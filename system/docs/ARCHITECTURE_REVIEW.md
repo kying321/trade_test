@@ -42,3 +42,18 @@
 1. 继续缩减 `engine.py`：将 `gate_report/ops_report/review_loop` 拆至 `orchestration/release.py`。
 2. 将默认模拟数据 Provider 与真实公开源 Provider 解耦成独立 profile（dev/prod）。
 3. 引入架构回归测试：校验关键模块不出现跨层反向依赖。
+
+## 增补（2026-02-14）
+1. 新增配置校验层：
+   - `src/lie_engine/config/validation.py`
+   - CLI 支持 `lie validate-config`
+   - 引擎初始化默认强校验，避免“带错配置运行”
+2. 新增运行工件清单（manifest）：
+   - `src/lie_engine/reporting/manifests.py`
+   - EOD/回测/复盘/研究回测统一写入 `output/artifacts/manifests/*.json`
+3. 新增架构审计入口：
+   - CLI 支持 `lie architecture-audit --date YYYY-MM-DD`
+   - 输出 `output/review/YYYY-MM-DD_architecture_audit.{json,md}`
+4. 研究回测的数据时间隔离策略已落地并固化测试：
+   - 截止日前数据用于回测
+   - 截止日后 `review_days` 数据仅用于复盘
