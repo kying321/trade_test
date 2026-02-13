@@ -1,0 +1,77 @@
+{
+  "started_at": "2026-02-13T23:27:01.936200",
+  "ended_at": "2026-02-13T23:33:14.864185",
+  "elapsed_seconds": 372.9279899597168,
+  "start_date": "2015-01-01",
+  "end_date": "2026-02-13",
+  "hours_budget": 0.03,
+  "universe_count": 40,
+  "bars_rows": 91679,
+  "news_records": 250,
+  "report_records": 3905,
+  "data_fetch_stats": {
+    "universe_count": 40,
+    "bars_symbols": 35,
+    "bars_rows": 91679,
+    "errors": {
+      "000963": "TypeError:arg must be a list, tuple, 1-d array, or Series",
+      "000975": "TypeError:arg must be a list, tuple, 1-d array, or Series",
+      "000938": "TypeError:arg must be a list, tuple, 1-d array, or Series",
+      "000895": "TypeError:arg must be a list, tuple, 1-d array, or Series",
+      "000876": "TypeError:arg must be a list, tuple, 1-d array, or Series"
+    },
+    "cache_hit": false,
+    "cache_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/research_cache/abee9161bbcb19e6_meta.json"
+  },
+  "mode_summaries": [
+    {
+      "mode": "ultra_short",
+      "trials": 1,
+      "best_score": -0.2173978565669182,
+      "best_params": {
+        "hold_days": 1,
+        "max_daily_trades": 7,
+        "signal_confidence_min": 50.36074539132183,
+        "convexity_min": 2.9171958398227646,
+        "news_weight": 0.6973680290593639,
+        "report_weight": 0.09417734788764953
+      },
+      "best_metrics": {
+        "annual_return": 0.007655449082462296,
+        "max_drawdown": 0.3563515432118798,
+        "positive_window_ratio": 0.9541759053954176,
+        "trades": 1169,
+        "factor_alignment": 0.005025526663921841,
+        "score": -0.2173978565669182
+      },
+      "budget_seconds": 59.999876260757446,
+      "elapsed_seconds": 113.17139506340027,
+      "trial_log_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_232701/ultra_short/trials.csv"
+    },
+    {
+      "mode": "swing",
+      "trials": 1,
+      "best_score": -1.2,
+      "best_params": {
+        "hold_days": 8,
+        "max_daily_trades": 5,
+        "signal_confidence_min": 70.11761016568165,
+        "convexity_min": 3.6865543326646897,
+        "news_weight": 0.12811363267554587,
+        "report_weight": 0.45038593789556713
+      },
+      "best_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "factor_alignment": 0.0,
+        "score": -1.2
+      },
+      "budget_seconds": 33.414063930511475,
+      "elapsed_seconds": 216.95181798934937,
+      "trial_log_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_232701/swing/trials.csv"
+    }
+  ],
+  "output_dir": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_232701"
+}

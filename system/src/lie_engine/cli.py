@@ -4,6 +4,7 @@ import argparse
 from datetime import date, datetime
 import json
 
+from lie_engine.config import load_settings, validate_settings
 from lie_engine.engine import LieEngine
 from lie_engine.models import BacktestResult, ReviewDelta
 
@@ -30,6 +31,18 @@ def main() -> None:
     p_bt = sub.add_parser("backtest", help="Run walk-forward backtest")
     p_bt.add_argument("--start", required=True)
     p_bt.add_argument("--end", required=True)
+
+    p_rbt = sub.add_parser("research-backtest", help="Run budgeted real-data multi-mode research backtest")
+    p_rbt.add_argument("--start", required=True)
+    p_rbt.add_argument("--end", required=True)
+    p_rbt.add_argument("--hours", default="10")
+    p_rbt.add_argument("--max-symbols", default="120")
+    p_rbt.add_argument("--report-symbol-cap", default="40")
+    p_rbt.add_argument("--workers", default="8")
+    p_rbt.add_argument("--max-trials-per-mode", default="500")
+    p_rbt.add_argument("--seed", default="42")
+    p_rbt.add_argument("--modes", default="ultra_short,swing,long", help="Comma-separated modes")
+    p_rbt.add_argument("--review-days", default="5", help="Post-cutoff review window days (not used for backtest)")
 
     p_rv = sub.add_parser("review", help="Run post-market review and parameter update")
     p_rv.add_argument("--date", required=True)
@@ -70,6 +83,11 @@ def main() -> None:
     p_or.add_argument("--date", required=True)
     p_or.add_argument("--window-days", default="7")
 
+    sub.add_parser("validate-config", help="Validate config schema and risk bounds")
+
+    p_aa = sub.add_parser("architecture-audit", help="Run architecture audit report")
+    p_aa.add_argument("--date", required=False, default=None)
+
     sub.add_parser("test-all", help="Run full test suite")
 
     p_loop = sub.add_parser("review-loop", help="Run review->tests loop until pass or max rounds")
@@ -77,9 +95,15 @@ def main() -> None:
     p_loop.add_argument("--max-rounds", default="3")
 
     args = parser.parse_args()
-    eng = LieEngine(config_path=args.config)
+    if args.cmd == "validate-config":
+        settings = load_settings(args.config)
+        out = validate_settings(settings)
+    else:
+        eng = LieEngine(config_path=args.config)
 
-    if args.cmd == "run-eod":
+    if args.cmd == "validate-config":
+        pass
+    elif args.cmd == "run-eod":
         out = eng.run_eod(as_of=_parse_date(args.date))
     elif args.cmd == "run-premarket":
         out = eng.run_premarket(as_of=_parse_date(args.date))
@@ -88,6 +112,19 @@ def main() -> None:
     elif args.cmd == "backtest":
         result: BacktestResult = eng.run_backtest(start=_parse_date(args.start), end=_parse_date(args.end))
         out = result.to_dict()
+    elif args.cmd == "research-backtest":
+        out = eng.run_research_backtest(
+            start=_parse_date(args.start),
+            end=_parse_date(args.end),
+            hours_budget=float(args.hours),
+            max_symbols=int(args.max_symbols),
+            report_symbol_cap=int(args.report_symbol_cap),
+            workers=int(args.workers),
+            max_trials_per_mode=int(args.max_trials_per_mode),
+            seed=int(args.seed),
+            modes=[x.strip() for x in str(args.modes).split(",") if x.strip()],
+            review_days=int(args.review_days),
+        )
     elif args.cmd == "review":
         result2: ReviewDelta = eng.run_review(as_of=_parse_date(args.date))
         out = result2.to_dict()
@@ -134,6 +171,8 @@ def main() -> None:
             as_of=_parse_date(args.date),
             window_days=int(args.window_days),
         )
+    elif args.cmd == "architecture-audit":
+        out = eng.architecture_audit(as_of=_parse_date(args.date) if args.date else None)
     elif args.cmd == "test-all":
         out = eng.test_all()
     elif args.cmd == "review-loop":

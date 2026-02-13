@@ -1,0 +1,47 @@
+{
+  "started_at": "2026-02-13T23:43:46.538199",
+  "ended_at": "2026-02-13T23:47:26.820676",
+  "elapsed_seconds": 220.28247809410095,
+  "start_date": "2015-01-01",
+  "end_date": "2026-02-13",
+  "hours_budget": 0.06,
+  "universe_count": 40,
+  "bars_rows": 92560,
+  "news_records": 250,
+  "report_records": 3905,
+  "data_fetch_stats": {
+    "universe_count": 40,
+    "bars_symbols": 40,
+    "bars_rows": 92560,
+    "errors": {},
+    "cache_hit": true,
+    "cache_age_hours": 0.15043825833333332
+  },
+  "mode_summaries": [
+    {
+      "mode": "swing",
+      "trials": 1,
+      "best_score": -1.2,
+      "best_params": {
+        "hold_days": 4,
+        "max_daily_trades": 5,
+        "signal_confidence_min": 59.48298851181772,
+        "convexity_min": 3.860635007787318,
+        "news_weight": 0.6973680290593639,
+        "report_weight": 0.09417734788764953
+      },
+      "best_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "factor_alignment": 0.0,
+        "score": -1.2
+      },
+      "budget_seconds": 215.9998857975006,
+      "elapsed_seconds": 219.33905792236328,
+      "trial_log_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_234346/swing/trials.csv"
+    }
+  ],
+  "output_dir": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_234346"
+}

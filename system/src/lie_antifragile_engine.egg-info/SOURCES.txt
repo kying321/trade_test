@@ -22,6 +22,9 @@ src/lie_engine/data/protocols.py
 src/lie_engine/data/providers.py
 src/lie_engine/data/quality.py
 src/lie_engine/data/storage.py
+src/lie_engine/orchestration/__init__.py
+src/lie_engine/orchestration/factor_contrib.py
+src/lie_engine/orchestration/guards.py
 src/lie_engine/regime/__init__.py
 src/lie_engine/regime/atr.py
 src/lie_engine/regime/consensus.py
@@ -30,6 +33,10 @@ src/lie_engine/regime/hurst.py
 src/lie_engine/reporting/__init__.py
 src/lie_engine/reporting/daily.py
 src/lie_engine/reporting/review.py
+src/lie_engine/research/__init__.py
+src/lie_engine/research/modes.py
+src/lie_engine/research/optimizer.py
+src/lie_engine/research/real_data.py
 src/lie_engine/review/__init__.py
 src/lie_engine/review/updater.py
 src/lie_engine/risk/__init__.py
@@ -45,8 +52,11 @@ tests/test_backtest.py
 tests/test_data_pipeline.py
 tests/test_data_quality.py
 tests/test_engine_integration.py
+tests/test_orchestration.py
 tests/test_regime.py
+tests/test_research.py
 tests/test_review.py
 tests/test_risk.py
 tests/test_signal.py
 tests/test_storage.py
+tests/test_stress.py

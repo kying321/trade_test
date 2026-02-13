@@ -1,0 +1,69 @@
+{
+  "started_at": "2026-02-13T23:13:15.010205",
+  "ended_at": "2026-02-13T23:19:18.901391",
+  "elapsed_seconds": 363.8911888599396,
+  "start_date": "2015-01-01",
+  "end_date": "2026-02-13",
+  "hours_budget": 0.05,
+  "universe_count": 40,
+  "bars_rows": 92560,
+  "news_records": 250,
+  "report_records": 3905,
+  "data_fetch_stats": {
+    "universe_count": 40,
+    "bars_symbols": 40,
+    "bars_rows": 92560,
+    "errors": {}
+  },
+  "mode_summaries": [
+    {
+      "mode": "ultra_short",
+      "trials": 1,
+      "best_score": -0.5646213071779714,
+      "best_params": {
+        "hold_days": 1,
+        "max_daily_trades": 7,
+        "signal_confidence_min": 50.36074539132183,
+        "convexity_min": 2.9171958398227646,
+        "news_weight": 0.6973680290593639,
+        "report_weight": 0.09417734788764953
+      },
+      "best_metrics": {
+        "annual_return": -0.040682935301358025,
+        "max_drawdown": 0.5138126746376501,
+        "positive_window_ratio": 0.9538063562453807,
+        "trades": 1082,
+        "factor_alignment": -0.013280184882920326,
+        "score": -0.5646213071779714
+      },
+      "budget_seconds": 43.6652626991272,
+      "elapsed_seconds": 108.06298303604126,
+      "trial_log_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_231315/ultra_short/trials.csv"
+    },
+    {
+      "mode": "swing",
+      "trials": 1,
+      "best_score": -1.2,
+      "best_params": {
+        "hold_days": 8,
+        "max_daily_trades": 5,
+        "signal_confidence_min": 70.11761016568165,
+        "convexity_min": 3.6865543326646897,
+        "news_weight": 0.12811363267554587,
+        "report_weight": 0.45038593789556713
+      },
+      "best_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "factor_alignment": 0.0,
+        "score": -1.2
+      },
+      "budget_seconds": 11.466383695602417,
+      "elapsed_seconds": 206.82382726669312,
+      "trial_log_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_231315/swing/trials.csv"
+    }
+  ],
+  "output_dir": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_231315"
+}

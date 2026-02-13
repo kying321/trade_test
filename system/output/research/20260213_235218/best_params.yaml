@@ -1,0 +1,15 @@
+long:
+  best_params:
+    hold_days: 13
+    max_daily_trades: 2
+    signal_confidence_min: 35.49375760280728
+    convexity_min: 1.7145017897238457
+    news_weight: 0.5694114399233269
+    report_weight: 0.2260870441170738
+  best_metrics:
+    annual_return: 0.15097827804470776
+    max_drawdown: 0.6302238693106693
+    positive_window_ratio: 0.8699186991869918
+    trades: 923
+    factor_alignment: -0.004575161329058393
+    score: -0.6086666201546795

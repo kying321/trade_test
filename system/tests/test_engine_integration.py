@@ -33,10 +33,12 @@ class EngineIntegrationTests(unittest.TestCase):
         d = date(2026, 2, 13)
         out = eng.run_eod(d)
         self.assertIn("briefing", out)
+        self.assertIn("manifest", out)
         daily_dir = tmp_root / "output" / "daily"
         self.assertTrue((daily_dir / "2026-02-13_briefing.md").exists())
         self.assertTrue((daily_dir / "2026-02-13_signals.json").exists())
         self.assertTrue((daily_dir / "2026-02-13_positions.csv").exists())
+        self.assertTrue((tmp_root / "output" / "artifacts" / "manifests" / "eod_2026-02-13.json").exists())
 
     def test_run_eod_blocks_new_positions_under_major_event_window(self) -> None:
         eng, _ = self._make_engine()
@@ -118,6 +120,16 @@ class EngineIntegrationTests(unittest.TestCase):
         out = eng.run_slot(as_of=d, slot="ops")
         self.assertEqual(out["slot"], "ops")
         self.assertIn("result", out)
+
+    def test_architecture_audit_generates_files(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        audit = eng.architecture_audit(as_of=d)
+        self.assertIn("status", audit)
+        self.assertIn("config", audit)
+        self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_architecture_audit.json").exists())
+        self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_architecture_audit.md").exists())
 
     def test_run_review_cycle(self) -> None:
         eng, tmp_root = self._make_engine()

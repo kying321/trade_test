@@ -16,7 +16,7 @@
    - `src/lie_engine/orchestration/factor_contrib.py`
    - `src/lie_engine/orchestration/__init__.py`
 2. `LieEngine` 保持外部接口不变，但内部改为调用编排子模块：
-   - 门禁评估统一走 `build_guard_assessment(...)`
+   - 门禁评估统一走 `guards` 模块（引擎侧保留 `_evaluate_guards` 兼容封装）
    - 120 日因子重估统一走 `estimate_factor_contrib_120d(...)`
 3. 保持兼容性：
    - `LieEngine._major_event_window/_loss_cooldown_active/_black_swan_assessment/_estimate_factor_contrib_120d` 仍保留（作为薄封装）
@@ -42,4 +42,3 @@
 1. 继续缩减 `engine.py`：将 `gate_report/ops_report/review_loop` 拆至 `orchestration/release.py`。
 2. 将默认模拟数据 Provider 与真实公开源 Provider 解耦成独立 profile（dev/prod）。
 3. 引入架构回归测试：校验关键模块不出现跨层反向依赖。
-

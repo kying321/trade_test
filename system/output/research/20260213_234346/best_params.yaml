@@ -1,0 +1,15 @@
+swing:
+  best_params:
+    hold_days: 4
+    max_daily_trades: 5
+    signal_confidence_min: 59.48298851181772
+    convexity_min: 3.860635007787318
+    news_weight: 0.6973680290593639
+    report_weight: 0.09417734788764953
+  best_metrics:
+    annual_return: 0.0
+    max_drawdown: 0.0
+    positive_window_ratio: 1.0
+    trades: 0
+    factor_alignment: 0.0
+    score: -1.2

@@ -1,0 +1,2 @@
+mode,trial,params,score,annual_return,max_drawdown,positive_window_ratio,trades,factor_alignment,started_at,elapsed_sec
+long,1,"{""hold_days"": 32, ""max_daily_trades"": 1, ""signal_confidence_min"": 71.87587071950767, ""convexity_min"": 4.055960267047038, ""news_weight"": 0.2753088157611293, ""report_weight"": 0.13796807286695534, ""signal_confidence_effective"": 70.96450118524066}",0.20000000000000007,0.0,0.0,1.0,0,0.0,2026-02-13T22:56:21.590514,12.266737937927246

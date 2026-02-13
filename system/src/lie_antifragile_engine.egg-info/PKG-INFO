@@ -7,8 +7,17 @@ Description-Content-Type: text/markdown
 Requires-Dist: numpy>=1.26
 Requires-Dist: pandas>=2.1
 Requires-Dist: PyYAML>=6.0
+Requires-Dist: akshare>=1.18.0
+Requires-Dist: yfinance>=0.2.66
+Requires-Dist: tqdm>=4.66
 
 # 离厄反脆弱交易系统
+
+架构复盘文档：
+
+```bash
+docs/ARCHITECTURE_REVIEW.md
+```
 
 运行：
 
@@ -16,6 +25,8 @@ Requires-Dist: PyYAML>=6.0
 python3 -m pip install -e .
 lie run-eod --date 2026-02-13
 lie test-all
+# 10小时预算的实盘多模式研究回测（新闻+研报因子）
+lie research-backtest --start 2015-01-01 --end 2026-02-13 --hours 10 --max-symbols 120 --max-trials-per-mode 500
 ```
 
 调度：

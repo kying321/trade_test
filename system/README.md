@@ -12,6 +12,12 @@ docs/ARCHITECTURE_REVIEW.md
 python3 -m pip install -e .
 lie run-eod --date 2026-02-13
 lie test-all
+lie validate-config
+lie architecture-audit --date 2026-02-13
+# 10小时预算的实盘多模式研究回测（新闻+研报因子）
+lie research-backtest --start 2015-01-01 --end 2026-02-13 --hours 10 --max-symbols 120 --max-trials-per-mode 500 --review-days 5
+# 单模式定向诊断（可选：ultra_short,swing,long）
+lie research-backtest --start 2015-01-01 --end 2026-02-13 --hours 2 --modes swing
 ```
 
 调度：

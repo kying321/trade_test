@@ -17,14 +17,15 @@ import pandas as pd
 import yaml
 
 from lie_engine.backtest import BacktestConfig, run_walk_forward_backtest
-from lie_engine.config import SystemSettings, load_settings
+from lie_engine.config import SystemSettings, assert_valid_settings, load_settings, validate_settings
 from lie_engine.data import DataBus, OpenSourcePrimaryProvider, OpenSourceSecondaryProvider
 from lie_engine.data.storage import append_sqlite, write_csv, write_json, write_markdown
 from lie_engine.models import BacktestResult, NewsEvent, RegimeLabel, ReviewDelta, TradePlan
 from lie_engine.orchestration import GuardAssessment, estimate_factor_contrib_120d
 from lie_engine.orchestration.guards import black_swan_assessment, loss_cooldown_active, major_event_window
 from lie_engine.regime import compute_atr_zscore, derive_regime_consensus, infer_hmm_state, latest_multi_scale_hurst
-from lie_engine.reporting import render_daily_briefing, render_review_report
+from lie_engine.research import run_research_backtest as run_research_pipeline
+from lie_engine.reporting import render_daily_briefing, render_review_report, write_run_manifest
 from lie_engine.review import ReviewThresholds, build_review_delta
 from lie_engine.risk import RiskManager, infer_edge_from_trades
 from lie_engine.signal import SignalEngineConfig, expand_universe, scan_signals
@@ -41,6 +42,8 @@ class EngineContext:
 class LieEngine:
     def __init__(self, config_path: str | Path | None = None) -> None:
         settings = load_settings(config_path)
+        assert_valid_settings(settings)
+        self._settings_validation = validate_settings(settings)
         root = Path(config_path).resolve().parent if config_path else Path(__file__).resolve().parents[2]
         output_dir = root / settings.paths.get("output", "output")
         sqlite_path = root / settings.paths.get("sqlite", "output/artifacts/lie_engine.db")
@@ -422,6 +425,26 @@ class LieEngine:
             "latest_positions",
             plans_df.assign(date=as_of.isoformat()),
         )
+        manifest_path = write_run_manifest(
+            output_dir=self.ctx.output_dir,
+            run_type="eod",
+            run_id=as_of.isoformat(),
+            artifacts={
+                "briefing": str(briefing_path),
+                "signals": str(signals_path),
+                "positions": str(positions_path),
+            },
+            metrics={
+                "signals": int(len(signals)),
+                "plans": int(len(plans)),
+                "black_swan_score": float(guard.black_swan_score),
+                "regime": str(regime.consensus.value),
+            },
+            checks={
+                "quality_passed": bool(ingest.quality.passed),
+                "trade_blocked": bool(guard.trade_blocked),
+            },
+        )
 
         return {
             "date": as_of.isoformat(),
@@ -429,6 +452,7 @@ class LieEngine:
             "signals": len(signals),
             "plans": len(plans),
             "briefing": str(briefing_path),
+            "manifest": str(manifest_path),
             "quality_passed": ingest.quality.passed,
             "non_trade_reasons": guard.non_trade_reasons,
             "black_swan_score": guard.black_swan_score,
@@ -523,7 +547,77 @@ class LieEngine:
         out_path = self.ctx.output_dir / "artifacts" / f"backtest_{start.isoformat()}_{end.isoformat()}.json"
         write_json(out_path, result.to_dict())
         append_sqlite(self.ctx.sqlite_path, "backtest_runs", pd.DataFrame([result.to_dict()]))
+        write_run_manifest(
+            output_dir=self.ctx.output_dir,
+            run_type="backtest",
+            run_id=f"{start.isoformat()}_{end.isoformat()}",
+            artifacts={"result": str(out_path)},
+            metrics={
+                "annual_return": float(result.annual_return),
+                "max_drawdown": float(result.max_drawdown),
+                "win_rate": float(result.win_rate),
+                "profit_factor": float(result.profit_factor),
+                "trades": int(result.trades),
+            },
+            checks={"violations": int(result.violations)},
+        )
         return result
+
+    def run_research_backtest(
+        self,
+        *,
+        start: date,
+        end: date,
+        hours_budget: float = 10.0,
+        max_symbols: int = 120,
+        report_symbol_cap: int = 40,
+        workers: int = 8,
+        max_trials_per_mode: int = 500,
+        seed: int = 42,
+        modes: list[str] | None = None,
+        review_days: int = 5,
+    ) -> dict[str, Any]:
+        summary = run_research_pipeline(
+            output_root=self.ctx.output_dir,
+            core_symbols=self._core_symbols(),
+            start=start,
+            end=end,
+            hours_budget=hours_budget,
+            max_symbols=max_symbols,
+            report_symbol_cap=report_symbol_cap,
+            workers=workers,
+            max_trials_per_mode=max_trials_per_mode,
+            seed=seed,
+            modes=modes,
+            review_days=review_days,
+        )
+        payload = summary.to_dict()
+        manifest_path = write_run_manifest(
+            output_dir=self.ctx.output_dir,
+            run_type="research_backtest",
+            run_id=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            artifacts={
+                "summary": str(Path(summary.output_dir) / "summary.json"),
+                "report": str(Path(summary.output_dir) / "report.md"),
+                "best_params": str(Path(summary.output_dir) / "best_params.yaml"),
+            },
+            metrics={
+                "hours_budget": float(payload.get("hours_budget", 0.0)),
+                "elapsed_seconds": float(payload.get("elapsed_seconds", 0.0)),
+                "universe_count": int(payload.get("universe_count", 0)),
+                "bars_rows": int(payload.get("bars_rows", 0)),
+            },
+            checks={
+                "strict_cutoff_enforced": bool(payload.get("data_fetch_stats", {}).get("strict_cutoff_enforced", False)),
+                "mode_count": int(len(payload.get("mode_summaries", []))),
+            },
+            metadata={
+                "cutoff_date": str(payload.get("cutoff_date", "")),
+                "review_days": int(payload.get("review_days", 0)),
+            },
+        )
+        payload["manifest"] = str(manifest_path)
+        return payload
 
     def _load_live_params(self) -> dict[str, float]:
         p = self.ctx.output_dir / "artifacts" / "params_live.yaml"
@@ -595,6 +689,27 @@ class LieEngine:
         write_markdown(live_params_path, yaml.safe_dump(review.parameter_changes, allow_unicode=True, sort_keys=False))
 
         append_sqlite(self.ctx.sqlite_path, "review_runs", pd.DataFrame([audit_payload]))
+        manifest_path = write_run_manifest(
+            output_dir=self.ctx.output_dir,
+            run_type="review",
+            run_id=as_of.isoformat(),
+            artifacts={
+                "review_report": str(review_path),
+                "param_delta": str(delta_path),
+                "live_params": str(live_params_path),
+            },
+            metrics={
+                "pass_gate": bool(review.pass_gate),
+                "defects": int(len(review.defects)),
+                "changed_params": int(len(review.parameter_changes)),
+            },
+            checks={
+                "positive_window_ratio": float(bt.positive_window_ratio),
+                "max_drawdown": float(bt.max_drawdown),
+                "violations": int(bt.violations),
+            },
+        )
+        review.notes.append(f"manifest={manifest_path}")
         return review
 
     def test_all(self) -> dict[str, Any]:
@@ -1169,3 +1284,58 @@ class LieEngine:
             "checks": checks,
             "missing": missing,
         }
+
+    def architecture_audit(self, as_of: date | None = None) -> dict[str, Any]:
+        tz = ZoneInfo(self.settings.timezone)
+        target = as_of or datetime.now(tz).date()
+        d = target.isoformat()
+        config_report = validate_settings(self.settings)
+        health = self.health_check(as_of=target, require_review=False)
+
+        manifest_dir = self.ctx.output_dir / "artifacts" / "manifests"
+        expected = {
+            "eod_manifest": manifest_dir / f"eod_{d}.json",
+            "backtest_manifest": manifest_dir / f"backtest_2015-01-01_{d}.json",
+            "review_manifest": manifest_dir / f"review_{d}.json",
+        }
+        manifest_checks = {k: p.exists() for k, p in expected.items()}
+
+        errors = int(config_report.get("summary", {}).get("errors", 0))
+        status = "pass" if errors == 0 else "fail"
+        payload = {
+            "date": d,
+            "status": status,
+            "config": config_report,
+            "health": health,
+            "manifests": manifest_checks,
+        }
+
+        json_path = self.ctx.output_dir / "review" / f"{d}_architecture_audit.json"
+        md_path = self.ctx.output_dir / "review" / f"{d}_architecture_audit.md"
+        write_json(json_path, payload)
+        lines = [
+            f"# 架构审计报告 | {d}",
+            "",
+            f"- 状态: `{status}`",
+            f"- 配置错误数: `{errors}`",
+            f"- 配置告警数: `{config_report.get('summary', {}).get('warnings', 0)}`",
+            f"- 健康状态: `{health.get('status', 'unknown')}`",
+            "",
+            "## Manifest 检查",
+        ]
+        for k, v in manifest_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        if config_report.get("errors"):
+            lines.append("## 配置错误")
+            for item in config_report["errors"]:
+                lines.append(f"- `{item['path']}`: {item['message']}")
+            lines.append("")
+        if config_report.get("warnings"):
+            lines.append("## 配置告警")
+            for item in config_report["warnings"]:
+                lines.append(f"- `{item['path']}`: {item['message']}")
+            lines.append("")
+        write_markdown(md_path, "\n".join(lines) + "\n")
+        payload["paths"] = {"json": str(json_path), "md": str(md_path)}
+        return payload

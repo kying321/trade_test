@@ -1,0 +1,111 @@
+{
+  "started_at": "2026-02-13T22:49:05.375063",
+  "ended_at": "2026-02-13T22:52:02.427067",
+  "elapsed_seconds": 177.05200600624084,
+  "start_date": "2019-01-01",
+  "end_date": "2026-02-13",
+  "hours_budget": 0.03,
+  "universe_count": 20,
+  "bars_rows": 4081,
+  "news_records": 120,
+  "report_records": 1550,
+  "data_fetch_stats": {
+    "universe_count": 20,
+    "bars_symbols": 3,
+    "bars_rows": 4081,
+    "errors": {
+      "603026": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000830": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000001": "AttributeError:'tuple' object has no attribute 'lower'",
+      "002050": "AttributeError:'tuple' object has no attribute 'lower'",
+      "300750": "AttributeError:'tuple' object has no attribute 'lower'",
+      "513130": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000301": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000002": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000157": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000100": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000063": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000166": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000538": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000338": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000333": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000408": "AttributeError:'tuple' object has no attribute 'lower'",
+      "000425": "AttributeError:'tuple' object has no attribute 'lower'"
+    }
+  },
+  "mode_summaries": [
+    {
+      "mode": "ultra_short",
+      "trials": 3,
+      "best_score": 0.10654158662204571,
+      "best_params": {
+        "hold_days": 3,
+        "max_daily_trades": 7,
+        "signal_confidence_min": 53.60473984981963,
+        "convexity_min": 3.0974791137218673,
+        "news_weight": 0.44051757049084117,
+        "report_weight": 0.28139966172944864
+      },
+      "best_metrics": {
+        "annual_return": 0.03890905633085562,
+        "max_drawdown": 0.21464410052969218,
+        "positive_window_ratio": 0.9861030689056167,
+        "trades": 58,
+        "factor_alignment": 0.024425482846571693,
+        "score": 0.10654158662204571
+      },
+      "budget_seconds": 50.816126108169556,
+      "elapsed_seconds": 49.64617204666138,
+      "trial_log_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_224905/ultra_short/trials.csv"
+    },
+    {
+      "mode": "swing",
+      "trials": 3,
+      "best_score": 0.8066476160106901,
+      "best_params": {
+        "hold_days": 12,
+        "max_daily_trades": 2,
+        "signal_confidence_min": 78.0,
+        "convexity_min": 3.1534285513391094,
+        "news_weight": 0.6812513307246433,
+        "report_weight": 0.2324600588926867
+      },
+      "best_metrics": {
+        "annual_return": 0.03064452720928279,
+        "max_drawdown": 0.020761053492556858,
+        "positive_window_ratio": 0.9994209612044007,
+        "trades": 2,
+        "factor_alignment": 0.025691035608774622,
+        "score": 0.8066476160106901
+      },
+      "budget_seconds": 51.40107798576355,
+      "elapsed_seconds": 50.08357787132263,
+      "trial_log_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_224905/swing/trials.csv"
+    },
+    {
+      "mode": "long",
+      "trials": 3,
+      "best_score": 0.531241836015801,
+      "best_params": {
+        "hold_days": 15,
+        "max_daily_trades": 2,
+        "signal_confidence_min": 64.31955411810094,
+        "convexity_min": 2.569141757252601,
+        "news_weight": 0.5206659851092754,
+        "report_weight": 0.287780130225491
+      },
+      "best_metrics": {
+        "annual_return": 0.020695422287392296,
+        "max_drawdown": 0.16082241317083634,
+        "positive_window_ratio": 0.9924724956572091,
+        "trades": 17,
+        "factor_alignment": 0.006365588175561115,
+        "score": 0.531241836015801
+      },
+      "budget_seconds": 52.71851992607117,
+      "elapsed_seconds": 49.77045297622681,
+      "trial_log_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_224905/long/trials.csv"
+    }
+  ],
+  "output_dir": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260213_224905"
+}
