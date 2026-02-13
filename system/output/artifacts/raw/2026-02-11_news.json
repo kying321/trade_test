@@ -1,0 +1,258 @@
+[
+  {
+    "event_id": "d9662b615d111d944d8d36105f35bcb2",
+    "ts": "2026-02-10T00:00:00",
+    "title": "[zh] 政策 监测快讯 20260210-0000",
+    "content": "国务院发布专项支持政策，强调稳增长与产业升级",
+    "lang": "zh",
+    "source": "open_source_primary",
+    "category": "政策",
+    "confidence": 0.8695,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.75085
+  },
+  {
+    "event_id": "ee1ec964d09382b617d93cb2bc57c63f",
+    "ts": "2026-02-10T00:00:00",
+    "title": "[en] 政策 监测快讯 20260210-0000",
+    "content": "国务院发布专项支持政策，强调稳增长与产业升级",
+    "lang": "en",
+    "source": "open_source_primary",
+    "category": "政策",
+    "confidence": 0.8695,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.75085
+  },
+  {
+    "event_id": "ec3c6fa1b39291e3fb74151f28e79f99",
+    "ts": "2026-02-10T06:00:00",
+    "title": "[zh] 宏观 监测快讯 20260210-0600",
+    "content": "CPI/PPI公布后市场对通缩与复苏预期再平衡",
+    "lang": "zh",
+    "source": "open_source_primary",
+    "category": "宏观",
+    "confidence": 0.8695,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7858499999999999
+  },
+  {
+    "event_id": "af4a9c0d49401b07cde79beac0542b92",
+    "ts": "2026-02-10T06:00:00",
+    "title": "[en] 宏观 监测快讯 20260210-0600",
+    "content": "CPI/PPI公布后市场对通缩与复苏预期再平衡",
+    "lang": "en",
+    "source": "open_source_primary",
+    "category": "宏观",
+    "confidence": 0.8695,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7858499999999999
+  },
+  {
+    "event_id": "1fbd8417daed3e583a295f51d92c2c64",
+    "ts": "2026-02-10T12:00:00",
+    "title": "[zh] 地缘 监测快讯 20260210-1200",
+    "content": "海外地缘局势出现阶段性缓和信号",
+    "lang": "zh",
+    "source": "open_source_primary",
+    "category": "地缘",
+    "confidence": 0.7655,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.78965
+  },
+  {
+    "event_id": "e2aff4f3d860908617db6dae5c49f271",
+    "ts": "2026-02-10T12:00:00",
+    "title": "[en] 地缘 监测快讯 20260210-1200",
+    "content": "海外地缘局势出现阶段性缓和信号",
+    "lang": "en",
+    "source": "open_source_primary",
+    "category": "地缘",
+    "confidence": 0.7655,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.78965
+  },
+  {
+    "event_id": "ed76e770116ffabd459ee425460f045d",
+    "ts": "2026-02-10T18:00:00",
+    "title": "[zh] 产业链 监测快讯 20260210-1800",
+    "content": "锂电排产与原材料价格出现分化",
+    "lang": "zh",
+    "source": "open_source_primary",
+    "category": "产业链",
+    "confidence": 0.7655,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7196499999999999
+  },
+  {
+    "event_id": "3e3e6e736ee06b2606cfccc3b91a7dbf",
+    "ts": "2026-02-10T18:00:00",
+    "title": "[en] 产业链 监测快讯 20260210-1800",
+    "content": "锂电排产与原材料价格出现分化",
+    "lang": "en",
+    "source": "open_source_primary",
+    "category": "产业链",
+    "confidence": 0.7655,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7196499999999999
+  },
+  {
+    "event_id": "097dd15a70288f38ba9a82cfefdea39a",
+    "ts": "2026-02-11T00:00:00",
+    "title": "[zh] 政策 监测快讯 20260211-0000",
+    "content": "国务院发布专项支持政策，强调稳增长与产业升级",
+    "lang": "zh",
+    "source": "open_source_primary",
+    "category": "政策",
+    "confidence": 0.8695,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7858499999999999
+  },
+  {
+    "event_id": "837aac65fa9cfca614c4f70c9346e148",
+    "ts": "2026-02-11T00:00:00",
+    "title": "[en] 政策 监测快讯 20260211-0000",
+    "content": "国务院发布专项支持政策，强调稳增长与产业升级",
+    "lang": "en",
+    "source": "open_source_primary",
+    "category": "政策",
+    "confidence": 0.8695,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7858499999999999
+  },
+  {
+    "event_id": "3c4ea6c2592bfa01a0cc6332c9f023b2",
+    "ts": "2026-02-11T06:00:00",
+    "title": "[zh] 宏观 监测快讯 20260211-0600",
+    "content": "CPI/PPI公布后市场对通缩与复苏预期再平衡",
+    "lang": "zh",
+    "source": "open_source_primary",
+    "category": "宏观",
+    "confidence": 0.8695,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.82085
+  },
+  {
+    "event_id": "1596de9920e14b8ef57e1d5fecc9718f",
+    "ts": "2026-02-11T06:00:00",
+    "title": "[en] 宏观 监测快讯 20260211-0600",
+    "content": "CPI/PPI公布后市场对通缩与复苏预期再平衡",
+    "lang": "en",
+    "source": "open_source_primary",
+    "category": "宏观",
+    "confidence": 0.8695,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.82085
+  },
+  {
+    "event_id": "f4cf3bf6259166235fe3b1018f7045f8",
+    "ts": "2026-02-11T12:00:00",
+    "title": "[zh] 地缘 监测快讯 20260211-1200",
+    "content": "海外地缘局势出现阶段性缓和信号",
+    "lang": "zh",
+    "source": "open_source_primary",
+    "category": "地缘",
+    "confidence": 0.7655,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7196499999999999
+  },
+  {
+    "event_id": "d3f98df91394b8649fb60a50f0859f20",
+    "ts": "2026-02-11T12:00:00",
+    "title": "[en] 地缘 监测快讯 20260211-1200",
+    "content": "海外地缘局势出现阶段性缓和信号",
+    "lang": "en",
+    "source": "open_source_primary",
+    "category": "地缘",
+    "confidence": 0.7655,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7196499999999999
+  },
+  {
+    "event_id": "d3b1fb5f610576fc561808b2ada2edb0",
+    "ts": "2026-02-11T18:00:00",
+    "title": "[zh] 产业链 监测快讯 20260211-1800",
+    "content": "锂电排产与原材料价格出现分化",
+    "lang": "zh",
+    "source": "open_source_primary",
+    "category": "产业链",
+    "confidence": 0.7655,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7546499999999998
+  },
+  {
+    "event_id": "ea9e603fdd6a41667d37751851e333cc",
+    "ts": "2026-02-11T18:00:00",
+    "title": "[en] 产业链 监测快讯 20260211-1800",
+    "content": "锂电排产与原材料价格出现分化",
+    "lang": "en",
+    "source": "open_source_primary",
+    "category": "产业链",
+    "confidence": 0.7655,
+    "entities": [
+      "A股",
+      "恒生科技",
+      "碳酸锂"
+    ],
+    "importance": 0.7546499999999998
+  }
+]

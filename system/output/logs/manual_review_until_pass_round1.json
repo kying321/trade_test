@@ -1,0 +1,21 @@
+{
+  "ts": "2026-02-13T17:58:17.501109",
+  "out": {
+    "passed": false,
+    "skipped": false,
+    "rounds": [
+      {
+        "round": 1,
+        "pass_gate": false,
+        "tests_ok": true,
+        "stable_replay_ok": true,
+        "stable_replay_days": 3,
+        "gate_passed": false,
+        "defect_plan": {
+          "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-13_defect_plan_round1.json",
+          "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-13_defect_plan_round1.md"
+        }
+      }
+    ]
+  }
+}

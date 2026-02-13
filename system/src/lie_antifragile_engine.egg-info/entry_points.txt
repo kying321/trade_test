@@ -1,0 +1,2 @@
+[console_scripts]
+lie = lie_engine.cli:main

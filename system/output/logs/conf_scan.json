@@ -1,0 +1,82 @@
+{
+  "ts": "2026-02-13T18:05:51.751960",
+  "rows": [
+    {
+      "conf": 30,
+      "positive_window_ratio": 0.479927395712168,
+      "total_return": 0.016492487491843733,
+      "max_drawdown": 0.14891623106472562,
+      "trades": 1156
+    },
+    {
+      "conf": 40,
+      "positive_window_ratio": 0.47793886663638413,
+      "total_return": 0.015219275721891202,
+      "max_drawdown": 0.14891623106472562,
+      "trades": 1108
+    },
+    {
+      "conf": 50,
+      "positive_window_ratio": 0.4841269401892906,
+      "total_return": 0.01798274395437726,
+      "max_drawdown": 0.14891623106472562,
+      "trades": 1029
+    },
+    {
+      "conf": 60,
+      "positive_window_ratio": 0.4983282609444528,
+      "total_return": 0.01844125030843266,
+      "max_drawdown": 0.13127343611145437,
+      "trades": 464
+    },
+    {
+      "conf": 62,
+      "positive_window_ratio": 0.4943184874779604,
+      "total_return": 0.016605757175611347,
+      "max_drawdown": 0.13127343611145437,
+      "trades": 436
+    },
+    {
+      "conf": 65,
+      "positive_window_ratio": 0.5506997313031795,
+      "total_return": 0.012564392333768118,
+      "max_drawdown": 0.11081611327424523,
+      "trades": 215
+    },
+    {
+      "conf": 70,
+      "positive_window_ratio": 0.4934865900383142,
+      "total_return": 9.548074662180488e-05,
+      "max_drawdown": 0.06112705035729449,
+      "trades": 108
+    },
+    {
+      "conf": 75,
+      "positive_window_ratio": 0.5284072249589491,
+      "total_return": 0.0010240032888005097,
+      "max_drawdown": 0.04086315914703631,
+      "trades": 80
+    },
+    {
+      "conf": 80,
+      "positive_window_ratio": 0.5344827586206896,
+      "total_return": -0.002056859250248321,
+      "max_drawdown": 0.02933487628687037,
+      "trades": 33
+    },
+    {
+      "conf": 85,
+      "positive_window_ratio": 0.5344827586206896,
+      "total_return": -0.002056859250248321,
+      "max_drawdown": 0.02933487628687037,
+      "trades": 33
+    },
+    {
+      "conf": 90,
+      "positive_window_ratio": 1.0,
+      "total_return": 0.0,
+      "max_drawdown": 0.0,
+      "trades": 0
+    }
+  ]
+}

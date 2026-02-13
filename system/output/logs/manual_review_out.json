@@ -1,0 +1,22 @@
+{
+  "as_of": "2026-02-13",
+  "parameter_changes": {
+    "win_rate": 0.434424550992613,
+    "payoff": 1.722359224347134,
+    "signal_confidence_min": 62.00000458052476
+  },
+  "factor_weights": {
+    "macro": 0.23629809829641132,
+    "industry": 0.2142312979305761,
+    "sentiment": 0.14746695434953314,
+    "fundamental": 0.14739657414624285,
+    "technical": 0.2546070752772365
+  },
+  "defects": [
+    "MODEL_POSITIVE_WINDOW_RATIO_BELOW_GATE"
+  ],
+  "pass_gate": false,
+  "notes": [
+    "Gates failed; keep protection bias and trigger re-test"
+  ]
+}

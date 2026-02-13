@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  lie-engine:
+    build:
+      context: ..
+      dockerfile: infra/cloud/Dockerfile
+    container_name: lie-engine
+    working_dir: /app
+    volumes:
+      - ../:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
+      - MAX_REVIEW_ROUNDS=2
+    command: ["python3", "-m", "lie_engine.cli", "--config", "/app/config.yaml", "run-daemon", "--poll-seconds", "30"]

@@ -1,0 +1,36 @@
+{
+  "date": "2026-02-13",
+  "round": 3,
+  "defect_count": 1,
+  "defects": [
+    {
+      "category": "model",
+      "code": "REVIEW_GATE",
+      "message": "复盘门槛未通过",
+      "action": "检查参数更新幅度和因子贡献，必要时回滚到上一个稳定参数。"
+    }
+  ],
+  "metrics": {
+    "completeness": 1.0,
+    "unresolved_conflict_ratio": 0.0,
+    "positive_window_ratio": 0.9830857188133604,
+    "max_drawdown": 0.1059372915352359,
+    "violations": 0
+  },
+  "checks": {
+    "review_pass_gate": true,
+    "tests_ok": true,
+    "health_ok": true,
+    "stable_replay_ok": true,
+    "data_completeness_ok": true,
+    "unresolved_conflict_ok": true,
+    "positive_window_ratio_ok": true,
+    "max_drawdown_ok": true,
+    "risk_violations_ok": true
+  },
+  "next_actions": [
+    "仅针对缺陷模块执行局部测试/回放",
+    "局部通过后执行 lie test-all",
+    "门槛通过后重跑 gate-report 与 ops-report"
+  ]
+}

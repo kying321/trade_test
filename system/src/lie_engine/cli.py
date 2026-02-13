@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import argparse
+from datetime import date, datetime
+import json
+
+from lie_engine.engine import LieEngine
+from lie_engine.models import BacktestResult, ReviewDelta
+
+
+def _parse_date(s: str) -> date:
+    return datetime.strptime(s, "%Y-%m-%d").date()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="lie", description="Liè Antifragile Trading System CLI")
+    parser.add_argument("--config", default=None, help="Path to config.yaml")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_eod = sub.add_parser("run-eod", help="Run end-of-day pipeline")
+    p_eod.add_argument("--date", required=True)
+
+    p_pm = sub.add_parser("run-premarket", help="Run premarket checks")
+    p_pm.add_argument("--date", required=True)
+
+    p_ic = sub.add_parser("run-intraday-check", help="Run intraday checkpoint")
+    p_ic.add_argument("--date", required=True)
+    p_ic.add_argument("--slot", required=True, help="HH:MM")
+
+    p_bt = sub.add_parser("backtest", help="Run walk-forward backtest")
+    p_bt.add_argument("--start", required=True)
+    p_bt.add_argument("--end", required=True)
+
+    p_rv = sub.add_parser("review", help="Run post-market review and parameter update")
+    p_rv.add_argument("--date", required=True)
+
+    p_rc = sub.add_parser("run-review-cycle", help="Run review-loop + gate-report + ops-report")
+    p_rc.add_argument("--date", required=True)
+    p_rc.add_argument("--max-rounds", default="2")
+    p_rc.add_argument("--ops-window-days", default=None)
+
+    p_rs = sub.add_parser("run-slot", help="Run one scheduled slot")
+    p_rs.add_argument("--date", required=True)
+    p_rs.add_argument("--slot", required=True, help="premarket|10:30|14:30|eod|review|ops")
+    p_rs.add_argument("--max-review-rounds", default="2")
+
+    p_ss = sub.add_parser("run-session", help="Run full scheduled session for one date")
+    p_ss.add_argument("--date", required=True)
+    p_ss.add_argument("--skip-review", action="store_true")
+    p_ss.add_argument("--max-review-rounds", default="2")
+
+    p_dm = sub.add_parser("run-daemon", help="Run polling scheduler daemon")
+    p_dm.add_argument("--poll-seconds", default="30")
+    p_dm.add_argument("--max-cycles", default=None)
+    p_dm.add_argument("--max-review-rounds", default="2")
+
+    p_hc = sub.add_parser("health-check", help="Check daily output and artifacts health")
+    p_hc.add_argument("--date", default=None)
+
+    p_sr = sub.add_parser("stable-replay", help="Check required stable replay days")
+    p_sr.add_argument("--date", required=True)
+    p_sr.add_argument("--days", default=None)
+
+    p_gr = sub.add_parser("gate-report", help="Run release gate report")
+    p_gr.add_argument("--date", required=True)
+    p_gr.add_argument("--run-tests", action="store_true")
+    p_gr.add_argument("--run-review-if-missing", action="store_true")
+
+    p_or = sub.add_parser("ops-report", help="Run operations health summary report")
+    p_or.add_argument("--date", required=True)
+    p_or.add_argument("--window-days", default="7")
+
+    sub.add_parser("test-all", help="Run full test suite")
+
+    p_loop = sub.add_parser("review-loop", help="Run review->tests loop until pass or max rounds")
+    p_loop.add_argument("--date", required=True)
+    p_loop.add_argument("--max-rounds", default="3")
+
+    args = parser.parse_args()
+    eng = LieEngine(config_path=args.config)
+
+    if args.cmd == "run-eod":
+        out = eng.run_eod(as_of=_parse_date(args.date))
+    elif args.cmd == "run-premarket":
+        out = eng.run_premarket(as_of=_parse_date(args.date))
+    elif args.cmd == "run-intraday-check":
+        out = eng.run_intraday_check(as_of=_parse_date(args.date), slot=args.slot)
+    elif args.cmd == "backtest":
+        result: BacktestResult = eng.run_backtest(start=_parse_date(args.start), end=_parse_date(args.end))
+        out = result.to_dict()
+    elif args.cmd == "review":
+        result2: ReviewDelta = eng.run_review(as_of=_parse_date(args.date))
+        out = result2.to_dict()
+    elif args.cmd == "run-review-cycle":
+        out = eng.run_review_cycle(
+            as_of=_parse_date(args.date),
+            max_rounds=int(args.max_rounds),
+            ops_window_days=int(args.ops_window_days) if args.ops_window_days not in {None, "", "none", "None"} else None,
+        )
+    elif args.cmd == "run-slot":
+        out = eng.run_slot(
+            as_of=_parse_date(args.date),
+            slot=args.slot,
+            max_review_rounds=int(args.max_review_rounds),
+        )
+    elif args.cmd == "run-session":
+        out = eng.run_session(
+            as_of=_parse_date(args.date),
+            include_review=not bool(args.skip_review),
+            max_review_rounds=int(args.max_review_rounds),
+        )
+    elif args.cmd == "run-daemon":
+        max_cycles = None if args.max_cycles in {None, "", "none", "None"} else int(args.max_cycles)
+        out = eng.run_daemon(
+            poll_seconds=int(args.poll_seconds),
+            max_cycles=max_cycles,
+            max_review_rounds=int(args.max_review_rounds),
+        )
+    elif args.cmd == "health-check":
+        out = eng.health_check(as_of=_parse_date(args.date) if args.date else None)
+    elif args.cmd == "stable-replay":
+        out = eng.stable_replay_check(
+            as_of=_parse_date(args.date),
+            days=int(args.days) if args.days not in {None, "", "none", "None"} else None,
+        )
+    elif args.cmd == "gate-report":
+        out = eng.gate_report(
+            as_of=_parse_date(args.date),
+            run_tests=bool(args.run_tests),
+            run_review_if_missing=bool(args.run_review_if_missing),
+        )
+    elif args.cmd == "ops-report":
+        out = eng.ops_report(
+            as_of=_parse_date(args.date),
+            window_days=int(args.window_days),
+        )
+    elif args.cmd == "test-all":
+        out = eng.test_all()
+    elif args.cmd == "review-loop":
+        out = eng.review_until_pass(as_of=_parse_date(args.date), max_rounds=int(args.max_rounds))
+    else:
+        raise ValueError(f"Unknown command: {args.cmd}")
+
+    print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()

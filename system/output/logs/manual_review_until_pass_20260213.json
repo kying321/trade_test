@@ -1,0 +1,45 @@
+{
+  "ts": "2026-02-13T18:09:59.887799",
+  "out": {
+    "passed": false,
+    "skipped": false,
+    "rounds": [
+      {
+        "round": 1,
+        "pass_gate": false,
+        "tests_ok": true,
+        "stable_replay_ok": true,
+        "stable_replay_days": 3,
+        "gate_passed": false,
+        "defect_plan": {
+          "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-13_defect_plan_round1.json",
+          "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-13_defect_plan_round1.md"
+        }
+      },
+      {
+        "round": 2,
+        "pass_gate": false,
+        "tests_ok": true,
+        "stable_replay_ok": true,
+        "stable_replay_days": 3,
+        "gate_passed": false,
+        "defect_plan": {
+          "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-13_defect_plan_round2.json",
+          "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-13_defect_plan_round2.md"
+        }
+      },
+      {
+        "round": 3,
+        "pass_gate": false,
+        "tests_ok": true,
+        "stable_replay_ok": true,
+        "stable_replay_days": 3,
+        "gate_passed": true,
+        "defect_plan": {
+          "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-13_defect_plan_round3.json",
+          "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-13_defect_plan_round3.md"
+        }
+      }
+    ]
+  }
+}

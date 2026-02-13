@@ -1,0 +1,24 @@
+{
+  "date": "2026-02-13",
+  "slot": "premarket",
+  "quality": {
+    "completeness": 1.0,
+    "unresolved_conflict_ratio": 0.0,
+    "flags": [],
+    "passed": true
+  },
+  "regime": {
+    "as_of": "2026-02-13",
+    "hurst": 0.5290262507187432,
+    "hmm_probs": {
+      "bull": 3.5044001991281836e-13,
+      "range": 0.0031607038380723714,
+      "bear": 0.9968392961615888
+    },
+    "atr_z": 1.4147856329623207,
+    "consensus": "不确定",
+    "protection_mode": true,
+    "rationale": "模型矛盾或置信度不足: votes=['neutral', 'downtrend', 'trend']"
+  },
+  "news_count": 16
+}

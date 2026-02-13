@@ -1,0 +1,36 @@
+timezone: Asia/Shanghai
+schedule:
+  premarket: "23:59"
+  intraday_slots: ["23:59", "23:59"]
+  eod: "23:59"
+  nightly_review: "23:59"
+universe:
+  core:
+    - {symbol: "300750", asset_class: "equity", theme: "新能源"}
+  max_dynamic_additions: 1
+thresholds:
+  hurst_trend: 0.6
+  hurst_mean_revert: 0.4
+  atr_extreme: 2.0
+  signal_confidence_min: 60.0
+  convexity_min: 3.0
+risk:
+  max_single_risk_pct: 2.0
+  max_total_exposure_pct: 50.0
+  max_symbol_pct: 15.0
+  max_theme_pct: 25.0
+  safety_bucket_pct: 85.0
+  convexity_bucket_pct: 15.0
+validation:
+  data_completeness_min: 0.99
+  unresolved_conflict_max: 0.005
+  positive_window_ratio_min: 0.70
+  max_drawdown_max: 0.18
+  required_stable_replay_days: 3
+  black_swan_score_threshold: 70.0
+  cooldown_consecutive_losses: 3
+  major_event_window_hours: 24
+  factor_lookback_days: 120
+paths:
+  output: output
+  sqlite: output/artifacts/lie_engine.db

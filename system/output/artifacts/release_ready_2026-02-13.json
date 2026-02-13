@@ -1,0 +1,14 @@
+{
+  "date": "2026-02-13",
+  "passed": true,
+  "rounds": [
+    {
+      "round": 1,
+      "pass_gate": true,
+      "tests_ok": true,
+      "stable_replay_ok": true,
+      "stable_replay_days": 3,
+      "gate_passed": true
+    }
+  ]
+}

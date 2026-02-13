@@ -1,0 +1,9 @@
+{
+  "ts": "2026-02-13T17:49:13.816022",
+  "out": {
+    "passed": false,
+    "skipped": true,
+    "reason": "max_rounds must be >= 1",
+    "rounds": []
+  }
+}

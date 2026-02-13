@@ -1,0 +1,38 @@
+as_of: '2026-02-13'
+parameter_changes:
+  win_rate: 0.4473519563431065
+  payoff: 1.5562630453935176
+  signal_confidence_min: 63.897001594882646
+factor_weights:
+  macro: 0.14963904488092686
+  industry: 0.29720683023065075
+  news: 0.13580246983368469
+  sentiment: 0.14079902957361753
+  fundamental: 0.10769821366082552
+  technical: 0.16885441182029468
+defects: []
+pass_gate: true
+notes:
+- All review gates passed
+change_reasons:
+  win_rate: 基于滚动样本外胜率做有界贝叶斯更新，避免过拟合漂移
+  payoff: 基于利润因子收缩更新，抑制极端窗口的偶然性
+  signal_confidence_min: 门槛通过时小步调整；失败时进入恢复带(55-70)并触发再验证
+factor_contrib_120d:
+  macro: 0.04745155135642899
+  industry: 0.9631729282495257
+  news: 0.08909080668196474
+  sentiment: 0.19738784844950993
+  technical: 0.15627403505784612
+  fundamental: 0.20992783212301822
+impact_window_days: 120
+rollback_anchor: /Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-13.yaml
+previous_parameters:
+  win_rate: 0.44693901590879803
+  payoff: 1.5615686598160945
+  signal_confidence_min: 63.80108869008983
+parameter_deltas:
+  win_rate: 0.00041294043430845084
+  payoff: -0.005305614422576932
+  signal_confidence_min: 0.09591290479281867
+generated_at: '2026-02-13T22:21:39.463877'
