@@ -44,6 +44,15 @@ def main() -> None:
     p_rbt.add_argument("--modes", default="ultra_short,swing,long", help="Comma-separated modes")
     p_rbt.add_argument("--review-days", default="5", help="Post-cutoff review window days (not used for backtest)")
 
+    p_sl = sub.add_parser("strategy-lab", help="Learn and validate new strategy candidates from market+reports")
+    p_sl.add_argument("--start", required=True)
+    p_sl.add_argument("--end", required=True)
+    p_sl.add_argument("--max-symbols", default="120")
+    p_sl.add_argument("--report-symbol-cap", default="40")
+    p_sl.add_argument("--workers", default="8")
+    p_sl.add_argument("--review-days", default="5")
+    p_sl.add_argument("--candidate-count", default="10")
+
     p_rv = sub.add_parser("review", help="Run post-market review and parameter update")
     p_rv.add_argument("--date", required=True)
 
@@ -66,6 +75,7 @@ def main() -> None:
     p_dm.add_argument("--poll-seconds", default="30")
     p_dm.add_argument("--max-cycles", default=None)
     p_dm.add_argument("--max-review-rounds", default="2")
+    p_dm.add_argument("--dry-run", action="store_true", help="Preview due slots without execution/state mutation")
 
     p_hc = sub.add_parser("health-check", help="Check daily output and artifacts health")
     p_hc.add_argument("--date", default=None)
@@ -88,7 +98,15 @@ def main() -> None:
     p_aa = sub.add_parser("architecture-audit", help="Run architecture audit report")
     p_aa.add_argument("--date", required=False, default=None)
 
-    sub.add_parser("test-all", help="Run full test suite")
+    p_da = sub.add_parser("dependency-audit", help="Run dependency layer audit report")
+    p_da.add_argument("--date", required=False, default=None)
+
+    p_ta = sub.add_parser("test-all", help="Run test suite")
+    p_ta.add_argument("--fast", action="store_true", help="Run deterministic subset for quick feedback")
+    p_ta.add_argument("--fast-ratio", default="0.10", help="Subset ratio in (0,1], e.g. 0.05")
+    p_ta.add_argument("--fast-shard-index", default="0", help="Shard index for parallel agents")
+    p_ta.add_argument("--fast-shard-total", default="1", help="Shard total for parallel agents")
+    p_ta.add_argument("--fast-seed", default="lie-fast-v1", help="Deterministic sampling seed")
 
     p_loop = sub.add_parser("review-loop", help="Run review->tests loop until pass or max rounds")
     p_loop.add_argument("--date", required=True)
@@ -125,6 +143,16 @@ def main() -> None:
             modes=[x.strip() for x in str(args.modes).split(",") if x.strip()],
             review_days=int(args.review_days),
         )
+    elif args.cmd == "strategy-lab":
+        out = eng.run_strategy_lab(
+            start=_parse_date(args.start),
+            end=_parse_date(args.end),
+            max_symbols=int(args.max_symbols),
+            report_symbol_cap=int(args.report_symbol_cap),
+            workers=int(args.workers),
+            review_days=int(args.review_days),
+            candidate_count=int(args.candidate_count),
+        )
     elif args.cmd == "review":
         result2: ReviewDelta = eng.run_review(as_of=_parse_date(args.date))
         out = result2.to_dict()
@@ -152,6 +180,7 @@ def main() -> None:
             poll_seconds=int(args.poll_seconds),
             max_cycles=max_cycles,
             max_review_rounds=int(args.max_review_rounds),
+            dry_run=bool(args.dry_run),
         )
     elif args.cmd == "health-check":
         out = eng.health_check(as_of=_parse_date(args.date) if args.date else None)
@@ -173,8 +202,16 @@ def main() -> None:
         )
     elif args.cmd == "architecture-audit":
         out = eng.architecture_audit(as_of=_parse_date(args.date) if args.date else None)
+    elif args.cmd == "dependency-audit":
+        out = eng.dependency_audit(as_of=_parse_date(args.date) if args.date else None)
     elif args.cmd == "test-all":
-        out = eng.test_all()
+        out = eng.test_all(
+            fast=bool(args.fast),
+            fast_ratio=float(args.fast_ratio),
+            fast_shard_index=int(args.fast_shard_index),
+            fast_shard_total=int(args.fast_shard_total),
+            fast_seed=str(args.fast_seed),
+        )
     elif args.cmd == "review-loop":
         out = eng.review_until_pass(as_of=_parse_date(args.date), max_rounds=int(args.max_rounds))
     else:

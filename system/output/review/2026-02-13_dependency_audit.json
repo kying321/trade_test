@@ -1,0 +1,144 @@
+{
+  "date": "2026-02-13",
+  "ok": true,
+  "files_checked": 47,
+  "edges": {
+    "backtest": [
+      "backtest",
+      "models",
+      "regime",
+      "signal"
+    ],
+    "cli": [
+      "config",
+      "engine",
+      "models"
+    ],
+    "config": [
+      "config"
+    ],
+    "data": [
+      "data",
+      "models"
+    ],
+    "engine": [
+      "backtest",
+      "config",
+      "data",
+      "models",
+      "orchestration",
+      "regime",
+      "reporting",
+      "research",
+      "review",
+      "risk",
+      "signal"
+    ],
+    "orchestration": [
+      "config",
+      "data",
+      "models",
+      "orchestration"
+    ],
+    "regime": [
+      "models",
+      "regime"
+    ],
+    "reporting": [
+      "data",
+      "models",
+      "reporting"
+    ],
+    "research": [
+      "backtest",
+      "data",
+      "research"
+    ],
+    "review": [
+      "models",
+      "review"
+    ],
+    "risk": [
+      "models",
+      "risk"
+    ],
+    "signal": [
+      "models",
+      "regime",
+      "signal"
+    ]
+  },
+  "violations": [],
+  "whitelist": {
+    "backtest": [
+      "backtest",
+      "models",
+      "regime",
+      "signal"
+    ],
+    "cli": [
+      "cli",
+      "config",
+      "engine",
+      "models"
+    ],
+    "config": [
+      "config"
+    ],
+    "data": [
+      "data",
+      "models"
+    ],
+    "engine": [
+      "backtest",
+      "config",
+      "data",
+      "engine",
+      "models",
+      "orchestration",
+      "regime",
+      "reporting",
+      "research",
+      "review",
+      "risk",
+      "signal"
+    ],
+    "models": [
+      "models"
+    ],
+    "orchestration": [
+      "config",
+      "data",
+      "models",
+      "orchestration"
+    ],
+    "regime": [
+      "models",
+      "regime"
+    ],
+    "reporting": [
+      "data",
+      "models",
+      "reporting"
+    ],
+    "research": [
+      "backtest",
+      "data",
+      "models",
+      "research"
+    ],
+    "review": [
+      "models",
+      "review"
+    ],
+    "risk": [
+      "models",
+      "risk"
+    ],
+    "signal": [
+      "models",
+      "regime",
+      "signal"
+    ]
+  }
+}

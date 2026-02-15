@@ -8,6 +8,8 @@ universe:
   core:
     - {symbol: "300750", asset_class: "equity", theme: "新能源"}
   max_dynamic_additions: 1
+data:
+  provider_profile: "opensource_dual"
 thresholds:
   hurst_trend: 0.6
   hurst_mean_revert: 0.4
@@ -24,6 +26,10 @@ risk:
 validation:
   data_completeness_min: 0.99
   unresolved_conflict_max: 0.005
+  source_confidence_min: 0.75
+  low_confidence_source_ratio_max: 0.40
+  use_mode_profiles: false
+  mode_profile_blend_with_live: 0.55
   positive_window_ratio_min: 0.70
   max_drawdown_max: 0.18
   required_stable_replay_days: 3
@@ -31,6 +37,69 @@ validation:
   cooldown_consecutive_losses: 3
   major_event_window_hours: 24
   factor_lookback_days: 120
+  review_use_strategy_lab: true
+  strategy_lab_merge_step: 0.18
+  strategy_lab_manifest_lookback_days: 45
+  review_autorun_strategy_lab_if_missing: false
+  strategy_lab_autorun_lookback_days: 120
+  strategy_lab_autorun_max_symbols: 8
+  strategy_lab_autorun_report_symbol_cap: 4
+  strategy_lab_autorun_workers: 1
+  strategy_lab_autorun_review_days: 2
+  strategy_lab_autorun_candidate_count: 3
+  mode_stats_lookback_days: 120
+  mode_health_min_samples: 1
+  mode_health_min_profit_factor: 1.0
+  mode_health_min_win_rate: 0.40
+  mode_health_max_drawdown_max: 0.18
+  mode_health_max_violations: 0
+  mode_adaptive_update_enabled: true
+  mode_adaptive_update_min_samples: 2
+  mode_adaptive_update_step: 0.08
+  mode_adaptive_good_profit_factor: 1.25
+  mode_adaptive_bad_profit_factor: 1.00
+  mode_adaptive_good_win_rate: 0.50
+  mode_adaptive_bad_win_rate: 0.42
+  mode_adaptive_good_drawdown_max: 0.12
+  mode_adaptive_bad_drawdown_max: 0.18
+  mode_switch_window_days: 20
+  mode_switch_max_rate: 0.45
+  mode_drift_window_days: 90
+  mode_drift_min_live_trades: 5
+  mode_drift_win_rate_max_gap: 0.15
+  mode_drift_profit_factor_max_gap: 0.50
+  mode_drift_focus_runtime_mode_only: true
+  ops_slot_window_days: 5
+  ops_slot_min_samples: 2
+  ops_slot_missing_ratio_max: 0.40
+  ops_slot_premarket_anomaly_ratio_max: 0.60
+  ops_slot_intraday_anomaly_ratio_max: 0.60
+  ops_slot_eod_anomaly_ratio_max: 0.60
+  ops_slot_source_confidence_floor: 0.75
+  ops_slot_risk_multiplier_floor: 0.20
+  ops_reconcile_window_days: 5
+  ops_reconcile_min_samples: 2
+  ops_reconcile_missing_ratio_max: 0.40
+  ops_reconcile_plan_gap_ratio_max: 0.20
+  ops_reconcile_closed_count_gap_ratio_max: 0.20
+  ops_reconcile_closed_pnl_gap_abs_max: 0.005
+  ops_reconcile_open_gap_ratio_max: 0.35
+  ops_state_min_samples: 3
+  ops_risk_multiplier_floor: 0.35
+  ops_risk_multiplier_drift_max: 0.30
+  ops_source_confidence_floor: 0.75
+  ops_mode_health_fail_days_max: 2
+  execution_min_risk_multiplier: 0.20
+  source_confidence_floor_risk_multiplier: 0.35
+  mode_health_risk_multiplier: 0.50
+  mode_health_insufficient_sample_risk_multiplier: 0.85
+  review_loop_fast_test_enabled: true
+  review_loop_fast_ratio: 0.15
+  review_loop_fast_shard_index: 0
+  review_loop_fast_shard_total: 1
+  review_loop_fast_seed: "lie-fast-v1"
+  review_loop_fast_then_full: true
+  review_backtest_lookback_days: 540
 paths:
   output: output
   sqlite: output/artifacts/lie_engine.db

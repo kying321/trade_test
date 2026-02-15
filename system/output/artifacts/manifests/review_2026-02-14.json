@@ -1,0 +1,25 @@
+{
+  "run_type": "review",
+  "run_id": "2026-02-14",
+  "created_at": "2026-02-15T00:27:57.769635",
+  "artifacts": {
+    "review_report": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-14_review.md",
+    "param_delta": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-14_param_delta.yaml",
+    "live_params": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live.yaml"
+  },
+  "metrics": {
+    "pass_gate": true,
+    "defects": 0,
+    "changed_params": 6,
+    "runtime_mode": "swing",
+    "mode_health_passed": true,
+    "mode_adaptive_applied": false,
+    "mode_adaptive_direction": "none"
+  },
+  "checks": {
+    "positive_window_ratio": 0.9554272031117118,
+    "max_drawdown": 0.17958424563701603,
+    "violations": 0
+  },
+  "metadata": {}
+}

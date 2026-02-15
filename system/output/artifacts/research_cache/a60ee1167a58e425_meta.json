@@ -1,0 +1,28 @@
+{
+  "created_at": "2026-02-14T13:27:58.080332",
+  "start_date": "2026-02-10",
+  "end_date": "2026-02-14",
+  "cutoff_date": "2026-02-14",
+  "review_end_date": "2026-02-16",
+  "review_days": 2,
+  "max_symbols": 1,
+  "report_symbol_cap": 1,
+  "universe": [
+    "300750"
+  ],
+  "news_records": 6,
+  "report_records": 0,
+  "review_news_records": 0,
+  "review_report_records": 0,
+  "fetch_stats": {
+    "universe_count": 1,
+    "bars_symbols": 1,
+    "bars_rows": 4,
+    "errors": {},
+    "strict_cutoff_enforced": true,
+    "cutoff_date": "2026-02-14",
+    "review_end_date": "2026-02-16",
+    "review_days": 2,
+    "universe_source_notice": "index constituents are latest snapshot; survivorship bias may remain"
+  }
+}

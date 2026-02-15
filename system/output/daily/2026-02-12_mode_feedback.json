@@ -1,0 +1,37 @@
+{
+  "runtime_mode": "swing",
+  "runtime_params": {
+    "signal_confidence_min": 57.73152958438446,
+    "convexity_min": 2.286733065034328,
+    "hold_days": 9.0,
+    "max_daily_trades": 2.0
+  },
+  "today": {
+    "signals": 0,
+    "plans": 0,
+    "avg_confidence": 0.0,
+    "avg_convexity": 0.0,
+    "closed_trades": 0,
+    "closed_pnl": 0.0
+  },
+  "history": {
+    "as_of": "2026-02-12",
+    "lookback_days": 365,
+    "modes": {}
+  },
+  "mode_health": {
+    "passed": true,
+    "active": false,
+    "runtime_mode": "swing",
+    "reason": "insufficient_samples",
+    "samples": 0,
+    "min_samples": 1
+  },
+  "risk_control": {
+    "risk_multiplier": 0.85,
+    "source_multiplier": 1.0,
+    "mode_multiplier": 0.85,
+    "mode_reason": "insufficient_samples",
+    "source_confidence_score": 0.7567670195978391
+  }
+}

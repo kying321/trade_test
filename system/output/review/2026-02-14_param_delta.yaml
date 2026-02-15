@@ -1,0 +1,125 @@
+as_of: '2026-02-14'
+parameter_changes:
+  win_rate: 0.44528872114488127
+  payoff: 1.428948155871248
+  signal_confidence_min: 54.95895463196548
+  convexity_min: 2.392740144520729
+  hold_days: 11.0
+  max_daily_trades: 2.0
+factor_weights:
+  macro: 0.1463430267685959
+  industry: 0.25975405273964974
+  news: 0.13415819765306433
+  sentiment: 0.10241192086497539
+  fundamental: 0.1428660663855243
+  technical: 0.21446673558819027
+defects: []
+pass_gate: true
+notes:
+- All review gates passed
+- strategy_lab_candidate=trend_convex_01; cutoff=2026-02-11; manifest=/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140611.json
+- mode_health=runtime_mode=swing; passed=True; active=True
+change_reasons:
+  win_rate: 基于滚动样本外胜率做有界贝叶斯更新，避免过拟合漂移
+  payoff: 基于利润因子收缩更新，抑制极端窗口的偶然性
+  signal_confidence_min: 融合 strategy-lab 最优候选 `trend_convex_01`（小步收敛，step=0.18）
+  convexity_min: 融合 strategy-lab 最优候选 `trend_convex_01`（小步收敛，step=0.18）
+  hold_days: 融合 strategy-lab 最优候选 `trend_convex_01`（小步收敛，step=0.18）
+  max_daily_trades: 融合 strategy-lab 最优候选 `trend_convex_01`（小步收敛，step=0.18）
+factor_contrib_120d:
+  macro: 0.07166850865477065
+  industry: 0.8271828946563174
+  news: 0.11909154986230806
+  sentiment: 0.01
+  technical: 0.4774363336205888
+  fundamental: 0.4509585579404391
+impact_window_days: 120
+rollback_anchor: /Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-14.yaml
+previous_parameters:
+  win_rate: 0.44573900742209893
+  payoff: 1.4432282211177596
+  signal_confidence_min: 55.61656413463933
+  convexity_min: 2.392740144520729
+  hold_days: 11.0
+  max_daily_trades: 2.0
+parameter_deltas:
+  win_rate: -0.0004502862772176597
+  payoff: -0.014280065246511597
+  signal_confidence_min: -0.65760950267385
+  convexity_min: 0.0
+  hold_days: 0.0
+  max_daily_trades: 0.0
+strategy_lab_candidate:
+  manifest_path: /Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140611.json
+  summary_path: /Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140607/summary.json
+  cutoff_date: '2026-02-11'
+  candidate:
+    name: trend_convex_01
+    rationale: 趋势驱动+凸性约束
+    params:
+      signal_confidence_min: 48.543436937742044
+      convexity_min: 2.392740144520729
+      hold_days: 11
+      max_daily_trades: 2
+    train_metrics:
+      annual_return: 0.0
+      max_drawdown: 0.0
+      positive_window_ratio: 1.0
+      trades: 0
+    validation_metrics:
+      annual_return: 0.0
+      max_drawdown: 0.0
+      positive_window_ratio: 1.0
+      trades: 0
+      violations: 0
+    factor_alignment_train: 0.0
+    factor_alignment_validation: 0.0
+    score: 0.5545000000000001
+    review_metrics:
+      annual_return: 0.0
+      max_drawdown: 0.0
+      positive_window_ratio: 1.0
+      trades: 0
+      violations: 0
+    factor_alignment_review: 0.0
+    robustness_score: 0.8225000000000001
+    accepted: true
+strategy_lab_autorun: {}
+runtime_mode: swing
+mode_history:
+  as_of: '2026-02-14'
+  lookback_days: 365
+  modes:
+    swing:
+      samples: 1
+      avg_annual_return: 0.04360044584612574
+      avg_win_rate: 0.4419866217786186
+      avg_profit_factor: 1.3242276773968285
+      avg_trades: 978.0
+      worst_drawdown: 0.17958424563701603
+      total_violations: 0
+mode_health:
+  passed: true
+  active: true
+  runtime_mode: swing
+  samples: 1
+  thresholds:
+    min_profit_factor: 1.0
+    min_win_rate: 0.4
+    max_drawdown_max: 0.18
+    max_violations: 0
+    min_samples: 1
+  stats:
+    avg_profit_factor: 1.3242276773968285
+    avg_win_rate: 0.4419866217786186
+    worst_drawdown: 0.17958424563701603
+    total_violations: 0
+  failed_rules: []
+mode_adaptive:
+  enabled: true
+  applied: false
+  runtime_mode: swing
+  samples: 1
+  min_samples: 3
+  reason: insufficient_samples
+generated_at: '2026-02-15T00:27:57.764586'

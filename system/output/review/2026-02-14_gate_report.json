@@ -1,0 +1,441 @@
+{
+  "date": "2026-02-14",
+  "passed": false,
+  "checks": {
+    "review_pass_gate": true,
+    "mode_health_ok": true,
+    "state_stability_ok": true,
+    "slot_anomaly_ok": false,
+    "mode_drift_ok": true,
+    "reconcile_drift_ok": true,
+    "tests_ok": true,
+    "health_ok": true,
+    "stable_replay_ok": true,
+    "data_completeness_ok": true,
+    "unresolved_conflict_ok": true,
+    "positive_window_ratio_ok": true,
+    "max_drawdown_ok": true,
+    "risk_violations_ok": true,
+    "rollback_anchor_ready": true
+  },
+  "metrics": {
+    "completeness": 1.0,
+    "unresolved_conflict_ratio": 0.0,
+    "positive_window_ratio": 0.9554272031117118,
+    "max_drawdown": 0.17958424563701603,
+    "violations": 0
+  },
+  "health": {
+    "date": "2026-02-14",
+    "status": "healthy",
+    "checks": {
+      "daily_briefing": true,
+      "daily_signals": true,
+      "daily_positions": true,
+      "sqlite": true,
+      "review_report": true,
+      "review_delta": true
+    },
+    "missing": []
+  },
+  "stable_replay": {
+    "as_of": "2026-02-14",
+    "replay_days": 3,
+    "passed": true,
+    "checks": [
+      {
+        "date": "2026-02-14",
+        "ok": true,
+        "health": {
+          "date": "2026-02-14",
+          "status": "healthy",
+          "checks": {
+            "daily_briefing": true,
+            "daily_signals": true,
+            "daily_positions": true,
+            "sqlite": true,
+            "review_report": true,
+            "review_delta": true
+          },
+          "missing": []
+        }
+      },
+      {
+        "date": "2026-02-13",
+        "ok": true,
+        "health": {
+          "date": "2026-02-13",
+          "status": "healthy",
+          "checks": {
+            "daily_briefing": true,
+            "daily_signals": true,
+            "daily_positions": true,
+            "sqlite": true
+          },
+          "missing": []
+        }
+      },
+      {
+        "date": "2026-02-12",
+        "ok": true,
+        "health": {
+          "date": "2026-02-12",
+          "status": "healthy",
+          "checks": {
+            "daily_briefing": true,
+            "daily_signals": true,
+            "daily_positions": true,
+            "sqlite": true
+          },
+          "missing": []
+        }
+      }
+    ]
+  },
+  "state_stability": {
+    "active": false,
+    "window_days": 20,
+    "samples": 3,
+    "min_samples": 5,
+    "metrics": {
+      "switch_count": 0,
+      "switch_rate": 0.0,
+      "risk_multiplier_min": 0.85,
+      "risk_multiplier_avg": 0.9,
+      "risk_multiplier_drift": 0.0,
+      "source_confidence_min": 0.7567670195978391,
+      "source_confidence_avg": 0.7697546650329667,
+      "mode_health_fail_days": 0
+    },
+    "thresholds": {
+      "mode_switch_max_rate": 0.45,
+      "ops_risk_multiplier_floor": 0.35,
+      "ops_risk_multiplier_drift_max": 0.3,
+      "ops_source_confidence_floor": 0.75,
+      "ops_mode_health_fail_days_max": 2
+    },
+    "checks": {
+      "switch_rate_ok": true,
+      "risk_multiplier_floor_ok": true,
+      "risk_multiplier_drift_ok": true,
+      "source_confidence_floor_ok": true,
+      "mode_health_fail_days_ok": true
+    },
+    "alerts": [
+      "insufficient_mode_feedback_samples"
+    ],
+    "series": [
+      {
+        "date": "2026-02-12",
+        "runtime_mode": "swing",
+        "risk_multiplier": 0.85,
+        "source_confidence_score": 0.7567670195978391,
+        "mode_health_passed": true
+      },
+      {
+        "date": "2026-02-13",
+        "runtime_mode": "swing",
+        "risk_multiplier": 0.85,
+        "source_confidence_score": 0.7595814532283635,
+        "mode_health_passed": true
+      },
+      {
+        "date": "2026-02-14",
+        "runtime_mode": "swing",
+        "risk_multiplier": 1.0,
+        "source_confidence_score": 0.7929155222726977,
+        "mode_health_passed": true
+      }
+    ]
+  },
+  "slot_anomaly": {
+    "active": true,
+    "window_days": 7,
+    "samples": 3,
+    "min_samples": 3,
+    "metrics": {
+      "expected_slots": 12,
+      "observed_slots": 9,
+      "missing_slots": 3,
+      "anomaly_slots": 2,
+      "missing_ratio": 0.25,
+      "premarket_anomaly_ratio": 0.0,
+      "intraday_anomaly_ratio": 0.0,
+      "eod_anomaly_ratio": 0.6666666666666666
+    },
+    "thresholds": {
+      "ops_slot_missing_ratio_max": 0.35,
+      "ops_slot_premarket_anomaly_ratio_max": 0.5,
+      "ops_slot_intraday_anomaly_ratio_max": 0.5,
+      "ops_slot_eod_anomaly_ratio_max": 0.5,
+      "ops_slot_source_confidence_floor": 0.75,
+      "ops_slot_risk_multiplier_floor": 0.2
+    },
+    "checks": {
+      "missing_ratio_ok": true,
+      "premarket_anomaly_ok": true,
+      "intraday_anomaly_ok": true,
+      "eod_anomaly_ok": false
+    },
+    "alerts": [
+      "slot_eod_anomaly_high"
+    ],
+    "slots": {
+      "premarket": {
+        "expected": 3,
+        "observed": 2,
+        "missing": 1,
+        "anomalies": 0,
+        "anomaly_ratio": 0.0,
+        "missing_ratio": 0.3333333333333333
+      },
+      "intraday": {
+        "expected": 6,
+        "observed": 4,
+        "missing": 2,
+        "anomalies": 0,
+        "anomaly_ratio": 0.0,
+        "missing_ratio": 0.3333333333333333
+      },
+      "eod": {
+        "expected": 3,
+        "observed": 3,
+        "missing": 0,
+        "anomalies": 2,
+        "anomaly_ratio": 0.6666666666666666,
+        "missing_ratio": 0.0
+      }
+    },
+    "series": [
+      {
+        "date": "2026-02-12",
+        "expected": 4,
+        "observed": 1,
+        "missing": 3,
+        "anomalies": 1,
+        "alerts": [
+          "premarket:missing",
+          "intraday:10:30:missing",
+          "intraday:14:30:missing",
+          "eod:quality_failed"
+        ]
+      },
+      {
+        "date": "2026-02-13",
+        "expected": 4,
+        "observed": 4,
+        "missing": 0,
+        "anomalies": 1,
+        "alerts": [
+          "eod:quality_failed"
+        ]
+      },
+      {
+        "date": "2026-02-14",
+        "expected": 4,
+        "observed": 4,
+        "missing": 0,
+        "anomalies": 0,
+        "alerts": []
+      }
+    ]
+  },
+  "mode_drift": {
+    "active": false,
+    "window_days": 120,
+    "runtime_mode": "swing",
+    "focus_runtime_mode_only": true,
+    "min_live_trades": 30,
+    "checks": {
+      "samples_ok": false,
+      "win_rate_gap_ok": true,
+      "profit_factor_gap_ok": true
+    },
+    "thresholds": {
+      "mode_drift_win_rate_max_gap": 0.12,
+      "mode_drift_profit_factor_max_gap": 0.4
+    },
+    "summary": {
+      "scope_modes": 1,
+      "compared_modes": 0,
+      "active_modes": 0
+    },
+    "alerts": [
+      "mode_drift_insufficient_live:swing",
+      "mode_drift_inactive"
+    ],
+    "modes": {
+      "swing": {
+        "baseline": {
+          "samples": 1,
+          "win_rate": 0.4419866217786186,
+          "profit_factor": 1.3242276773968285
+        },
+        "live": {
+          "trades": 0,
+          "win_rate": 0.0,
+          "profit_factor": 0.0
+        },
+        "gaps": {
+          "win_rate_abs": 0.4419866217786186,
+          "profit_factor_abs": 1.3242276773968285
+        },
+        "checks": {
+          "baseline_ok": true,
+          "samples_ok": false,
+          "win_rate_gap_ok": true,
+          "profit_factor_gap_ok": true
+        },
+        "active": false,
+        "reason": "insufficient_live_trades"
+      }
+    }
+  },
+  "reconcile_drift": {
+    "active": true,
+    "window_days": 7,
+    "samples": 3,
+    "min_samples": 3,
+    "metrics": {
+      "missing_days": 0,
+      "missing_ratio": 0.0,
+      "plan_gap_breach_ratio": 0.0,
+      "closed_count_gap_breach_ratio": 0.0,
+      "closed_pnl_gap_breach_ratio": 0.0,
+      "open_gap_breach_ratio": 0.0,
+      "avg_plan_gap_ratio": 0.0,
+      "avg_closed_count_gap_ratio": 0.0,
+      "avg_closed_pnl_gap_abs": 0.0,
+      "avg_open_gap_ratio": 0.0,
+      "open_gap_samples": 1
+    },
+    "thresholds": {
+      "ops_reconcile_missing_ratio_max": 0.35,
+      "ops_reconcile_plan_gap_ratio_max": 0.1,
+      "ops_reconcile_closed_count_gap_ratio_max": 0.1,
+      "ops_reconcile_closed_pnl_gap_abs_max": 0.001,
+      "ops_reconcile_open_gap_ratio_max": 0.25
+    },
+    "checks": {
+      "missing_ratio_ok": true,
+      "plan_count_gap_ok": true,
+      "closed_count_gap_ok": true,
+      "closed_pnl_gap_ok": true,
+      "open_count_gap_ok": true
+    },
+    "alerts": [],
+    "series": [
+      {
+        "date": "2026-02-12",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0
+        },
+        "alerts": []
+      },
+      {
+        "date": "2026-02-13",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0
+        },
+        "alerts": []
+      },
+      {
+        "date": "2026-02-14",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0
+        },
+        "alerts": []
+      }
+    ]
+  },
+  "rollback_recommendation": {
+    "active": false,
+    "level": "none",
+    "score": 1,
+    "reason_codes": [
+      "slot_anomaly"
+    ],
+    "action": "no_rollback",
+    "target_anchor": "",
+    "anchor_ready": true,
+    "cooldown_days": 0,
+    "candidates": [
+      {
+        "date": "2026-02-14",
+        "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-14.yaml",
+        "source": "params_backup"
+      },
+      {
+        "date": "2026-02-13",
+        "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-13.yaml",
+        "source": "params_backup"
+      }
+    ],
+    "alerts": [
+      "insufficient_mode_feedback_samples",
+      "slot_eod_anomaly_high",
+      "mode_drift_insufficient_live:swing",
+      "mode_drift_inactive"
+    ]
+  },
+  "tests": {
+    "skipped": true
+  }
+}

@@ -61,6 +61,48 @@ class RiskTests(unittest.TestCase):
         assert plan is not None
         self.assertEqual(plan.status, "TRANSLATED")
 
+    def test_risk_multiplier_scales_position(self) -> None:
+        manager = RiskManager(2.0, 50.0, 15.0, 25.0)
+        signal = SignalCandidate(
+            symbol="300750",
+            side=Side.LONG,
+            regime=RegimeLabel.STRONG_TREND,
+            position_score=4,
+            structure_score=5,
+            momentum_score=4,
+            confidence=80.0,
+            convexity_ratio=3.2,
+            entry_price=50.0,
+            stop_price=48.0,
+            target_price=56.0,
+            can_short=False,
+        )
+        budget = manager.build_budget(1_000_000, used_exposure_pct=0.0)
+        plan_full = manager.size_signal(
+            signal,
+            win_rate=0.45,
+            payoff=2.5,
+            budget=budget,
+            symbol_exposure_pct=0.0,
+            theme_exposure_pct=0.0,
+            protection_mode=False,
+            risk_multiplier=1.0,
+        )
+        plan_half = manager.size_signal(
+            signal,
+            win_rate=0.45,
+            payoff=2.5,
+            budget=budget,
+            symbol_exposure_pct=0.0,
+            theme_exposure_pct=0.0,
+            protection_mode=False,
+            risk_multiplier=0.5,
+        )
+        assert plan_full is not None
+        assert plan_half is not None
+        self.assertLess(plan_half.size_pct, plan_full.size_pct)
+        self.assertAlmostEqual(plan_half.size_pct / plan_full.size_pct, 0.5, delta=0.2)
+
 
 if __name__ == "__main__":
     unittest.main()

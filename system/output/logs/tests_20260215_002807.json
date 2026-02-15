@@ -1,0 +1,16 @@
+{
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "test_quality_flags_low_source_confidence (tests.test_data_quality.DataQualityTests.test_quality_flags_low_source_confidence) ... ok\ntest_estimate_factor_contrib_outputs_required_keys (tests.test_orchestration.OrchestrationTests.test_estimate_factor_contrib_outputs_required_keys) ... ok\ntest_quality_pass (tests.test_data_quality.DataQualityTests.test_quality_pass) ... ok\ntest_run_slot_and_session (tests.test_engine_integration.EngineIntegrationTests.test_run_slot_and_session) ... ok\ntest_run_review_applies_mode_health_guard (tests.test_engine_integration.EngineIntegrationTests.test_run_review_applies_mode_health_guard) ... ok\ntest_review_until_pass_defect_plan_includes_state_stability_breaches (tests.test_release_orchestrator.ReleaseOrchestratorTests.test_review_until_pass_defect_plan_includes_state_stability_breaches) ... ok\ntest_run_daemon_allows_same_trigger_time_for_eod_and_review (tests.test_scheduler_orchestrator.SchedulerOrchestratorTests.test_run_daemon_allows_same_trigger_time_for_eod_and_review) ... ok\ntest_positive_window_ratio_uses_neutral_band (tests.test_backtest.BacktestTests.test_positive_window_ratio_uses_neutral_band) ... ok\ntest_kelly_formula (tests.test_risk.RiskTests.test_kelly_formula) ... ok\n\n----------------------------------------------------------------------\nRan 9 tests in 8.858s\n\nOK\n",
+  "failed_tests": [],
+  "summary_line": "error=none; mode=fast; discovered=84; selected=9; ran=9; failed=0",
+  "mode": "fast",
+  "fast": true,
+  "fast_ratio": 0.1,
+  "fast_shard_index": 0,
+  "fast_shard_total": 1,
+  "fast_seed": "lie-fast-v1",
+  "tests_discovered": 84,
+  "tests_selected": 9,
+  "tests_ran": 9
+}

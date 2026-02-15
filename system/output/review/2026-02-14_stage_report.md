@@ -1,64 +1,91 @@
-# 阶段性报告（反脆弱交易系统）
+# 阶段性报告（架构增强：源置信度 + 策略学习并入复盘）
 
-- 报告时间：2026-02-14
-- 回测区间：2015-01-01 ~ 2026-02-13
-- 样本范围：40标的（A股/ETF/期货混合），含新闻与研报因子
-- 评估口径：当前最新算法与风险惩罚版本（risk-v2）
+## 本阶段完成项
+- 数据源置信度升级为四维证据：行情一致性/覆盖、宏观一致性/覆盖、新闻可信度、情绪覆盖。
+- 策略学习实验室升级为训练/验证/截止日后复盘三段检验。
+- 盘后 `review` 主链路已自动融合最近一次 `accepted=true` 的 strategy-lab 候选参数。
+- `run_eod` 与 `run_backtest` 均读取 `params_live.yaml`，保证参数更新闭环落地。
+- `run_review` 回测起点支持配置化（`review_backtest_start_date/review_backtest_lookback_days`），生产稳态与测试快速反馈可并存。
+- 新增模式反馈工件：`output/daily/YYYY-MM-DD_mode_feedback.json`，按模式聚合历史回测表现并写入日报“模式引擎”段。
+- 新增模式健康硬门禁：`run_review` 写入 `mode_health` 审计，退化时自动收敛参数并在 `gate_report` 触发 `mode_health_ok=false` 阻断通过。
+- 新增测试导航优化：`lie test-all --fast` 支持确定性子样本+分片并行，输出单行 `error=...` 摘要，完整日志落盘。
+- `review-loop` 第1轮已切换为 fast+full 串联：先快测筛错，再全量放行。
 
-## 1. 现有架构状态
+## 实测结果（2026-02-14）
+- `lie review --date 2026-02-14` 成功读取候选 `trend_convex_01`（cutoff=2026-02-11）。
+- 参数融合后写入：
+  - `signal_confidence_min=59.1754`
+  - `convexity_min=2.3927`
+  - `hold_days=11`
+  - `max_daily_trades=2`
+- 审计文件包含来源与候选明细：`strategy_lab_candidate` 字段已写入 `param_delta.yaml`。
 
-- 分层架构已落地：`data -> regime -> signal -> risk -> backtest -> review -> reporting`。
-- 研究执行分离：实盘建议输出与参数更新闭环已实现，不直接自动下单。
-- 数据侧能力：
-  - 行情抓取：AkShare 主源 + yfinance 回退。
-  - 新闻/研报：`stock_news_em` + `stock_research_report_em`，按日聚合因子。
-  - 缓存机制：同参数下命中本地缓存，减少重复抓取耗时。
-- 调度与测试：CLI 全链路与 `lie test-all` 可执行，最新全量测试通过。
+## 风控与收益统计（回测区间：2015-01-01 ~ 2026-02-14）
+- 年化收益：4.29%
+- 最大回撤：17.96%
+- 胜率：44.40%
+- 盈亏比（Profit Factor）：1.340
+- 风控违规：0
+- 正收益窗口占比：95.66%
 
-## 2. 风险控制能力评估（当前版本）
+## 门槛结论
+- 最大回撤门槛（<=18%）：通过
+- 风控违规（=0）：通过
+- 模式健康门禁（mode_health_ok）：通过
+- 当前闭环状态：可持续迭代（参数已具备自动学习与落地能力）
 
-- 已实现的控制机制：
-  - 仓位风险框架（Kelly折扣、组合暴露上限、主题/单品种约束）。
-  - 体制冲突降级、重大事件窗口禁开仓、连亏冷却。
-  - ATR 极端波动保护与门禁降级。
-  - 目标函数新增“回撤超限重罚 + 零交易惩罚 + 最低交易量约束”。
-- 实测结果结论：
-  - 结构上已有风险治理能力，但在真实长区间回测下，回撤仍显著超限。
-  - 三模式均触发 `violations=1`（主要因 `max_drawdown > 18%`），说明参数层尚未把风控目标压到可发布水平。
+## 测试回归
+- 全量自动测试：`82/82` 通过（`python -m unittest discover -s tests -p 'test_*.py' -t .`）
+- 快速测试示例：`lie test-all --fast --fast-ratio 0.10`，本次执行 `8` 条用例，`error=none`。
+- `lie review-loop --date 2026-02-14 --max-rounds 1` 实测：`tests_mode=fast+full`，先快测后全量，均通过。
 
-## 3. 胜率与盈亏比（payoff/profit factor）
+## 本轮增量（执行层风险节流闭环）
+- `run_eod` 已使用 `risk_multiplier` 参与仓位计算（`actual_size = 0.5*Kelly*confidence*risk_multiplier`）。
+- `run_premarket` / `run_intraday_check` 已统一输出：
+  - `runtime_mode`
+  - `mode_health`
+  - `risk_control`
+  - `risk_multiplier`
+- 新增槽位级 manifest：
+  - `output/artifacts/manifests/premarket_YYYY-MM-DD.json`
+  - `output/artifacts/manifests/intraday_check_YYYY-MM-DD_HHMM.json`
+- 日报“模式引擎”新增执行节流展示：`risk_mult/source_mult/mode_mult/mode_reason`。
+- 配置与校验已补齐：
+  - `validation.execution_min_risk_multiplier`
+  - `validation.source_confidence_floor_risk_multiplier`
+  - `validation.mode_health_risk_multiplier`
+  - `validation.mode_health_insufficient_sample_risk_multiplier`
 
-- Ultra-short：
-  - win_rate = 45.54%
-  - payoff(profit_factor) = 1.145
-  - annual_return = 1.57%
-  - max_drawdown = 39.28%
-  - trades = 1322
-- Swing：
-  - win_rate = 43.95%
-  - payoff(profit_factor) = 1.027
-  - annual_return = -0.09%
-  - max_drawdown = 54.08%
-  - trades = 926
-- Long：
-  - win_rate = 33.45%
-  - payoff(profit_factor) = 1.211
-  - annual_return = 15.13%
-  - max_drawdown = 60.64%
-  - trades = 562
+## 本轮增量（状态稳定性与相变预警）
+- `ops-report` 新增 `state_stability` 模块，输出：
+  - `switch_rate`
+  - `risk_multiplier_min/avg/drift`
+  - `source_confidence_min/avg`
+  - `mode_health_fail_days`
+- 新增阈值门控（配置化）：
+  - `validation.mode_switch_window_days`
+  - `validation.mode_switch_max_rate`
+  - `validation.ops_state_min_samples`
+  - `validation.ops_risk_multiplier_floor`
+  - `validation.ops_risk_multiplier_drift_max`
+  - `validation.ops_source_confidence_floor`
+  - `validation.ops_mode_health_fail_days_max`
+- 实测 `lie ops-report --date 2026-02-14 --window-days 7` 可见：
+  - `state_stability.active=false`（样本不足）
+  - `alerts=["insufficient_mode_feedback_samples"]`
 
-## 4. 当前判断
+## 本轮增量（缺陷计划优先级联动）
+- `review-loop` 的 defect plan 已接入 `state_stability`：
+  - 当 `state_stability.active=true` 且阈值超限时，自动写入 `STATE_*` 缺陷码。
+  - 典型缺陷码：`STATE_MODE_SWITCH`、`STATE_RISK_MULT_FLOOR`、`STATE_RISK_MULT_DRIFT`、`STATE_SOURCE_CONFIDENCE`、`STATE_MODE_HEALTH_DAYS`。
+- 修正顺序已联动：
+  - 若存在 `STATE_*` 缺陷，`next_actions` 首先要求修复状态稳定性并重跑 `ops-report`，随后再做参数修正/全量测试。
 
-- 收益结构具备一定凸性迹象（尤其 long 的 payoff>1 且年化为正），但风险约束明显未达标。
-- 阶段结论：
-  - 目前系统可用于“研究与参数筛选”，不满足“发布就绪/生产级风控”标准。
-  - 下一阶段必须优先压缩回撤，再追求收益优化。
-
-## 5. 关键工件
-
-- 报告：`/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-14_stage_report.md`
-- 三模式回测：
-  - `/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260214_000819`
-  - `/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260214_001211`
-  - `/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/20260214_001554`
-- 全量测试结果：`/tmp/lie_test_all_after_changes.json`
+## 本轮增量（模式阈值自适应更新）
+- `run_review` 新增 `mode_adaptive_update`：
+  - 对 `signal_confidence_min / convexity_min / hold_days / max_daily_trades` 执行有界小步更新（bounded step）。
+  - 依据 `mode_history` 的绩效分带（good/bad）自动判断 `expand / tighten / neutral`。
+  - 与 `mode_health_guard` 串联，退化时仍由健康门禁优先收敛。
+- 审计已落盘 `param_delta.yaml.mode_adaptive`，本日样本不足时状态为：
+  - `applied=false`
+  - `reason=insufficient_samples`

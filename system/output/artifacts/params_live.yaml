@@ -1,3 +1,6 @@
-win_rate: 0.4473519563431065
-payoff: 1.5562630453935176
-signal_confidence_min: 63.897001594882646
+win_rate: 0.44528872114488127
+payoff: 1.428948155871248
+signal_confidence_min: 54.95895463196548
+convexity_min: 2.392740144520729
+hold_days: 11.0
+max_daily_trades: 2.0

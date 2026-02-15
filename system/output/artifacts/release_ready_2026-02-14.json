@@ -1,0 +1,27 @@
+{
+  "date": "2026-02-14",
+  "passed": true,
+  "rounds": [
+    {
+      "round": 1,
+      "tests_mode": "fast+full",
+      "pass_gate": true,
+      "tests_ok": true,
+      "stable_replay_ok": true,
+      "stable_replay_days": 3,
+      "gate_passed": true,
+      "fast_tests": {
+        "returncode": 0,
+        "summary_line": "error=none; mode=fast; discovered=77; selected=8; ran=8; failed=0",
+        "tests_ran": 8,
+        "failed_tests": []
+      },
+      "full_tests": {
+        "returncode": 0,
+        "summary_line": "error=none; mode=full; discovered=N/A; selected=77; ran=77; failed=0",
+        "tests_ran": 77,
+        "failed_tests": []
+      }
+    }
+  ]
+}

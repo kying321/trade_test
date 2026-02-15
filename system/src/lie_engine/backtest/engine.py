@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -80,10 +80,13 @@ def run_event_backtest(
     mean_thr: float,
     atr_extreme: float,
 ) -> BacktestResult:
-    bars = bars.copy()
-    bars["ts"] = pd.to_datetime(bars["ts"])
-    bars = bars[(bars["ts"].dt.date >= start) & (bars["ts"].dt.date <= end)].sort_values(["ts", "symbol"])
-    if bars.empty:
+    bars_all = bars.copy()
+    bars_all["ts"] = pd.to_datetime(bars_all["ts"])
+    warmup_days = max(int(cfg.proxy_lookback) * 3, 260)
+    warmup_start = start - timedelta(days=warmup_days)
+    bars_all = bars_all[(bars_all["ts"].dt.date >= warmup_start) & (bars_all["ts"].dt.date <= end)].sort_values(["ts", "symbol"])
+    eval_slice = bars_all[(bars_all["ts"].dt.date >= start) & (bars_all["ts"].dt.date <= end)]
+    if eval_slice.empty:
         return BacktestResult(
             start=start,
             end=end,
@@ -100,7 +103,7 @@ def run_event_backtest(
             by_asset={},
         )
 
-    dates = sorted(bars["ts"].dt.date.unique())
+    dates = sorted(eval_slice["ts"].dt.date.unique())
     equity = 1.0
     equity_points = []
     trades_rows = []
@@ -108,7 +111,7 @@ def run_event_backtest(
     last_regime = None
 
     for i, d in enumerate(dates):
-        hist = bars[bars["ts"].dt.date <= d]
+        hist = bars_all[bars_all["ts"].dt.date <= d]
         if hist["symbol"].nunique() < 2:
             equity_points.append({"date": d.isoformat(), "equity": equity})
             continue
@@ -158,7 +161,7 @@ def run_event_backtest(
         day_ret = 0.0
         executed_count = 0
         for sig in sigs:
-            symbol_df = bars[bars["symbol"] == sig.symbol].sort_values("ts").reset_index(drop=True)
+            symbol_df = bars_all[bars_all["symbol"] == sig.symbol].sort_values("ts").reset_index(drop=True)
             entry_row = symbol_df[symbol_df["ts"].dt.date == d]
             if entry_row.empty:
                 continue

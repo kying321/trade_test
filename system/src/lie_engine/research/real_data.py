@@ -57,6 +57,7 @@ class RealDataBundle:
     news_records: int
     report_records: int
     fetch_stats: dict[str, Any]
+    review_bars: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
     cutoff_date: date | None = None
     review_days: int = 0
     review_news_daily: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
@@ -328,7 +329,7 @@ def load_real_data_bundle(
     review_end = cutoff + timedelta(days=review_days) if include_post_review and review_days > 0 else cutoff
 
     cache_key_src = (
-        "v3|"
+        "v4|"
         f"{start.isoformat()}|{end.isoformat()}|{cutoff.isoformat()}|{review_end.isoformat()}|"
         f"{max_symbols}|{report_symbol_cap}|{include_post_review}|{','.join(sorted(core_symbols))}"
     )
@@ -383,7 +384,8 @@ def load_real_data_bundle(
             created_at = datetime.fromisoformat(str(meta.get("created_at")))
             age_hours = (datetime.now() - created_at).total_seconds() / 3600.0
             if age_hours <= max(0.1, float(cache_ttl_hours)):
-                bars = pd.read_parquet(bars_cache_path)
+                bars_all = pd.read_parquet(bars_cache_path)
+                bars_all["ts"] = pd.to_datetime(bars_all["ts"], errors="coerce")
                 news_daily = _read_series(news_cache_path, "news_score")
                 report_daily = _read_series(report_cache_path, "report_score")
                 review_news_daily = _read_series(review_news_cache_path, "news_score")
@@ -392,9 +394,21 @@ def load_real_data_bundle(
                     cached_cutoff = datetime.fromisoformat(str(meta.get("cutoff_date", cutoff.isoformat()))).date()
                 except Exception:
                     cached_cutoff = cutoff
+                try:
+                    cached_review_end = datetime.fromisoformat(str(meta.get("review_end_date", review_end.isoformat()))).date()
+                except Exception:
+                    cached_review_end = review_end
+
+                bars = bars_all[bars_all["ts"].dt.date <= cached_cutoff].copy()
+                review_bars = bars_all[
+                    (bars_all["ts"].dt.date > cached_cutoff) & (bars_all["ts"].dt.date <= cached_review_end)
+                ].copy()
+                bars = bars.sort_values(["ts", "symbol"]).reset_index(drop=True)
+                review_bars = review_bars.sort_values(["ts", "symbol"]).reset_index(drop=True)
 
                 return RealDataBundle(
                     bars=bars,
+                    review_bars=review_bars,
                     universe=list(meta.get("universe", [])),
                     news_daily=news_daily,
                     report_daily=report_daily,
@@ -420,7 +434,7 @@ def load_real_data_bundle(
     bars_frames: list[pd.DataFrame] = []
     errors: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=max(2, workers)) as ex:
-        futs = [ex.submit(_fetch_one_symbol, s, start, cutoff) for s in universe]
+        futs = [ex.submit(_fetch_one_symbol, s, start, review_end) for s in universe]
         for f in as_completed(futs):
             symbol, df, err = f.result()
             if err:
@@ -431,10 +445,19 @@ def load_real_data_bundle(
             else:
                 errors[symbol] = "empty"
 
-    bars = pd.concat(bars_frames, ignore_index=True) if bars_frames else pd.DataFrame(
+    bars_all = pd.concat(bars_frames, ignore_index=True) if bars_frames else pd.DataFrame(
         columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"]
     )
+    bars_all = bars_all.sort_values(["ts", "symbol"]).reset_index(drop=True)
+    ts_date = pd.to_datetime(bars_all["ts"]).dt.date if not bars_all.empty else pd.Series(dtype="object")
+    bars = bars_all[ts_date <= cutoff].copy() if not bars_all.empty else bars_all.copy()
+    review_bars = (
+        bars_all[(ts_date > cutoff) & (ts_date <= review_end)].copy()
+        if not bars_all.empty
+        else pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    )
     bars = bars.sort_values(["ts", "symbol"]).reset_index(drop=True)
+    review_bars = review_bars.sort_values(["ts", "symbol"]).reset_index(drop=True)
 
     eq_symbols = [s for s in universe if EQUITY_RE.match(s)][: max(5, int(report_symbol_cap))]
     news_frames: list[pd.DataFrame] = []
@@ -463,6 +486,7 @@ def load_real_data_bundle(
 
     bundle = RealDataBundle(
         bars=bars,
+        review_bars=review_bars,
         universe=universe,
         news_daily=news_daily,
         report_daily=report_daily,
@@ -478,6 +502,7 @@ def load_real_data_bundle(
             "universe_count": len(universe),
             "bars_symbols": int(bars["symbol"].nunique()) if not bars.empty else 0,
             "bars_rows": int(len(bars)),
+            "review_bars_rows": int(len(review_bars)),
             "errors": errors,
             "strict_cutoff_enforced": True,
             "cutoff_date": cutoff.isoformat(),
@@ -488,7 +513,7 @@ def load_real_data_bundle(
     )
     if cache_meta and bars_cache_path and news_cache_path and report_cache_path and review_news_cache_path and review_report_cache_path:
         try:
-            bars.to_parquet(bars_cache_path, index=False)
+            bars_all.to_parquet(bars_cache_path, index=False)
             pd.DataFrame({"date": list(news_daily.index), "news_score": news_daily.values}).to_csv(news_cache_path, index=False)
             pd.DataFrame({"date": list(report_daily.index), "report_score": report_daily.values}).to_csv(report_cache_path, index=False)
             pd.DataFrame({"date": list(review_news_daily.index), "news_score": review_news_daily.values}).to_csv(review_news_cache_path, index=False)
@@ -503,6 +528,8 @@ def load_real_data_bundle(
                 "max_symbols": int(max_symbols),
                 "report_symbol_cap": int(report_symbol_cap),
                 "universe": universe,
+                "bars_rows": int(len(bars)),
+                "review_bars_rows": int(len(review_bars)),
                 "news_records": int(len(news_df)),
                 "report_records": int(len(report_df)),
                 "review_news_records": int(len(review_news_df)),

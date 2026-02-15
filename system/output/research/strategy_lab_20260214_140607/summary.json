@@ -1,0 +1,195 @@
+{
+  "started_at": "2026-02-14T14:06:07.763978",
+  "ended_at": "2026-02-14T14:06:11.158885",
+  "elapsed_seconds": 3.394907,
+  "start_date": "2026-01-15",
+  "end_date": "2026-02-11",
+  "train_end_date": "2026-01-28",
+  "validation_start_date": "2026-01-29",
+  "cutoff_date": "2026-02-11",
+  "review_days": 2,
+  "universe_count": 1,
+  "bars_rows": 20,
+  "review_bars_rows": 2,
+  "news_records": 6,
+  "report_records": 1,
+  "market_insights": {
+    "trend_strength_z": 0.0,
+    "volatility_z": 0.0,
+    "tail_risk_z": -0.9637007226036448,
+    "mean_return": 0.002183137066259821,
+    "volatility": 0.014451249181779813
+  },
+  "report_insights": {
+    "news_bias_z": 0.0,
+    "report_bias_z": 0.5,
+    "news_report_agreement": 0.0,
+    "news_bias": 0.0,
+    "report_bias": 0.21525423728813559
+  },
+  "review_start_date": "2026-02-12",
+  "review_end_date": "2026-02-13",
+  "review_news_records": 2,
+  "review_report_records": 0,
+  "candidates": [
+    {
+      "name": "trend_convex_01",
+      "rationale": "趋势驱动+凸性约束",
+      "params": {
+        "signal_confidence_min": 48.543436937742044,
+        "convexity_min": 2.392740144520729,
+        "hold_days": 11,
+        "max_daily_trades": 2
+      },
+      "train_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0
+      },
+      "validation_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "violations": 0
+      },
+      "factor_alignment_train": 0.0,
+      "factor_alignment_validation": 0.0,
+      "score": 0.5545000000000001,
+      "review_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "violations": 0
+      },
+      "factor_alignment_review": 0.0,
+      "robustness_score": 0.8225000000000001,
+      "accepted": true
+    },
+    {
+      "name": "report_momentum_02",
+      "rationale": "研报偏向驱动的动量延续",
+      "params": {
+        "signal_confidence_min": 46.543436937742044,
+        "convexity_min": 2.192740144520729,
+        "hold_days": 14,
+        "max_daily_trades": 2
+      },
+      "train_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0
+      },
+      "validation_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "violations": 0
+      },
+      "factor_alignment_train": 0.0,
+      "factor_alignment_validation": 0.0,
+      "score": 0.5545000000000001,
+      "review_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "violations": 0
+      },
+      "factor_alignment_review": 0.0,
+      "robustness_score": 0.8225000000000001,
+      "accepted": true
+    },
+    {
+      "name": "news_reversion_03",
+      "rationale": "新闻冲击后的均值回归",
+      "params": {
+        "signal_confidence_min": 43.543436937742044,
+        "convexity_min": 1.9927401445207291,
+        "hold_days": 7,
+        "max_daily_trades": 3
+      },
+      "train_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0
+      },
+      "validation_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "violations": 0
+      },
+      "factor_alignment_train": 0.0,
+      "factor_alignment_validation": 0.0,
+      "score": 0.5545000000000001,
+      "review_metrics": {
+        "annual_return": 0.0,
+        "max_drawdown": 0.0,
+        "positive_window_ratio": 1.0,
+        "trades": 0,
+        "violations": 0
+      },
+      "factor_alignment_review": 0.0,
+      "robustness_score": 0.8225000000000001,
+      "accepted": true
+    }
+  ],
+  "best_candidate": {
+    "name": "trend_convex_01",
+    "rationale": "趋势驱动+凸性约束",
+    "params": {
+      "signal_confidence_min": 48.543436937742044,
+      "convexity_min": 2.392740144520729,
+      "hold_days": 11,
+      "max_daily_trades": 2
+    },
+    "train_metrics": {
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "positive_window_ratio": 1.0,
+      "trades": 0
+    },
+    "validation_metrics": {
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "positive_window_ratio": 1.0,
+      "trades": 0,
+      "violations": 0
+    },
+    "factor_alignment_train": 0.0,
+    "factor_alignment_validation": 0.0,
+    "score": 0.5545000000000001,
+    "review_metrics": {
+      "annual_return": 0.0,
+      "max_drawdown": 0.0,
+      "positive_window_ratio": 1.0,
+      "trades": 0,
+      "violations": 0
+    },
+    "factor_alignment_review": 0.0,
+    "robustness_score": 0.8225000000000001,
+    "accepted": true
+  },
+  "output_dir": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140607",
+  "data_fetch_stats": {
+    "universe_count": 1,
+    "bars_symbols": 1,
+    "bars_rows": 20,
+    "review_bars_rows": 2,
+    "errors": {},
+    "strict_cutoff_enforced": true,
+    "cutoff_date": "2026-02-11",
+    "review_end_date": "2026-02-13",
+    "review_days": 2,
+    "universe_source_notice": "index constituents are latest snapshot; survivorship bias may remain",
+    "cache_hit": false,
+    "cache_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/research_cache/270c785c07a9247a_meta.json"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "test_run_eod_outputs_contract_files (tests.test_engine_integration.EngineIntegrationTests.test_run_eod_outputs_contract_files) ... ok\ntest_hurst_trend_higher_than_random (tests.test_regime.RegimeTests.test_hurst_trend_higher_than_random) ... ok\ntest_range_signal_generation (tests.test_signal.SignalTests.test_range_signal_generation) ... ok\ntest_backtest_runs (tests.test_backtest.BacktestTests.test_backtest_runs) ... ok\ntest_run_review_cycle (tests.test_engine_integration.EngineIntegrationTests.test_run_review_cycle) ... ok\ntest_run_strategy_lab_manifest (tests.test_engine_integration.EngineIntegrationTests.test_run_strategy_lab_manifest) ... ok\ntest_news_normalization_uses_source_reliability_and_category_extraction (tests.test_data_pipeline.DataPipelineTests.test_news_normalization_uses_source_reliability_and_category_extraction) ... ok\ntest_health_check_review_required_toggle (tests.test_observability_orchestrator.ObservabilityOrchestratorTests.test_health_check_review_required_toggle) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 15.552s\n\nOK\n",
+  "failed_tests": [],
+  "summary_line": "error=none; mode=fast; discovered=75; selected=8; ran=8; failed=0",
+  "mode": "fast",
+  "fast": true,
+  "fast_ratio": 0.1,
+  "fast_shard_index": 0,
+  "fast_shard_total": 1,
+  "fast_seed": "nav-test-1",
+  "tests_discovered": 75,
+  "tests_selected": 8,
+  "tests_ran": 8
+}

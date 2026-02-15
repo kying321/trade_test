@@ -1,0 +1,23 @@
+{
+  "run_type": "strategy_lab",
+  "run_id": "20260214_140526",
+  "created_at": "2026-02-14T14:05:26.684835",
+  "artifacts": {
+    "summary": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140526/summary.json",
+    "report": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140526/report.md",
+    "best_strategy": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140526/best_strategy.yaml"
+  },
+  "metrics": {
+    "universe_count": 1,
+    "bars_rows": 4,
+    "candidate_count": 3
+  },
+  "checks": {
+    "has_best_candidate": true,
+    "strict_cutoff_enforced": true
+  },
+  "metadata": {
+    "cutoff_date": "2026-02-14",
+    "review_days": 2
+  }
+}

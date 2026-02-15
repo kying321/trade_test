@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from lie_engine.data.quality import DataQualityReport
 from lie_engine.models import RegimeState, SignalCandidate, TradePlan
@@ -24,6 +25,7 @@ def render_daily_briefing(
     next_events: list[str],
     black_swan_score: float = 0.0,
     non_trade_reasons: list[str] | None = None,
+    mode_feedback: dict[str, Any] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# 📊 离厄反脆弱简报 | {as_of.isoformat()}")
@@ -31,6 +33,63 @@ def render_daily_briefing(
     lines.append("## 🌡️ 市场温度计")
     lines.append(f"当前体制：**{regime.consensus.value}**；保护模式：**{'是' if regime.protection_mode else '否'}**")
     lines.append("")
+    if mode_feedback:
+        lines.append("## 🧭 模式引擎")
+        runtime_mode = str(mode_feedback.get("runtime_mode", "base"))
+        lines.append(f"- 当前运行模式：`{runtime_mode}`")
+        runtime_params = mode_feedback.get("runtime_params", {})
+        if isinstance(runtime_params, dict) and runtime_params:
+            lines.append(
+                "- 模式参数："
+                + f"conf>={float(runtime_params.get('signal_confidence_min', 0.0)):.1f}, "
+                + f"conv>={float(runtime_params.get('convexity_min', 0.0)):.2f}, "
+                + f"hold={int(float(runtime_params.get('hold_days', 0.0)))}, "
+                + f"max_trades={int(float(runtime_params.get('max_daily_trades', 0.0)))}"
+            )
+        today = mode_feedback.get("today", {})
+        if isinstance(today, dict) and today:
+            lines.append(
+                "- 当日模式质量："
+                + f"signals={int(today.get('signals', 0))}, "
+                + f"plans={int(today.get('plans', 0))}, "
+                + f"avg_conf={float(today.get('avg_confidence', 0.0)):.1f}%, "
+                + f"avg_conv={float(today.get('avg_convexity', 0.0)):.2f}"
+            )
+        mode_health = mode_feedback.get("mode_health", {})
+        if isinstance(mode_health, dict) and mode_health:
+            lines.append(
+                "- 模式健康："
+                + f"passed={bool(mode_health.get('passed', True))}, "
+                + f"active={bool(mode_health.get('active', False))}, "
+                + f"reason={str(mode_health.get('reason', 'ok'))}"
+            )
+        risk_control = mode_feedback.get("risk_control", {})
+        if isinstance(risk_control, dict) and risk_control:
+            lines.append(
+                "- 执行风控节流："
+                + f"risk_mult={float(risk_control.get('risk_multiplier', 1.0)):.3f}, "
+                + f"source_mult={float(risk_control.get('source_multiplier', 1.0)):.3f}, "
+                + f"mode_mult={float(risk_control.get('mode_multiplier', 1.0)):.3f}, "
+                + f"mode_reason={str(risk_control.get('mode_reason', 'healthy'))}"
+            )
+        history = mode_feedback.get("history", {})
+        modes = history.get("modes", {}) if isinstance(history, dict) else {}
+        if isinstance(modes, dict) and modes:
+            lines.append("- 近窗回测模式统计：")
+            for mode_name, item in sorted(modes.items()):
+                if not isinstance(item, dict):
+                    continue
+                lines.append(
+                    "- "
+                    + f"`{mode_name}` "
+                    + f"samples={int(item.get('samples', 0))}, "
+                    + f"win={float(item.get('avg_win_rate', 0.0)):.2%}, "
+                    + f"pf={float(item.get('avg_profit_factor', 0.0)):.3f}, "
+                    + f"mdd={float(item.get('worst_drawdown', 0.0)):.2%}, "
+                    + f"viol={int(item.get('total_violations', 0))}"
+                )
+        lines.append("")
+
     lines.append("## 🔬 体制诊断")
     lines.append(f"- Hurst: `{regime.hurst:.3f}`")
     lines.append(
@@ -43,6 +102,11 @@ def render_daily_briefing(
     lines.append("## 🧪 数据质量")
     lines.append(f"- 完整率：`{quality.completeness:.2%}`")
     lines.append(f"- 冲突占比：`{quality.unresolved_conflict_ratio:.2%}`")
+    lines.append(f"- 源置信度：`{quality.source_confidence_score:.2%}`")
+    lines.append(f"- 低置信源占比：`{quality.low_confidence_source_ratio:.2%}`")
+    if quality.source_confidence:
+        src_line = ", ".join(f"{k}:{v:.2f}" for k, v in sorted(quality.source_confidence.items()))
+        lines.append(f"- 各源评分：`{src_line}`")
     lines.append(f"- 质检标记：`{', '.join(quality.flags) if quality.flags else 'NONE'}`")
     lines.append("")
 

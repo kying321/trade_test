@@ -1,0 +1,21 @@
+{
+  "run_type": "intraday_check",
+  "run_id": "2026-02-14_1430",
+  "created_at": "2026-02-14T22:13:28.475653",
+  "artifacts": {
+    "intraday_log": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/logs/2026-02-14_intraday_1430.json"
+  },
+  "metrics": {
+    "runtime_mode": "swing",
+    "risk_multiplier": 1.0,
+    "source_confidence_score": 0.7929155222726977,
+    "black_swan_score": 32.0,
+    "atr_z": -1.6837944016836164
+  },
+  "checks": {
+    "quality_passed": true,
+    "major_event_window": false,
+    "protection_mode": true
+  },
+  "metadata": {}
+}

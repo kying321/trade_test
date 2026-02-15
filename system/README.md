@@ -4,6 +4,7 @@
 
 ```bash
 docs/ARCHITECTURE_REVIEW.md
+docs/PROGRESS.md
 ```
 
 运行：
@@ -12,12 +13,83 @@ docs/ARCHITECTURE_REVIEW.md
 python3 -m pip install -e .
 lie run-eod --date 2026-02-13
 lie test-all
+# 快速子样本测试（确定性）
+lie test-all --fast --fast-ratio 0.10
+# 并行分片（多智能体协作时可覆盖全量）
+lie test-all --fast --fast-ratio 1.0 --fast-shard-index 0 --fast-shard-total 4
 lie validate-config
 lie architecture-audit --date 2026-02-13
+lie dependency-audit --date 2026-02-13
+# 数据源 profile（config.yaml: data.provider_profile）
+# 可选: opensource_dual | opensource_primary | hybrid_with_paid_placeholder | paid_placeholder
 # 10小时预算的实盘多模式研究回测（新闻+研报因子）
 lie research-backtest --start 2015-01-01 --end 2026-02-13 --hours 10 --max-symbols 120 --max-trials-per-mode 500 --review-days 5
 # 单模式定向诊断（可选：ultra_short,swing,long）
 lie research-backtest --start 2015-01-01 --end 2026-02-13 --hours 2 --modes swing
+# 市场+研报学习新策略并做训练/验证检验
+lie strategy-lab --start 2015-01-01 --end 2026-02-13 --candidate-count 12 --review-days 5
+# 盘后复盘：会自动尝试融合最近一次已通过(accepted=true)的 strategy-lab 候选参数
+lie review --date 2026-02-13
+# 评审回测窗口可配置：
+# validation.review_backtest_start_date: "2015-01-01"（默认）
+# validation.review_backtest_lookback_days: 540（可选，优先于 start_date，适合测试/快速迭代）
+# 模式反馈窗口：
+# validation.mode_stats_lookback_days: 365（按历史 backtest manifest 聚合超短/中短/长线模式统计）
+# 模式健康门禁（用于 review/gate）：
+# validation.mode_health_min_samples: 1
+# validation.mode_health_min_profit_factor: 1.0
+# validation.mode_health_min_win_rate: 0.40
+# validation.mode_health_max_drawdown_max: 0.18
+# validation.mode_health_max_violations: 0
+# 模式阈值自适应（review 小步更新）：
+# validation.mode_adaptive_update_enabled: true
+# validation.mode_adaptive_update_min_samples: 3
+# validation.mode_adaptive_update_step: 0.08
+# validation.mode_adaptive_good_profit_factor: 1.25
+# validation.mode_adaptive_bad_profit_factor: 1.00
+# validation.mode_adaptive_good_win_rate: 0.50
+# validation.mode_adaptive_bad_win_rate: 0.42
+# validation.mode_adaptive_good_drawdown_max: 0.12
+# validation.mode_adaptive_bad_drawdown_max: 0.18
+# 执行层动态风险节流（source_confidence + mode_health 联合控制）：
+# validation.execution_min_risk_multiplier: 0.20
+# validation.source_confidence_floor_risk_multiplier: 0.35
+# validation.mode_health_risk_multiplier: 0.50
+# validation.mode_health_insufficient_sample_risk_multiplier: 0.85
+# 状态稳定性与相变预警（ops-report）：
+# validation.mode_switch_window_days: 20
+# validation.mode_switch_max_rate: 0.45
+# validation.ops_state_min_samples: 5
+# validation.ops_risk_multiplier_floor: 0.35
+# validation.ops_risk_multiplier_drift_max: 0.30
+# validation.ops_source_confidence_floor: 0.75
+# validation.ops_mode_health_fail_days_max: 2
+# 实盘/回测模式漂移门控（gate/ops/defect-plan）：
+# validation.mode_drift_window_days: 120
+# validation.mode_drift_min_live_trades: 30
+# validation.mode_drift_win_rate_max_gap: 0.12
+# validation.mode_drift_profit_factor_max_gap: 0.40
+# validation.mode_drift_focus_runtime_mode_only: true
+# 分时槽位异常门控（premarket/intraday/eod）：
+# validation.ops_slot_window_days: 7
+# validation.ops_slot_min_samples: 3
+# validation.ops_slot_missing_ratio_max: 0.35
+# validation.ops_slot_premarket_anomaly_ratio_max: 0.50
+# validation.ops_slot_intraday_anomaly_ratio_max: 0.50
+# validation.ops_slot_eod_anomaly_ratio_max: 0.50
+# validation.ops_slot_source_confidence_floor: 0.75
+# validation.ops_slot_risk_multiplier_floor: 0.20
+# 执行链路对账漂移门控（manifest / daily csv / sqlite / open-state）：
+# validation.ops_reconcile_window_days: 7
+# validation.ops_reconcile_min_samples: 3
+# validation.ops_reconcile_missing_ratio_max: 0.35
+# validation.ops_reconcile_plan_gap_ratio_max: 0.10
+# validation.ops_reconcile_closed_count_gap_ratio_max: 0.10
+# validation.ops_reconcile_closed_pnl_gap_abs_max: 0.001
+# validation.ops_reconcile_open_gap_ratio_max: 0.25
+# 自动回滚建议（gate/ops/defect-plan 联动）：
+# rollback_recommendation.level: none | soft | hard
+# rollback_recommendation.target_anchor: params_live_backup_YYYY-MM-DD.yaml
 ```
 
 调度：
@@ -32,9 +104,12 @@ lie run-slot --date 2026-02-13 --slot ops
 lie run-session --date 2026-02-13
 lie run-review-cycle --date 2026-02-13 --max-rounds 2
 # 生产建议 max-rounds>=1；max-rounds=0 仅用于跳过复审循环的快速联调
+# 默认 review-loop 第1轮采用 fast 子样本测试，fast 通过后同轮自动补跑 full 验证
 
 # 守护调度（按 config.yaml 固定时段触发）
 lie run-daemon --poll-seconds 30
+# 仅预演当前时刻会触发哪些槽位（不执行，不写状态）
+lie run-daemon --dry-run
 
 # 本地 cron 安装/卸载
 ./infra/local/install_cron.sh
@@ -51,4 +126,7 @@ lie ops-report --date 2026-02-13 --window-days 7
 # 审查未通过时会自动生成：
 # output/review/YYYY-MM-DD_defect_plan_roundN.json
 # output/review/YYYY-MM-DD_defect_plan_roundN.md
+# EOD 同时会维护 paper execution 状态：
+# output/artifacts/paper_positions_open.json   # 当前未平仓 paper 持仓
+# sqlite: executed_plans                        # 触发止损/止盈/时间止损后的已平仓记录
 ```

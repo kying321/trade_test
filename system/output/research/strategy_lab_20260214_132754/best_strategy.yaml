@@ -1,0 +1,21 @@
+name: trend_convex_01
+rationale: 趋势驱动+凸性约束
+params:
+  signal_confidence_min: 50.0
+  convexity_min: 2.4386913871128724
+  hold_days: 11
+  max_daily_trades: 2
+train_metrics:
+  annual_return: 0.0
+  max_drawdown: 0.0
+  positive_window_ratio: 1.0
+  trades: 0
+validation_metrics:
+  annual_return: 0.0
+  max_drawdown: 0.0
+  positive_window_ratio: 1.0
+  trades: 0
+  violations: 0
+factor_alignment_train: 0.0
+factor_alignment_validation: 0.0
+score: 0.25

@@ -32,6 +32,7 @@ class RiskManager:
         symbol_exposure_pct: float,
         theme_exposure_pct: float,
         protection_mode: bool,
+        risk_multiplier: float = 1.0,
     ) -> TradePlan | None:
         if budget.available_exposure_pct <= 0:
             return None
@@ -41,7 +42,8 @@ class RiskManager:
 
         kelly = compute_kelly_fraction(win_rate=win_rate, payoff=payoff)
         confidence_factor = max(0.0, min(1.0, signal.confidence / 100.0))
-        raw_size_pct = 100.0 * 0.5 * kelly * confidence_factor
+        mult = max(0.0, min(1.0, float(risk_multiplier)))
+        raw_size_pct = 100.0 * 0.5 * kelly * confidence_factor * mult
 
         if protection_mode:
             raw_size_pct *= 0.5

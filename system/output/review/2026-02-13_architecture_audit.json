@@ -1,0 +1,34 @@
+{
+  "date": "2026-02-13",
+  "status": "warn",
+  "config": {
+    "ok": true,
+    "errors": [],
+    "warnings": [],
+    "summary": {
+      "errors": 0,
+      "warnings": 0
+    }
+  },
+  "health": {
+    "date": "2026-02-13",
+    "status": "healthy",
+    "checks": {
+      "daily_briefing": true,
+      "daily_signals": true,
+      "daily_positions": true,
+      "sqlite": true
+    },
+    "missing": []
+  },
+  "manifests": {
+    "eod_manifest": false,
+    "backtest_manifest": false,
+    "review_manifest": false
+  },
+  "missing_manifests": [
+    "eod_manifest",
+    "backtest_manifest",
+    "review_manifest"
+  ]
+}
