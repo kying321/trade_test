@@ -1,0 +1,133 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lie-premarket
+spec:
+  schedule: "40 8 * * 1-5"
+  timeZone: Asia/Shanghai
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: lie
+              image: lie-engine:latest
+              env:
+                - name: SLOT
+                  value: "08:40"
+                - name: MAX_RETRY
+                  value: "3"
+              command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lie-intraday-1030
+spec:
+  schedule: "30 10 * * 1-5"
+  timeZone: Asia/Shanghai
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: lie
+              image: lie-engine:latest
+              env:
+                - name: SLOT
+                  value: "10:30"
+                - name: MAX_RETRY
+                  value: "3"
+              command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lie-intraday-1430
+spec:
+  schedule: "30 14 * * 1-5"
+  timeZone: Asia/Shanghai
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: lie
+              image: lie-engine:latest
+              env:
+                - name: SLOT
+                  value: "14:30"
+                - name: MAX_RETRY
+                  value: "3"
+              command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lie-eod
+spec:
+  schedule: "10 15 * * 1-5"
+  timeZone: Asia/Shanghai
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: lie
+              image: lie-engine:latest
+              env:
+                - name: SLOT
+                  value: "15:10"
+                - name: MAX_RETRY
+                  value: "3"
+              command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lie-review
+spec:
+  schedule: "30 20 * * 1-5"
+  timeZone: Asia/Shanghai
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: lie
+              image: lie-engine:latest
+              env:
+                - name: SLOT
+                  value: "20:30"
+                - name: MAX_REVIEW_ROUNDS
+                  value: "2"
+                - name: MAX_RETRY
+                  value: "3"
+              command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lie-ops-report
+spec:
+  schedule: "45 20 * * 1-5"
+  timeZone: Asia/Shanghai
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: lie
+              image: lie-engine:latest
+              env:
+                - name: SLOT
+                  value: "ops"
+                - name: MAX_RETRY
+                  value: "2"
+              command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]

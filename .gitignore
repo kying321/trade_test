@@ -1,0 +1,32 @@
+# ===== OS / Editor =====
+.DS_Store
+*.swp
+*.swo
+
+# ===== Python cache / build =====
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.env
+.env.*
+*.egg-info/
+pip-wheel-metadata/
+
+# ===== Runtime outputs (regenerable) =====
+system/output/artifacts/
+system/output/daily/
+system/output/logs/
+system/output/research/
+
+# keep review artifacts versionable; only ignore temp files
+system/output/review/*.tmp
+system/output/review/*.bak
+system/output/review/*.cache
