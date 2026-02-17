@@ -1,0 +1,17 @@
+[
+  {
+    "symbol": "000001",
+    "side": "SHORT",
+    "regime": "震荡",
+    "position_score": 5.0,
+    "structure_score": 4.0,
+    "momentum_score": 2.0,
+    "confidence": 78.57142857142857,
+    "convexity_ratio": 3.1999999999999953,
+    "entry_price": 56.6035789005079,
+    "stop_price": 58.186732880975214,
+    "target_price": 51.537486163012495,
+    "can_short": false,
+    "notes": "S点触发但标的不支持直接做空，转译为减仓/平仓+指数对冲腿"
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "completeness": 1.0,
+  "unresolved_conflict_ratio": 0.0,
+  "source_confidence_score": 0.7706595460863835,
+  "low_confidence_source_ratio": 0.5,
+  "source_confidence": {
+    "open_source_primary": 0.8049195664322635,
+    "open_source_secondary": 0.7361195664322635
+  },
+  "flags": [
+    "LOW_CONFIDENCE_SOURCE_RATIO_HIGH:0.5000"
+  ],
+  "passed": false
+}

@@ -161,13 +161,17 @@
       "missing_ratio": 0.25,
       "premarket_anomaly_ratio": 0.0,
       "intraday_anomaly_ratio": 0.0,
-      "eod_anomaly_ratio": 0.6666666666666666
+      "eod_anomaly_ratio": 0.6666666666666666,
+      "eod_quality_anomaly_ratio": 0.6666666666666666,
+      "eod_risk_anomaly_ratio": 0.0
     },
     "thresholds": {
       "ops_slot_missing_ratio_max": 0.35,
       "ops_slot_premarket_anomaly_ratio_max": 0.5,
       "ops_slot_intraday_anomaly_ratio_max": 0.5,
       "ops_slot_eod_anomaly_ratio_max": 0.5,
+      "ops_slot_eod_quality_anomaly_ratio_max": 0.5,
+      "ops_slot_eod_risk_anomaly_ratio_max": 0.5,
       "ops_slot_source_confidence_floor": 0.75,
       "ops_slot_risk_multiplier_floor": 0.2
     },
@@ -175,9 +179,12 @@
       "missing_ratio_ok": true,
       "premarket_anomaly_ok": true,
       "intraday_anomaly_ok": true,
+      "eod_quality_anomaly_ok": false,
+      "eod_risk_anomaly_ok": true,
       "eod_anomaly_ok": false
     },
     "alerts": [
+      "slot_eod_quality_anomaly_high",
       "slot_eod_anomaly_high"
     ],
     "slots": {
@@ -203,7 +210,11 @@
         "missing": 0,
         "anomalies": 2,
         "anomaly_ratio": 0.6666666666666666,
-        "missing_ratio": 0.0
+        "missing_ratio": 0.0,
+        "quality_anomalies": 2,
+        "risk_anomalies": 0,
+        "quality_anomaly_ratio": 0.6666666666666666,
+        "risk_anomaly_ratio": 0.0
       }
     },
     "series": [
@@ -307,21 +318,37 @@
       "avg_closed_count_gap_ratio": 0.0,
       "avg_closed_pnl_gap_abs": 0.0,
       "avg_open_gap_ratio": 0.0,
-      "open_gap_samples": 1
+      "open_gap_samples": 1,
+      "broker_monitor_enabled": false,
+      "broker_expected_days": 0,
+      "broker_missing_days": 0,
+      "broker_missing_ratio": 0.0,
+      "broker_samples": 0,
+      "broker_count_breach_ratio": 0.0,
+      "broker_pnl_breach_ratio": 0.0,
+      "avg_broker_count_gap_ratio": 0.0,
+      "avg_broker_pnl_gap_abs": 0.0
     },
     "thresholds": {
       "ops_reconcile_missing_ratio_max": 0.35,
       "ops_reconcile_plan_gap_ratio_max": 0.1,
       "ops_reconcile_closed_count_gap_ratio_max": 0.1,
       "ops_reconcile_closed_pnl_gap_abs_max": 0.001,
-      "ops_reconcile_open_gap_ratio_max": 0.25
+      "ops_reconcile_open_gap_ratio_max": 0.25,
+      "ops_reconcile_broker_gap_ratio_max": 0.1,
+      "ops_reconcile_broker_pnl_gap_abs_max": 0.001,
+      "ops_reconcile_broker_missing_ratio_max": 0.5,
+      "ops_reconcile_require_broker_snapshot": false
     },
     "checks": {
       "missing_ratio_ok": true,
       "plan_count_gap_ok": true,
       "closed_count_gap_ok": true,
       "closed_pnl_gap_ok": true,
-      "open_count_gap_ok": true
+      "open_count_gap_ok": true,
+      "broker_missing_ratio_ok": true,
+      "broker_count_gap_ok": true,
+      "broker_pnl_gap_ok": true
     },
     "alerts": [],
     "series": [
@@ -347,7 +374,13 @@
           "plan_count_ratio": 0.0,
           "closed_count_ratio": 0.0,
           "closed_pnl_abs": 0.0,
-          "open_count_ratio": 0.0
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": false,
+          "found": false
         },
         "alerts": []
       },
@@ -373,7 +406,13 @@
           "plan_count_ratio": 0.0,
           "closed_count_ratio": 0.0,
           "closed_pnl_abs": 0.0,
-          "open_count_ratio": 0.0
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": false,
+          "found": false
         },
         "alerts": []
       },
@@ -399,7 +438,13 @@
           "plan_count_ratio": 0.0,
           "closed_count_ratio": 0.0,
           "closed_pnl_abs": 0.0,
-          "open_count_ratio": 0.0
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": false,
+          "found": false
         },
         "alerts": []
       }
@@ -430,6 +475,7 @@
     ],
     "alerts": [
       "insufficient_mode_feedback_samples",
+      "slot_eod_quality_anomaly_high",
       "slot_eod_anomaly_high",
       "mode_drift_insufficient_live:swing",
       "mode_drift_inactive"

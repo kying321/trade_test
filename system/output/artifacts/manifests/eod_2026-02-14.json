@@ -1,12 +1,13 @@
 {
   "run_type": "eod",
   "run_id": "2026-02-14",
-  "created_at": "2026-02-15T01:46:32.524955",
+  "created_at": "2026-02-15T10:53:45.540568",
   "artifacts": {
     "briefing": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/daily/2026-02-14_briefing.md",
     "signals": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/daily/2026-02-14_signals.json",
     "positions": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/daily/2026-02-14_positions.csv",
-    "mode_feedback": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/daily/2026-02-14_mode_feedback.json"
+    "mode_feedback": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/daily/2026-02-14_mode_feedback.json",
+    "broker_snapshot": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/broker_snapshot/2026-02-14.json"
   },
   "metrics": {
     "signals": 0,

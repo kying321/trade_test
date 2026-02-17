@@ -25,11 +25,14 @@
 - samples: `3` / min=`3`
 - slots(expected/observed/missing): `12` / `9` / `3`
 - anomaly_ratio(pre/intra/eod): `0.00%` / `0.00%` / `66.67%`
+- eod_anomaly_split(quality/risk): `66.67%` / `0.00%`
 - missing_ratio: `25.00%`
-- alerts: `slot_eod_anomaly_high`
+- alerts: `slot_eod_quality_anomaly_high, slot_eod_anomaly_high`
 - `missing_ratio_ok`: `True`
 - `premarket_anomaly_ok`: `True`
 - `intraday_anomaly_ok`: `True`
+- `eod_quality_anomaly_ok`: `False`
+- `eod_risk_anomaly_ok`: `True`
 - `eod_anomaly_ok`: `False`
 
 ## 模式漂移
@@ -46,22 +49,26 @@
 - active: `True`
 - samples: `3` / min=`3`
 - breach_ratio(plan/closed/open): `0.00%` / `0.00%` / `0.00%`
-- missing_ratio: `100.00%`
-- alerts: `reconcile_missing_ratio_high`
-- `missing_ratio_ok`: `False`
+- broker(missing/breach_count/breach_pnl): `0.00%` / `0.00%` / `0.00%`
+- missing_ratio: `0.00%`
+- alerts: `NONE`
+- `missing_ratio_ok`: `True`
 - `plan_count_gap_ok`: `True`
 - `closed_count_gap_ok`: `True`
 - `closed_pnl_gap_ok`: `True`
 - `open_count_gap_ok`: `True`
+- `broker_missing_ratio_ok`: `True`
+- `broker_count_gap_ok`: `True`
+- `broker_pnl_gap_ok`: `True`
 
 ## 回滚建议
 - active: `False`
 - level: `none`
-- score: `3`
+- score: `1`
 - action: `no_rollback`
 - anchor_ready: `True`
 - target_anchor: `N/A`
-- reason_codes: `reconcile_drift, slot_anomaly`
+- reason_codes: `slot_anomaly`
 
 ## 最近健康历史
 - 2026-02-08: DEGRADED | missing=['daily_briefing', 'daily_signals', 'daily_positions']
@@ -78,7 +85,7 @@
 - `state_stability_ok`: `True`
 - `slot_anomaly_ok`: `False`
 - `mode_drift_ok`: `True`
-- `reconcile_drift_ok`: `False`
+- `reconcile_drift_ok`: `True`
 - `tests_ok`: `True`
 - `health_ok`: `True`
 - `stable_replay_ok`: `True`
