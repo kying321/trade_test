@@ -1,0 +1,298 @@
+timezone: Asia/Shanghai
+schedule:
+  premarket: "08:40"
+  intraday_slots: ["10:30", "14:30"]
+  eod: "15:10"
+  nightly_review: "20:30"
+universe:
+  core:
+    - {symbol: "300750", asset_class: "equity", theme: "新能源"}
+    - {symbol: "002050", asset_class: "equity", theme: "新能源"}
+    - {symbol: "603026", asset_class: "equity", theme: "新能源"}
+    - {symbol: "000830", asset_class: "equity", theme: "化工"}
+    - {symbol: "513130", asset_class: "etf", theme: "科技"}
+    - {symbol: "LC2603", asset_class: "future", theme: "锂"}
+    - {symbol: "SC2603", asset_class: "future", theme: "原油"}
+    - {symbol: "RB2605", asset_class: "future", theme: "复苏"}
+  max_dynamic_additions: 5
+data:
+  provider_profile: "opensource_dual"
+thresholds:
+  hurst_trend: 0.6
+  hurst_mean_revert: 0.4
+  atr_extreme: 2.0
+  signal_confidence_min: 60.0
+  convexity_min: 3.0
+risk:
+  max_single_risk_pct: 2.0
+  max_total_exposure_pct: 50.0
+  max_symbol_pct: 15.0
+  max_theme_pct: 25.0
+  safety_bucket_pct: 85.0
+  convexity_bucket_pct: 15.0
+validation:
+  data_completeness_min: 0.99
+  unresolved_conflict_max: 0.005
+  source_confidence_min: 0.75
+  low_confidence_source_ratio_max: 0.40
+  use_mode_profiles: true
+  mode_profile_blend_with_live: 0.55
+  positive_window_ratio_min: 0.70
+  max_drawdown_max: 0.18
+  required_stable_replay_days: 3
+  black_swan_score_threshold: 70.0
+  cooldown_consecutive_losses: 3
+  major_event_window_hours: 24
+  factor_lookback_days: 120
+  review_use_strategy_lab: true
+  strategy_lab_merge_step: 0.18
+  strategy_lab_manifest_lookback_days: 45
+  review_autorun_strategy_lab_if_missing: true
+  strategy_lab_autorun_lookback_days: 180
+  strategy_lab_autorun_max_symbols: 60
+  strategy_lab_autorun_report_symbol_cap: 20
+  strategy_lab_autorun_workers: 4
+  strategy_lab_autorun_review_days: 3
+  strategy_lab_autorun_candidate_count: 6
+  mode_stats_lookback_days: 365
+  mode_health_min_samples: 1
+  mode_health_min_profit_factor: 1.0
+  mode_health_min_win_rate: 0.40
+  mode_health_max_drawdown_max: 0.18
+  mode_health_max_violations: 0
+  mode_adaptive_update_enabled: true
+  mode_adaptive_update_min_samples: 3
+  mode_adaptive_update_step: 0.08
+  mode_adaptive_good_profit_factor: 1.25
+  mode_adaptive_bad_profit_factor: 1.00
+  mode_adaptive_good_win_rate: 0.50
+  mode_adaptive_bad_win_rate: 0.42
+  mode_adaptive_good_drawdown_max: 0.12
+  mode_adaptive_bad_drawdown_max: 0.18
+  mode_switch_window_days: 20
+  mode_switch_max_rate: 0.45
+  mode_drift_window_days: 120
+  mode_drift_min_live_trades: 30
+  mode_drift_win_rate_max_gap: 0.12
+  mode_drift_profit_factor_max_gap: 0.40
+  mode_drift_focus_runtime_mode_only: true
+  ops_temporal_audit_enabled: true
+  ops_temporal_audit_lookback_days: 45
+  ops_temporal_audit_min_samples: 1
+  ops_temporal_audit_missing_ratio_max: 0.20
+  ops_temporal_audit_leak_ratio_max: 0.00
+  ops_temporal_audit_autofix_enabled: true
+  ops_temporal_audit_autofix_max_writes: 3
+  ops_temporal_audit_autofix_fix_strict_cutoff: true
+  ops_temporal_audit_autofix_require_safe: true
+  ops_temporal_audit_autofix_patch_retention_days: 30
+  ops_temporal_audit_autofix_patch_checksum_index_enabled: true
+  ops_stress_matrix_trend_enabled: true
+  ops_stress_matrix_trend_window_runs: 8
+  ops_stress_matrix_trend_min_runs: 3
+  ops_stress_matrix_robustness_drop_max: 0.15
+  ops_stress_matrix_annual_return_drop_max: 0.08
+  ops_stress_matrix_drawdown_rise_max: 0.08
+  ops_stress_matrix_fail_ratio_max: 0.50
+  ops_stress_autorun_history_enabled: true
+  ops_stress_autorun_history_window_days: 30
+  ops_stress_autorun_history_min_rounds: 3
+  ops_stress_autorun_history_retention_days: 30
+  ops_stress_autorun_history_checksum_index_enabled: true
+  ops_stress_autorun_adaptive_monitor_enabled: true
+  ops_stress_autorun_adaptive_monitor_window_days: 30
+  ops_stress_autorun_adaptive_monitor_min_rounds: 3
+  ops_stress_autorun_adaptive_effective_base_ratio_floor: 0.50
+  ops_stress_autorun_adaptive_effective_base_ratio_ceiling: 2.00
+  ops_stress_autorun_adaptive_throttle_ratio_max: 0.85
+  ops_stress_autorun_adaptive_expand_ratio_max: 0.85
+  ops_stress_autorun_reason_drift_enabled: true
+  ops_stress_autorun_reason_drift_window_days: 30
+  ops_stress_autorun_reason_drift_min_rounds: 6
+  ops_stress_autorun_reason_drift_recent_rounds: 4
+  ops_stress_autorun_reason_drift_mix_gap_max: 0.35
+  ops_stress_autorun_reason_drift_change_point_gap_max: 0.45
+  ops_stress_autorun_reason_drift_retention_days: 30
+  ops_stress_autorun_reason_drift_checksum_index_enabled: true
+  ops_slot_window_days: 7
+  ops_slot_min_samples: 3
+  ops_slot_missing_ratio_max: 0.35
+  ops_slot_premarket_anomaly_ratio_max: 0.50
+  ops_slot_intraday_anomaly_ratio_max: 0.50
+  ops_slot_eod_anomaly_ratio_max: 0.50
+  ops_slot_eod_quality_anomaly_ratio_max: 0.50
+  ops_slot_eod_risk_anomaly_ratio_max: 0.50
+  ops_slot_eod_quality_anomaly_ratio_max_by_regime:
+    trend: 0.55
+    range: 0.50
+    extreme_vol: 0.35
+  ops_slot_eod_risk_anomaly_ratio_max_by_regime:
+    trend: 0.55
+    range: 0.50
+    extreme_vol: 0.30
+  ops_slot_use_live_regime_thresholds: true
+  ops_slot_regime_tune_enabled: true
+  ops_slot_regime_tune_window_days: 180
+  ops_slot_regime_tune_min_days: 20
+  ops_slot_regime_tune_step: 0.12
+  ops_slot_regime_tune_buffer: 0.08
+  ops_slot_regime_tune_floor: 0.10
+  ops_slot_regime_tune_ceiling: 0.80
+  ops_slot_regime_tune_missing_ratio_hard_cap: 0.80
+  ops_slot_source_confidence_floor: 0.75
+  ops_slot_risk_multiplier_floor: 0.20
+  ops_reconcile_window_days: 7
+  ops_reconcile_min_samples: 3
+  ops_reconcile_missing_ratio_max: 0.35
+  ops_reconcile_plan_gap_ratio_max: 0.10
+  ops_reconcile_closed_count_gap_ratio_max: 0.10
+  ops_reconcile_closed_pnl_gap_abs_max: 0.001
+  ops_reconcile_open_gap_ratio_max: 0.25
+  ops_reconcile_broker_missing_ratio_max: 0.50
+  ops_reconcile_broker_gap_ratio_max: 0.10
+  ops_reconcile_broker_pnl_gap_abs_max: 0.001
+  ops_reconcile_broker_contract_schema_invalid_ratio_max: 0.10
+  ops_reconcile_broker_contract_numeric_invalid_ratio_max: 0.10
+  ops_reconcile_broker_contract_symbol_invalid_ratio_max: 0.10
+  ops_reconcile_broker_contract_symbol_noncanonical_ratio_max: 0.40
+  ops_reconcile_broker_closed_pnl_abs_hard_max: 1000000000.0
+  ops_reconcile_broker_position_qty_abs_hard_max: 1000000000.0
+  ops_reconcile_broker_position_notional_abs_hard_max: 10000000000.0
+  ops_reconcile_broker_price_abs_hard_max: 100000000.0
+  ops_reconcile_broker_row_diff_min_samples: 1
+  ops_reconcile_broker_row_diff_breach_ratio_max: 0.20
+  ops_reconcile_broker_row_diff_key_mismatch_max: 0.25
+  ops_reconcile_broker_row_diff_count_gap_max: 0.25
+  ops_reconcile_broker_row_diff_notional_gap_max: 0.50
+  ops_reconcile_broker_row_diff_alias_monitor_enabled: true
+  ops_reconcile_broker_row_diff_alias_hit_rate_min: 0.00
+  ops_reconcile_broker_row_diff_unresolved_key_ratio_max: 0.30
+  ops_reconcile_broker_row_diff_asof_only: true
+  ops_reconcile_broker_row_diff_artifact_retention_days: 30
+  ops_reconcile_broker_row_diff_artifact_checksum_index_enabled: true
+  ops_reconcile_broker_row_diff_symbol_alias_map: {}
+  ops_reconcile_broker_row_diff_side_alias_map: {}
+  ops_artifact_governance_profiles:
+    temporal_autofix_patch:
+      json_glob: "*_temporal_autofix_patch.json"
+      md_glob: "*_temporal_autofix_patch.md"
+      checksum_index_filename: "temporal_autofix_patch_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    stress_autorun_history:
+      json_glob: "*_stress_autorun_history.json"
+      md_glob: "*_stress_autorun_history.md"
+      checksum_index_filename: "stress_autorun_history_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    stress_autorun_reason_drift:
+      json_glob: "*_stress_autorun_reason_drift.json"
+      md_glob: "*_stress_autorun_reason_drift.md"
+      checksum_index_filename: "stress_autorun_reason_drift_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    reconcile_row_diff:
+      json_glob: "*_reconcile_row_diff.json"
+      md_glob: "*_reconcile_row_diff.md"
+      checksum_index_filename: "reconcile_row_diff_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+  ops_artifact_governance_strict_mode_enabled: false
+  ops_artifact_governance_profile_baseline:
+    temporal_autofix_patch:
+      json_glob: "*_temporal_autofix_patch.json"
+      md_glob: "*_temporal_autofix_patch.md"
+      checksum_index_filename: "temporal_autofix_patch_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    stress_autorun_history:
+      json_glob: "*_stress_autorun_history.json"
+      md_glob: "*_stress_autorun_history.md"
+      checksum_index_filename: "stress_autorun_history_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    stress_autorun_reason_drift:
+      json_glob: "*_stress_autorun_reason_drift.json"
+      md_glob: "*_stress_autorun_reason_drift.md"
+      checksum_index_filename: "stress_autorun_reason_drift_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    reconcile_row_diff:
+      json_glob: "*_reconcile_row_diff.json"
+      md_glob: "*_reconcile_row_diff.md"
+      checksum_index_filename: "reconcile_row_diff_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+  ops_reconcile_require_broker_snapshot: false
+  ops_reconcile_broker_contract_emit_canonical_view: true
+  ops_reconcile_broker_contract_canonical_dir: "artifacts/broker_snapshot_canonical"
+  ops_state_min_samples: 5
+  ops_risk_multiplier_floor: 0.35
+  ops_risk_multiplier_drift_max: 0.30
+  ops_source_confidence_floor: 0.75
+  ops_mode_health_fail_days_max: 2
+  broker_snapshot_source_mode: "paper_engine"  # paper_engine | live_adapter | hybrid_prefer_live
+  broker_snapshot_live_mapping_profile: "generic"  # generic | ibkr | binance | ctp
+  broker_snapshot_live_inbox: "output/artifacts/broker_live_inbox"
+  broker_snapshot_live_fallback_to_paper: true
+  execution_min_risk_multiplier: 0.20
+  source_confidence_floor_risk_multiplier: 0.35
+  mode_health_risk_multiplier: 0.50
+  mode_health_insufficient_sample_risk_multiplier: 0.85
+  test_all_timeout_seconds: 1800
+  review_loop_fast_test_enabled: true
+  review_loop_fast_ratio: 0.10
+  review_loop_fast_shard_index: 0
+  review_loop_fast_shard_total: 1
+  review_loop_fast_seed: "lie-fast-v1"
+  review_loop_fast_then_full: true
+  review_loop_timeout_fallback_enabled: true
+  review_loop_timeout_fallback_ratio: 0.08
+  review_loop_timeout_fallback_shard_index: 0
+  review_loop_timeout_fallback_shard_total: 1
+  review_loop_timeout_fallback_seed: "lie-timeout-v1"
+  review_loop_stress_matrix_autorun_enabled: true
+  review_loop_stress_matrix_autorun_on_mode_drift: true
+  review_loop_stress_matrix_autorun_on_stress_breach: true
+  review_loop_stress_matrix_autorun_max_runs: 1
+  review_loop_stress_matrix_autorun_cooldown_rounds: 1
+  review_loop_stress_matrix_autorun_backoff_multiplier: 2.0
+  review_loop_stress_matrix_autorun_backoff_max_rounds: 8
+  review_loop_stress_matrix_autorun_adaptive_enabled: true
+  review_loop_stress_matrix_autorun_adaptive_window_days: 30
+  review_loop_stress_matrix_autorun_adaptive_min_rounds: 6
+  review_loop_stress_matrix_autorun_adaptive_low_density_threshold: 0.20
+  review_loop_stress_matrix_autorun_adaptive_high_density_threshold: 0.60
+  review_loop_stress_matrix_autorun_adaptive_low_density_factor: 1.50
+  review_loop_stress_matrix_autorun_adaptive_high_density_factor: 0.50
+  review_loop_stress_matrix_autorun_adaptive_min_runs_floor: 0
+  review_loop_stress_matrix_autorun_adaptive_max_runs_cap: 3
+  review_loop_stress_matrix_autorun_modes: ["ultra_short", "swing", "long"]
+  review_backtest_start_date: "2015-01-01"
+mode_profiles:
+  ultra_short:
+    signal_confidence_min: 56.0
+    convexity_min: 1.6
+    hold_days: 2
+    max_daily_trades: 4
+  swing:
+    signal_confidence_min: 60.0
+    convexity_min: 2.2
+    hold_days: 8
+    max_daily_trades: 2
+  long:
+    signal_confidence_min: 54.0
+    convexity_min: 2.8
+    hold_days: 18
+    max_daily_trades: 1
+mode_runtime:
+  regime_to_mode:
+    强趋势: long
+    弱趋势: swing
+    震荡: ultra_short
+    下跌趋势: swing
+    不确定: swing
+    极端波动: ultra_short
+paths:
+  output: output
+  sqlite: output/artifacts/lie_engine.db

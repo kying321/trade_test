@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lie-antifragile-engine"
+version = "0.1.0"
+description = "Liè Antifragile Trading System"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "PyYAML>=6.0",
+  "akshare>=1.18.0",
+  "yfinance>=0.2.66",
+  "tqdm>=4.66",
+]
+
+[project.scripts]
+lie = "lie_engine.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
