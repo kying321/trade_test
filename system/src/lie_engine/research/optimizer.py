@@ -52,12 +52,20 @@ class ResearchRunSummary:
     start_date: str
     end_date: str
     cutoff_date: str
+    cutoff_ts: str
+    bar_max_ts: str
+    news_max_ts: str
+    report_max_ts: str
     review_days: int
     hours_budget: float
     universe_count: int
     bars_rows: int
     news_records: int
     report_records: int
+    review_bars_rows: int
+    review_bar_max_ts: str
+    review_news_max_ts: str
+    review_report_max_ts: str
     review_news_records: int
     review_report_records: int
     data_fetch_stats: dict[str, Any]
@@ -346,13 +354,21 @@ def _render_report(summary: ResearchRunSummary) -> str:
     lines.append(f"- 实际耗时: `{summary.elapsed_seconds/3600:.2f}` 小时")
     lines.append(f"- 区间: `{summary.start_date} ~ {summary.end_date}`")
     lines.append(f"- 回测截止日(严格隔离): `{summary.cutoff_date}`")
+    lines.append(f"- 截止时间戳: `{summary.cutoff_ts}`")
+    lines.append(f"- 回测行情最大时间戳(<=截止日): `{summary.bar_max_ts}`")
+    lines.append(f"- 回测新闻最大时间戳(<=截止日): `{summary.news_max_ts}`")
+    lines.append(f"- 回测研报最大时间戳(<=截止日): `{summary.report_max_ts}`")
     lines.append(f"- 复盘窗口天数: `{summary.review_days}`")
     lines.append(f"- 覆盖标的数: `{summary.universe_count}`")
     lines.append(f"- 行情记录数: `{summary.bars_rows}`")
+    lines.append(f"- 复盘行情记录数: `{summary.review_bars_rows}`")
+    lines.append(f"- 复盘行情最大时间戳(>截止日): `{summary.review_bar_max_ts}`")
     lines.append(f"- 回测新闻记录数(<=截止日): `{summary.news_records}`")
     lines.append(f"- 回测研报记录数(<=截止日): `{summary.report_records}`")
     lines.append(f"- 复盘新闻记录数(>截止日): `{summary.review_news_records}`")
     lines.append(f"- 复盘研报记录数(>截止日): `{summary.review_report_records}`")
+    lines.append(f"- 复盘新闻最大时间戳(>截止日): `{summary.review_news_max_ts}`")
+    lines.append(f"- 复盘研报最大时间戳(>截止日): `{summary.review_report_max_ts}`")
     lines.append("")
     lines.append("## 模式结果")
     for item in summary.mode_summaries:
@@ -405,6 +421,8 @@ def run_research_backtest(
         review_days=int(review_days),
         include_post_review=True,
     )
+    cutoff_iso = (bundle.cutoff_date or end).isoformat()
+    cutoff_ts = str(bundle.cutoff_ts or f"{cutoff_iso}T23:59:59")
     bars = bundle.bars
     bars_path = run_dir / "bars_used.parquet"
     if not bars.empty:
@@ -468,13 +486,21 @@ def run_research_backtest(
         elapsed_seconds=float(time.time() - t_start),
         start_date=start.isoformat(),
         end_date=end.isoformat(),
-        cutoff_date=(bundle.cutoff_date or end).isoformat(),
+        cutoff_date=cutoff_iso,
+        cutoff_ts=cutoff_ts,
+        bar_max_ts=str(bundle.bar_max_ts),
+        news_max_ts=str(bundle.news_max_ts),
+        report_max_ts=str(bundle.report_max_ts),
         review_days=int(bundle.review_days),
         hours_budget=float(hours_budget),
         universe_count=int(len(bundle.universe)),
         bars_rows=int(len(bundle.bars)),
         news_records=int(bundle.news_records),
         report_records=int(bundle.report_records),
+        review_bars_rows=int(len(bundle.review_bars)),
+        review_bar_max_ts=str(bundle.review_bar_max_ts),
+        review_news_max_ts=str(bundle.review_news_max_ts),
+        review_report_max_ts=str(bundle.review_report_max_ts),
         review_news_records=int(bundle.review_news_records),
         review_report_records=int(bundle.review_report_records),
         data_fetch_stats=bundle.fetch_stats,

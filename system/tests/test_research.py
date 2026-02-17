@@ -132,6 +132,13 @@ class ResearchTests(unittest.TestCase):
             self.assertEqual(bundle.review_news_records, 2)
             self.assertEqual(bundle.review_report_records, 2)
             self.assertTrue(bool(bundle.fetch_stats.get("strict_cutoff_enforced", False)))
+            self.assertTrue(str(bundle.cutoff_ts).startswith("2026-02-13T"))
+            self.assertIn("2026-02-13", str(bundle.bar_max_ts))
+            self.assertIn("2026-02-13", str(bundle.news_max_ts))
+            self.assertIn("2026-02-13", str(bundle.report_max_ts))
+            self.assertIn("2026-02-15", str(bundle.review_bar_max_ts))
+            self.assertIn("2026-02-15", str(bundle.review_news_max_ts))
+            self.assertIn("2026-02-15", str(bundle.review_report_max_ts))
         finally:
             rd.load_universe = original_load_universe  # type: ignore[assignment]
             rd._fetch_one_symbol = original_fetch_one  # type: ignore[assignment]
@@ -191,6 +198,10 @@ class ResearchTests(unittest.TestCase):
                 self.assertTrue((Path(summary.output_dir) / "report.md").exists())
                 self.assertTrue((Path(summary.output_dir) / "best_strategy.yaml").exists())
                 self.assertIn("review_metrics", summary.candidates[0].to_dict())
+                self.assertEqual(summary.cutoff_ts, "2025-12-31T23:59:59")
+                self.assertEqual(summary.bar_max_ts, "")
+                self.assertEqual(summary.news_max_ts, "")
+                self.assertEqual(summary.report_max_ts, "")
         finally:
             sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
 

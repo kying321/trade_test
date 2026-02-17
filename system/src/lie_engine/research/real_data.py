@@ -64,6 +64,41 @@ class RealDataBundle:
     review_report_daily: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     review_news_records: int = 0
     review_report_records: int = 0
+    cutoff_ts: str = ""
+    bar_max_ts: str = ""
+    news_max_ts: str = ""
+    report_max_ts: str = ""
+    review_bar_max_ts: str = ""
+    review_news_max_ts: str = ""
+    review_report_max_ts: str = ""
+
+
+def _date_end_iso(d: date | None) -> str:
+    if d is None:
+        return ""
+    return f"{d.isoformat()}T23:59:59"
+
+
+def _max_bar_ts_iso(bars: pd.DataFrame) -> str:
+    if bars.empty or "ts" not in bars.columns:
+        return ""
+    ts = pd.to_datetime(bars["ts"], errors="coerce")
+    ts = ts.dropna()
+    if ts.empty:
+        return ""
+    return ts.max().to_pydatetime().replace(microsecond=0).isoformat()
+
+
+def _max_daily_series_ts_iso(series: pd.Series) -> str:
+    if series.empty:
+        return ""
+    idx = pd.to_datetime(pd.Index(series.index), errors="coerce")
+    if len(idx) == 0:
+        return ""
+    ts = pd.Timestamp(idx.max())
+    if pd.isna(ts):
+        return ""
+    return ts.to_pydatetime().replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
 
 
 def _retry_call(fn, retries: int = 3, base_sleep: float = 0.8):
@@ -405,6 +440,13 @@ def load_real_data_bundle(
                 ].copy()
                 bars = bars.sort_values(["ts", "symbol"]).reset_index(drop=True)
                 review_bars = review_bars.sort_values(["ts", "symbol"]).reset_index(drop=True)
+                cutoff_ts = str(meta.get("cutoff_ts", _date_end_iso(cached_cutoff)))
+                bar_max_ts = str(meta.get("bar_max_ts", _max_bar_ts_iso(bars)))
+                news_max_ts = str(meta.get("news_max_ts", _max_daily_series_ts_iso(news_daily)))
+                report_max_ts = str(meta.get("report_max_ts", _max_daily_series_ts_iso(report_daily)))
+                review_bar_max_ts = str(meta.get("review_bar_max_ts", _max_bar_ts_iso(review_bars)))
+                review_news_max_ts = str(meta.get("review_news_max_ts", _max_daily_series_ts_iso(review_news_daily)))
+                review_report_max_ts = str(meta.get("review_report_max_ts", _max_daily_series_ts_iso(review_report_daily)))
 
                 return RealDataBundle(
                     bars=bars,
@@ -420,10 +462,24 @@ def load_real_data_bundle(
                     review_report_daily=review_report_daily,
                     review_news_records=int(meta.get("review_news_records", 0)),
                     review_report_records=int(meta.get("review_report_records", 0)),
+                    cutoff_ts=cutoff_ts,
+                    bar_max_ts=bar_max_ts,
+                    news_max_ts=news_max_ts,
+                    report_max_ts=report_max_ts,
+                    review_bar_max_ts=review_bar_max_ts,
+                    review_news_max_ts=review_news_max_ts,
+                    review_report_max_ts=review_report_max_ts,
                     fetch_stats={
                         **(meta.get("fetch_stats", {}) or {}),
                         "cache_hit": True,
                         "cache_age_hours": age_hours,
+                        "cutoff_ts": cutoff_ts,
+                        "bar_max_ts": bar_max_ts,
+                        "news_max_ts": news_max_ts,
+                        "report_max_ts": report_max_ts,
+                        "review_bar_max_ts": review_bar_max_ts,
+                        "review_news_max_ts": review_news_max_ts,
+                        "review_report_max_ts": review_report_max_ts,
                     },
                 )
         except Exception:
@@ -483,6 +539,13 @@ def load_real_data_bundle(
     report_daily = report_df.groupby("date")["report_score"].mean().sort_index() if not report_df.empty else pd.Series(dtype=float)
     review_news_daily = review_news_df.groupby("date")["news_score"].mean().sort_index() if not review_news_df.empty else pd.Series(dtype=float)
     review_report_daily = review_report_df.groupby("date")["report_score"].mean().sort_index() if not review_report_df.empty else pd.Series(dtype=float)
+    cutoff_ts = _date_end_iso(cutoff)
+    bar_max_ts = _max_bar_ts_iso(bars)
+    news_max_ts = _max_daily_series_ts_iso(news_daily)
+    report_max_ts = _max_daily_series_ts_iso(report_daily)
+    review_bar_max_ts = _max_bar_ts_iso(review_bars)
+    review_news_max_ts = _max_daily_series_ts_iso(review_news_daily)
+    review_report_max_ts = _max_daily_series_ts_iso(review_report_daily)
 
     bundle = RealDataBundle(
         bars=bars,
@@ -498,6 +561,13 @@ def load_real_data_bundle(
         review_report_daily=review_report_daily,
         review_news_records=int(len(review_news_df)),
         review_report_records=int(len(review_report_df)),
+        cutoff_ts=cutoff_ts,
+        bar_max_ts=bar_max_ts,
+        news_max_ts=news_max_ts,
+        report_max_ts=report_max_ts,
+        review_bar_max_ts=review_bar_max_ts,
+        review_news_max_ts=review_news_max_ts,
+        review_report_max_ts=review_report_max_ts,
         fetch_stats={
             "universe_count": len(universe),
             "bars_symbols": int(bars["symbol"].nunique()) if not bars.empty else 0,
@@ -506,8 +576,15 @@ def load_real_data_bundle(
             "errors": errors,
             "strict_cutoff_enforced": True,
             "cutoff_date": cutoff.isoformat(),
+            "cutoff_ts": cutoff_ts,
             "review_end_date": review_end.isoformat(),
             "review_days": review_days,
+            "bar_max_ts": bar_max_ts,
+            "news_max_ts": news_max_ts,
+            "report_max_ts": report_max_ts,
+            "review_bar_max_ts": review_bar_max_ts,
+            "review_news_max_ts": review_news_max_ts,
+            "review_report_max_ts": review_report_max_ts,
             "universe_source_notice": "index constituents are latest snapshot; survivorship bias may remain",
         },
     )
@@ -523,6 +600,7 @@ def load_real_data_bundle(
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
                 "cutoff_date": cutoff.isoformat(),
+                "cutoff_ts": cutoff_ts,
                 "review_end_date": review_end.isoformat(),
                 "review_days": review_days,
                 "max_symbols": int(max_symbols),
@@ -530,10 +608,16 @@ def load_real_data_bundle(
                 "universe": universe,
                 "bars_rows": int(len(bars)),
                 "review_bars_rows": int(len(review_bars)),
+                "bar_max_ts": bar_max_ts,
                 "news_records": int(len(news_df)),
                 "report_records": int(len(report_df)),
                 "review_news_records": int(len(review_news_df)),
                 "review_report_records": int(len(review_report_df)),
+                "news_max_ts": news_max_ts,
+                "report_max_ts": report_max_ts,
+                "review_bar_max_ts": review_bar_max_ts,
+                "review_news_max_ts": review_news_max_ts,
+                "review_report_max_ts": review_report_max_ts,
                 "fetch_stats": bundle.fetch_stats,
             }
             cache_meta.write_text(json.dumps(cache_payload, ensure_ascii=False, indent=2), encoding="utf-8")

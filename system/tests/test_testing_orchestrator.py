@@ -7,6 +7,7 @@ import sys
 import unittest
 from unittest.mock import patch
 import json
+import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -68,6 +69,23 @@ class TestingOrchestratorTests(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         self.assertEqual(cmd[:4], [sys.executable, "-m", "unittest", "-v"])
         self.assertEqual(len(cmd) - 4, 2)
+
+    def test_test_all_timeout_is_guarded(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+
+        timeout_exc = subprocess.TimeoutExpired(cmd=["python", "-m", "unittest"], timeout=1)
+        timeout_exc.stdout = "partial output"
+        timeout_exc.stderr = "partial error"
+
+        with patch("lie_engine.orchestration.testing.subprocess.run", side_effect=timeout_exc):
+            orch = TestingOrchestrator(root=td, output_dir=td, timeout_seconds=60)
+            out = orch.test_all()
+
+        self.assertEqual(int(out["returncode"]), 124)
+        self.assertTrue(bool(out.get("timed_out", False)))
+        self.assertIn("__timeout__", list(out.get("failed_tests", [])))
+        self.assertIn("error=test_timeout", str(out.get("summary_line", "")))
 
 
 if __name__ == "__main__":

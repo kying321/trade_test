@@ -93,6 +93,10 @@ def main() -> None:
     p_or.add_argument("--date", required=True)
     p_or.add_argument("--window-days", default="7")
 
+    p_sm = sub.add_parser("stress-matrix", help="Run mode-aware stress matrix report")
+    p_sm.add_argument("--date", required=True)
+    p_sm.add_argument("--modes", default="ultra_short,swing,long", help="Comma-separated runtime modes")
+
     sub.add_parser("validate-config", help="Validate config schema and risk bounds")
 
     p_aa = sub.add_parser("architecture-audit", help="Run architecture audit report")
@@ -199,6 +203,11 @@ def main() -> None:
         out = eng.ops_report(
             as_of=_parse_date(args.date),
             window_days=int(args.window_days),
+        )
+    elif args.cmd == "stress-matrix":
+        out = eng.run_mode_stress_matrix(
+            as_of=_parse_date(args.date),
+            modes=[x.strip() for x in str(args.modes).split(",") if x.strip()],
         )
     elif args.cmd == "architecture-audit":
         out = eng.architecture_audit(as_of=_parse_date(args.date) if args.date else None)

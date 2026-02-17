@@ -19,6 +19,7 @@ from lie_engine.data.storage import write_json
 class TestingOrchestrator:
     root: Path
     output_dir: Path
+    timeout_seconds: int = 1800
 
     @staticmethod
     def _iter_test_ids(suite: unittest.TestSuite) -> list[str]:
@@ -115,6 +116,7 @@ class TestingOrchestrator:
     ) -> dict[str, Any]:
         env = dict(os.environ)
         env["PYTHONWARNINGS"] = "ignore::ResourceWarning"
+        timeout_seconds = max(30, int(self.timeout_seconds))
         tests_discovered = 0
         tests_selected = 0
         cmd: list[str]
@@ -133,19 +135,33 @@ class TestingOrchestrator:
         else:
             cmd = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-t", ".", "-v"]
 
-        proc = subprocess.run(
-            cmd,
-            cwd=self.root,
-            text=True,
-            capture_output=True,
-            env=env,
-        )
-        failed_tests = self._extract_failed_tests(proc.stdout, proc.stderr)
-        ran_count = self._extract_ran_count(proc.stdout, proc.stderr)
+        timed_out = False
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=self.root,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=timeout_seconds,
+            )
+            returncode = int(proc.returncode)
+            stdout = str(proc.stdout)
+            stderr = str(proc.stderr)
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            returncode = 124
+            stdout = str(exc.stdout or "")
+            stderr = str(exc.stderr or "")
+            stderr = (stderr + "\n" if stderr else "") + f"error=test_timeout; timeout_seconds={timeout_seconds}"
+        failed_tests = self._extract_failed_tests(stdout, stderr)
+        if timed_out:
+            failed_tests.append("__timeout__")
+        ran_count = self._extract_ran_count(stdout, stderr)
         if ran_count is None:
             ran_count = tests_selected if fast else 0
         summary_line = (
-            f"error={'none' if proc.returncode == 0 else 'test_failure'};"
+            f"error={'none' if returncode == 0 else ('test_timeout' if timed_out else 'test_failure')};"
             + f" mode={'fast' if fast else 'full'};"
             + f" discovered={tests_discovered if fast else 'N/A'};"
             + f" selected={tests_selected if fast else ran_count};"
@@ -154,9 +170,9 @@ class TestingOrchestrator:
         )
 
         log_payload = {
-            "returncode": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
+            "returncode": returncode,
+            "stdout": stdout,
+            "stderr": stderr,
             "failed_tests": failed_tests,
             "summary_line": summary_line,
             "mode": "fast" if fast else "full",
@@ -168,12 +184,14 @@ class TestingOrchestrator:
             "tests_discovered": int(tests_discovered),
             "tests_selected": int(tests_selected if fast else ran_count),
             "tests_ran": int(ran_count),
+            "timeout_seconds": int(timeout_seconds),
+            "timed_out": bool(timed_out),
         }
         log_path = self.output_dir / "logs" / f"tests_{datetime.now():%Y%m%d_%H%M%S}.json"
         write_json(log_path, log_payload)
 
         payload = {
-            "returncode": proc.returncode,
+            "returncode": returncode,
             "mode": "fast" if fast else "full",
             "fast": bool(fast),
             "fast_ratio": float(fast_ratio),
@@ -185,8 +203,10 @@ class TestingOrchestrator:
             "tests_ran": int(ran_count),
             "failed_tests": failed_tests,
             "summary_line": summary_line,
-            "stdout_excerpt": self._excerpt(proc.stdout),
-            "stderr_excerpt": self._excerpt(proc.stderr),
+            "stdout_excerpt": self._excerpt(stdout),
+            "stderr_excerpt": self._excerpt(stderr),
+            "timeout_seconds": int(timeout_seconds),
+            "timed_out": bool(timed_out),
             "log_path": str(log_path),
         }
         return payload

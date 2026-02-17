@@ -43,6 +43,10 @@ class StrategyLabSummary:
     train_end_date: str
     validation_start_date: str
     cutoff_date: str
+    cutoff_ts: str
+    bar_max_ts: str
+    news_max_ts: str
+    report_max_ts: str
     review_days: int
     universe_count: int
     bars_rows: int
@@ -53,6 +57,9 @@ class StrategyLabSummary:
     report_insights: dict[str, float]
     review_start_date: str = ""
     review_end_date: str = ""
+    review_bar_max_ts: str = ""
+    review_news_max_ts: str = ""
+    review_report_max_ts: str = ""
     review_news_records: int = 0
     review_report_records: int = 0
     candidates: list[StrategyCandidateResult] = field(default_factory=list)
@@ -288,8 +295,15 @@ def _render_report(summary: StrategyLabSummary) -> str:
     lines.append(f"- 区间: `{summary.start_date} ~ {summary.end_date}`")
     lines.append(f"- 训练截止: `{summary.train_end_date}`")
     lines.append(f"- 验证起点: `{summary.validation_start_date}`")
+    lines.append(f"- 截止时间戳: `{summary.cutoff_ts}`")
+    lines.append(f"- 训练行情最大时间戳: `{summary.bar_max_ts}`")
+    lines.append(f"- 训练新闻最大时间戳: `{summary.news_max_ts}`")
+    lines.append(f"- 训练研报最大时间戳: `{summary.report_max_ts}`")
     if summary.review_start_date and summary.review_end_date:
         lines.append(f"- 复盘检验窗口: `{summary.review_start_date} ~ {summary.review_end_date}`")
+        lines.append(f"- 复盘行情最大时间戳: `{summary.review_bar_max_ts}`")
+        lines.append(f"- 复盘新闻最大时间戳: `{summary.review_news_max_ts}`")
+        lines.append(f"- 复盘研报最大时间戳: `{summary.review_report_max_ts}`")
     lines.append(f"- 覆盖标的: `{summary.universe_count}`")
     lines.append(f"- 行情记录: `{summary.bars_rows}`")
     lines.append(f"- 复盘行情记录: `{summary.review_bars_rows}`")
@@ -359,6 +373,8 @@ def run_strategy_lab(
         review_days=int(review_days),
         include_post_review=True,
     )
+    cutoff_iso = (bundle.cutoff_date or end).isoformat()
+    cutoff_ts = str(bundle.cutoff_ts or f"{cutoff_iso}T23:59:59")
 
     bars = bundle.bars.copy()
     review_bars = bundle.review_bars.copy()
@@ -371,10 +387,17 @@ def run_strategy_lab(
             end_date=end.isoformat(),
             train_end_date=end.isoformat(),
             validation_start_date=end.isoformat(),
-            cutoff_date=(bundle.cutoff_date or end).isoformat(),
+            cutoff_date=cutoff_iso,
+            cutoff_ts=cutoff_ts,
+            bar_max_ts=str(bundle.bar_max_ts),
+            news_max_ts=str(bundle.news_max_ts),
+            report_max_ts=str(bundle.report_max_ts),
             review_days=int(bundle.review_days),
             review_start_date="",
             review_end_date="",
+            review_bar_max_ts=str(bundle.review_bar_max_ts),
+            review_news_max_ts=str(bundle.review_news_max_ts),
+            review_report_max_ts=str(bundle.review_report_max_ts),
             universe_count=int(len(bundle.universe)),
             bars_rows=0,
             review_bars_rows=int(len(review_bars)),
@@ -539,10 +562,17 @@ def run_strategy_lab(
         end_date=end.isoformat(),
         train_end_date=train_end.isoformat(),
         validation_start_date=valid_start.isoformat(),
-        cutoff_date=(bundle.cutoff_date or end).isoformat(),
+        cutoff_date=cutoff_iso,
+        cutoff_ts=cutoff_ts,
+        bar_max_ts=str(bundle.bar_max_ts),
+        news_max_ts=str(bundle.news_max_ts),
+        report_max_ts=str(bundle.report_max_ts),
         review_days=int(bundle.review_days),
         review_start_date=review_start.isoformat() if review_start else "",
         review_end_date=review_end.isoformat() if review_end else "",
+        review_bar_max_ts=str(bundle.review_bar_max_ts),
+        review_news_max_ts=str(bundle.review_news_max_ts),
+        review_report_max_ts=str(bundle.review_report_max_ts),
         universe_count=int(len(bundle.universe)),
         bars_rows=int(len(bars)),
         review_bars_rows=int(len(review_bars)),

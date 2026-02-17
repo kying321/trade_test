@@ -31,7 +31,7 @@ from lie_engine.orchestration.guards import black_swan_assessment, loss_cooldown
 from lie_engine.regime import compute_atr_zscore, derive_regime_consensus, infer_hmm_state, latest_multi_scale_hurst
 from lie_engine.research import run_research_backtest as run_research_pipeline
 from lie_engine.research import run_strategy_lab as run_strategy_lab_pipeline
-from lie_engine.reporting import render_daily_briefing, render_review_report, write_run_manifest
+from lie_engine.reporting import render_daily_briefing, render_mode_stress_matrix, render_review_report, write_run_manifest
 from lie_engine.review import ReviewThresholds, bounded_bayesian_update, build_review_delta
 from lie_engine.risk import RiskManager, infer_edge_from_trades
 from lie_engine.signal import SignalEngineConfig, expand_universe, scan_signals
@@ -110,6 +110,20 @@ class LieEngine:
             return None
         try:
             return date.fromisoformat(str(value))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_iso_datetime(value: Any) -> datetime | None:
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(text)
         except Exception:
             return None
 
@@ -288,6 +302,242 @@ class LieEngine:
                         profiles[mode_name][key] = float(values[key])
         return profiles
 
+    @staticmethod
+    def _regime_bucket(label: Any) -> str:
+        txt = str(label or "").strip().lower()
+        if not txt:
+            return "unknown"
+        if any(k in txt for k in ("极端波动", "extreme_vol", "extreme-vol", "extreme vol")):
+            return "extreme_vol"
+        if any(k in txt for k in ("强趋势", "弱趋势", "下跌趋势", "trend", "downtrend")):
+            return "trend"
+        if any(k in txt for k in ("震荡", "不确定", "range", "uncertain")):
+            return "range"
+        return "unknown"
+
+    @staticmethod
+    def _regime_threshold_map(raw: Any, *, default: float) -> dict[str, float]:
+        out = {
+            "trend": float(default),
+            "range": float(default),
+            "extreme_vol": float(default),
+        }
+        if not isinstance(raw, dict):
+            return out
+        for k, v in raw.items():
+            bucket = LieEngine._regime_bucket(k)
+            if bucket not in out:
+                continue
+            try:
+                candidate = float(v)
+            except Exception:
+                continue
+            if 0.0 <= candidate <= 1.0:
+                out[bucket] = float(candidate)
+        return out
+
+    def _slot_regime_tuning_path(self) -> Path:
+        return self.ctx.output_dir / "artifacts" / "slot_regime_thresholds_live.yaml"
+
+    def _tune_slot_regime_thresholds(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = bool(val.get("ops_slot_regime_tune_enabled", True))
+        tuning_path = self._slot_regime_tuning_path()
+
+        base_quality_default = float(val.get("ops_slot_eod_quality_anomaly_ratio_max", 0.50))
+        base_risk_default = float(val.get("ops_slot_eod_risk_anomaly_ratio_max", 0.50))
+        current_quality = self._regime_threshold_map(
+            val.get("ops_slot_eod_quality_anomaly_ratio_max_by_regime", {}),
+            default=base_quality_default,
+        )
+        current_risk = self._regime_threshold_map(
+            val.get("ops_slot_eod_risk_anomaly_ratio_max_by_regime", {}),
+            default=base_risk_default,
+        )
+
+        prev_live = {}
+        if tuning_path.exists():
+            try:
+                prev_live = yaml.safe_load(tuning_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                prev_live = {}
+        if isinstance(prev_live, dict):
+            current_quality = self._regime_threshold_map(
+                prev_live.get("ops_slot_eod_quality_anomaly_ratio_max_by_regime", current_quality),
+                default=base_quality_default,
+            )
+            current_risk = self._regime_threshold_map(
+                prev_live.get("ops_slot_eod_risk_anomaly_ratio_max_by_regime", current_risk),
+                default=base_risk_default,
+            )
+
+        if not enabled:
+            return {
+                "enabled": False,
+                "applied": False,
+                "path": str(tuning_path),
+                "ops_slot_eod_quality_anomaly_ratio_max_by_regime": current_quality,
+                "ops_slot_eod_risk_anomaly_ratio_max_by_regime": current_risk,
+                "reason": "disabled",
+            }
+
+        lookback_days = max(30, int(val.get("ops_slot_regime_tune_window_days", 180)))
+        min_days = max(1, int(val.get("ops_slot_regime_tune_min_days", 20)))
+        step = self._clamp_float(float(val.get("ops_slot_regime_tune_step", 0.12)), 0.01, 0.80)
+        buffer = self._clamp_float(float(val.get("ops_slot_regime_tune_buffer", 0.08)), 0.0, 0.50)
+        floor = self._clamp_float(float(val.get("ops_slot_regime_tune_floor", 0.10)), 0.0, 1.0)
+        ceiling = self._clamp_float(float(val.get("ops_slot_regime_tune_ceiling", 0.80)), floor, 1.0)
+        missing_ratio_hard_cap = self._clamp_float(
+            float(val.get("ops_slot_regime_tune_missing_ratio_hard_cap", 0.80)),
+            0.0,
+            1.0,
+        )
+        risk_floor = self._clamp_float(
+            float(val.get("ops_slot_risk_multiplier_floor", val.get("execution_min_risk_multiplier", 0.20))),
+            0.0,
+            1.0,
+        )
+
+        slot_missing_ratio = 0.0
+        slot_missing_ratio_active = False
+        slot_alerts: list[str] = []
+        try:
+            slot_anomaly = self._release_orchestrator()._slot_anomaly_metrics(as_of=as_of)
+        except Exception:
+            slot_anomaly = {}
+        if isinstance(slot_anomaly, dict):
+            slot_missing_ratio_active = bool(slot_anomaly.get("active", False))
+            slot_metrics = slot_anomaly.get("metrics", {}) if isinstance(slot_anomaly.get("metrics", {}), dict) else {}
+            slot_missing_ratio = float(slot_metrics.get("missing_ratio", 0.0))
+            slot_alerts = list(slot_anomaly.get("alerts", [])) if isinstance(slot_anomaly.get("alerts", []), list) else []
+        skip_for_missing = bool(slot_missing_ratio_active and slot_missing_ratio > missing_ratio_hard_cap)
+        if skip_for_missing:
+            payload = {
+                "as_of": as_of.isoformat(),
+                "generated_at": datetime.now().isoformat(),
+                "lookback_days": int(lookback_days),
+                "min_days": int(min_days),
+                "step": float(step),
+                "buffer": float(buffer),
+                "floor": float(floor),
+                "ceiling": float(ceiling),
+                "risk_multiplier_floor": float(risk_floor),
+                "ops_slot_regime_tune_missing_ratio_hard_cap": float(missing_ratio_hard_cap),
+                "slot_missing_ratio": float(slot_missing_ratio),
+                "slot_missing_ratio_active": bool(slot_missing_ratio_active),
+                "slot_alerts": slot_alerts[:10],
+                "ops_slot_eod_quality_anomaly_ratio_max_by_regime": current_quality,
+                "ops_slot_eod_risk_anomaly_ratio_max_by_regime": current_risk,
+                "buckets": {},
+                "changed": False,
+                "skipped": True,
+                "skip_reason": "slot_missing_ratio_high",
+            }
+            write_markdown(tuning_path, yaml.safe_dump(payload, allow_unicode=True, sort_keys=False))
+            return {
+                "enabled": True,
+                "applied": False,
+                "path": str(tuning_path),
+                "changed": False,
+                "skipped": True,
+                "reason": "slot_missing_ratio_high",
+                "slot_missing_ratio": float(slot_missing_ratio),
+                "ops_slot_regime_tune_missing_ratio_hard_cap": float(missing_ratio_hard_cap),
+                "ops_slot_eod_quality_anomaly_ratio_max_by_regime": current_quality,
+                "ops_slot_eod_risk_anomaly_ratio_max_by_regime": current_risk,
+                "buckets": {},
+            }
+
+        stats = {
+            "trend": {"days": 0, "quality_anomalies": 0, "risk_anomalies": 0},
+            "range": {"days": 0, "quality_anomalies": 0, "risk_anomalies": 0},
+            "extreme_vol": {"days": 0, "quality_anomalies": 0, "risk_anomalies": 0},
+        }
+        manifest_dir = self.ctx.output_dir / "artifacts" / "manifests"
+        for i in range(lookback_days):
+            day = as_of - timedelta(days=i)
+            payload = self._load_json_safely(manifest_dir / f"eod_{day.isoformat()}.json")
+            if not payload:
+                continue
+            metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics", {}), dict) else {}
+            checks = payload.get("checks", {}) if isinstance(payload.get("checks", {}), dict) else {}
+            bucket = self._regime_bucket(metrics.get("regime", ""))
+            if bucket not in stats:
+                continue
+            stats[bucket]["days"] = int(stats[bucket]["days"]) + 1
+            if not bool(checks.get("quality_passed", True)):
+                stats[bucket]["quality_anomalies"] = int(stats[bucket]["quality_anomalies"]) + 1
+            if float(metrics.get("risk_multiplier", 1.0)) < risk_floor:
+                stats[bucket]["risk_anomalies"] = int(stats[bucket]["risk_anomalies"]) + 1
+
+        tuned_quality = dict(current_quality)
+        tuned_risk = dict(current_risk)
+        summary_buckets: dict[str, Any] = {}
+        changed = False
+        for bucket in ("trend", "range", "extreme_vol"):
+            days = int(stats[bucket]["days"])
+            q_anom = int(stats[bucket]["quality_anomalies"])
+            r_anom = int(stats[bucket]["risk_anomalies"])
+            q_ratio = float(q_anom / days) if days > 0 else 0.0
+            r_ratio = float(r_anom / days) if days > 0 else 0.0
+            q_before = float(tuned_quality[bucket])
+            r_before = float(tuned_risk[bucket])
+            q_after = q_before
+            r_after = r_before
+            if days >= min_days:
+                q_target = self._clamp_float(q_ratio + buffer, floor, ceiling)
+                r_target = self._clamp_float(r_ratio + buffer, floor, ceiling)
+                q_after = float(bounded_bayesian_update(q_before, q_target, floor, ceiling, step=step))
+                r_after = float(bounded_bayesian_update(r_before, r_target, floor, ceiling, step=step))
+                tuned_quality[bucket] = q_after
+                tuned_risk[bucket] = r_after
+                if abs(q_after - q_before) > 1e-9 or abs(r_after - r_before) > 1e-9:
+                    changed = True
+            summary_buckets[bucket] = {
+                "days": days,
+                "quality_anomaly_ratio": q_ratio,
+                "risk_anomaly_ratio": r_ratio,
+                "quality_before": q_before,
+                "quality_after": q_after,
+                "risk_before": r_before,
+                "risk_after": r_after,
+                "eligible": bool(days >= min_days),
+            }
+
+        payload = {
+            "as_of": as_of.isoformat(),
+            "generated_at": datetime.now().isoformat(),
+            "lookback_days": int(lookback_days),
+            "min_days": int(min_days),
+            "step": float(step),
+            "buffer": float(buffer),
+            "floor": float(floor),
+            "ceiling": float(ceiling),
+            "risk_multiplier_floor": float(risk_floor),
+            "ops_slot_regime_tune_missing_ratio_hard_cap": float(missing_ratio_hard_cap),
+            "slot_missing_ratio": float(slot_missing_ratio),
+            "slot_missing_ratio_active": bool(slot_missing_ratio_active),
+            "slot_alerts": slot_alerts[:10],
+            "ops_slot_eod_quality_anomaly_ratio_max_by_regime": tuned_quality,
+            "ops_slot_eod_risk_anomaly_ratio_max_by_regime": tuned_risk,
+            "buckets": summary_buckets,
+            "changed": bool(changed),
+            "skipped": False,
+        }
+        write_markdown(tuning_path, yaml.safe_dump(payload, allow_unicode=True, sort_keys=False))
+        return {
+            "enabled": True,
+            "applied": True,
+            "path": str(tuning_path),
+            "changed": bool(changed),
+            "skipped": False,
+            "ops_slot_regime_tune_missing_ratio_hard_cap": float(missing_ratio_hard_cap),
+            "slot_missing_ratio": float(slot_missing_ratio),
+            "ops_slot_eod_quality_anomaly_ratio_max_by_regime": tuned_quality,
+            "ops_slot_eod_risk_anomaly_ratio_max_by_regime": tuned_risk,
+            "buckets": summary_buckets,
+        }
+
     def _load_latest_strategy_candidate(self, as_of: date) -> dict[str, Any]:
         if not bool(self.settings.validation.get("review_use_strategy_lab", True)):
             return {}
@@ -313,15 +563,50 @@ class LieEngine:
             summary = self._load_json_safely(summary_path)
             if not summary:
                 continue
+            metadata = manifest.get("metadata", {}) if isinstance(manifest.get("metadata", {}), dict) else {}
+            checks = manifest.get("checks", {}) if isinstance(manifest.get("checks", {}), dict) else {}
+            summary_fetch_stats = summary.get("data_fetch_stats", {})
+            if not isinstance(summary_fetch_stats, dict):
+                summary_fetch_stats = {}
             cutoff = self._parse_iso_date(summary.get("cutoff_date"))
             if cutoff is None:
-                metadata = manifest.get("metadata", {}) if isinstance(manifest.get("metadata", {}), dict) else {}
                 cutoff = self._parse_iso_date(metadata.get("cutoff_date"))
             if cutoff is None:
                 continue
             if cutoff > as_of:
                 continue
             if (as_of - cutoff).days > max(1, lookback_days):
+                continue
+            strict_cutoff_enforced = (
+                bool(checks.get("strict_cutoff_enforced"))
+                if "strict_cutoff_enforced" in checks
+                else bool(summary_fetch_stats.get("strict_cutoff_enforced", False))
+            )
+            if not strict_cutoff_enforced:
+                continue
+
+            cutoff_ts_raw = str(summary.get("cutoff_ts") or metadata.get("cutoff_ts") or f"{cutoff.isoformat()}T23:59:59")
+            cutoff_ts_dt = self._parse_iso_datetime(cutoff_ts_raw) or self._parse_iso_datetime(f"{cutoff.isoformat()}T23:59:59")
+            if cutoff_ts_dt is None:
+                continue
+
+            def _temporal_field(name: str) -> str:
+                return str(summary.get(name) or metadata.get(name) or summary_fetch_stats.get(name) or "").strip()
+
+            bar_max_ts = _temporal_field("bar_max_ts")
+            news_max_ts = _temporal_field("news_max_ts")
+            report_max_ts = _temporal_field("report_max_ts")
+
+            temporal_ok = True
+            for ts_raw in (bar_max_ts, news_max_ts, report_max_ts):
+                if not ts_raw:
+                    continue
+                ts_dt = self._parse_iso_datetime(ts_raw)
+                ts_date = ts_dt.date() if ts_dt is not None else self._parse_iso_date(ts_raw)
+                if ts_date is None or ts_date > cutoff:
+                    temporal_ok = False
+                    break
+            if not temporal_ok:
                 continue
 
             best = summary.get("best_candidate", {})
@@ -343,6 +628,11 @@ class LieEngine:
                 "manifest_path": str(mp),
                 "summary_path": str(summary_path),
                 "cutoff_date": cutoff.isoformat(),
+                "cutoff_ts": cutoff_ts_raw,
+                "bar_max_ts": bar_max_ts,
+                "news_max_ts": news_max_ts,
+                "report_max_ts": report_max_ts,
+                "strict_cutoff_enforced": strict_cutoff_enforced,
                 "candidate": best,
             }
         return {}
@@ -407,6 +697,8 @@ class LieEngine:
             review.notes.append(
                 "strategy_lab_candidate="
                 + f"{cand.get('name', 'unknown')}; cutoff={candidate_payload.get('cutoff_date', '')}; "
+                + f"bar_max_ts={candidate_payload.get('bar_max_ts', '')}; "
+                + f"news_max_ts={candidate_payload.get('news_max_ts', '')}; "
                 + f"manifest={candidate_payload.get('manifest_path', '')}"
             )
 
@@ -598,6 +890,248 @@ class LieEngine:
     def _paper_positions_state_path(self) -> Path:
         return self.ctx.output_dir / "artifacts" / "paper_positions_open.json"
 
+    def _broker_snapshot_path(self, as_of: date) -> Path:
+        return self.ctx.output_dir / "artifacts" / "broker_snapshot" / f"{as_of.isoformat()}.json"
+
+    def _broker_snapshot_live_inbox_path(self, as_of: date) -> Path:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        raw = str(val.get("broker_snapshot_live_inbox", "output/artifacts/broker_live_inbox")).strip()
+        path = Path(raw) if raw else Path("output/artifacts/broker_live_inbox")
+        if not path.is_absolute():
+            path = self.ctx.root / path
+        return path / f"{as_of.isoformat()}.json"
+
+    def _broker_snapshot_source_mode(self) -> str:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        mode = str(val.get("broker_snapshot_source_mode", "paper_engine")).strip().lower()
+        if mode not in {"paper_engine", "live_adapter", "hybrid_prefer_live"}:
+            return "paper_engine"
+        return mode
+
+    def _broker_snapshot_live_mapping_profile(self) -> str:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        profile = str(val.get("broker_snapshot_live_mapping_profile", "generic")).strip().lower()
+        if profile not in {"generic", "ibkr", "binance", "ctp"}:
+            return "generic"
+        return profile
+
+    @staticmethod
+    def _deep_get_by_path(data: Any, path: str) -> Any:
+        if not path:
+            return None
+        cur = data
+        for part in str(path).split("."):
+            key = str(part).strip()
+            if key == "":
+                return None
+            if isinstance(cur, dict):
+                if key not in cur:
+                    return None
+                cur = cur.get(key)
+            else:
+                return None
+        return cur
+
+    def _pick_first(self, data: Any, paths: list[str]) -> Any:
+        for p in paths:
+            value = self._deep_get_by_path(data, str(p))
+            if value is not None:
+                return value
+        return None
+
+    @staticmethod
+    def _default_live_mapping_profiles() -> dict[str, dict[str, Any]]:
+        return {
+            "generic": {
+                "source": ["source", "broker", "adapter_source"],
+                "open_positions": ["open_positions", "open_count", "positions_count"],
+                "closed_count": ["closed_count", "closed_trades", "summary.closed_count"],
+                "closed_pnl": ["closed_pnl", "realized_pnl", "realizedPnL", "summary.realized_pnl"],
+                "positions": ["positions", "open_positions_detail", "position_list"],
+                "position_fields": {
+                    "symbol": ["symbol", "ticker", "instrument", "instrument_id"],
+                    "side": ["side", "direction", "position_side", "positionSide", "posSide"],
+                    "qty": ["qty", "quantity", "position_qty", "size", "positionAmt", "position"],
+                    "notional": ["notional", "notional_value", "marketValue", "market_value"],
+                    "entry_price": ["entry_price", "avg_price", "average_price", "entryPrice", "avgCost"],
+                    "market_price": ["market_price", "last_price", "mark_price", "markPrice", "marketPrice"],
+                    "status": ["status", "state"],
+                },
+            },
+            "ibkr": {
+                "source": ["source", "broker", "adapter_source"],
+                "open_positions": ["open_positions", "summary.open_positions"],
+                "closed_count": ["closed_count", "summary.closed_count"],
+                "closed_pnl": ["closed_pnl", "summary.realized_pnl", "realized_pnl"],
+                "positions": ["positions", "portfolio"],
+                "position_fields": {
+                    "symbol": ["symbol", "contract.symbol", "localSymbol", "contract.localSymbol"],
+                    "side": ["side", "direction"],
+                    "qty": ["qty", "position", "quantity", "size"],
+                    "notional": ["notional", "marketValue", "market_value"],
+                    "entry_price": ["entry_price", "avgCost", "average_cost", "avg_price"],
+                    "market_price": ["market_price", "marketPrice", "last_price", "markPrice"],
+                    "status": ["status", "state"],
+                },
+            },
+            "binance": {
+                "source": ["source", "broker", "adapter_source"],
+                "open_positions": ["open_positions", "summary.open_positions"],
+                "closed_count": ["closed_count", "summary.closed_count"],
+                "closed_pnl": ["closed_pnl", "realizedPnl", "summary.realized_pnl"],
+                "positions": ["positions", "account.positions"],
+                "position_fields": {
+                    "symbol": ["symbol"],
+                    "side": ["side", "positionSide"],
+                    "qty": ["qty", "positionAmt", "amount", "size"],
+                    "notional": ["notional", "notionalValue", "positionInitialMargin"],
+                    "entry_price": ["entry_price", "entryPrice", "avgPrice"],
+                    "market_price": ["market_price", "markPrice", "price", "lastPrice"],
+                    "status": ["status", "state"],
+                },
+            },
+            "ctp": {
+                "source": ["source", "broker", "adapter_source"],
+                "open_positions": ["open_positions", "summary.open_positions"],
+                "closed_count": ["closed_count", "summary.closed_count"],
+                "closed_pnl": ["closed_pnl", "realized_pnl", "summary.realized_pnl"],
+                "positions": ["positions", "position_list"],
+                "position_fields": {
+                    "symbol": ["symbol", "instrument", "instrument_id"],
+                    "side": ["side", "direction", "posi_direction"],
+                    "qty": ["qty", "position", "volume"],
+                    "notional": ["notional"],
+                    "entry_price": ["entry_price", "open_price", "avg_price"],
+                    "market_price": ["market_price", "last_price", "settlement_price"],
+                    "status": ["status", "state"],
+                },
+            },
+        }
+
+    @staticmethod
+    def _merge_live_mapping(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(base)
+        for key in ("source", "open_positions", "closed_count", "closed_pnl", "positions"):
+            if key in override and isinstance(override.get(key), list):
+                merged[key] = [str(x) for x in override.get(key, []) if str(x).strip()]
+        pf = dict(base.get("position_fields", {})) if isinstance(base.get("position_fields", {}), dict) else {}
+        override_pf = override.get("position_fields", {})
+        if isinstance(override_pf, dict):
+            for f_key, f_paths in override_pf.items():
+                if isinstance(f_paths, list):
+                    pf[str(f_key)] = [str(x) for x in f_paths if str(x).strip()]
+        merged["position_fields"] = pf
+        return merged
+
+    def _resolve_live_mapping_profile(self) -> tuple[str, dict[str, Any]]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        profile = self._broker_snapshot_live_mapping_profile()
+        all_profiles = self._default_live_mapping_profiles()
+        base = all_profiles.get(profile, all_profiles["generic"])
+        override = val.get("broker_snapshot_live_mapping_fields", {})
+        if isinstance(override, dict):
+            base = self._merge_live_mapping(base, override)
+        return profile, base
+
+    @staticmethod
+    def _to_float(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return float(default)
+
+    @staticmethod
+    def _normalize_position_side(side_raw: Any, qty_signed: float) -> str:
+        side = str(side_raw or "").strip().upper()
+        if side in {"LONG", "BUY", "B", "L", "2"}:
+            return "LONG"
+        if side in {"SHORT", "SELL", "S", "-1", "3"}:
+            return "SHORT"
+        if side in {"FLAT", "NONE", "0"}:
+            return "FLAT"
+        if side in {"", "BOTH", "NET"}:
+            if qty_signed < 0:
+                return "SHORT"
+            if qty_signed > 0:
+                return "LONG"
+            return "FLAT"
+        if qty_signed < 0:
+            return "SHORT"
+        if qty_signed > 0:
+            return "LONG"
+        return "FLAT"
+
+    def _normalize_live_broker_snapshot(
+        self,
+        *,
+        as_of: date,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        profile, mapping = self._resolve_live_mapping_profile()
+        positions_key_paths = mapping.get("positions", ["positions"])
+        positions_raw = self._pick_first(payload, positions_key_paths if isinstance(positions_key_paths, list) else ["positions"])
+        positions_in = positions_raw if isinstance(positions_raw, list) else []
+        pf = mapping.get("position_fields", {}) if isinstance(mapping.get("position_fields", {}), dict) else {}
+        positions: list[dict[str, Any]] = []
+        for row in positions_in:
+            if not isinstance(row, dict):
+                continue
+            qty_raw = self._pick_first(row, pf.get("qty", ["qty", "quantity"])) if isinstance(pf.get("qty", []), list) else row.get("qty", 0.0)
+            qty_signed = self._to_float(qty_raw, 0.0)
+            side_raw = self._pick_first(row, pf.get("side", ["side"])) if isinstance(pf.get("side", []), list) else row.get("side", "")
+            side = self._normalize_position_side(side_raw, qty_signed)
+            qty = abs(qty_signed)
+            status_raw = self._pick_first(row, pf.get("status", ["status"])) if isinstance(pf.get("status", []), list) else row.get("status", "")
+            status = str(status_raw or "").strip().upper() or "OPEN"
+            if qty <= 1e-12 and status not in {"OPEN", "ACTIVE"}:
+                continue
+            symbol_raw = self._pick_first(row, pf.get("symbol", ["symbol"])) if isinstance(pf.get("symbol", []), list) else row.get("symbol", "")
+            entry_price_raw = self._pick_first(row, pf.get("entry_price", ["entry_price"])) if isinstance(pf.get("entry_price", []), list) else row.get("entry_price", 0.0)
+            market_price_raw = self._pick_first(row, pf.get("market_price", ["market_price"])) if isinstance(pf.get("market_price", []), list) else row.get("market_price", 0.0)
+            notional_raw = self._pick_first(row, pf.get("notional", ["notional"])) if isinstance(pf.get("notional", []), list) else row.get("notional", 0.0)
+            market_price = self._to_float(market_price_raw, 0.0)
+            notional = self._to_float(notional_raw, 0.0)
+            if abs(notional) <= 1e-12 and qty > 0 and market_price > 0:
+                notional = qty * market_price
+            positions.append(
+                {
+                    "symbol": str(symbol_raw or ""),
+                    "side": side,
+                    "qty": qty,
+                    "notional": notional,
+                    "entry_price": self._to_float(entry_price_raw, 0.0),
+                    "market_price": market_price,
+                    "status": status,
+                }
+            )
+        open_positions_raw = self._pick_first(payload, mapping.get("open_positions", ["open_positions"]))
+        open_positions = int(round(self._to_float(open_positions_raw, len(positions))))
+        open_positions = max(0, open_positions)
+        closed_pnl_raw = self._pick_first(payload, mapping.get("closed_pnl", ["closed_pnl"]))
+        closed_count_raw = self._pick_first(payload, mapping.get("closed_count", ["closed_count"]))
+        closed_pnl = self._to_float(closed_pnl_raw, 0.0)
+        closed_count = int(round(self._to_float(closed_count_raw, 0.0)))
+        closed_count = max(0, closed_count)
+        source_raw = self._pick_first(payload, mapping.get("source", ["source"]))
+        source = str(source_raw or "live_broker").strip() or "live_broker"
+
+        return {
+            "date": as_of.isoformat(),
+            "generated_at": datetime.now().isoformat(),
+            "source": "live_adapter",
+            "adapter_source": source,
+            "mapping_profile": profile,
+            "open_positions": open_positions,
+            "closed_count": closed_count,
+            "closed_pnl": closed_pnl,
+            "positions": positions,
+            "stats": {
+                "raw_path": str(self._broker_snapshot_live_inbox_path(as_of)),
+                "positions_rows_in": int(len(positions_in)),
+                "positions_rows_out": int(len(positions)),
+            },
+        }
+
     def _load_open_paper_positions(self) -> list[dict[str, Any]]:
         payload = self._load_json_safely(self._paper_positions_state_path())
         rows = payload.get("positions", []) if isinstance(payload.get("positions", []), list) else []
@@ -615,6 +1149,92 @@ class LieEngine:
                 "positions": positions,
             },
         )
+
+    def _write_paper_broker_snapshot(
+        self,
+        *,
+        as_of: date,
+        active_positions: list[dict[str, Any]],
+        paper_exec_summary: dict[str, Any],
+    ) -> Path:
+        positions: list[dict[str, Any]] = []
+        for row in active_positions:
+            if not isinstance(row, dict):
+                continue
+            positions.append(
+                {
+                    "open_date": str(row.get("open_date", "")),
+                    "symbol": str(row.get("symbol", "")),
+                    "side": str(row.get("side", "")),
+                    "size_pct": float(row.get("size_pct", 0.0)),
+                    "risk_pct": float(row.get("risk_pct", 0.0)),
+                    "entry_price": float(row.get("entry_price", 0.0)),
+                    "stop_price": float(row.get("stop_price", 0.0)),
+                    "target_price": float(row.get("target_price", 0.0)),
+                    "runtime_mode": str(row.get("runtime_mode", "base")),
+                    "status": str(row.get("status", "OPEN")),
+                }
+            )
+
+        payload = {
+            "date": as_of.isoformat(),
+            "generated_at": datetime.now().isoformat(),
+            "source": "paper_engine",
+            "open_positions": int(len(positions)),
+            "closed_count": int((paper_exec_summary or {}).get("closed_count", 0)),
+            "closed_pnl": float((paper_exec_summary or {}).get("closed_pnl", 0.0)),
+            "positions": positions,
+            "stats": {
+                "open_before": int((paper_exec_summary or {}).get("open_before", 0)),
+                "missing_symbol_count": int((paper_exec_summary or {}).get("missing_symbol_count", 0)),
+            },
+        }
+        out_path = self._broker_snapshot_path(as_of)
+        write_json(out_path, payload)
+        return out_path
+
+    def _resolve_and_write_broker_snapshot(
+        self,
+        *,
+        as_of: date,
+        active_positions: list[dict[str, Any]],
+        paper_exec_summary: dict[str, Any],
+    ) -> Path | None:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        mode = self._broker_snapshot_source_mode()
+        fallback_to_paper = bool(val.get("broker_snapshot_live_fallback_to_paper", True))
+        target_path = self._broker_snapshot_path(as_of)
+
+        live_inbox = self._broker_snapshot_live_inbox_path(as_of)
+        live_payload = self._load_json_safely(live_inbox)
+        live_ready = bool(live_payload)
+        prefer_live = mode in {"live_adapter", "hybrid_prefer_live"}
+
+        if prefer_live and live_ready:
+            normalized = self._normalize_live_broker_snapshot(as_of=as_of, payload=live_payload)
+            write_json(target_path, normalized)
+            return target_path
+
+        if mode == "live_adapter" and (not live_ready) and (not fallback_to_paper):
+            if target_path.exists():
+                try:
+                    target_path.unlink()
+                except OSError:
+                    pass
+            return None
+
+        paper_path = self._write_paper_broker_snapshot(
+            as_of=as_of,
+            active_positions=active_positions,
+            paper_exec_summary=paper_exec_summary,
+        )
+        if mode == "live_adapter" and (not live_ready):
+            payload = self._load_json_safely(paper_path)
+            payload["source"] = "paper_engine_fallback"
+            payload["fallback_reason"] = "live_snapshot_missing"
+            payload["live_inbox"] = str(live_inbox)
+            write_json(paper_path, payload)
+        return paper_path
 
     @staticmethod
     def _bars_daily_snapshot(bars: pd.DataFrame) -> dict[str, dict[str, float]]:
@@ -1001,6 +1621,12 @@ class LieEngine:
         )
         active_positions = list(paper_exec.get("remaining_positions", [])) + open_positions
         self._save_open_paper_positions(as_of=as_of, positions=active_positions)
+        broker_snapshot_path = self._resolve_and_write_broker_snapshot(
+            as_of=as_of,
+            active_positions=active_positions,
+            paper_exec_summary=(paper_exec.get("summary", {}) if isinstance(paper_exec.get("summary", {}), dict) else {}),
+        )
+        broker_snapshot_ref = str(broker_snapshot_path) if broker_snapshot_path is not None else ""
         manifest_path = write_run_manifest(
             output_dir=self.ctx.output_dir,
             run_type="eod",
@@ -1010,6 +1636,7 @@ class LieEngine:
                 "signals": str(signals_path),
                 "positions": str(positions_path),
                 "mode_feedback": str(mode_feedback_path),
+                "broker_snapshot": broker_snapshot_ref,
             },
             metrics={
                 "signals": int(len(signals)),
@@ -1047,6 +1674,7 @@ class LieEngine:
             "closed_trades": int((paper_exec.get("summary", {}) or {}).get("closed_count", 0)),
             "closed_pnl": float((paper_exec.get("summary", {}) or {}).get("closed_pnl", 0.0)),
             "open_positions": int(len(active_positions)),
+            "broker_snapshot": broker_snapshot_ref,
         }
 
     def run_premarket(self, as_of: date) -> dict[str, Any]:
@@ -1228,6 +1856,228 @@ class LieEngine:
         )
         return result
 
+    @staticmethod
+    def _default_mode_stress_windows() -> list[dict[str, str]]:
+        return [
+            {"name": "2015_crash", "start": "2015-01-01", "end": "2015-12-31"},
+            {"name": "2020_pandemic", "start": "2020-01-01", "end": "2020-12-31"},
+            {"name": "2022_geopolitical", "start": "2022-01-01", "end": "2022-12-31"},
+            {"name": "extreme_gap", "start": "2024-01-01", "end": "2025-06-30"},
+        ]
+
+    def run_mode_stress_matrix(
+        self,
+        *,
+        as_of: date,
+        modes: list[str] | None = None,
+        windows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        profiles = self._resolved_mode_profiles()
+        default_modes = ["ultra_short", "swing", "long"]
+        mode_candidates = modes if isinstance(modes, list) and modes else default_modes
+        selected_modes: list[str] = []
+        for raw in mode_candidates:
+            m = str(raw).strip()
+            if (not m) or (m in selected_modes):
+                continue
+            if m in profiles:
+                selected_modes.append(m)
+        if not selected_modes:
+            selected_modes = ["swing"] if "swing" in profiles else [next(iter(profiles.keys()))]
+
+        windows_in = windows if isinstance(windows, list) and windows else self._default_mode_stress_windows()
+        parsed_windows: list[dict[str, Any]] = []
+        for row in windows_in:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name", "")).strip() or "window"
+            start = self._parse_iso_date(row.get("start"))
+            end = self._parse_iso_date(row.get("end"))
+            if start is None or end is None or end < start:
+                continue
+            if start > as_of:
+                continue
+            end_eff = min(end, as_of)
+            parsed_windows.append(
+                {
+                    "name": name,
+                    "start": start.isoformat(),
+                    "end": end_eff.isoformat(),
+                }
+            )
+
+        symbols = self._core_symbols()
+        symbols = expand_universe(symbols, pd.DataFrame(), int(self.settings.universe.get("max_dynamic_additions", 5)))
+        trend_thr = float(self.settings.thresholds.get("hurst_trend", 0.6))
+        mean_thr = float(self.settings.thresholds.get("hurst_mean_revert", 0.4))
+        atr_extreme = float(self.settings.thresholds.get("atr_extreme", 2.0))
+
+        matrix_rows: list[dict[str, Any]] = []
+        for w in parsed_windows:
+            w_name = str(w.get("name", "window"))
+            w_start = self._parse_iso_date(w.get("start"))
+            w_end = self._parse_iso_date(w.get("end"))
+            if w_start is None or w_end is None:
+                continue
+            bars, _ = self._run_ingestion_range(start=w_start, end=w_end, symbols=symbols)
+            bars_empty = bool(bars.empty)
+            for mode in selected_modes:
+                profile = profiles.get(mode, profiles.get("swing", self._default_mode_profiles().get("swing", {})))
+                cfg = BacktestConfig(
+                    signal_confidence_min=float(profile.get("signal_confidence_min", 60.0)),
+                    convexity_min=float(profile.get("convexity_min", 2.0)),
+                    max_daily_trades=self._clamp_int(profile.get("max_daily_trades", 2.0), 1, 5),
+                    hold_days=self._clamp_int(profile.get("hold_days", 5.0), 1, 20),
+                )
+                if bars_empty:
+                    result = BacktestResult(
+                        start=w_start,
+                        end=w_end,
+                        total_return=0.0,
+                        annual_return=0.0,
+                        max_drawdown=0.0,
+                        win_rate=0.0,
+                        profit_factor=0.0,
+                        expectancy=0.0,
+                        trades=0,
+                        violations=0,
+                        positive_window_ratio=0.0,
+                        equity_curve=[],
+                        by_asset={},
+                    )
+                    status = "no_data"
+                else:
+                    result = run_walk_forward_backtest(
+                        bars=bars,
+                        start=w_start,
+                        end=w_end,
+                        trend_thr=trend_thr,
+                        mean_thr=mean_thr,
+                        atr_extreme=atr_extreme,
+                        cfg_template=cfg,
+                        train_years=3,
+                        valid_years=1,
+                        step_months=3,
+                    )
+                    status = "ok"
+
+                matrix_rows.append(
+                    {
+                        "mode": mode,
+                        "window": w_name,
+                        "start": w_start.isoformat(),
+                        "end": w_end.isoformat(),
+                        "status": status,
+                        "total_return": float(result.total_return),
+                        "annual_return": float(result.annual_return),
+                        "max_drawdown": float(result.max_drawdown),
+                        "win_rate": float(result.win_rate),
+                        "profit_factor": float(result.profit_factor),
+                        "expectancy": float(result.expectancy),
+                        "trades": int(result.trades),
+                        "violations": int(result.violations),
+                        "positive_window_ratio": float(result.positive_window_ratio),
+                    }
+                )
+
+        summary_rows: list[dict[str, Any]] = []
+        for mode in selected_modes:
+            rows = [x for x in matrix_rows if str(x.get("mode", "")) == mode and str(x.get("status", "")) == "ok"]
+            if not rows:
+                summary_rows.append(
+                    {
+                        "mode": mode,
+                        "windows": 0,
+                        "avg_annual_return": 0.0,
+                        "worst_drawdown": 0.0,
+                        "avg_win_rate": 0.0,
+                        "avg_profit_factor": 0.0,
+                        "avg_positive_window_ratio": 0.0,
+                        "total_violations": 0,
+                        "robustness_score": -1.0,
+                    }
+                )
+                continue
+            n = float(len(rows))
+            avg_annual = float(sum(float(r.get("annual_return", 0.0)) for r in rows) / n)
+            worst_drawdown = float(max(float(r.get("max_drawdown", 0.0)) for r in rows))
+            avg_win = float(sum(float(r.get("win_rate", 0.0)) for r in rows) / n)
+            avg_pf = float(sum(float(r.get("profit_factor", 0.0)) for r in rows) / n)
+            avg_pwr = float(sum(float(r.get("positive_window_ratio", 0.0)) for r in rows) / n)
+            total_violations = int(sum(int(r.get("violations", 0)) for r in rows))
+            robustness_score = float(
+                avg_annual
+                - worst_drawdown
+                + 0.10 * (avg_pf - 1.0)
+                + 0.05 * (avg_pwr - 0.5)
+                - 0.02 * float(total_violations)
+            )
+            summary_rows.append(
+                {
+                    "mode": mode,
+                    "windows": int(len(rows)),
+                    "avg_annual_return": avg_annual,
+                    "worst_drawdown": worst_drawdown,
+                    "avg_win_rate": avg_win,
+                    "avg_profit_factor": avg_pf,
+                    "avg_positive_window_ratio": avg_pwr,
+                    "total_violations": total_violations,
+                    "robustness_score": robustness_score,
+                }
+            )
+
+        summary_rows.sort(key=lambda x: float(x.get("robustness_score", -1e9)), reverse=True)
+        best_mode = str(summary_rows[0]["mode"]) if summary_rows else "N/A"
+
+        payload: dict[str, Any] = {
+            "date": as_of.isoformat(),
+            "mode_count": int(len(selected_modes)),
+            "window_count": int(len(parsed_windows)),
+            "modes": selected_modes,
+            "windows": parsed_windows,
+            "matrix": matrix_rows,
+            "mode_summary": summary_rows,
+            "best_mode": best_mode,
+        }
+
+        review_dir = self.ctx.output_dir / "review"
+        json_path = review_dir / f"{as_of.isoformat()}_mode_stress_matrix.json"
+        md_path = review_dir / f"{as_of.isoformat()}_mode_stress_matrix.md"
+        write_json(json_path, payload)
+        write_markdown(md_path, render_mode_stress_matrix(as_of, payload))
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "mode_stress_matrix_runs",
+            pd.DataFrame(
+                [
+                    {
+                        "date": as_of.isoformat(),
+                        "mode_count": int(len(selected_modes)),
+                        "window_count": int(len(parsed_windows)),
+                        "best_mode": best_mode,
+                    }
+                ]
+            ),
+        )
+        manifest_path = write_run_manifest(
+            output_dir=self.ctx.output_dir,
+            run_type="mode_stress_matrix",
+            run_id=as_of.isoformat(),
+            artifacts={
+                "matrix_json": str(json_path),
+                "matrix_md": str(md_path),
+            },
+            metrics={
+                "mode_count": int(len(selected_modes)),
+                "window_count": int(len(parsed_windows)),
+                "best_mode": best_mode,
+            },
+            checks={"matrix_rows": int(len(matrix_rows))},
+        )
+        payload["paths"] = {"json": str(json_path), "md": str(md_path)}
+        payload["manifest"] = str(manifest_path)
+        return payload
+
     def run_research_backtest(
         self,
         *,
@@ -1278,6 +2128,13 @@ class LieEngine:
             },
             metadata={
                 "cutoff_date": str(payload.get("cutoff_date", "")),
+                "cutoff_ts": str(payload.get("cutoff_ts", "")),
+                "bar_max_ts": str(payload.get("bar_max_ts", "")),
+                "news_max_ts": str(payload.get("news_max_ts", "")),
+                "report_max_ts": str(payload.get("report_max_ts", "")),
+                "review_bar_max_ts": str(payload.get("review_bar_max_ts", "")),
+                "review_news_max_ts": str(payload.get("review_news_max_ts", "")),
+                "review_report_max_ts": str(payload.get("review_report_max_ts", "")),
                 "review_days": int(payload.get("review_days", 0)),
             },
         )
@@ -1327,6 +2184,13 @@ class LieEngine:
             },
             metadata={
                 "cutoff_date": str(payload.get("cutoff_date", "")),
+                "cutoff_ts": str(payload.get("cutoff_ts", "")),
+                "bar_max_ts": str(payload.get("bar_max_ts", "")),
+                "news_max_ts": str(payload.get("news_max_ts", "")),
+                "report_max_ts": str(payload.get("report_max_ts", "")),
+                "review_bar_max_ts": str(payload.get("review_bar_max_ts", "")),
+                "review_news_max_ts": str(payload.get("review_news_max_ts", "")),
+                "review_report_max_ts": str(payload.get("review_report_max_ts", "")),
                 "review_days": int(payload.get("review_days", 0)),
             },
         )
@@ -1678,6 +2542,7 @@ class LieEngine:
             runtime_mode=runtime_mode,
             mode_history=mode_history,
         )
+        slot_regime_tuning = self._tune_slot_regime_thresholds(as_of=as_of)
         self._apply_mode_health_guard(
             review=review,
             current_params=params,
@@ -1687,6 +2552,12 @@ class LieEngine:
             "mode_health="
             + f"runtime_mode={runtime_mode}; passed={mode_health.get('passed', True)}; "
             + f"active={mode_health.get('active', False)}"
+        )
+        review.notes.append(
+            "slot_regime_tuning="
+            + f"applied={bool(slot_regime_tuning.get('applied', False))}; "
+            + f"changed={bool(slot_regime_tuning.get('changed', False))}; "
+            + f"path={slot_regime_tuning.get('path', '')}"
         )
         review.rollback_anchor = rollback_anchor
 
@@ -1712,6 +2583,7 @@ class LieEngine:
         audit_payload["mode_history"] = mode_history
         audit_payload["mode_health"] = mode_health
         audit_payload["mode_adaptive"] = mode_adaptive
+        audit_payload["slot_regime_tuning"] = slot_regime_tuning
         audit_payload["generated_at"] = datetime.now().isoformat()
         write_markdown(delta_path, yaml.safe_dump(audit_payload, allow_unicode=True, sort_keys=False))
 
@@ -1736,6 +2608,7 @@ class LieEngine:
                 "mode_health_passed": bool(mode_health.get("passed", True)),
                 "mode_adaptive_applied": bool(mode_adaptive.get("applied", False)),
                 "mode_adaptive_direction": str(mode_adaptive.get("direction", "none")),
+                "slot_regime_tuning_changed": bool(slot_regime_tuning.get("changed", False)),
             },
             checks={
                 "positive_window_ratio": float(bt.positive_window_ratio),
@@ -1778,6 +2651,7 @@ class LieEngine:
             test_all=lambda **kwargs: self.test_all(**kwargs),
             load_json_safely=lambda p: self._load_json_safely(p),
             sqlite_path=self.ctx.sqlite_path,
+            run_stress_matrix=lambda d, modes: self.run_mode_stress_matrix(as_of=d, modes=modes),
         )
 
     def _architecture_orchestrator(self) -> ArchitectureOrchestrator:
@@ -1803,9 +2677,11 @@ class LieEngine:
         )
 
     def _testing_orchestrator(self) -> TestingOrchestrator:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         return TestingOrchestrator(
             root=self.ctx.root,
             output_dir=self.ctx.output_dir,
+            timeout_seconds=max(30, int(val.get("test_all_timeout_seconds", 1800))),
         )
 
     def _scheduler_orchestrator(self) -> SchedulerOrchestrator:
