@@ -5,6 +5,7 @@
 ```bash
 docs/ARCHITECTURE_REVIEW.md
 docs/PROGRESS.md
+docs/DEMO_VERSIONING_BASELINE.md
 ```
 
 运行：
