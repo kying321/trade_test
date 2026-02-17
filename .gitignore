@@ -21,6 +21,7 @@ venv/
 pip-wheel-metadata/
 
 # ===== Runtime outputs (regenerable) =====
+system/output/
 system/output/artifacts/
 system/output/daily/
 system/output/logs/
