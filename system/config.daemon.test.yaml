@@ -90,6 +90,8 @@ validation:
   ops_stress_autorun_history_enabled: true
   ops_stress_autorun_history_window_days: 21
   ops_stress_autorun_history_min_rounds: 2
+  ops_stress_autorun_history_retention_days: 14
+  ops_stress_autorun_history_checksum_index_enabled: true
   ops_stress_autorun_adaptive_monitor_enabled: true
   ops_stress_autorun_adaptive_monitor_window_days: 21
   ops_stress_autorun_adaptive_monitor_min_rounds: 2
@@ -103,6 +105,8 @@ validation:
   ops_stress_autorun_reason_drift_recent_rounds: 3
   ops_stress_autorun_reason_drift_mix_gap_max: 0.40
   ops_stress_autorun_reason_drift_change_point_gap_max: 0.50
+  ops_stress_autorun_reason_drift_retention_days: 14
+  ops_stress_autorun_reason_drift_checksum_index_enabled: true
   ops_slot_window_days: 5
   ops_slot_min_samples: 2
   ops_slot_missing_ratio_max: 0.40
@@ -157,8 +161,61 @@ validation:
   ops_reconcile_broker_row_diff_alias_hit_rate_min: 0.00
   ops_reconcile_broker_row_diff_unresolved_key_ratio_max: 0.35
   ops_reconcile_broker_row_diff_asof_only: true
+  ops_reconcile_broker_row_diff_artifact_retention_days: 30
+  ops_reconcile_broker_row_diff_artifact_checksum_index_enabled: true
   ops_reconcile_broker_row_diff_symbol_alias_map: {}
   ops_reconcile_broker_row_diff_side_alias_map: {}
+  ops_artifact_governance_profiles:
+    temporal_autofix_patch:
+      json_glob: "*_temporal_autofix_patch.json"
+      md_glob: "*_temporal_autofix_patch.md"
+      checksum_index_filename: "temporal_autofix_patch_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    stress_autorun_history:
+      json_glob: "*_stress_autorun_history.json"
+      md_glob: "*_stress_autorun_history.md"
+      checksum_index_filename: "stress_autorun_history_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    stress_autorun_reason_drift:
+      json_glob: "*_stress_autorun_reason_drift.json"
+      md_glob: "*_stress_autorun_reason_drift.md"
+      checksum_index_filename: "stress_autorun_reason_drift_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    reconcile_row_diff:
+      json_glob: "*_reconcile_row_diff.json"
+      md_glob: "*_reconcile_row_diff.md"
+      checksum_index_filename: "reconcile_row_diff_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+  ops_artifact_governance_strict_mode_enabled: false
+  ops_artifact_governance_profile_baseline:
+    temporal_autofix_patch:
+      json_glob: "*_temporal_autofix_patch.json"
+      md_glob: "*_temporal_autofix_patch.md"
+      checksum_index_filename: "temporal_autofix_patch_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    stress_autorun_history:
+      json_glob: "*_stress_autorun_history.json"
+      md_glob: "*_stress_autorun_history.md"
+      checksum_index_filename: "stress_autorun_history_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    stress_autorun_reason_drift:
+      json_glob: "*_stress_autorun_reason_drift.json"
+      md_glob: "*_stress_autorun_reason_drift.md"
+      checksum_index_filename: "stress_autorun_reason_drift_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
+    reconcile_row_diff:
+      json_glob: "*_reconcile_row_diff.json"
+      md_glob: "*_reconcile_row_diff.md"
+      checksum_index_filename: "reconcile_row_diff_checksum_index.json"
+      retention_days: 30
+      checksum_index_enabled: true
   ops_reconcile_require_broker_snapshot: false
   ops_reconcile_broker_contract_emit_canonical_view: true
   ops_reconcile_broker_contract_canonical_dir: "artifacts/broker_snapshot_canonical"

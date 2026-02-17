@@ -5,16 +5,16 @@ from datetime import date, timedelta
 from pathlib import Path
 from contextlib import closing
 import csv
-import hashlib
 import math
 import sqlite3
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import yaml
 
 from lie_engine.config import SystemSettings
 from lie_engine.data.storage import write_json, write_markdown
 from lie_engine.models import ReviewDelta
+from lie_engine.orchestration.artifact_governance import apply_dated_artifact_governance
 
 
 @dataclass(slots=True)
@@ -30,6 +30,54 @@ class ReleaseOrchestrator:
     load_json_safely: Callable[[Path], dict[str, Any]]
     sqlite_path: Path | None = None
     run_stress_matrix: Callable[[date, list[str] | None], dict[str, Any]] | None = None
+    ARTIFACT_GOVERNANCE_DEFAULTS: ClassVar[dict[str, dict[str, str]]] = {
+        "stress_autorun_history": {
+            "json_glob": "*_stress_autorun_history.json",
+            "md_glob": "*_stress_autorun_history.md",
+            "checksum_index_filename": "stress_autorun_history_checksum_index.json",
+        },
+        "stress_autorun_reason_drift": {
+            "json_glob": "*_stress_autorun_reason_drift.json",
+            "md_glob": "*_stress_autorun_reason_drift.md",
+            "checksum_index_filename": "stress_autorun_reason_drift_checksum_index.json",
+        },
+        "temporal_autofix_patch": {
+            "json_glob": "*_temporal_autofix_patch.json",
+            "md_glob": "*_temporal_autofix_patch.md",
+            "checksum_index_filename": "temporal_autofix_patch_checksum_index.json",
+        },
+        "reconcile_row_diff": {
+            "json_glob": "*_reconcile_row_diff.json",
+            "md_glob": "*_reconcile_row_diff.md",
+            "checksum_index_filename": "reconcile_row_diff_checksum_index.json",
+        },
+    }
+    ARTIFACT_GOVERNANCE_LEGACY_KEYS: ClassVar[dict[str, dict[str, Any]]] = {
+        "temporal_autofix_patch": {
+            "retention_key": "ops_temporal_audit_autofix_patch_retention_days",
+            "retention_default": 30,
+            "checksum_key": "ops_temporal_audit_autofix_patch_checksum_index_enabled",
+            "checksum_default": True,
+        },
+        "stress_autorun_history": {
+            "retention_key": "ops_stress_autorun_history_retention_days",
+            "retention_default": 30,
+            "checksum_key": "ops_stress_autorun_history_checksum_index_enabled",
+            "checksum_default": True,
+        },
+        "stress_autorun_reason_drift": {
+            "retention_key": "ops_stress_autorun_reason_drift_retention_days",
+            "retention_default": 30,
+            "checksum_key": "ops_stress_autorun_reason_drift_checksum_index_enabled",
+            "checksum_default": True,
+        },
+        "reconcile_row_diff": {
+            "retention_key": "ops_reconcile_broker_row_diff_artifact_retention_days",
+            "retention_default": 30,
+            "checksum_key": "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled",
+            "checksum_default": True,
+        },
+    }
 
     @staticmethod
     def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -37,6 +85,19 @@ class ReleaseOrchestrator:
             return float(v)
         except Exception:
             return float(default)
+
+    @staticmethod
+    def _safe_bool(v: Any, default: bool = False) -> bool:
+        if isinstance(v, bool):
+            return bool(v)
+        if isinstance(v, (int, float)):
+            return bool(v)
+        txt = str(v).strip().lower()
+        if txt in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if txt in {"0", "false", "f", "no", "n", "off"}:
+            return False
+        return bool(default)
 
     @staticmethod
     def _extract_failed_tests(test_payload: dict[str, Any]) -> list[str]:
@@ -79,136 +140,374 @@ class ReleaseOrchestrator:
         failed = cls._extract_failed_tests(test_payload)
         return "__timeout__" in set(failed)
 
-    @staticmethod
-    def _sha256_file(path: Path) -> tuple[str, int]:
-        digest = hashlib.sha256()
-        size = 0
-        with path.open("rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                size += len(chunk)
-                digest.update(chunk)
-        return digest.hexdigest(), int(size)
-
-    @staticmethod
-    def _extract_temporal_patch_date(path: Path) -> date | None:
-        name = str(path.name).strip()
-        if len(name) < 10:
-            return None
-        prefix = name[:10]
-        try:
-            return date.fromisoformat(prefix)
-        except Exception:
-            return None
-
-    def _collect_temporal_autofix_patch_pairs(self, *, review_dir: Path) -> dict[str, dict[str, Path]]:
-        out: dict[str, dict[str, Path]] = {}
-        for p in sorted(review_dir.glob("*_temporal_autofix_patch.json")):
-            d = self._extract_temporal_patch_date(p)
-            if d is None:
-                continue
-            key = d.isoformat()
-            out.setdefault(key, {})
-            out[key]["json"] = p
-        for p in sorted(review_dir.glob("*_temporal_autofix_patch.md")):
-            d = self._extract_temporal_patch_date(p)
-            if d is None:
-                continue
-            key = d.isoformat()
-            out.setdefault(key, {})
-            out[key]["md"] = p
-        return out
-
-    def _rotate_temporal_autofix_patch_artifacts(
+    def _artifact_governance_profile(
         self,
         *,
-        as_of: date,
-        review_dir: Path,
-        retention_days: int,
+        profile_name: str,
+        fallback_retention_days: int,
+        fallback_checksum_index_enabled: bool,
     ) -> dict[str, Any]:
-        keep_days = max(1, int(retention_days))
-        pairs = self._collect_temporal_autofix_patch_pairs(review_dir=review_dir)
-        rotated_out_dates: list[str] = []
-        deleted_files = 0
-
-        for dstr in sorted(pairs.keys()):
-            try:
-                d0 = date.fromisoformat(str(dstr))
-            except Exception:
-                continue
-            age_days = (as_of - d0).days
-            if age_days < keep_days:
-                continue
-            if age_days < 0:
-                # Future artifacts are not touched by retention.
-                continue
-            item = pairs.get(dstr, {})
-            for key in ("json", "md"):
-                p = item.get(key)
-                if isinstance(p, Path) and p.exists():
-                    p.unlink()
-                    deleted_files += 1
-            rotated_out_dates.append(str(dstr))
-
+        defaults = self.ARTIFACT_GOVERNANCE_DEFAULTS.get(str(profile_name), {})
+        default_json_glob = str(defaults.get("json_glob", "")).strip() or f"*_{profile_name}.json"
+        default_md_glob = str(defaults.get("md_glob", "")).strip() or f"*_{profile_name}.md"
+        default_index_filename = (
+            str(defaults.get("checksum_index_filename", "")).strip() or f"{profile_name}_checksum_index.json"
+        )
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        raw_profiles = (
+            val.get("ops_artifact_governance_profiles", {})
+            if isinstance(val.get("ops_artifact_governance_profiles", {}), dict)
+            else {}
+        )
+        profile_raw = (
+            raw_profiles.get(profile_name, {})
+            if isinstance(raw_profiles.get(profile_name, {}), dict)
+            else {}
+        )
+        json_glob = str(profile_raw.get("json_glob", default_json_glob)).strip() or default_json_glob
+        md_glob = str(profile_raw.get("md_glob", default_md_glob)).strip() or default_md_glob
+        checksum_index_filename = (
+            str(profile_raw.get("checksum_index_filename", default_index_filename)).strip()
+            or default_index_filename
+        )
+        retention_days = max(
+            1,
+            int(
+                self._safe_float(
+                    profile_raw.get("retention_days", fallback_retention_days),
+                    fallback_retention_days,
+                )
+            ),
+        )
+        checksum_index_enabled = self._safe_bool(
+            profile_raw.get("checksum_index_enabled", fallback_checksum_index_enabled),
+            bool(fallback_checksum_index_enabled),
+        )
         return {
-            "retention_days": int(keep_days),
-            "rotated_out_count": int(len(rotated_out_dates)),
-            "rotated_out_dates": rotated_out_dates,
-            "deleted_files": int(deleted_files),
+            "profile_name": str(profile_name),
+            "json_glob": str(json_glob),
+            "md_glob": str(md_glob),
+            "checksum_index_filename": str(checksum_index_filename),
+            "retention_days": int(retention_days),
+            "checksum_index_enabled": bool(checksum_index_enabled),
+            "profile_override": bool(profile_name in raw_profiles),
         }
 
-    def _write_temporal_autofix_checksum_index(
+    def _apply_artifact_governance(
         self,
         *,
         as_of: date,
         review_dir: Path,
-        retention_days: int,
-        rotated_out_dates: list[str],
+        profile_name: str,
+        fallback_retention_days: int,
+        fallback_checksum_index_enabled: bool,
     ) -> dict[str, Any]:
-        index_entries: list[dict[str, Any]] = []
-        pairs = self._collect_temporal_autofix_patch_pairs(review_dir=review_dir)
-        for dstr in sorted(pairs.keys(), reverse=True):
-            item = pairs.get(dstr, {})
-            row: dict[str, Any] = {
-                "date": str(dstr),
-                "json": "",
-                "json_sha256": "",
-                "json_bytes": 0,
-                "md": "",
-                "md_sha256": "",
-                "md_bytes": 0,
-                "pair_complete": False,
+        policy = self._artifact_governance_profile(
+            profile_name=profile_name,
+            fallback_retention_days=fallback_retention_days,
+            fallback_checksum_index_enabled=fallback_checksum_index_enabled,
+        )
+        result = apply_dated_artifact_governance(
+            as_of=as_of,
+            directory=review_dir,
+            json_glob=str(policy.get("json_glob", "")),
+            md_glob=str(policy.get("md_glob", "")),
+            retention_days=int(policy.get("retention_days", fallback_retention_days)),
+            checksum_index_enabled=bool(policy.get("checksum_index_enabled", fallback_checksum_index_enabled)),
+            checksum_index_filename=str(policy.get("checksum_index_filename", "")),
+        )
+        result["profile_name"] = str(profile_name)
+        result["profile_override"] = bool(policy.get("profile_override", False))
+        result["json_glob"] = str(policy.get("json_glob", ""))
+        result["md_glob"] = str(policy.get("md_glob", ""))
+        result["checksum_index_filename"] = str(policy.get("checksum_index_filename", ""))
+        return result
+
+    def _artifact_governance_legacy_defaults(self, *, profile_name: str) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        mapping = self.ARTIFACT_GOVERNANCE_LEGACY_KEYS.get(str(profile_name), {})
+        retention_key = str(mapping.get("retention_key", "")).strip()
+        retention_default = int(self._safe_float(mapping.get("retention_default", 30), 30))
+        checksum_key = str(mapping.get("checksum_key", "")).strip()
+        checksum_default = self._safe_bool(mapping.get("checksum_default", True), True)
+        retention_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(retention_key, retention_default) if retention_key else retention_default,
+                    retention_default,
+                )
+            ),
+        )
+        checksum_index_enabled = self._safe_bool(
+            val.get(checksum_key, checksum_default) if checksum_key else checksum_default,
+            checksum_default,
+        )
+        return {
+            "retention_days": int(retention_days),
+            "checksum_index_enabled": bool(checksum_index_enabled),
+        }
+
+    def _artifact_governance_metrics(
+        self,
+        *,
+        as_of: date,
+        temporal_audit: dict[str, Any],
+        stress_autorun_history: dict[str, Any],
+        stress_autorun_reason_drift: dict[str, Any],
+        reconcile_drift: dict[str, Any],
+    ) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        strict_mode_enabled = self._safe_bool(val.get("ops_artifact_governance_strict_mode_enabled", False), False)
+        baseline_profiles = (
+            val.get("ops_artifact_governance_profile_baseline", {})
+            if isinstance(val.get("ops_artifact_governance_profile_baseline", {}), dict)
+            else {}
+        )
+        artifacts_temporal = (
+            temporal_audit.get("artifacts", {}) if isinstance(temporal_audit.get("artifacts", {}), dict) else {}
+        )
+        artifact_temporal_autofix = (
+            artifacts_temporal.get("autofix_patch", {})
+            if isinstance(artifacts_temporal.get("autofix_patch", {}), dict)
+            else {}
+        )
+        artifacts_history = (
+            stress_autorun_history.get("artifacts", {})
+            if isinstance(stress_autorun_history.get("artifacts", {}), dict)
+            else {}
+        )
+        artifact_stress_history = (
+            artifacts_history.get("history", {})
+            if isinstance(artifacts_history.get("history", {}), dict)
+            else {}
+        )
+        artifacts_reason = (
+            stress_autorun_reason_drift.get("artifacts", {})
+            if isinstance(stress_autorun_reason_drift.get("artifacts", {}), dict)
+            else {}
+        )
+        artifact_stress_reason = (
+            artifacts_reason.get("reason_drift", {})
+            if isinstance(artifacts_reason.get("reason_drift", {}), dict)
+            else {}
+        )
+        artifacts_reconcile = (
+            reconcile_drift.get("artifacts", {}) if isinstance(reconcile_drift.get("artifacts", {}), dict) else {}
+        )
+        artifact_reconcile_row_diff = (
+            artifacts_reconcile.get("row_diff", {})
+            if isinstance(artifacts_reconcile.get("row_diff", {}), dict)
+            else {}
+        )
+
+        profile_inputs: list[dict[str, Any]] = [
+            {
+                "profile": "temporal_autofix_patch",
+                "active": bool(temporal_audit.get("active", False)),
+                "artifact": artifact_temporal_autofix,
+            },
+            {
+                "profile": "stress_autorun_history",
+                "active": bool(stress_autorun_history.get("active", False)),
+                "artifact": artifact_stress_history,
+            },
+            {
+                "profile": "stress_autorun_reason_drift",
+                "active": bool(stress_autorun_reason_drift.get("active", False)),
+                "artifact": artifact_stress_reason,
+            },
+            {
+                "profile": "reconcile_row_diff",
+                "active": bool(reconcile_drift.get("active", False)),
+                "artifact": artifact_reconcile_row_diff,
+            },
+        ]
+
+        profile_rows: list[dict[str, Any]] = []
+        required_missing = 0
+        policy_mismatch = 0
+        legacy_drift = 0
+        baseline_defined = 0
+        baseline_drift = 0
+        alerts: list[str] = []
+
+        for row in profile_inputs:
+            profile_name = str(row.get("profile", "")).strip()
+            active = bool(row.get("active", False))
+            artifact = row.get("artifact", {}) if isinstance(row.get("artifact", {}), dict) else {}
+            legacy = self._artifact_governance_legacy_defaults(profile_name=profile_name)
+            policy = self._artifact_governance_profile(
+                profile_name=profile_name,
+                fallback_retention_days=int(legacy.get("retention_days", 30)),
+                fallback_checksum_index_enabled=bool(legacy.get("checksum_index_enabled", True)),
+            )
+
+            artifact_written = bool(artifact.get("written", False))
+            artifact_retention_days = int(self._safe_float(artifact.get("retention_days", 0), 0))
+            artifact_checksum_enabled = bool(artifact.get("checksum_index_enabled", False))
+            artifact_index_path = str(artifact.get("checksum_index_path", "")).strip()
+            expected_index_filename = str(policy.get("checksum_index_filename", "")).strip()
+
+            has_artifact_payload = bool(artifact)
+            has_any_artifact_trace = bool(
+                artifact_written
+                or str(artifact.get("json", "")).strip()
+                or str(artifact.get("md", "")).strip()
+                or artifact_index_path
+            )
+            required_profile_missing = bool(active and (not has_artifact_payload))
+            if required_profile_missing:
+                required_missing += 1
+
+            retention_mismatch = bool(has_any_artifact_trace and artifact_retention_days != int(policy.get("retention_days", 0)))
+            checksum_switch_mismatch = bool(
+                has_any_artifact_trace and artifact_checksum_enabled != bool(policy.get("checksum_index_enabled", False))
+            )
+            index_filename_mismatch = False
+            if artifact_index_path and expected_index_filename:
+                index_filename_mismatch = bool(Path(artifact_index_path).name != expected_index_filename)
+
+            this_policy_mismatch = bool(
+                retention_mismatch or checksum_switch_mismatch or index_filename_mismatch
+            )
+            if this_policy_mismatch:
+                policy_mismatch += 1
+
+            legacy_retention_days = int(legacy.get("retention_days", 30))
+            legacy_checksum_enabled = bool(legacy.get("checksum_index_enabled", True))
+            this_legacy_drift = bool(
+                int(policy.get("retention_days", legacy_retention_days)) != legacy_retention_days
+                or bool(policy.get("checksum_index_enabled", legacy_checksum_enabled)) != legacy_checksum_enabled
+            )
+            if this_legacy_drift:
+                legacy_drift += 1
+
+            baseline_raw = (
+                baseline_profiles.get(profile_name, {})
+                if isinstance(baseline_profiles.get(profile_name, {}), dict)
+                else {}
+            )
+            baseline_compare_keys = {
+                str(k)
+                for k in baseline_raw.keys()
+                if str(k)
+                in {"json_glob", "md_glob", "checksum_index_filename", "retention_days", "checksum_index_enabled"}
             }
-            json_path = item.get("json")
-            if isinstance(json_path, Path) and json_path.exists():
-                row["json"] = str(json_path)
-                digest, size = self._sha256_file(json_path)
-                row["json_sha256"] = str(digest)
-                row["json_bytes"] = int(size)
-            md_path = item.get("md")
-            if isinstance(md_path, Path) and md_path.exists():
-                row["md"] = str(md_path)
-                digest, size = self._sha256_file(md_path)
-                row["md_sha256"] = str(digest)
-                row["md_bytes"] = int(size)
-            row["pair_complete"] = bool(row["json"] and row["md"])
-            index_entries.append(row)
+            baseline_drift_fields: list[str] = []
+            if baseline_compare_keys:
+                baseline_defined += 1
+                if "json_glob" in baseline_compare_keys:
+                    baseline_json_glob = str(baseline_raw.get("json_glob", policy.get("json_glob", ""))).strip()
+                    if baseline_json_glob != str(policy.get("json_glob", "")).strip():
+                        baseline_drift_fields.append("json_glob")
+                if "md_glob" in baseline_compare_keys:
+                    baseline_md_glob = str(baseline_raw.get("md_glob", policy.get("md_glob", ""))).strip()
+                    if baseline_md_glob != str(policy.get("md_glob", "")).strip():
+                        baseline_drift_fields.append("md_glob")
+                if "checksum_index_filename" in baseline_compare_keys:
+                    baseline_index_name = str(
+                        baseline_raw.get("checksum_index_filename", policy.get("checksum_index_filename", ""))
+                    ).strip()
+                    if baseline_index_name != str(policy.get("checksum_index_filename", "")).strip():
+                        baseline_drift_fields.append("checksum_index_filename")
+                if "retention_days" in baseline_compare_keys:
+                    baseline_retention_days = max(
+                        1,
+                        int(
+                            self._safe_float(
+                                baseline_raw.get("retention_days", policy.get("retention_days", 0)),
+                                policy.get("retention_days", 0),
+                            )
+                        ),
+                    )
+                    if baseline_retention_days != int(policy.get("retention_days", 0)):
+                        baseline_drift_fields.append("retention_days")
+                if "checksum_index_enabled" in baseline_compare_keys:
+                    baseline_checksum_enabled = self._safe_bool(
+                        baseline_raw.get("checksum_index_enabled", policy.get("checksum_index_enabled", False)),
+                        bool(policy.get("checksum_index_enabled", False)),
+                    )
+                    if baseline_checksum_enabled != bool(policy.get("checksum_index_enabled", False)):
+                        baseline_drift_fields.append("checksum_index_enabled")
 
-        index_payload = {
-            "generated_for_date": as_of.isoformat(),
-            "retention_days": int(max(1, int(retention_days))),
-            "rotated_out_dates": [str(x) for x in rotated_out_dates],
-            "entry_count": int(len(index_entries)),
-            "entries": index_entries,
+            this_baseline_drift = bool(len(baseline_drift_fields) > 0)
+            if this_baseline_drift:
+                baseline_drift += 1
+
+            profile_rows.append(
+                {
+                    "profile": profile_name,
+                    "active": bool(active),
+                    "profile_override": bool(policy.get("profile_override", False)),
+                    "legacy_retention_days": int(legacy_retention_days),
+                    "legacy_checksum_index_enabled": bool(legacy_checksum_enabled),
+                    "policy_retention_days": int(policy.get("retention_days", legacy_retention_days)),
+                    "policy_checksum_index_enabled": bool(
+                        policy.get("checksum_index_enabled", legacy_checksum_enabled)
+                    ),
+                    "policy_json_glob": str(policy.get("json_glob", "")),
+                    "policy_md_glob": str(policy.get("md_glob", "")),
+                    "policy_checksum_index_filename": str(expected_index_filename),
+                    "artifact_present": bool(has_artifact_payload),
+                    "artifact_written": bool(artifact_written),
+                    "artifact_retention_days": int(artifact_retention_days),
+                    "artifact_checksum_index_enabled": bool(artifact_checksum_enabled),
+                    "artifact_checksum_index_path": str(artifact_index_path),
+                    "required_profile_missing": bool(required_profile_missing),
+                    "retention_mismatch": bool(retention_mismatch),
+                    "checksum_switch_mismatch": bool(checksum_switch_mismatch),
+                    "index_filename_mismatch": bool(index_filename_mismatch),
+                    "policy_mismatch": bool(this_policy_mismatch),
+                    "legacy_policy_drift": bool(this_legacy_drift),
+                    "baseline_defined": bool(len(baseline_compare_keys) > 0),
+                    "baseline_compare_keys": sorted(baseline_compare_keys),
+                    "baseline_policy_drift": bool(this_baseline_drift),
+                    "baseline_drift_fields": baseline_drift_fields,
+                }
+            )
+
+        if required_missing > 0:
+            alerts.append("artifact_governance_profile_missing")
+        if policy_mismatch > 0:
+            alerts.append("artifact_governance_policy_mismatch")
+        if legacy_drift > 0:
+            alerts.append("artifact_governance_legacy_policy_drift")
+        if baseline_drift > 0:
+            alerts.append("artifact_governance_baseline_drift")
+        strict_mode_blocked = bool(
+            strict_mode_enabled
+            and (required_missing > 0 or policy_mismatch > 0 or legacy_drift > 0 or baseline_drift > 0)
+        )
+        if strict_mode_blocked:
+            alerts.append("artifact_governance_strict_mode_blocked")
+
+        checks = {
+            "required_profiles_present_ok": bool(required_missing == 0),
+            "policy_alignment_ok": bool(policy_mismatch == 0),
+            "legacy_alignment_ok": bool((not strict_mode_enabled) or (legacy_drift == 0)),
+            "baseline_freeze_ok": bool((not strict_mode_enabled) or (baseline_drift == 0)),
+            "strict_mode_ok": bool((not strict_mode_enabled) or (not strict_mode_blocked)),
         }
-        index_path = review_dir / "temporal_autofix_patch_checksum_index.json"
-        write_json(index_path, index_payload)
+
         return {
-            "written": True,
-            "path": str(index_path),
-            "entries": int(len(index_entries)),
+            "active": True,
+            "as_of": as_of.isoformat(),
+            "checks": checks,
+            "metrics": {
+                "profiles_total": int(len(profile_rows)),
+                "profiles_active": int(sum(1 for x in profile_rows if bool(x.get("active", False)))),
+                "profiles_with_override": int(sum(1 for x in profile_rows if bool(x.get("profile_override", False)))),
+                "required_missing_profiles": int(required_missing),
+                "policy_mismatch_profiles": int(policy_mismatch),
+                "legacy_policy_drift_profiles": int(legacy_drift),
+                "baseline_defined_profiles": int(baseline_defined),
+                "baseline_drift_profiles": int(baseline_drift),
+                "strict_mode_enabled": bool(strict_mode_enabled),
+                "strict_mode_blocked": bool(strict_mode_blocked),
+            },
+            "alerts": alerts,
+            "profiles": profile_rows,
         }
 
     def gate_report(
@@ -251,6 +550,15 @@ class ReleaseOrchestrator:
         )
         stress_matrix_trend_ok = all(bool(v) for v in stress_checks.values()) if stress_active else True
         stress_autorun_history = self._stress_autorun_history_metrics(as_of=as_of)
+        stress_autorun_history_active = bool(stress_autorun_history.get("active", False))
+        stress_autorun_history_checks = (
+            stress_autorun_history.get("checks", {})
+            if isinstance(stress_autorun_history.get("checks", {}), dict)
+            else {}
+        )
+        stress_autorun_history_ok = (
+            all(bool(v) for v in stress_autorun_history_checks.values()) if stress_autorun_history_active else True
+        )
         stress_autorun_adaptive = self._stress_autorun_adaptive_saturation_metrics(as_of=as_of)
         stress_autorun_adaptive_active = bool(stress_autorun_adaptive.get("active", False))
         stress_autorun_adaptive_checks = (
@@ -277,6 +585,22 @@ class ReleaseOrchestrator:
         reconcile_active = bool(reconcile_drift.get("active", False))
         reconcile_checks = reconcile_drift.get("checks", {}) if isinstance(reconcile_drift.get("checks", {}), dict) else {}
         reconcile_drift_ok = all(bool(v) for v in reconcile_checks.values()) if reconcile_active else True
+        artifact_governance = self._artifact_governance_metrics(
+            as_of=as_of,
+            temporal_audit=temporal_audit,
+            stress_autorun_history=stress_autorun_history,
+            stress_autorun_reason_drift=stress_autorun_reason_drift,
+            reconcile_drift=reconcile_drift,
+        )
+        artifact_governance_active = bool(artifact_governance.get("active", False))
+        artifact_governance_checks = (
+            artifact_governance.get("checks", {})
+            if isinstance(artifact_governance.get("checks", {}), dict)
+            else {}
+        )
+        artifact_governance_ok = (
+            all(bool(v) for v in artifact_governance_checks.values()) if artifact_governance_active else True
+        )
 
         tests_ok = True
         tests_payload: dict[str, Any] = {}
@@ -317,9 +641,11 @@ class ReleaseOrchestrator:
             "slot_anomaly_ok": slot_anomaly_ok,
             "mode_drift_ok": mode_drift_ok,
             "stress_matrix_trend_ok": stress_matrix_trend_ok,
+            "stress_autorun_history_ok": stress_autorun_history_ok,
             "stress_autorun_adaptive_ok": stress_autorun_adaptive_ok,
             "stress_autorun_reason_drift_ok": stress_autorun_reason_drift_ok,
             "reconcile_drift_ok": reconcile_drift_ok,
+            "artifact_governance_ok": artifact_governance_ok,
             "tests_ok": tests_ok,
             "health_ok": health_ok,
             "stable_replay_ok": replay_ok,
@@ -362,6 +688,7 @@ class ReleaseOrchestrator:
             "stress_autorun_adaptive": stress_autorun_adaptive,
             "stress_autorun_reason_drift": stress_autorun_reason_drift,
             "reconcile_drift": reconcile_drift,
+            "artifact_governance": artifact_governance,
             "rollback_recommendation": rollback_recommendation,
             "tests": tests_payload if run_tests else {"skipped": True},
         }
@@ -487,7 +814,16 @@ class ReleaseOrchestrator:
         as_of: date,
         series: list[dict[str, Any]],
         metrics: dict[str, Any],
+        retention_days: int,
+        checksum_index_enabled: bool = True,
     ) -> dict[str, Any]:
+        policy = self._artifact_governance_profile(
+            profile_name="stress_autorun_history",
+            fallback_retention_days=retention_days,
+            fallback_checksum_index_enabled=checksum_index_enabled,
+        )
+        keep_days = int(policy.get("retention_days", max(1, int(retention_days))))
+        index_enabled = bool(policy.get("checksum_index_enabled", checksum_index_enabled))
         total_rounds = len(series)
         if total_rounds <= 0:
             return {
@@ -495,6 +831,15 @@ class ReleaseOrchestrator:
                 "json": "",
                 "md": "",
                 "total_rounds": 0,
+                "retention_days": int(keep_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
                 "reason": "no_history",
             }
 
@@ -577,15 +922,41 @@ class ReleaseOrchestrator:
                 "json": "",
                 "md": "",
                 "total_rounds": int(total_rounds),
+                "retention_days": int(keep_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
                 "reason": f"write_failed:{type(exc).__name__}:{exc}",
             }
+
+        governance = self._apply_artifact_governance(
+            as_of=as_of,
+            review_dir=review_dir,
+            profile_name="stress_autorun_history",
+            fallback_retention_days=keep_days,
+            fallback_checksum_index_enabled=index_enabled,
+        )
 
         return {
             "written": True,
             "json": str(json_path),
             "md": str(md_path),
             "total_rounds": int(total_rounds),
-            "reason": "",
+            "retention_days": int(governance.get("retention_days", keep_days)),
+            "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+            "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+            "rotation_failed": bool(governance.get("rotation_failed", False)),
+            "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+            "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+            "checksum_index_path": str(governance.get("checksum_index_path", "")),
+            "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+            "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
+            "reason": str(governance.get("reason", "")),
         }
 
     def _write_stress_autorun_reason_drift_artifact(
@@ -595,7 +966,16 @@ class ReleaseOrchestrator:
         series: list[dict[str, Any]],
         metrics: dict[str, Any],
         window_trace: list[dict[str, Any]],
+        retention_days: int,
+        checksum_index_enabled: bool = True,
     ) -> dict[str, Any]:
+        policy = self._artifact_governance_profile(
+            profile_name="stress_autorun_reason_drift",
+            fallback_retention_days=retention_days,
+            fallback_checksum_index_enabled=checksum_index_enabled,
+        )
+        keep_days = int(policy.get("retention_days", max(1, int(retention_days))))
+        index_enabled = bool(policy.get("checksum_index_enabled", checksum_index_enabled))
         total_rounds = len(series)
         transition_counts = (
             metrics.get("transition_counts", {}) if isinstance(metrics.get("transition_counts", {}), dict) else {}
@@ -673,8 +1053,25 @@ class ReleaseOrchestrator:
                 "total_rounds": int(total_rounds),
                 "transition_count": int(len(top_transitions)),
                 "window_trace_points": int(len(window_trace)),
+                "retention_days": int(keep_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
                 "reason": f"write_failed:{type(exc).__name__}:{exc}",
             }
+
+        governance = self._apply_artifact_governance(
+            as_of=as_of,
+            review_dir=review_dir,
+            profile_name="stress_autorun_reason_drift",
+            fallback_retention_days=keep_days,
+            fallback_checksum_index_enabled=index_enabled,
+        )
 
         return {
             "written": True,
@@ -683,7 +1080,16 @@ class ReleaseOrchestrator:
             "total_rounds": int(total_rounds),
             "transition_count": int(len(top_transitions)),
             "window_trace_points": int(len(window_trace)),
-            "reason": "",
+            "retention_days": int(governance.get("retention_days", keep_days)),
+            "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+            "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+            "rotation_failed": bool(governance.get("rotation_failed", False)),
+            "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+            "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+            "checksum_index_path": str(governance.get("checksum_index_path", "")),
+            "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+            "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
+            "reason": str(governance.get("reason", "")),
         }
 
     def _stress_autorun_history_metrics(self, *, as_of: date) -> dict[str, Any]:
@@ -706,6 +1112,16 @@ class ReleaseOrchestrator:
 
         window_days = max(1, int(val.get("ops_stress_autorun_history_window_days", 30)))
         min_rounds = max(1, int(val.get("ops_stress_autorun_history_min_rounds", 3)))
+        history_artifact_policy = self._artifact_governance_profile(
+            profile_name="stress_autorun_history",
+            fallback_retention_days=max(1, int(val.get("ops_stress_autorun_history_retention_days", 30))),
+            fallback_checksum_index_enabled=self._safe_bool(
+                val.get("ops_stress_autorun_history_checksum_index_enabled", True),
+                True,
+            ),
+        )
+        retention_days = int(history_artifact_policy.get("retention_days", 30))
+        checksum_index_enabled = bool(history_artifact_policy.get("checksum_index_enabled", True))
         series = self._load_review_loop_history_series(as_of=as_of, window_days=window_days)
         rounds_total = len(series)
         triggered_rounds = 0
@@ -762,6 +1178,7 @@ class ReleaseOrchestrator:
         attempt_rate_when_triggered = self._ratio(attempted_rounds, triggered_rounds)
         run_rate_when_triggered = self._ratio(ran_rounds, triggered_rounds)
         cooldown_efficiency = self._ratio(cooldown_skip_rounds, cooldown_skip_rounds + ran_rounds)
+        checks: dict[str, bool] = {}
         alerts: list[str] = []
         if not active:
             alerts.append("stress_autorun_history_insufficient_rounds")
@@ -789,18 +1206,43 @@ class ReleaseOrchestrator:
                 sorted(trigger_reason_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
             ),
         }
-        artifact = self._write_stress_autorun_history_artifact(as_of=as_of, series=series, metrics=metrics)
+        artifact = self._write_stress_autorun_history_artifact(
+            as_of=as_of,
+            series=series,
+            metrics=metrics,
+            retention_days=retention_days,
+            checksum_index_enabled=checksum_index_enabled,
+        )
         artifact_failed = (
             rounds_total > 0
             and (not bool(artifact.get("written", False)))
             and str(artifact.get("reason", "")).startswith("write_failed")
         )
+        artifact_rotation_failed = bool(artifact.get("rotation_failed", False))
+        artifact_checksum_index_failed = bool(artifact.get("checksum_index_failed", False))
         if artifact_failed:
             alerts.append("stress_autorun_history_artifact_failed")
+        if artifact_rotation_failed:
+            alerts.append("stress_autorun_history_artifact_rotation_failed")
+        if artifact_checksum_index_failed:
+            alerts.append("stress_autorun_history_artifact_checksum_index_failed")
+
+        if active:
+            checks["artifact_rotation_ok"] = bool(not artifact_rotation_failed)
+            checks["artifact_checksum_index_ok"] = bool((not checksum_index_enabled) or (not artifact_checksum_index_failed))
 
         metrics["artifact_written"] = bool(artifact.get("written", False))
         metrics["artifact_failed"] = bool(artifact_failed)
         metrics["artifact_total_rounds"] = int(artifact.get("total_rounds", 0))
+        metrics["artifact_retention_days"] = int(artifact.get("retention_days", retention_days))
+        metrics["artifact_rotated_out_count"] = int(artifact.get("rotated_out_count", 0))
+        metrics["artifact_rotation_failed"] = bool(artifact_rotation_failed)
+        metrics["artifact_checksum_index_enabled"] = bool(
+            artifact.get("checksum_index_enabled", checksum_index_enabled)
+        )
+        metrics["artifact_checksum_index_written"] = bool(artifact.get("checksum_index_written", False))
+        metrics["artifact_checksum_index_entries"] = int(artifact.get("checksum_index_entries", 0))
+        metrics["artifact_checksum_index_failed"] = bool(artifact_checksum_index_failed)
 
         return {
             "active": bool(active),
@@ -808,10 +1250,12 @@ class ReleaseOrchestrator:
             "window_days": int(window_days),
             "samples": int(rounds_total),
             "min_samples": int(min_rounds),
-            "checks": {},
+            "checks": checks,
             "thresholds": {
                 "ops_stress_autorun_history_window_days": int(window_days),
                 "ops_stress_autorun_history_min_rounds": int(min_rounds),
+                "ops_stress_autorun_history_retention_days": int(retention_days),
+                "ops_stress_autorun_history_checksum_index_enabled": bool(checksum_index_enabled),
             },
             "metrics": metrics,
             "alerts": alerts,
@@ -821,6 +1265,17 @@ class ReleaseOrchestrator:
                     "json": str(artifact.get("json", "")),
                     "md": str(artifact.get("md", "")),
                     "total_rounds": int(artifact.get("total_rounds", 0)),
+                    "retention_days": int(artifact.get("retention_days", retention_days)),
+                    "rotated_out_count": int(artifact.get("rotated_out_count", 0)),
+                    "rotated_out_dates": [str(x) for x in artifact.get("rotated_out_dates", [])],
+                    "rotation_failed": bool(artifact.get("rotation_failed", False)),
+                    "checksum_index_enabled": bool(
+                        artifact.get("checksum_index_enabled", checksum_index_enabled)
+                    ),
+                    "checksum_index_written": bool(artifact.get("checksum_index_written", False)),
+                    "checksum_index_path": str(artifact.get("checksum_index_path", "")),
+                    "checksum_index_entries": int(artifact.get("checksum_index_entries", 0)),
+                    "checksum_index_failed": bool(artifact.get("checksum_index_failed", False)),
                     "reason": str(artifact.get("reason", "")),
                 }
             },
@@ -994,6 +1449,16 @@ class ReleaseOrchestrator:
         window_days = max(1, int(val.get("ops_stress_autorun_reason_drift_window_days", 30)))
         min_rounds = max(2, int(val.get("ops_stress_autorun_reason_drift_min_rounds", 6)))
         recent_rounds_cfg = max(1, int(val.get("ops_stress_autorun_reason_drift_recent_rounds", 4)))
+        reason_artifact_policy = self._artifact_governance_profile(
+            profile_name="stress_autorun_reason_drift",
+            fallback_retention_days=max(1, int(val.get("ops_stress_autorun_reason_drift_retention_days", 30))),
+            fallback_checksum_index_enabled=self._safe_bool(
+                val.get("ops_stress_autorun_reason_drift_checksum_index_enabled", True),
+                True,
+            ),
+        )
+        retention_days = int(reason_artifact_policy.get("retention_days", 30))
+        checksum_index_enabled = bool(reason_artifact_policy.get("checksum_index_enabled", True))
         mix_gap_max = min(
             1.0,
             max(
@@ -1116,18 +1581,39 @@ class ReleaseOrchestrator:
             series=series,
             metrics=metrics,
             window_trace=window_trace,
+            retention_days=retention_days,
+            checksum_index_enabled=checksum_index_enabled,
         )
         artifact_failed = (
             rounds_total > 0
             and (not bool(artifact.get("written", False)))
             and str(artifact.get("reason", "")).startswith("write_failed")
         )
+        artifact_rotation_failed = bool(artifact.get("rotation_failed", False))
+        artifact_checksum_index_failed = bool(artifact.get("checksum_index_failed", False))
         if artifact_failed:
             alerts.append("stress_autorun_reason_drift_artifact_failed")
+        if artifact_rotation_failed:
+            alerts.append("stress_autorun_reason_drift_artifact_rotation_failed")
+        if artifact_checksum_index_failed:
+            alerts.append("stress_autorun_reason_drift_artifact_checksum_index_failed")
+
+        if active:
+            checks["artifact_rotation_ok"] = bool(not artifact_rotation_failed)
+            checks["artifact_checksum_index_ok"] = bool((not checksum_index_enabled) or (not artifact_checksum_index_failed))
 
         metrics["artifact_written"] = bool(artifact.get("written", False))
         metrics["artifact_failed"] = bool(artifact_failed)
         metrics["artifact_total_rounds"] = int(artifact.get("total_rounds", 0))
+        metrics["artifact_retention_days"] = int(artifact.get("retention_days", retention_days))
+        metrics["artifact_rotated_out_count"] = int(artifact.get("rotated_out_count", 0))
+        metrics["artifact_rotation_failed"] = bool(artifact_rotation_failed)
+        metrics["artifact_checksum_index_enabled"] = bool(
+            artifact.get("checksum_index_enabled", checksum_index_enabled)
+        )
+        metrics["artifact_checksum_index_written"] = bool(artifact.get("checksum_index_written", False))
+        metrics["artifact_checksum_index_entries"] = int(artifact.get("checksum_index_entries", 0))
+        metrics["artifact_checksum_index_failed"] = bool(artifact_checksum_index_failed)
 
         return {
             "active": bool(active),
@@ -1142,6 +1628,8 @@ class ReleaseOrchestrator:
                 "ops_stress_autorun_reason_drift_recent_rounds": int(recent_rounds_cfg),
                 "ops_stress_autorun_reason_drift_mix_gap_max": float(mix_gap_max),
                 "ops_stress_autorun_reason_drift_change_point_gap_max": float(change_point_gap_max),
+                "ops_stress_autorun_reason_drift_retention_days": int(retention_days),
+                "ops_stress_autorun_reason_drift_checksum_index_enabled": bool(checksum_index_enabled),
             },
             "metrics": metrics,
             "alerts": alerts,
@@ -1153,6 +1641,17 @@ class ReleaseOrchestrator:
                     "total_rounds": int(artifact.get("total_rounds", 0)),
                     "transition_count": int(artifact.get("transition_count", 0)),
                     "window_trace_points": int(artifact.get("window_trace_points", 0)),
+                    "retention_days": int(artifact.get("retention_days", retention_days)),
+                    "rotated_out_count": int(artifact.get("rotated_out_count", 0)),
+                    "rotated_out_dates": [str(x) for x in artifact.get("rotated_out_dates", [])],
+                    "rotation_failed": bool(artifact.get("rotation_failed", False)),
+                    "checksum_index_enabled": bool(
+                        artifact.get("checksum_index_enabled", checksum_index_enabled)
+                    ),
+                    "checksum_index_written": bool(artifact.get("checksum_index_written", False)),
+                    "checksum_index_path": str(artifact.get("checksum_index_path", "")),
+                    "checksum_index_entries": int(artifact.get("checksum_index_entries", 0)),
+                    "checksum_index_failed": bool(artifact.get("checksum_index_failed", False)),
                     "reason": str(artifact.get("reason", "")),
                 }
             },
@@ -2061,7 +2560,32 @@ class ReleaseOrchestrator:
             "unresolved_key_ratio": float(unresolved_key_ratio),
         }
 
-    def _write_reconcile_row_diff_artifact(self, *, as_of: date, series: list[dict[str, Any]]) -> dict[str, Any]:
+    def _write_reconcile_row_diff_artifact(
+        self,
+        *,
+        as_of: date,
+        series: list[dict[str, Any]],
+        retention_days: int = 30,
+        checksum_index_enabled: bool = True,
+    ) -> dict[str, Any]:
+        policy = self._artifact_governance_profile(
+            profile_name="reconcile_row_diff",
+            fallback_retention_days=retention_days,
+            fallback_checksum_index_enabled=checksum_index_enabled,
+        )
+        keep_days = int(policy.get("retention_days", max(1, int(retention_days))))
+        index_enabled = bool(policy.get("checksum_index_enabled", checksum_index_enabled))
+        review_dir = self.output_dir / "review"
+
+        def _governance() -> dict[str, Any]:
+            return self._apply_artifact_governance(
+                as_of=as_of,
+                review_dir=review_dir,
+                profile_name="reconcile_row_diff",
+                fallback_retention_days=keep_days,
+                fallback_checksum_index_enabled=index_enabled,
+            )
+
         missing_counts: dict[str, int] = {}
         extra_counts: dict[str, int] = {}
         sample_rows = 0
@@ -2089,21 +2613,41 @@ class ReleaseOrchestrator:
                     extra_counts[txt] = int(extra_counts.get(txt, 0) + 1)
 
         if sample_rows <= 0:
+            governance = _governance()
             return {
                 "written": False,
                 "json": "",
                 "md": "",
                 "sample_rows": 0,
                 "breach_rows": 0,
+                "retention_days": int(governance.get("retention_days", keep_days)),
+                "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+                "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+                "rotation_failed": bool(governance.get("rotation_failed", False)),
+                "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+                "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+                "checksum_index_path": str(governance.get("checksum_index_path", "")),
+                "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+                "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
                 "reason": "no_row_diff_samples",
             }
         if breach_rows <= 0 and (not missing_counts) and (not extra_counts):
+            governance = _governance()
             return {
                 "written": False,
                 "json": "",
                 "md": "",
                 "sample_rows": int(sample_rows),
                 "breach_rows": int(breach_rows),
+                "retention_days": int(governance.get("retention_days", keep_days)),
+                "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+                "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+                "rotation_failed": bool(governance.get("rotation_failed", False)),
+                "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+                "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+                "checksum_index_path": str(governance.get("checksum_index_path", "")),
+                "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+                "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
                 "reason": "no_row_diff_breach",
             }
 
@@ -2137,7 +2681,6 @@ class ReleaseOrchestrator:
             "top_extra_on_broker": top_extra,
             "hints": hints[:10],
         }
-        review_dir = self.output_dir / "review"
         json_path = review_dir / f"{as_of.isoformat()}_reconcile_row_diff.json"
         md_path = review_dir / f"{as_of.isoformat()}_reconcile_row_diff.md"
 
@@ -2178,16 +2721,35 @@ class ReleaseOrchestrator:
                 "md": "",
                 "sample_rows": int(sample_rows),
                 "breach_rows": int(breach_rows),
+                "retention_days": int(keep_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
                 "reason": f"write_failed:{type(exc).__name__}:{exc}",
             }
 
+        governance = _governance()
         return {
             "written": True,
             "json": str(json_path),
             "md": str(md_path),
             "sample_rows": int(sample_rows),
             "breach_rows": int(breach_rows),
-            "reason": "",
+            "retention_days": int(governance.get("retention_days", keep_days)),
+            "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+            "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+            "rotation_failed": bool(governance.get("rotation_failed", False)),
+            "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+            "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+            "checksum_index_path": str(governance.get("checksum_index_path", "")),
+            "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+            "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
+            "reason": str(governance.get("reason", "")),
         }
 
     def _write_temporal_autofix_artifact(
@@ -2198,6 +2760,13 @@ class ReleaseOrchestrator:
         retention_days: int = 30,
         checksum_index_enabled: bool = True,
     ) -> dict[str, Any]:
+        policy = self._artifact_governance_profile(
+            profile_name="temporal_autofix_patch",
+            fallback_retention_days=retention_days,
+            fallback_checksum_index_enabled=checksum_index_enabled,
+        )
+        keep_days = int(policy.get("retention_days", max(1, int(retention_days))))
+        index_enabled = bool(policy.get("checksum_index_enabled", checksum_index_enabled))
         events: list[dict[str, Any]] = []
         reason_counts: dict[str, int] = {}
         applied_count = 0
@@ -2271,8 +2840,6 @@ class ReleaseOrchestrator:
         review_dir = self.output_dir / "review"
         json_path = review_dir / f"{as_of.isoformat()}_temporal_autofix_patch.json"
         md_path = review_dir / f"{as_of.isoformat()}_temporal_autofix_patch.md"
-        keep_days = max(1, int(retention_days))
-        index_enabled = bool(checksum_index_enabled)
 
         lines: list[str] = []
         lines.append(f"# Temporal Autofix Patch Report | {as_of.isoformat()}")
@@ -2350,52 +2917,13 @@ class ReleaseOrchestrator:
                 "reason": f"write_failed:{type(exc).__name__}:{exc}",
             }
 
-        rotation_failed = False
-        checksum_failed = False
-        rotated_out_count = 0
-        rotated_out_dates: list[str] = []
-        checksum_written = False
-        checksum_path = ""
-        checksum_entries = 0
-        reason = ""
-
-        try:
-            rotation = self._rotate_temporal_autofix_patch_artifacts(
-                as_of=as_of,
-                review_dir=review_dir,
-                retention_days=keep_days,
-            )
-            rotated_out_count = int(rotation.get("rotated_out_count", 0))
-            rotated_out_dates = [str(x) for x in rotation.get("rotated_out_dates", [])]
-        except Exception as exc:
-            rotation_failed = True
-            reason = f"rotation_failed:{type(exc).__name__}:{exc}"
-
-        if index_enabled and (not rotation_failed):
-            try:
-                checksum_meta = self._write_temporal_autofix_checksum_index(
-                    as_of=as_of,
-                    review_dir=review_dir,
-                    retention_days=keep_days,
-                    rotated_out_dates=rotated_out_dates,
-                )
-                checksum_written = bool(checksum_meta.get("written", False))
-                checksum_path = str(checksum_meta.get("path", ""))
-                checksum_entries = int(checksum_meta.get("entries", 0))
-            except Exception as exc:
-                checksum_failed = True
-                reason = f"checksum_index_write_failed:{type(exc).__name__}:{exc}"
-        elif not index_enabled:
-            checksum_written = False
-            checksum_path = ""
-            checksum_entries = 0
-        else:
-            checksum_written = False
-            checksum_path = ""
-            checksum_entries = 0
-            checksum_failed = True
-            if not reason:
-                reason = "checksum_index_skipped_due_to_rotation_failure"
+        governance = self._apply_artifact_governance(
+            as_of=as_of,
+            review_dir=review_dir,
+            profile_name="temporal_autofix_patch",
+            fallback_retention_days=keep_days,
+            fallback_checksum_index_enabled=index_enabled,
+        )
 
         return {
             "written": True,
@@ -2405,16 +2933,16 @@ class ReleaseOrchestrator:
             "applied_count": int(applied_count),
             "failed_count": int(failed_count),
             "skipped_count": int(skipped_count),
-            "retention_days": int(keep_days),
-            "rotated_out_count": int(rotated_out_count),
-            "rotated_out_dates": rotated_out_dates,
-            "rotation_failed": bool(rotation_failed),
-            "checksum_index_enabled": bool(index_enabled),
-            "checksum_index_written": bool(checksum_written),
-            "checksum_index_path": str(checksum_path),
-            "checksum_index_entries": int(checksum_entries),
-            "checksum_index_failed": bool(checksum_failed),
-            "reason": str(reason),
+            "retention_days": int(governance.get("retention_days", keep_days)),
+            "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+            "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+            "rotation_failed": bool(governance.get("rotation_failed", False)),
+            "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+            "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+            "checksum_index_path": str(governance.get("checksum_index_path", "")),
+            "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+            "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
+            "reason": str(governance.get("reason", "")),
         }
 
     def _lint_broker_snapshot_contract(
@@ -2611,6 +3139,21 @@ class ReleaseOrchestrator:
             0.30,
         )
         broker_row_diff_asof_only = bool(val.get("ops_reconcile_broker_row_diff_asof_only", True))
+        row_diff_artifact_policy = self._artifact_governance_profile(
+            profile_name="reconcile_row_diff",
+            fallback_retention_days=max(
+                1,
+                int(val.get("ops_reconcile_broker_row_diff_artifact_retention_days", 30)),
+            ),
+            fallback_checksum_index_enabled=self._safe_bool(
+                val.get("ops_reconcile_broker_row_diff_artifact_checksum_index_enabled", True),
+                True,
+            ),
+        )
+        broker_row_diff_artifact_retention_days = int(row_diff_artifact_policy.get("retention_days", 30))
+        broker_row_diff_artifact_checksum_index_enabled = bool(
+            row_diff_artifact_policy.get("checksum_index_enabled", True)
+        )
         broker_row_diff_symbol_alias_size = len(self._row_diff_symbol_alias_map())
         broker_row_diff_side_alias_size = len(self._row_diff_side_alias_map())
         require_broker_snapshot = bool(val.get("ops_reconcile_require_broker_snapshot", False))
@@ -3312,6 +3855,8 @@ class ReleaseOrchestrator:
             "broker_contract_canonical_view_ok": True,
             "broker_row_diff_ok": True,
             "broker_row_diff_alias_drift_ok": True,
+            "broker_row_diff_artifact_rotation_ok": True,
+            "broker_row_diff_artifact_checksum_index_ok": True,
         }
         alerts: list[str] = []
         if active:
@@ -3394,14 +3939,31 @@ class ReleaseOrchestrator:
             alerts.append("insufficient_reconcile_samples")
 
         series.reverse()
-        row_diff_artifact = self._write_reconcile_row_diff_artifact(as_of=as_of, series=series)
+        row_diff_artifact = self._write_reconcile_row_diff_artifact(
+            as_of=as_of,
+            series=series,
+            retention_days=broker_row_diff_artifact_retention_days,
+            checksum_index_enabled=broker_row_diff_artifact_checksum_index_enabled,
+        )
         row_diff_artifact_failed = (
             (int(broker_row_diff_breach_days) > 0)
             and (not bool(row_diff_artifact.get("written", False)))
             and str(row_diff_artifact.get("reason", "")).startswith("write_failed")
         )
+        row_diff_artifact_rotation_failed = bool(row_diff_artifact.get("rotation_failed", False))
+        row_diff_artifact_checksum_index_failed = bool(row_diff_artifact.get("checksum_index_failed", False))
+        checks["broker_row_diff_artifact_rotation_ok"] = bool(not row_diff_artifact_rotation_failed)
+        checks["broker_row_diff_artifact_checksum_index_ok"] = bool(
+            (not broker_row_diff_artifact_checksum_index_enabled) or (not row_diff_artifact_checksum_index_failed)
+        )
         if row_diff_artifact_failed and ("reconcile_broker_row_diff_artifact_failed" not in alerts):
             alerts.append("reconcile_broker_row_diff_artifact_failed")
+        if row_diff_artifact_rotation_failed and ("reconcile_broker_row_diff_artifact_rotation_failed" not in alerts):
+            alerts.append("reconcile_broker_row_diff_artifact_rotation_failed")
+        if row_diff_artifact_checksum_index_failed and (
+            "reconcile_broker_row_diff_artifact_checksum_index_failed" not in alerts
+        ):
+            alerts.append("reconcile_broker_row_diff_artifact_checksum_index_failed")
         return {
             "active": active,
             "window_days": window_days,
@@ -3472,6 +4034,24 @@ class ReleaseOrchestrator:
                 "broker_row_diff_artifact_written": bool(row_diff_artifact.get("written", False)),
                 "broker_row_diff_artifact_sample_rows": int(row_diff_artifact.get("sample_rows", 0)),
                 "broker_row_diff_artifact_breach_rows": int(row_diff_artifact.get("breach_rows", 0)),
+                "broker_row_diff_artifact_retention_days": int(
+                    row_diff_artifact.get("retention_days", broker_row_diff_artifact_retention_days)
+                ),
+                "broker_row_diff_artifact_rotated_out_count": int(row_diff_artifact.get("rotated_out_count", 0)),
+                "broker_row_diff_artifact_rotation_failed": bool(row_diff_artifact_rotation_failed),
+                "broker_row_diff_artifact_checksum_index_enabled": bool(
+                    row_diff_artifact.get(
+                        "checksum_index_enabled",
+                        broker_row_diff_artifact_checksum_index_enabled,
+                    )
+                ),
+                "broker_row_diff_artifact_checksum_index_written": bool(
+                    row_diff_artifact.get("checksum_index_written", False)
+                ),
+                "broker_row_diff_artifact_checksum_index_entries": int(
+                    row_diff_artifact.get("checksum_index_entries", 0)
+                ),
+                "broker_row_diff_artifact_checksum_index_failed": bool(row_diff_artifact_checksum_index_failed),
                 "broker_row_diff_artifact_failed": bool(row_diff_artifact_failed),
                 "avg_broker_count_gap_ratio": avg_broker_count_gap_ratio,
                 "avg_broker_pnl_gap_abs": avg_broker_pnl_gap_abs,
@@ -3505,6 +4085,12 @@ class ReleaseOrchestrator:
                 "ops_reconcile_broker_row_diff_alias_hit_rate_min": broker_row_diff_alias_hit_rate_min,
                 "ops_reconcile_broker_row_diff_unresolved_key_ratio_max": broker_row_diff_unresolved_key_ratio_max,
                 "ops_reconcile_broker_row_diff_asof_only": bool(broker_row_diff_asof_only),
+                "ops_reconcile_broker_row_diff_artifact_retention_days": int(
+                    broker_row_diff_artifact_retention_days
+                ),
+                "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled": bool(
+                    broker_row_diff_artifact_checksum_index_enabled
+                ),
                 "ops_reconcile_broker_row_diff_symbol_alias_size": int(broker_row_diff_symbol_alias_size),
                 "ops_reconcile_broker_row_diff_side_alias_size": int(broker_row_diff_side_alias_size),
             },
@@ -3517,6 +4103,22 @@ class ReleaseOrchestrator:
                     "md": str(row_diff_artifact.get("md", "")),
                     "sample_rows": int(row_diff_artifact.get("sample_rows", 0)),
                     "breach_rows": int(row_diff_artifact.get("breach_rows", 0)),
+                    "retention_days": int(
+                        row_diff_artifact.get("retention_days", broker_row_diff_artifact_retention_days)
+                    ),
+                    "rotated_out_count": int(row_diff_artifact.get("rotated_out_count", 0)),
+                    "rotated_out_dates": [str(x) for x in row_diff_artifact.get("rotated_out_dates", [])],
+                    "rotation_failed": bool(row_diff_artifact.get("rotation_failed", False)),
+                    "checksum_index_enabled": bool(
+                        row_diff_artifact.get(
+                            "checksum_index_enabled",
+                            broker_row_diff_artifact_checksum_index_enabled,
+                        )
+                    ),
+                    "checksum_index_written": bool(row_diff_artifact.get("checksum_index_written", False)),
+                    "checksum_index_path": str(row_diff_artifact.get("checksum_index_path", "")),
+                    "checksum_index_entries": int(row_diff_artifact.get("checksum_index_entries", 0)),
+                    "checksum_index_failed": bool(row_diff_artifact.get("checksum_index_failed", False)),
                     "reason": str(row_diff_artifact.get("reason", "")),
                 }
             },
@@ -4033,9 +4635,17 @@ class ReleaseOrchestrator:
         autofix_max_writes = max(0, int(val.get("ops_temporal_audit_autofix_max_writes", 3)))
         autofix_fix_strict_cutoff = bool(val.get("ops_temporal_audit_autofix_fix_strict_cutoff", True))
         autofix_require_safe = bool(val.get("ops_temporal_audit_autofix_require_safe", True))
-        autofix_patch_retention_days = max(1, int(val.get("ops_temporal_audit_autofix_patch_retention_days", 30)))
+        autofix_artifact_policy = self._artifact_governance_profile(
+            profile_name="temporal_autofix_patch",
+            fallback_retention_days=max(1, int(val.get("ops_temporal_audit_autofix_patch_retention_days", 30))),
+            fallback_checksum_index_enabled=self._safe_bool(
+                val.get("ops_temporal_audit_autofix_patch_checksum_index_enabled", True),
+                True,
+            ),
+        )
+        autofix_patch_retention_days = int(autofix_artifact_policy.get("retention_days", 30))
         autofix_patch_checksum_index_enabled = bool(
-            val.get("ops_temporal_audit_autofix_patch_checksum_index_enabled", True)
+            autofix_artifact_policy.get("checksum_index_enabled", True)
         )
 
         def _parse_date(v: Any) -> date | None:
@@ -4633,6 +5243,18 @@ class ReleaseOrchestrator:
             reconcile_drift.get("checks", {}) if isinstance(reconcile_drift.get("checks", {}), dict) else {}
         )
         reconcile_all_ok = all(bool(v) for v in reconcile_checks.values()) if reconcile_active else True
+        artifact_governance = (
+            gate.get("artifact_governance", {}) if isinstance(gate.get("artifact_governance", {}), dict) else {}
+        )
+        artifact_governance_active = bool(artifact_governance.get("active", False))
+        artifact_governance_checks = (
+            artifact_governance.get("checks", {})
+            if isinstance(artifact_governance.get("checks", {}), dict)
+            else {}
+        )
+        artifact_governance_all_ok = (
+            all(bool(v) for v in artifact_governance_checks.values()) if artifact_governance_active else True
+        )
         rollback_rec = (
             gate.get("rollback_recommendation", {})
             if isinstance(gate.get("rollback_recommendation", {}), dict)
@@ -4672,6 +5294,7 @@ class ReleaseOrchestrator:
             or (stress_auto_adaptive_active and not stress_auto_adaptive_all_ok)
             or (stress_reason_drift_active and not stress_reason_drift_all_ok)
             or (reconcile_active and not reconcile_all_ok)
+            or (artifact_governance_active and not artifact_governance_all_ok)
             or rollback_level == "hard"
             or (rollback_active and not rollback_anchor_ready)
         ):
@@ -4686,6 +5309,7 @@ class ReleaseOrchestrator:
             or (not stress_auto_adaptive_active)
             or (not stress_reason_drift_active)
             or (not reconcile_active)
+            or (not artifact_governance_active)
             or rollback_level == "soft"
         ):
             status = "yellow"
@@ -4711,6 +5335,7 @@ class ReleaseOrchestrator:
             "stress_autorun_adaptive": stress_autorun_adaptive,
             "stress_autorun_reason_drift": stress_autorun_reason_drift,
             "reconcile_drift": reconcile_drift,
+            "artifact_governance": artifact_governance,
             "rollback_recommendation": rollback_rec,
             "history": history,
         }
@@ -4990,9 +5615,24 @@ class ReleaseOrchestrator:
             + f"`{bool(stress_auto_history_artifact.get('written', False))}` / "
             + f"`{int(self._safe_float(stress_auto_history_artifact.get('total_rounds', 0), 0))}`"
         )
+        lines.append(
+            "- history_retention(days/rotated/rotation_failed): "
+            + f"`{int(self._safe_float(stress_auto_history_artifact.get('retention_days', 0), 0))}` / "
+            + f"`{int(self._safe_float(stress_auto_history_artifact.get('rotated_out_count', 0), 0))}` / "
+            + f"`{bool(stress_auto_history_artifact.get('rotation_failed', False))}`"
+        )
+        lines.append(
+            "- history_checksum_index(enabled/written/entries/failed): "
+            + f"`{bool(stress_auto_history_artifact.get('checksum_index_enabled', False))}` / "
+            + f"`{bool(stress_auto_history_artifact.get('checksum_index_written', False))}` / "
+            + f"`{int(self._safe_float(stress_auto_history_artifact.get('checksum_index_entries', 0), 0))}` / "
+            + f"`{bool(stress_auto_history_artifact.get('checksum_index_failed', False))}`"
+        )
         stress_auto_history_md = str(stress_auto_history_artifact.get("md", "")).strip()
+        stress_auto_history_index = str(stress_auto_history_artifact.get("checksum_index_path", "")).strip()
         stress_auto_history_reason = str(stress_auto_history_artifact.get("reason", "")).strip()
         lines.append(f"- history_artifact_md: `{stress_auto_history_md if stress_auto_history_md else 'N/A'}`")
+        lines.append(f"- history_checksum_index: `{stress_auto_history_index if stress_auto_history_index else 'N/A'}`")
         if stress_auto_history_reason:
             lines.append(f"- history_artifact_reason: `{stress_auto_history_reason}`")
         lines.append(
@@ -5080,12 +5720,56 @@ class ReleaseOrchestrator:
             + f"`{int(self._safe_float(stress_reason_artifact.get('transition_count', 0), 0))}` / "
             + f"`{int(self._safe_float(stress_reason_artifact.get('window_trace_points', 0), 0))}`"
         )
+        lines.append(
+            "- reason_drift_retention(days/rotated/rotation_failed): "
+            + f"`{int(self._safe_float(stress_reason_artifact.get('retention_days', 0), 0))}` / "
+            + f"`{int(self._safe_float(stress_reason_artifact.get('rotated_out_count', 0), 0))}` / "
+            + f"`{bool(stress_reason_artifact.get('rotation_failed', False))}`"
+        )
+        lines.append(
+            "- reason_drift_checksum_index(enabled/written/entries/failed): "
+            + f"`{bool(stress_reason_artifact.get('checksum_index_enabled', False))}` / "
+            + f"`{bool(stress_reason_artifact.get('checksum_index_written', False))}` / "
+            + f"`{int(self._safe_float(stress_reason_artifact.get('checksum_index_entries', 0), 0))}` / "
+            + f"`{bool(stress_reason_artifact.get('checksum_index_failed', False))}`"
+        )
         reason_artifact_md = str(stress_reason_artifact.get("md", "")).strip()
+        reason_artifact_index = str(stress_reason_artifact.get("checksum_index_path", "")).strip()
         reason_artifact_reason = str(stress_reason_artifact.get("reason", "")).strip()
         lines.append(f"- reason_drift_artifact_md: `{reason_artifact_md if reason_artifact_md else 'N/A'}`")
+        lines.append(f"- reason_drift_checksum_index: `{reason_artifact_index if reason_artifact_index else 'N/A'}`")
         if reason_artifact_reason:
             lines.append(f"- reason_drift_artifact_reason: `{reason_artifact_reason}`")
         for k, v in stress_reason_drift_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## Artifact Governance")
+        lines.append(f"- active: `{artifact_governance.get('active', False)}`")
+        artifact_metrics = (
+            artifact_governance.get("metrics", {}) if isinstance(artifact_governance.get("metrics", {}), dict) else {}
+        )
+        lines.append(
+            "- profiles(total/active/override): "
+            + f"`{int(self._safe_float(artifact_metrics.get('profiles_total', 0), 0))}` / "
+            + f"`{int(self._safe_float(artifact_metrics.get('profiles_active', 0), 0))}` / "
+            + f"`{int(self._safe_float(artifact_metrics.get('profiles_with_override', 0), 0))}`"
+        )
+        lines.append(
+            "- policy(required_missing/policy_mismatch/legacy_drift/baseline_drift): "
+            + f"`{int(self._safe_float(artifact_metrics.get('required_missing_profiles', 0), 0))}` / "
+            + f"`{int(self._safe_float(artifact_metrics.get('policy_mismatch_profiles', 0), 0))}` / "
+            + f"`{int(self._safe_float(artifact_metrics.get('legacy_policy_drift_profiles', 0), 0))}` / "
+            + f"`{int(self._safe_float(artifact_metrics.get('baseline_drift_profiles', 0), 0))}`"
+        )
+        lines.append(
+            "- strict_mode(enabled/blocked): "
+            + f"`{bool(artifact_metrics.get('strict_mode_enabled', False))}` / "
+            + f"`{bool(artifact_metrics.get('strict_mode_blocked', False))}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(artifact_governance.get('alerts', [])) if artifact_governance.get('alerts') else 'NONE'}`"
+        )
+        for k, v in artifact_governance_checks.items():
             lines.append(f"- `{k}`: `{v}`")
         lines.append("")
         lines.append("## 对账漂移")
@@ -5160,10 +5844,27 @@ class ReleaseOrchestrator:
             + f"`{int(self._safe_float(row_diff_artifact.get('sample_rows', 0), 0))}` / "
             + f"`{int(self._safe_float(row_diff_artifact.get('breach_rows', 0), 0))}`"
         )
+        lines.append(
+            "- broker_row_diff_artifact_retention(days/rotated/rotation_failed): "
+            + f"`{int(self._safe_float(row_diff_artifact.get('retention_days', 0), 0))}` / "
+            + f"`{int(self._safe_float(row_diff_artifact.get('rotated_out_count', 0), 0))}` / "
+            + f"`{bool(row_diff_artifact.get('rotation_failed', False))}`"
+        )
+        lines.append(
+            "- broker_row_diff_artifact_checksum(enabled/written/entries/failed): "
+            + f"`{bool(row_diff_artifact.get('checksum_index_enabled', False))}` / "
+            + f"`{bool(row_diff_artifact.get('checksum_index_written', False))}` / "
+            + f"`{int(self._safe_float(row_diff_artifact.get('checksum_index_entries', 0), 0))}` / "
+            + f"`{bool(row_diff_artifact.get('checksum_index_failed', False))}`"
+        )
         row_diff_artifact_md = str(row_diff_artifact.get("md", "")).strip()
+        row_diff_artifact_index = str(row_diff_artifact.get("checksum_index_path", "")).strip()
         row_diff_artifact_reason = str(row_diff_artifact.get("reason", "")).strip()
         lines.append(
             f"- broker_row_diff_artifact_md: `{row_diff_artifact_md if row_diff_artifact_md else 'N/A'}`"
+        )
+        lines.append(
+            f"- broker_row_diff_artifact_checksum_index: `{row_diff_artifact_index if row_diff_artifact_index else 'N/A'}`"
         )
         if row_diff_artifact_reason:
             lines.append(f"- broker_row_diff_artifact_reason: `{row_diff_artifact_reason}`")
@@ -5737,6 +6438,49 @@ class ReleaseOrchestrator:
                     }
                 )
 
+        stress_history_payload = (
+            gate.get("stress_autorun_history", {})
+            if isinstance(gate.get("stress_autorun_history", {}), dict)
+            else {}
+        )
+        stress_history_active = bool(stress_history_payload.get("active", False))
+        stress_history_checks = (
+            stress_history_payload.get("checks", {})
+            if isinstance(stress_history_payload.get("checks", {}), dict)
+            else {}
+        )
+        stress_history_artifacts = (
+            stress_history_payload.get("artifacts", {})
+            if isinstance(stress_history_payload.get("artifacts", {}), dict)
+            else {}
+        )
+        stress_history_artifact = (
+            stress_history_artifacts.get("history", {})
+            if isinstance(stress_history_artifacts.get("history", {}), dict)
+            else {}
+        )
+        if stress_history_active:
+            if not bool(stress_history_checks.get("artifact_rotation_ok", True)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_AUTORUN_HISTORY_ARTIFACT_ROTATION",
+                        "message": "Stress history 工件轮转失败，历史审计窗口可能失控增长。",
+                        "action": "修复 review 目录权限与日期命名后重跑 gate/ops，恢复 retention 轮转。",
+                    }
+                )
+            if not bool(stress_history_checks.get("artifact_checksum_index_ok", True)):
+                history_index_path = str(stress_history_artifact.get("checksum_index_path", "")).strip()
+                history_index_hint = f"目标索引: {history_index_path}。" if history_index_path else ""
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_AUTORUN_HISTORY_CHECKSUM_INDEX",
+                        "message": "Stress history checksum 索引写入失败，工件追溯完整性下降。",
+                        "action": "修复 checksum 索引写盘链路后重跑 stress history 审计。" + history_index_hint,
+                    }
+                )
+
         stress_auto_adaptive_payload = (
             gate.get("stress_autorun_adaptive", {})
             if isinstance(gate.get("stress_autorun_adaptive", {}), dict)
@@ -5833,6 +6577,16 @@ class ReleaseOrchestrator:
             if isinstance(stress_reason_payload.get("thresholds", {}), dict)
             else {}
         )
+        stress_reason_artifacts = (
+            stress_reason_payload.get("artifacts", {})
+            if isinstance(stress_reason_payload.get("artifacts", {}), dict)
+            else {}
+        )
+        stress_reason_artifact = (
+            stress_reason_artifacts.get("reason_drift", {})
+            if isinstance(stress_reason_artifacts.get("reason_drift", {}), dict)
+            else {}
+        )
         if stress_reason_active:
             if not bool(stress_reason_checks.get("reason_mix_gap_ok", True)):
                 defects.append(
@@ -5858,6 +6612,26 @@ class ReleaseOrchestrator:
                             + f"{self._safe_float(stress_reason_thresholds.get('ops_stress_autorun_reason_drift_change_point_gap_max', 1.0), 1.0):.3f}"
                         ),
                         "action": "触发变点复核：先锁定最近参数变更与数据口径，再决定是否回滚 adaptive 配置。",
+                    }
+                )
+            if bool(stress_reason_metrics.get("artifact_rotation_failed", False)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_AUTORUN_REASON_ARTIFACT_ROTATION",
+                        "message": "Stress reason-drift 工件轮转失败，历史审计窗口可能持续膨胀。",
+                        "action": "修复 review 目录权限与日期命名后重跑 gate/ops，恢复 retention 轮转。",
+                    }
+                )
+            if bool(stress_reason_metrics.get("artifact_checksum_index_failed", False)):
+                reason_index_path = str(stress_reason_artifact.get("checksum_index_path", "")).strip()
+                reason_index_hint = f"目标索引: {reason_index_path}。" if reason_index_path else ""
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_AUTORUN_REASON_CHECKSUM_INDEX",
+                        "message": "Stress reason-drift checksum 索引写入失败，工件追溯完整性下降。",
+                        "action": "修复 checksum 索引写盘链路后重跑 reason-drift 审计。" + reason_index_hint,
                     }
                 )
 
@@ -6029,6 +6803,89 @@ class ReleaseOrchestrator:
                         "action": "校准 symbol/side alias 映射并复核 unresolved keys，再重跑对账与行级工件导出。",
                     }
                 )
+            if not bool(reconcile_checks.get("broker_row_diff_artifact_rotation_ok", True)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "RECONCILE_BROKER_ROW_DIFF_ARTIFACT_ROTATION",
+                        "message": "Broker 行级差异工件轮转失败，review 目录保留策略失效。",
+                        "action": "修复 output/review 写权限与文件命名后重跑 gate/ops，恢复 retention 清理。",
+                    }
+                )
+            if not bool(reconcile_checks.get("broker_row_diff_artifact_checksum_index_ok", True)):
+                row_diff_index = str(reconcile_row_diff_artifact.get("checksum_index_path", "")).strip()
+                row_diff_index_hint = f"目标索引: {row_diff_index}。" if row_diff_index else ""
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "RECONCILE_BROKER_ROW_DIFF_ARTIFACT_CHECKSUM_INDEX",
+                        "message": "Broker 行级差异工件 checksum 索引写入失败，审计追溯链路不完整。",
+                        "action": "修复 checksum 索引写盘后重跑对账工件导出。" + row_diff_index_hint,
+                    }
+                )
+
+        artifact_governance_payload = (
+            gate.get("artifact_governance", {})
+            if isinstance(gate.get("artifact_governance", {}), dict)
+            else {}
+        )
+        artifact_governance_active = bool(artifact_governance_payload.get("active", False))
+        artifact_governance_checks = (
+            artifact_governance_payload.get("checks", {})
+            if isinstance(artifact_governance_payload.get("checks", {}), dict)
+            else {}
+        )
+        artifact_governance_metrics = (
+            artifact_governance_payload.get("metrics", {})
+            if isinstance(artifact_governance_payload.get("metrics", {}), dict)
+            else {}
+        )
+        if artifact_governance_active:
+            if not bool(artifact_governance_checks.get("required_profiles_present_ok", True)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "ARTIFACT_GOVERNANCE_PROFILE_MISSING",
+                        "message": "Artifact governance 缺少活跃 profile 的工件观测，审计链路不完整。",
+                        "action": "补齐对应 profile 工件导出并校验 artifacts 路径配置。",
+                    }
+                )
+            if not bool(artifact_governance_checks.get("policy_alignment_ok", True)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "ARTIFACT_GOVERNANCE_POLICY_MISMATCH",
+                        "message": "Artifact governance 策略与实际工件存在错配（retention/checksum/index 命名漂移）。",
+                        "action": "统一 profile 策略声明与工件写入行为后重跑 gate/ops。",
+                    }
+                )
+            if int(artifact_governance_metrics.get("legacy_policy_drift_profiles", 0)) > 0:
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "ARTIFACT_GOVERNANCE_LEGACY_DRIFT",
+                        "message": "Artifact governance profile 与 legacy 键存在漂移（已进入声明式策略模式）。",
+                        "action": "确认是否保留 legacy 键；如无需兼容，逐步收敛到 profiles 单一配置源。",
+                    }
+                )
+            if int(artifact_governance_metrics.get("baseline_drift_profiles", 0)) > 0:
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "ARTIFACT_GOVERNANCE_BASELINE_DRIFT",
+                        "message": "Artifact governance profile 与基线配置不一致（baseline freeze 漂移）。",
+                        "action": "核对 ops_artifact_governance_profile_baseline 与 profiles 声明，统一后重跑 gate/ops。",
+                    }
+                )
+            if not bool(artifact_governance_checks.get("strict_mode_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "ARTIFACT_GOVERNANCE_STRICT_BLOCKED",
+                        "message": "Artifact governance 严格模式阻断发布（存在 profile/policy/baseline 漂移）。",
+                        "action": "先修复 governance 漂移并确认 strict_mode_ok=true，再继续 review-loop。",
+                    }
+                )
 
         rollback_payload = rollback_recommendation if isinstance(rollback_recommendation, dict) else {}
         rollback_level = str(rollback_payload.get("level", "none")).strip().lower() or "none"
@@ -6100,6 +6957,11 @@ class ReleaseOrchestrator:
                 f"优先修复 reconcile_drift 缺陷并重跑 lie ops-report --date {as_of.isoformat()} --window-days 7",
                 "对账一致后再执行参数更新与全量回测。",
             ] + [x for x in next_actions if x not in default_actions] + default_actions
+        if any(str(x.get("code", "")).startswith("ARTIFACT_GOVERNANCE_") for x in defects):
+            next_actions = [
+                f"优先修复 artifact governance 策略漂移并重跑 lie gate-report --date {as_of.isoformat()}",
+                "确认 profiles 与工件写入一致后，再执行 lie ops-report 与 review-loop。",
+            ] + [x for x in next_actions if x not in default_actions] + default_actions
         if any(str(x.get("code", "")).startswith("ROLLBACK_") for x in defects):
             next_actions = [
                 f"优先执行回滚建议并重跑 lie gate-report --date {as_of.isoformat()}",
@@ -6124,6 +6986,7 @@ class ReleaseOrchestrator:
             "mode_drift": drift_payload,
             "stress_matrix_trend": stress_payload,
             "reconcile_drift": reconcile_payload,
+            "artifact_governance": artifact_governance_payload,
             "rollback_recommendation": rollback_payload,
             "next_actions": next_actions,
         }

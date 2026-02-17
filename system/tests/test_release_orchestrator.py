@@ -68,6 +68,11 @@ class ReleaseOrchestratorTests(unittest.TestCase):
         self.assertTrue(out["passed"])
         self.assertIn("mode_health_ok", out["checks"])
         self.assertTrue(out["checks"]["mode_health_ok"])
+        self.assertIn("artifact_governance_ok", out["checks"])
+        self.assertTrue(bool(out["checks"]["artifact_governance_ok"]))
+        artifact_governance = out.get("artifact_governance", {})
+        self.assertTrue(bool(artifact_governance.get("active", False)))
+        self.assertEqual(int((artifact_governance.get("metrics", {}) or {}).get("profiles_total", 0)), 4)
         self.assertTrue((review_dir / f"{d.isoformat()}_gate_report.json").exists())
 
     def test_gate_report_fails_on_mode_health(self) -> None:
@@ -95,6 +100,172 @@ class ReleaseOrchestratorTests(unittest.TestCase):
         out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
         self.assertFalse(out["passed"])
         self.assertFalse(out["checks"]["mode_health_ok"])
+
+    def test_gate_report_artifact_governance_legacy_drift_alert(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text("pass_gate: true\n", encoding="utf-8")
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "ops_reconcile_broker_row_diff_artifact_retention_days": 2,
+                "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled": True,
+                "ops_artifact_governance_profiles": {
+                    "reconcile_row_diff": {
+                        "json_glob": "*_reconcile_row_diff.json",
+                        "md_glob": "*_reconcile_row_diff.md",
+                        "checksum_index_filename": "reconcile_row_diff_checksum_index.json",
+                        "retention_days": 5,
+                        "checksum_index_enabled": False,
+                    }
+                },
+            }
+        )
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=lambda p: {},
+        )
+        out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
+        self.assertTrue(bool(out["checks"]["artifact_governance_ok"]))
+        artifact_governance = out.get("artifact_governance", {})
+        self.assertIn("artifact_governance_legacy_policy_drift", set(artifact_governance.get("alerts", [])))
+        self.assertGreaterEqual(
+            int((artifact_governance.get("metrics", {}) or {}).get("legacy_policy_drift_profiles", 0)),
+            1,
+        )
+
+    def test_gate_report_artifact_governance_strict_mode_blocks_baseline_drift(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text("pass_gate: true\n", encoding="utf-8")
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "ops_artifact_governance_strict_mode_enabled": True,
+                "ops_reconcile_broker_row_diff_artifact_retention_days": 5,
+                "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled": False,
+                "ops_artifact_governance_profiles": {
+                    "reconcile_row_diff": {
+                        "json_glob": "*_reconcile_row_diff.json",
+                        "md_glob": "*_reconcile_row_diff.md",
+                        "checksum_index_filename": "reconcile_row_diff_checksum_index.json",
+                        "retention_days": 5,
+                        "checksum_index_enabled": False,
+                    }
+                },
+                "ops_artifact_governance_profile_baseline": {
+                    "reconcile_row_diff": {
+                        "retention_days": 30,
+                    }
+                },
+            }
+        )
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=lambda p: {},
+        )
+        out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
+        self.assertFalse(bool(out["passed"]))
+        self.assertFalse(bool(out["checks"]["artifact_governance_ok"]))
+        artifact_governance = out.get("artifact_governance", {})
+        alerts = set(artifact_governance.get("alerts", []))
+        self.assertIn("artifact_governance_baseline_drift", alerts)
+        self.assertIn("artifact_governance_strict_mode_blocked", alerts)
+        checks = artifact_governance.get("checks", {}) if isinstance(artifact_governance.get("checks", {}), dict) else {}
+        self.assertFalse(bool(checks.get("baseline_freeze_ok", True)))
+        self.assertFalse(bool(checks.get("strict_mode_ok", True)))
+        metrics = (
+            artifact_governance.get("metrics", {}) if isinstance(artifact_governance.get("metrics", {}), dict) else {}
+        )
+        self.assertTrue(bool(metrics.get("strict_mode_enabled", False)))
+        self.assertTrue(bool(metrics.get("strict_mode_blocked", False)))
+        self.assertGreaterEqual(int(metrics.get("baseline_drift_profiles", 0)), 1)
+
+    def test_review_until_pass_defect_plan_marks_artifact_governance_strict_block(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "ops_artifact_governance_strict_mode_enabled": True,
+                "ops_reconcile_broker_row_diff_artifact_retention_days": 5,
+                "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled": False,
+                "ops_artifact_governance_profiles": {
+                    "reconcile_row_diff": {
+                        "json_glob": "*_reconcile_row_diff.json",
+                        "md_glob": "*_reconcile_row_diff.md",
+                        "checksum_index_filename": "reconcile_row_diff_checksum_index.json",
+                        "retention_days": 5,
+                        "checksum_index_enabled": False,
+                    }
+                },
+                "ops_artifact_governance_profile_baseline": {
+                    "reconcile_row_diff": {
+                        "retention_days": 30,
+                    }
+                },
+            }
+        )
+
+        def _run_review(as_of: date) -> ReviewDelta:
+            (review_dir / f"{as_of.isoformat()}_param_delta.yaml").write_text(
+                "pass_gate: true\nmode_health:\n  passed: true\n",
+                encoding="utf-8",
+            )
+            return ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True)
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=_run_review,
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda **kwargs: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=lambda p: {},
+        )
+        out = orch.review_until_pass(as_of=d, max_rounds=1)
+        self.assertFalse(bool(out["passed"]))
+        defect_plan = out["rounds"][0].get("defect_plan", {})
+        plan_json = Path(str(defect_plan.get("json", "")))
+        self.assertTrue(plan_json.exists())
+        payload = json.loads(plan_json.read_text(encoding="utf-8"))
+        defects = payload.get("defects", []) if isinstance(payload.get("defects", []), list) else []
+        codes = {str(item.get("code", "")) for item in defects if isinstance(item, dict)}
+        self.assertIn("ARTIFACT_GOVERNANCE_BASELINE_DRIFT", codes)
+        self.assertIn("ARTIFACT_GOVERNANCE_STRICT_BLOCKED", codes)
 
     def test_review_until_pass_failure_writes_defect_plan(self) -> None:
         td = Path(tempfile.mkdtemp())
@@ -1516,6 +1687,121 @@ class ReleaseOrchestratorTests(unittest.TestCase):
         self.assertTrue(Path(str(history_artifact.get("json", ""))).exists())
         self.assertTrue(Path(str(history_artifact.get("md", ""))).exists())
 
+    def test_gate_report_stress_autorun_history_rotation_and_checksum_index(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        artifacts_dir = td / "artifacts"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text(
+            "pass_gate: true\nmode_health:\n  passed: true\n",
+            encoding="utf-8",
+        )
+
+        stale_json = review_dir / "2026-02-10_stress_autorun_history.json"
+        stale_md = review_dir / "2026-02-10_stress_autorun_history.md"
+        stale_json.write_text("{}", encoding="utf-8")
+        stale_md.write_text("# stale\n", encoding="utf-8")
+
+        (artifacts_dir / "release_ready_2026-02-12.json").write_text(
+            json.dumps(
+                {
+                    "date": "2026-02-12",
+                    "passed": True,
+                    "rounds": [
+                        {
+                            "round": 1,
+                            "stress_matrix_autorun": {
+                                "enabled": True,
+                                "triggered": True,
+                                "attempted": True,
+                                "ran": True,
+                                "reason_codes": ["stress_trend"],
+                                "skipped_reason": "",
+                                "runs_used": 1,
+                                "next_allowed_round": 3,
+                                "cooldown_remaining_rounds": 2,
+                            },
+                        },
+                        {
+                            "round": 2,
+                            "stress_matrix_autorun": {
+                                "enabled": True,
+                                "triggered": True,
+                                "attempted": False,
+                                "ran": False,
+                                "reason_codes": ["mode_drift"],
+                                "skipped_reason": "cooldown_active",
+                                "runs_used": 1,
+                                "next_allowed_round": 3,
+                                "cooldown_remaining_rounds": 1,
+                            },
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "ops_stress_autorun_history_enabled": True,
+                "ops_stress_autorun_history_window_days": 3,
+                "ops_stress_autorun_history_min_rounds": 1,
+                "ops_stress_autorun_history_retention_days": 2,
+                "ops_stress_autorun_history_checksum_index_enabled": True,
+            }
+        )
+
+        def _load_json(path: Path) -> dict[str, object]:
+            if not path.exists():
+                return {}
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=_load_json,
+        )
+        out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
+        hist = out.get("stress_autorun_history", {}) if isinstance(out.get("stress_autorun_history", {}), dict) else {}
+        artifacts = hist.get("artifacts", {}) if isinstance(hist.get("artifacts", {}), dict) else {}
+        history_artifact = artifacts.get("history", {}) if isinstance(artifacts.get("history", {}), dict) else {}
+
+        self.assertTrue(bool(history_artifact.get("written", False)))
+        self.assertEqual(int(history_artifact.get("retention_days", 0)), 2)
+        self.assertGreaterEqual(int(history_artifact.get("rotated_out_count", 0)), 1)
+        self.assertIn("2026-02-10", set(history_artifact.get("rotated_out_dates", [])))
+        self.assertFalse(stale_json.exists())
+        self.assertFalse(stale_md.exists())
+
+        self.assertTrue(bool(history_artifact.get("checksum_index_enabled", False)))
+        self.assertTrue(bool(history_artifact.get("checksum_index_written", False)))
+        index_path = Path(str(history_artifact.get("checksum_index_path", "")))
+        self.assertTrue(index_path.exists())
+        index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+        self.assertEqual(int(index_payload.get("retention_days", 0)), 2)
+        self.assertGreaterEqual(int(index_payload.get("entry_count", 0)), 1)
+        entries = index_payload.get("entries", [])
+        self.assertTrue(entries)
+        first = entries[0] if isinstance(entries[0], dict) else {}
+        self.assertEqual(len(str(first.get("json_sha256", ""))), 64)
+        self.assertEqual(len(str(first.get("md_sha256", ""))), 64)
+
     def test_gate_report_fails_on_stress_autorun_adaptive_saturation(self) -> None:
         td = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
@@ -2039,6 +2325,122 @@ class ReleaseOrchestratorTests(unittest.TestCase):
         )
         self.assertTrue(bool(reason_artifact.get("written", False)))
         self.assertTrue(Path(str(reason_artifact.get("json", ""))).exists())
+
+    def test_gate_report_stress_autorun_reason_drift_rotation_and_checksum_index(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        artifacts_dir = td / "artifacts"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text(
+            "pass_gate: true\nmode_health:\n  passed: true\n",
+            encoding="utf-8",
+        )
+
+        stale_json = review_dir / "2026-02-10_stress_autorun_reason_drift.json"
+        stale_md = review_dir / "2026-02-10_stress_autorun_reason_drift.md"
+        stale_json.write_text("{}", encoding="utf-8")
+        stale_md.write_text("# stale\n", encoding="utf-8")
+
+        rounds = []
+        for i in range(3):
+            rounds.append(
+                {
+                    "round": i + 1,
+                    "stress_matrix_autorun": {
+                        "enabled": True,
+                        "triggered": True,
+                        "attempted": True,
+                        "ran": True,
+                        "reason_codes": ["stress_trend"],
+                        "max_runs": 1,
+                        "max_runs_base": 2,
+                        "adaptive": {"reason": "high_density_throttle", "factor": 0.5, "trigger_density": 0.80},
+                    },
+                }
+            )
+        for i in range(3):
+            rounds.append(
+                {
+                    "round": i + 4,
+                    "stress_matrix_autorun": {
+                        "enabled": True,
+                        "triggered": True,
+                        "attempted": True,
+                        "ran": True,
+                        "reason_codes": ["stress_trend"],
+                        "max_runs": 2,
+                        "max_runs_base": 2,
+                        "adaptive": {"reason": "low_density_expand", "factor": 1.0, "trigger_density": 0.20},
+                    },
+                }
+            )
+        (artifacts_dir / "release_ready_2026-02-12.json").write_text(
+            json.dumps({"date": "2026-02-12", "passed": False, "rounds": rounds}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "ops_stress_autorun_adaptive_monitor_enabled": False,
+                "ops_stress_autorun_reason_drift_enabled": True,
+                "ops_stress_autorun_reason_drift_window_days": 3,
+                "ops_stress_autorun_reason_drift_min_rounds": 4,
+                "ops_stress_autorun_reason_drift_recent_rounds": 3,
+                "ops_stress_autorun_reason_drift_mix_gap_max": 0.20,
+                "ops_stress_autorun_reason_drift_change_point_gap_max": 0.30,
+                "ops_stress_autorun_reason_drift_retention_days": 2,
+                "ops_stress_autorun_reason_drift_checksum_index_enabled": True,
+            }
+        )
+
+        def _load_json(path: Path) -> dict[str, object]:
+            if not path.exists():
+                return {}
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=_load_json,
+        )
+        out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
+        drift = out.get("stress_autorun_reason_drift", {}) if isinstance(out.get("stress_autorun_reason_drift", {}), dict) else {}
+        artifacts = drift.get("artifacts", {}) if isinstance(drift.get("artifacts", {}), dict) else {}
+        reason_artifact = artifacts.get("reason_drift", {}) if isinstance(artifacts.get("reason_drift", {}), dict) else {}
+
+        self.assertTrue(bool(reason_artifact.get("written", False)))
+        self.assertEqual(int(reason_artifact.get("retention_days", 0)), 2)
+        self.assertGreaterEqual(int(reason_artifact.get("rotated_out_count", 0)), 1)
+        self.assertIn("2026-02-10", set(reason_artifact.get("rotated_out_dates", [])))
+        self.assertFalse(stale_json.exists())
+        self.assertFalse(stale_md.exists())
+
+        self.assertTrue(bool(reason_artifact.get("checksum_index_enabled", False)))
+        self.assertTrue(bool(reason_artifact.get("checksum_index_written", False)))
+        index_path = Path(str(reason_artifact.get("checksum_index_path", "")))
+        self.assertTrue(index_path.exists())
+        index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+        self.assertEqual(int(index_payload.get("retention_days", 0)), 2)
+        self.assertGreaterEqual(int(index_payload.get("entry_count", 0)), 1)
+        entries = index_payload.get("entries", [])
+        self.assertTrue(entries)
+        first = entries[0] if isinstance(entries[0], dict) else {}
+        self.assertEqual(len(str(first.get("json_sha256", ""))), 64)
+        self.assertEqual(len(str(first.get("md_sha256", ""))), 64)
 
     def test_review_until_pass_defect_plan_includes_stress_autorun_reason_drift_breaches(self) -> None:
         td = Path(tempfile.mkdtemp())
@@ -3982,6 +4384,140 @@ class ReleaseOrchestratorTests(unittest.TestCase):
         self.assertEqual(str(artifact.get("reason", "")), "no_row_diff_breach")
         self.assertEqual(int(artifact.get("sample_rows", -1)), 1)
         self.assertEqual(int(artifact.get("breach_rows", -1)), 0)
+
+    def test_reconcile_row_diff_artifact_rotation_and_checksum_index(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+
+        stale_json = review_dir / "2026-02-10_reconcile_row_diff.json"
+        stale_md = review_dir / "2026-02-10_reconcile_row_diff.md"
+        stale_json.write_text(json.dumps({"date": "2026-02-10", "sample_rows": 1}), encoding="utf-8")
+        stale_md.write_text("# stale\n", encoding="utf-8")
+
+        orch = ReleaseOrchestrator(
+            settings=self._make_settings(),
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=lambda p: {},
+        )
+        artifact = orch._write_reconcile_row_diff_artifact(
+            as_of=d,
+            series=[
+                {
+                    "date": d.isoformat(),
+                    "broker": {
+                        "row_diff": {
+                            "active": True,
+                            "skipped": False,
+                            "breached": True,
+                            "missing_on_broker": ["RB2405.SHFE|LONG"],
+                            "extra_on_broker": [],
+                        }
+                    },
+                }
+            ],
+            retention_days=2,
+            checksum_index_enabled=True,
+        )
+
+        self.assertTrue(bool(artifact.get("written", False)))
+        self.assertEqual(int(artifact.get("sample_rows", 0)), 1)
+        self.assertEqual(int(artifact.get("breach_rows", 0)), 1)
+        self.assertEqual(int(artifact.get("retention_days", 0)), 2)
+        self.assertEqual(int(artifact.get("rotated_out_count", -1)), 1)
+        self.assertEqual(artifact.get("rotated_out_dates", []), ["2026-02-10"])
+        self.assertFalse(bool(artifact.get("rotation_failed", True)))
+        self.assertTrue(bool(artifact.get("checksum_index_enabled", False)))
+        self.assertTrue(bool(artifact.get("checksum_index_written", False)))
+        self.assertFalse(bool(artifact.get("checksum_index_failed", True)))
+        self.assertFalse(stale_json.exists())
+        self.assertFalse(stale_md.exists())
+
+        index_path = Path(str(artifact.get("checksum_index_path", "")))
+        self.assertTrue(index_path.exists())
+        index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+        self.assertEqual(int(index_payload.get("retention_days", 0)), 2)
+        self.assertEqual(index_payload.get("rotated_out_dates", []), ["2026-02-10"])
+        self.assertEqual(int(index_payload.get("entry_count", 0)), 1)
+
+    def test_reconcile_row_diff_artifact_profile_override(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "ops_reconcile_broker_row_diff_artifact_retention_days": 2,
+                "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled": True,
+                "ops_artifact_governance_profiles": {
+                    "reconcile_row_diff": {
+                        "json_glob": "*_reconcile_row_diff.json",
+                        "md_glob": "*_reconcile_row_diff.md",
+                        "checksum_index_filename": "custom_reconcile_row_diff_index.json",
+                        "retention_days": 5,
+                        "checksum_index_enabled": False,
+                    }
+                },
+            }
+        )
+
+        stale_json = review_dir / "2026-02-06_reconcile_row_diff.json"
+        stale_md = review_dir / "2026-02-06_reconcile_row_diff.md"
+        stale_json.write_text(json.dumps({"date": "2026-02-06", "sample_rows": 1}), encoding="utf-8")
+        stale_md.write_text("# stale\n", encoding="utf-8")
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=lambda p: {},
+        )
+        artifact = orch._write_reconcile_row_diff_artifact(
+            as_of=d,
+            series=[
+                {
+                    "date": d.isoformat(),
+                    "broker": {
+                        "row_diff": {
+                            "active": True,
+                            "skipped": False,
+                            "breached": True,
+                            "missing_on_broker": ["RB2405.SHFE|LONG"],
+                            "extra_on_broker": [],
+                        }
+                    },
+                }
+            ],
+            retention_days=2,
+            checksum_index_enabled=True,
+        )
+
+        self.assertTrue(bool(artifact.get("written", False)))
+        self.assertEqual(int(artifact.get("retention_days", 0)), 5)
+        self.assertFalse(bool(artifact.get("checksum_index_enabled", True)))
+        self.assertFalse(bool(artifact.get("checksum_index_written", True)))
+        self.assertEqual(str(artifact.get("checksum_index_path", "")), "")
+        self.assertEqual(int(artifact.get("checksum_index_entries", 0)), 0)
+        self.assertFalse((review_dir / "custom_reconcile_row_diff_index.json").exists())
+        self.assertFalse(stale_json.exists())
+        self.assertFalse(stale_md.exists())
 
     def test_gate_report_reconcile_broker_row_diff_alias_drift(self) -> None:
         td = Path(tempfile.mkdtemp())

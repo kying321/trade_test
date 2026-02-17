@@ -88,6 +88,8 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_stress_autorun_history_enabled": True,
                     "ops_stress_autorun_history_window_days": 30,
                     "ops_stress_autorun_history_min_rounds": 3,
+                    "ops_stress_autorun_history_retention_days": 30,
+                    "ops_stress_autorun_history_checksum_index_enabled": True,
                     "ops_stress_autorun_adaptive_monitor_enabled": True,
                     "ops_stress_autorun_adaptive_monitor_window_days": 30,
                     "ops_stress_autorun_adaptive_monitor_min_rounds": 3,
@@ -101,6 +103,8 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_stress_autorun_reason_drift_recent_rounds": 4,
                     "ops_stress_autorun_reason_drift_mix_gap_max": 0.35,
                     "ops_stress_autorun_reason_drift_change_point_gap_max": 0.45,
+                    "ops_stress_autorun_reason_drift_retention_days": 30,
+                    "ops_stress_autorun_reason_drift_checksum_index_enabled": True,
                     "ops_slot_window_days": 7,
                     "ops_slot_min_samples": 3,
                     "ops_slot_missing_ratio_max": 0.35,
@@ -157,8 +161,29 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_reconcile_broker_row_diff_alias_hit_rate_min": 0.00,
                     "ops_reconcile_broker_row_diff_unresolved_key_ratio_max": 0.30,
                     "ops_reconcile_broker_row_diff_asof_only": True,
+                    "ops_reconcile_broker_row_diff_artifact_retention_days": 30,
+                    "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled": True,
                     "ops_reconcile_broker_row_diff_symbol_alias_map": {"RB2405": "RB2405.SHFE"},
                     "ops_reconcile_broker_row_diff_side_alias_map": {"SELLSHORT": "SHORT"},
+                    "ops_artifact_governance_profiles": {
+                        "reconcile_row_diff": {
+                            "json_glob": "*_reconcile_row_diff.json",
+                            "md_glob": "*_reconcile_row_diff.md",
+                            "checksum_index_filename": "reconcile_row_diff_checksum_index.json",
+                            "retention_days": 30,
+                            "checksum_index_enabled": True,
+                        }
+                    },
+                    "ops_artifact_governance_strict_mode_enabled": False,
+                    "ops_artifact_governance_profile_baseline": {
+                        "reconcile_row_diff": {
+                            "json_glob": "*_reconcile_row_diff.json",
+                            "md_glob": "*_reconcile_row_diff.md",
+                            "checksum_index_filename": "reconcile_row_diff_checksum_index.json",
+                            "retention_days": 30,
+                            "checksum_index_enabled": True,
+                        }
+                    },
                     "ops_reconcile_require_broker_snapshot": False,
                     "ops_reconcile_broker_contract_emit_canonical_view": True,
                     "ops_reconcile_broker_contract_canonical_dir": "artifacts/broker_snapshot_canonical",
@@ -270,6 +295,8 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_stress_autorun_history_enabled": "yes",
                     "ops_stress_autorun_history_window_days": 0,
                     "ops_stress_autorun_history_min_rounds": 0,
+                    "ops_stress_autorun_history_retention_days": 0,
+                    "ops_stress_autorun_history_checksum_index_enabled": "yes",
                     "ops_stress_autorun_adaptive_monitor_enabled": "yes",
                     "ops_stress_autorun_adaptive_monitor_window_days": 0,
                     "ops_stress_autorun_adaptive_monitor_min_rounds": 0,
@@ -283,6 +310,8 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_stress_autorun_reason_drift_recent_rounds": 0,
                     "ops_stress_autorun_reason_drift_mix_gap_max": 1.2,
                     "ops_stress_autorun_reason_drift_change_point_gap_max": -0.1,
+                    "ops_stress_autorun_reason_drift_retention_days": 0,
+                    "ops_stress_autorun_reason_drift_checksum_index_enabled": "yes",
                     "ops_slot_window_days": 0,
                     "ops_slot_min_samples": 0,
                     "ops_slot_missing_ratio_max": 1.2,
@@ -331,8 +360,33 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_reconcile_broker_row_diff_alias_hit_rate_min": 1.2,
                     "ops_reconcile_broker_row_diff_unresolved_key_ratio_max": -0.1,
                     "ops_reconcile_broker_row_diff_asof_only": "yes",
+                    "ops_reconcile_broker_row_diff_artifact_retention_days": 0,
+                    "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled": "yes",
                     "ops_reconcile_broker_row_diff_symbol_alias_map": {" ": ""},
                     "ops_reconcile_broker_row_diff_side_alias_map": {"": "UNKNOWN"},
+                    "ops_artifact_governance_profiles": {
+                        "": {"json_glob": "*_x.json"},
+                        "bad_type": "x",
+                        "reconcile_row_diff": {
+                            "json_glob": "",
+                            "md_glob": 1,
+                            "checksum_index_filename": "",
+                            "retention_days": 0,
+                            "checksum_index_enabled": "yes",
+                        },
+                    },
+                    "ops_artifact_governance_strict_mode_enabled": "yes",
+                    "ops_artifact_governance_profile_baseline": {
+                        "": {"json_glob": "*_x.json"},
+                        "bad_type": "x",
+                        "reconcile_row_diff": {
+                            "json_glob": "",
+                            "md_glob": 1,
+                            "checksum_index_filename": "",
+                            "retention_days": 0,
+                            "checksum_index_enabled": "yes",
+                        },
+                    },
                     "ops_reconcile_require_broker_snapshot": "yes",
                     "ops_reconcile_broker_contract_emit_canonical_view": "yes",
                     "ops_reconcile_broker_contract_canonical_dir": "",
@@ -425,6 +479,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.ops_stress_autorun_history_enabled", paths)
         self.assertIn("validation.ops_stress_autorun_history_window_days", paths)
         self.assertIn("validation.ops_stress_autorun_history_min_rounds", paths)
+        self.assertIn("validation.ops_stress_autorun_history_retention_days", paths)
+        self.assertIn("validation.ops_stress_autorun_history_checksum_index_enabled", paths)
         self.assertIn("validation.ops_stress_autorun_adaptive_monitor_enabled", paths)
         self.assertIn("validation.ops_stress_autorun_adaptive_monitor_window_days", paths)
         self.assertIn("validation.ops_stress_autorun_adaptive_monitor_min_rounds", paths)
@@ -438,6 +494,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.ops_stress_autorun_reason_drift_recent_rounds", paths)
         self.assertIn("validation.ops_stress_autorun_reason_drift_mix_gap_max", paths)
         self.assertIn("validation.ops_stress_autorun_reason_drift_change_point_gap_max", paths)
+        self.assertIn("validation.ops_stress_autorun_reason_drift_retention_days", paths)
+        self.assertIn("validation.ops_stress_autorun_reason_drift_checksum_index_enabled", paths)
         self.assertIn("validation.ops_slot_window_days", paths)
         self.assertIn("validation.ops_slot_min_samples", paths)
         self.assertIn("validation.ops_slot_missing_ratio_max", paths)
@@ -485,9 +543,35 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.ops_reconcile_broker_row_diff_alias_hit_rate_min", paths)
         self.assertIn("validation.ops_reconcile_broker_row_diff_unresolved_key_ratio_max", paths)
         self.assertIn("validation.ops_reconcile_broker_row_diff_asof_only", paths)
+        self.assertIn("validation.ops_reconcile_broker_row_diff_artifact_retention_days", paths)
+        self.assertIn("validation.ops_reconcile_broker_row_diff_artifact_checksum_index_enabled", paths)
         self.assertIn("validation.ops_reconcile_broker_row_diff_symbol_alias_map[ ]", paths)
         self.assertIn("validation.ops_reconcile_broker_row_diff_side_alias_map", paths)
         self.assertIn("validation.ops_reconcile_broker_row_diff_side_alias_map[]", paths)
+        self.assertIn("validation.ops_artifact_governance_profiles[]", paths)
+        self.assertIn("validation.ops_artifact_governance_profiles[bad_type]", paths)
+        self.assertIn("validation.ops_artifact_governance_profiles[reconcile_row_diff].json_glob", paths)
+        self.assertIn("validation.ops_artifact_governance_profiles[reconcile_row_diff].md_glob", paths)
+        self.assertIn("validation.ops_artifact_governance_profiles[reconcile_row_diff].checksum_index_filename", paths)
+        self.assertIn("validation.ops_artifact_governance_profiles[reconcile_row_diff].retention_days", paths)
+        self.assertIn("validation.ops_artifact_governance_profiles[reconcile_row_diff].checksum_index_enabled", paths)
+        self.assertIn("validation.ops_artifact_governance_strict_mode_enabled", paths)
+        self.assertIn("validation.ops_artifact_governance_profile_baseline[]", paths)
+        self.assertIn("validation.ops_artifact_governance_profile_baseline[bad_type]", paths)
+        self.assertIn("validation.ops_artifact_governance_profile_baseline[reconcile_row_diff].json_glob", paths)
+        self.assertIn("validation.ops_artifact_governance_profile_baseline[reconcile_row_diff].md_glob", paths)
+        self.assertIn(
+            "validation.ops_artifact_governance_profile_baseline[reconcile_row_diff].checksum_index_filename",
+            paths,
+        )
+        self.assertIn(
+            "validation.ops_artifact_governance_profile_baseline[reconcile_row_diff].retention_days",
+            paths,
+        )
+        self.assertIn(
+            "validation.ops_artifact_governance_profile_baseline[reconcile_row_diff].checksum_index_enabled",
+            paths,
+        )
         self.assertIn("validation.ops_reconcile_require_broker_snapshot", paths)
         self.assertIn("validation.ops_reconcile_broker_contract_emit_canonical_view", paths)
         self.assertIn("validation.ops_reconcile_broker_contract_canonical_dir", paths)

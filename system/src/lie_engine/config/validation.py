@@ -326,6 +326,16 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         val.get("ops_stress_autorun_history_min_rounds", 0)
     ) < 1:
         issues.append(ValidationIssue("error", "validation.ops_stress_autorun_history_min_rounds", "必须 >= 1"))
+    if "ops_stress_autorun_history_retention_days" in val and _as_int(
+        val.get("ops_stress_autorun_history_retention_days", 0)
+    ) < 1:
+        issues.append(ValidationIssue("error", "validation.ops_stress_autorun_history_retention_days", "必须 >= 1"))
+    if "ops_stress_autorun_history_checksum_index_enabled" in val and not isinstance(
+        val.get("ops_stress_autorun_history_checksum_index_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue("error", "validation.ops_stress_autorun_history_checksum_index_enabled", "必须是布尔值")
+        )
     if "ops_stress_autorun_adaptive_monitor_enabled" in val and not isinstance(
         val.get("ops_stress_autorun_adaptive_monitor_enabled"), bool
     ):
@@ -399,6 +409,22 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         val.get("ops_stress_autorun_reason_drift_recent_rounds", 0)
     ) < 1:
         issues.append(ValidationIssue("error", "validation.ops_stress_autorun_reason_drift_recent_rounds", "必须 >= 1"))
+    if "ops_stress_autorun_reason_drift_retention_days" in val and _as_int(
+        val.get("ops_stress_autorun_reason_drift_retention_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_stress_autorun_reason_drift_retention_days", "必须 >= 1")
+        )
+    if "ops_stress_autorun_reason_drift_checksum_index_enabled" in val and not isinstance(
+        val.get("ops_stress_autorun_reason_drift_checksum_index_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_autorun_reason_drift_checksum_index_enabled",
+                "必须是布尔值",
+            )
+        )
     for k in ("ops_stress_autorun_reason_drift_mix_gap_max", "ops_stress_autorun_reason_drift_change_point_gap_max"):
         if k in val:
             v = _as_float(val.get(k, 0.0))
@@ -482,6 +508,16 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         val.get("ops_reconcile_broker_row_diff_min_samples", 0)
     ) < 1:
         issues.append(ValidationIssue("error", "validation.ops_reconcile_broker_row_diff_min_samples", "必须 >= 1"))
+    if "ops_reconcile_broker_row_diff_artifact_retention_days" in val and _as_int(
+        val.get("ops_reconcile_broker_row_diff_artifact_retention_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_reconcile_broker_row_diff_artifact_retention_days",
+                "必须 >= 1",
+            )
+        )
     for k in (
         "ops_reconcile_missing_ratio_max",
         "ops_reconcile_plan_gap_ratio_max",
@@ -534,6 +570,16 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         val.get("ops_reconcile_broker_row_diff_asof_only"), bool
     ):
         issues.append(ValidationIssue("error", "validation.ops_reconcile_broker_row_diff_asof_only", "必须是布尔值"))
+    if "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled" in val and not isinstance(
+        val.get("ops_reconcile_broker_row_diff_artifact_checksum_index_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_reconcile_broker_row_diff_artifact_checksum_index_enabled",
+                "必须是布尔值",
+            )
+        )
     if "ops_reconcile_broker_row_diff_alias_monitor_enabled" in val and not isinstance(
         val.get("ops_reconcile_broker_row_diff_alias_monitor_enabled"), bool
     ):
@@ -591,6 +637,118 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                             f"validation.ops_reconcile_broker_row_diff_side_alias_map[{key}]",
                             "值必须可规范化为 LONG/SHORT/FLAT",
                         )
+                    )
+    if "ops_artifact_governance_profiles" in val:
+        profiles = val.get("ops_artifact_governance_profiles")
+        if not isinstance(profiles, dict):
+            issues.append(ValidationIssue("error", "validation.ops_artifact_governance_profiles", "必须是对象"))
+        else:
+            allowed_keys = {
+                "json_glob",
+                "md_glob",
+                "checksum_index_filename",
+                "retention_days",
+                "checksum_index_enabled",
+            }
+            for profile_name, profile_cfg in profiles.items():
+                profile_key = str(profile_name or "").strip()
+                path_base = f"validation.ops_artifact_governance_profiles[{profile_name}]"
+                if not profile_key:
+                    issues.append(ValidationIssue("error", path_base, "profile 名称不能为空"))
+                    continue
+                if not isinstance(profile_cfg, dict):
+                    issues.append(ValidationIssue("error", path_base, "profile 配置必须是对象"))
+                    continue
+                for key in profile_cfg.keys():
+                    if str(key) not in allowed_keys:
+                        issues.append(
+                            ValidationIssue(
+                                "warning",
+                                f"{path_base}.{key}",
+                                "未知字段（将被忽略）",
+                            )
+                        )
+                for key in ("json_glob", "md_glob", "checksum_index_filename"):
+                    if key in profile_cfg:
+                        raw = profile_cfg.get(key)
+                        if not isinstance(raw, str):
+                            issues.append(
+                                ValidationIssue("error", f"{path_base}.{key}", "必须是字符串")
+                            )
+                        elif str(raw).strip() == "":
+                            issues.append(
+                                ValidationIssue("error", f"{path_base}.{key}", "不能为空")
+                            )
+                if "retention_days" in profile_cfg and _as_int(profile_cfg.get("retention_days", 0)) < 1:
+                    issues.append(
+                        ValidationIssue("error", f"{path_base}.retention_days", "必须 >= 1")
+                    )
+                if "checksum_index_enabled" in profile_cfg and not isinstance(
+                    profile_cfg.get("checksum_index_enabled"), bool
+                ):
+                    issues.append(
+                        ValidationIssue("error", f"{path_base}.checksum_index_enabled", "必须是布尔值")
+                    )
+    if "ops_artifact_governance_strict_mode_enabled" in val and not isinstance(
+        val.get("ops_artifact_governance_strict_mode_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_artifact_governance_strict_mode_enabled",
+                "必须是布尔值",
+            )
+        )
+    if "ops_artifact_governance_profile_baseline" in val:
+        baseline = val.get("ops_artifact_governance_profile_baseline")
+        if not isinstance(baseline, dict):
+            issues.append(ValidationIssue("error", "validation.ops_artifact_governance_profile_baseline", "必须是对象"))
+        else:
+            allowed_keys = {
+                "json_glob",
+                "md_glob",
+                "checksum_index_filename",
+                "retention_days",
+                "checksum_index_enabled",
+            }
+            for profile_name, profile_cfg in baseline.items():
+                profile_key = str(profile_name or "").strip()
+                path_base = f"validation.ops_artifact_governance_profile_baseline[{profile_name}]"
+                if not profile_key:
+                    issues.append(ValidationIssue("error", path_base, "profile 名称不能为空"))
+                    continue
+                if not isinstance(profile_cfg, dict):
+                    issues.append(ValidationIssue("error", path_base, "profile baseline 必须是对象"))
+                    continue
+                for key in profile_cfg.keys():
+                    if str(key) not in allowed_keys:
+                        issues.append(
+                            ValidationIssue(
+                                "warning",
+                                f"{path_base}.{key}",
+                                "未知字段（将被忽略）",
+                            )
+                        )
+                for key in ("json_glob", "md_glob", "checksum_index_filename"):
+                    if key in profile_cfg:
+                        raw = profile_cfg.get(key)
+                        if not isinstance(raw, str):
+                            issues.append(
+                                ValidationIssue("error", f"{path_base}.{key}", "必须是字符串")
+                            )
+                        elif str(raw).strip() == "":
+                            issues.append(
+                                ValidationIssue("error", f"{path_base}.{key}", "不能为空")
+                            )
+                if "retention_days" in profile_cfg and _as_int(profile_cfg.get("retention_days", 0)) < 1:
+                    issues.append(
+                        ValidationIssue("error", f"{path_base}.retention_days", "必须 >= 1")
+                    )
+                if "checksum_index_enabled" in profile_cfg and not isinstance(
+                    profile_cfg.get("checksum_index_enabled"), bool
+                ):
+                    issues.append(
+                        ValidationIssue("error", f"{path_base}.checksum_index_enabled", "必须是布尔值")
                     )
     if "ops_state_min_samples" in val and _as_int(val.get("ops_state_min_samples", 0)) < 1:
         issues.append(ValidationIssue("error", "validation.ops_state_min_samples", "必须 >= 1"))

@@ -194,6 +194,69 @@
   - `runtime_mode`
   - `mode_history`
   - `mode_health`
+- Stress reason-drift artifact retention/checksum is online:
+  - reason-drift artifact now supports retention rotation:
+    `validation.ops_stress_autorun_reason_drift_retention_days`.
+  - checksum index now supports audit trace:
+    `validation.ops_stress_autorun_reason_drift_checksum_index_enabled`.
+  - compliance artifact:
+    `output/review/stress_autorun_reason_drift_checksum_index.json`.
+  - gate/ops/review defect plan now surfaces
+    `STRESS_AUTORUN_REASON_ARTIFACT_ROTATION` /
+    `STRESS_AUTORUN_REASON_CHECKSUM_INDEX`.
+- Stress history artifact retention/checksum is online:
+  - history artifact now supports retention rotation:
+    `validation.ops_stress_autorun_history_retention_days`.
+  - checksum index now supports audit trace:
+    `validation.ops_stress_autorun_history_checksum_index_enabled`.
+  - compliance artifact:
+    `output/review/stress_autorun_history_checksum_index.json`.
+- Shared artifact governance utility is online:
+  - common module:
+    `src/lie_engine/orchestration/artifact_governance.py`.
+  - unified flow (`collect -> rotate -> checksum index`) is now reused by:
+    `temporal_autofix_patch` / `stress_autorun_history` / `stress_autorun_reason_drift`.
+  - release orchestrator now routes these artifact chains through one governance entry,
+    reducing duplicated retention/checksum logic and keeping behavior一致。
+- Reconcile row-diff artifact governance is online:
+  - row-diff drilldown artifact now supports retention + checksum index:
+    `validation.ops_reconcile_broker_row_diff_artifact_retention_days` /
+    `validation.ops_reconcile_broker_row_diff_artifact_checksum_index_enabled`.
+  - compliance index artifact:
+    `output/review/reconcile_row_diff_checksum_index.json`.
+  - gate/ops/review defect plan now surfaces:
+    `RECONCILE_BROKER_ROW_DIFF_ARTIFACT_ROTATION` /
+    `RECONCILE_BROKER_ROW_DIFF_ARTIFACT_CHECKSUM_INDEX`.
+- Profile-based artifact governance config is online:
+  - validation key:
+    `validation.ops_artifact_governance_profiles`.
+  - per-profile declarative fields:
+    `json_glob / md_glob / checksum_index_filename / retention_days / checksum_index_enabled`.
+  - release governance routing now supports profile override while remaining backward-compatible with legacy retention/checksum keys.
+  - current onboarded profiles:
+    `temporal_autofix_patch / stress_autorun_history / stress_autorun_reason_drift / reconcile_row_diff`.
+- Artifact governance compliance snapshot is online:
+  - gate/ops now include `artifact_governance` section with profile-level policy snapshot.
+  - monitors:
+    `required_profiles_present_ok / policy_alignment_ok`.
+  - drift alerts:
+    `artifact_governance_policy_mismatch` /
+    `artifact_governance_legacy_policy_drift`.
+  - defect plan emits:
+    `ARTIFACT_GOVERNANCE_PROFILE_MISSING` /
+    `ARTIFACT_GOVERNANCE_POLICY_MISMATCH` /
+    `ARTIFACT_GOVERNANCE_LEGACY_DRIFT`.
+- Governance strict mode + baseline freeze is online:
+  - new validation keys:
+    `validation.ops_artifact_governance_strict_mode_enabled` /
+    `validation.ops_artifact_governance_profile_baseline`.
+  - gate/ops now surface strict freeze checks:
+    `legacy_alignment_ok / baseline_freeze_ok / strict_mode_ok`.
+  - strict mode blocks release when profile/policy/legacy/baseline drifts exist:
+    `artifact_governance_strict_mode_blocked`.
+  - defect plan emits:
+    `ARTIFACT_GOVERNANCE_BASELINE_DRIFT` /
+    `ARTIFACT_GOVERNANCE_STRICT_BLOCKED`.
 
 ## Testing Workflow
 - Full suite:
@@ -215,4 +278,4 @@
 - Downstream gate/review reads `failed_tests` first, then falls back to stderr parsing.
 
 ## Next Priorities
-1. Add stress-autorun reason-drift retention + checksum index policy（对历史 drift 工件做轮转与哈希审计）.
+1. Add baseline snapshot promotion workflow（从“手工 baseline”升级为“review 通过后自动固化 baseline”，并支持回滚锚点）。
