@@ -100,6 +100,9 @@ class SignalCandidate:
     stop_price: float
     target_price: float
     can_short: bool
+    factor_exposure_score: float = 0.0
+    factor_penalty: float = 0.0
+    factor_flags: list[str] = field(default_factory=list)
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -180,6 +183,7 @@ class ReviewDelta:
     notes: list[str] = field(default_factory=list)
     change_reasons: dict[str, str] = field(default_factory=dict)
     factor_contrib_120d: dict[str, float] = field(default_factory=dict)
+    style_diagnostics: dict[str, Any] = field(default_factory=dict)
     impact_window_days: int = 120
     rollback_anchor: str = ""
 

@@ -101,6 +101,108 @@ class ReleaseOrchestratorTests(unittest.TestCase):
         self.assertFalse(out["passed"])
         self.assertFalse(out["checks"]["mode_health_ok"])
 
+    def test_gate_report_style_drift_hard_fail_blocks_release(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "pass_gate": True,
+                    "mode_health": {"passed": True},
+                    "style_diagnostics": {
+                        "active": True,
+                        "style_drift_score": 0.03,
+                        "drift_gap_max": 0.01,
+                        "alerts": ["style_drift:momentum"],
+                    },
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "style_drift_gate_enabled": True,
+                "style_drift_gate_hard_fail": True,
+                "style_drift_gate_require_active": True,
+                "style_drift_gate_allow_alerts": False,
+                "style_drift_gate_max_ratio": 2.0,
+                "style_drift_gate_max_alerts": 0,
+            }
+        )
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=lambda p: {},
+        )
+        out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
+        self.assertFalse(bool(out["checks"]["style_drift_ok"]))
+        self.assertFalse(bool(out["passed"]))
+        self.assertIn("style_drift_gate_ratio_high", set(out.get("style_drift", {}).get("alerts", [])))
+
+    def test_gate_report_style_drift_monitor_mode_does_not_block_release(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "pass_gate": True,
+                    "mode_health": {"passed": True},
+                    "style_diagnostics": {
+                        "active": True,
+                        "style_drift_score": 0.03,
+                        "drift_gap_max": 0.01,
+                        "alerts": ["style_drift:momentum"],
+                    },
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "style_drift_gate_enabled": True,
+                "style_drift_gate_hard_fail": False,
+                "style_drift_gate_require_active": True,
+                "style_drift_gate_allow_alerts": False,
+                "style_drift_gate_max_ratio": 2.0,
+                "style_drift_gate_max_alerts": 0,
+            }
+        )
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=lambda p: {},
+        )
+        out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
+        self.assertTrue(bool(out["checks"]["style_drift_ok"]))
+        self.assertTrue(bool(out["passed"]))
+        self.assertTrue(bool(out.get("style_drift", {}).get("monitor_failed", False)))
+
     def test_gate_report_artifact_governance_legacy_drift_alert(self) -> None:
         td = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))

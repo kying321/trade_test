@@ -39,6 +39,32 @@ def render_review_report(as_of: date, backtest: BacktestResult, review: ReviewDe
         lines.append("### 近120日边际贡献")
         for k, v in review.factor_contrib_120d.items():
             lines.append(f"- `{k}`: `{v:.4f}`")
+    if review.style_diagnostics:
+        diag = review.style_diagnostics
+        lines.append("")
+        lines.append("## 风格分桶归因")
+        lines.append(f"- active: `{bool(diag.get('active', False))}`")
+        lines.append(f"- dominant_style: `{diag.get('dominant_style', 'neutral')}`")
+        lines.append(f"- dominant_direction: `{diag.get('dominant_direction', 'na')}`")
+        lines.append(f"- dominant_spread: `{float(diag.get('dominant_spread', 0.0)):.5f}`")
+        lines.append(f"- style_drift_score: `{float(diag.get('style_drift_score', 0.0)):.5f}`")
+        lines.append(f"- sample_days: `{int(diag.get('sample_days', 0))}`")
+        style_spreads = diag.get("style_spreads", {}) if isinstance(diag.get("style_spreads", {}), dict) else {}
+        if style_spreads:
+            lines.append("- style_spreads:")
+            for style, stats in style_spreads.items():
+                if not isinstance(stats, dict):
+                    continue
+                lines.append(
+                    "- "
+                    + f"`{style}` avg={float(stats.get('avg_spread', 0.0)):.5f}, "
+                    + f"recent={float(stats.get('recent_avg', 0.0)):.5f}, "
+                    + f"prev={float(stats.get('prev_avg', 0.0)):.5f}, "
+                    + f"win={float(stats.get('win_rate', 0.0)):.2%}, "
+                    + f"n={int(float(stats.get('sample_days', 0.0)))}"
+                )
+        alerts = diag.get("alerts", []) if isinstance(diag.get("alerts", []), list) else []
+        lines.append(f"- alerts: `{', '.join(str(x) for x in alerts) if alerts else 'NONE'}`")
     lines.append("")
     lines.append("## 审查结论")
     lines.append(f"- 通过门槛: `{review.pass_gate}`")

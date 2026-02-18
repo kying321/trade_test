@@ -26,6 +26,10 @@
   - `gate_report.checks.mode_drift_ok` compares live performance vs backtest baseline.
   - `ops_report.mode_drift` exposes drift status/alerts (win-rate & profit-factor gaps).
   - review-loop defect plan emits `MODE_DRIFT_*` codes and prioritizes drift fixes.
+- Style-drift adaptive guard + release gate linkage is online:
+  - `run_review` now applies severity-scaled收敛（`signal_confidence_min / max_daily_trades / hold_days`）并产出 `style_drift_guard` 审计。
+  - `gate_report.checks.style_drift_ok` supports monitor-only / hard-fail modes (`style_drift_gate_hard_fail`).
+  - `ops_report.style_drift` + defect plan now expose `STYLE_DRIFT_*` codes and gate failures.
 - Slot anomaly monitor is online:
   - `gate_report.checks.slot_anomaly_ok` evaluates premarket/intraday/eod anomalies.
   - `ops_report.slot_anomaly` exposes missing/anomaly ratios and threshold checks.

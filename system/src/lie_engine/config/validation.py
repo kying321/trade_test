@@ -267,6 +267,69 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         issues.append(ValidationIssue("error", "validation.mode_drift_profit_factor_max_gap", "必须 > 0"))
     if "mode_drift_focus_runtime_mode_only" in val and not isinstance(val.get("mode_drift_focus_runtime_mode_only"), bool):
         issues.append(ValidationIssue("error", "validation.mode_drift_focus_runtime_mode_only", "必须是布尔值"))
+    if "style_attribution_lookback_days" in val and _as_int(val.get("style_attribution_lookback_days", 0)) < 20:
+        issues.append(ValidationIssue("error", "validation.style_attribution_lookback_days", "必须 >= 20"))
+    if "style_drift_window_days" in val and _as_int(val.get("style_drift_window_days", 0)) < 3:
+        issues.append(ValidationIssue("error", "validation.style_drift_window_days", "必须 >= 3"))
+    if "style_drift_min_sample_days" in val and _as_int(val.get("style_drift_min_sample_days", 0)) < 5:
+        issues.append(ValidationIssue("error", "validation.style_drift_min_sample_days", "必须 >= 5"))
+    if "style_drift_gap_max" in val:
+        v = _as_float(val.get("style_drift_gap_max", 0.0))
+        if not (0.0 < v <= 1.0):
+            issues.append(ValidationIssue("error", "validation.style_drift_gap_max", "必须在 (0, 1]"))
+    if "style_drift_block_on_alert" in val and not isinstance(val.get("style_drift_block_on_alert"), bool):
+        issues.append(ValidationIssue("error", "validation.style_drift_block_on_alert", "必须是布尔值"))
+    if "style_drift_adaptive_enabled" in val and not isinstance(val.get("style_drift_adaptive_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.style_drift_adaptive_enabled", "必须是布尔值"))
+    if "style_drift_adaptive_confidence_step_max" in val and _as_float(
+        val.get("style_drift_adaptive_confidence_step_max", 0.0)
+    ) < 0.0:
+        issues.append(ValidationIssue("error", "validation.style_drift_adaptive_confidence_step_max", "必须 >= 0"))
+    if "style_drift_adaptive_trade_reduction_max" in val and _as_int(
+        val.get("style_drift_adaptive_trade_reduction_max", 0)
+    ) < 0:
+        issues.append(ValidationIssue("error", "validation.style_drift_adaptive_trade_reduction_max", "必须 >= 0"))
+    if "style_drift_adaptive_hold_reduction_max" in val and _as_int(
+        val.get("style_drift_adaptive_hold_reduction_max", 0)
+    ) < 0:
+        issues.append(ValidationIssue("error", "validation.style_drift_adaptive_hold_reduction_max", "必须 >= 0"))
+    if "style_drift_adaptive_trigger_ratio" in val and _as_float(
+        val.get("style_drift_adaptive_trigger_ratio", 0.0)
+    ) <= 0.0:
+        issues.append(ValidationIssue("error", "validation.style_drift_adaptive_trigger_ratio", "必须 > 0"))
+    if "style_drift_adaptive_ratio_for_max" in val and _as_float(
+        val.get("style_drift_adaptive_ratio_for_max", 0.0)
+    ) <= 0.0:
+        issues.append(ValidationIssue("error", "validation.style_drift_adaptive_ratio_for_max", "必须 > 0"))
+    if (
+        "style_drift_adaptive_trigger_ratio" in val
+        and "style_drift_adaptive_ratio_for_max" in val
+        and _as_float(val.get("style_drift_adaptive_ratio_for_max", 0.0))
+        <= _as_float(val.get("style_drift_adaptive_trigger_ratio", 0.0))
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.style_drift_adaptive_ratio_for_max",
+                "必须 > validation.style_drift_adaptive_trigger_ratio",
+            )
+        )
+    if "style_drift_adaptive_block_ratio" in val and _as_float(val.get("style_drift_adaptive_block_ratio", 0.0)) < 1.0:
+        issues.append(ValidationIssue("error", "validation.style_drift_adaptive_block_ratio", "必须 >= 1"))
+    if "style_drift_gate_enabled" in val and not isinstance(val.get("style_drift_gate_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.style_drift_gate_enabled", "必须是布尔值"))
+    if "style_drift_gate_require_active" in val and not isinstance(val.get("style_drift_gate_require_active"), bool):
+        issues.append(ValidationIssue("error", "validation.style_drift_gate_require_active", "必须是布尔值"))
+    if "style_drift_gate_allow_alerts" in val and not isinstance(val.get("style_drift_gate_allow_alerts"), bool):
+        issues.append(ValidationIssue("error", "validation.style_drift_gate_allow_alerts", "必须是布尔值"))
+    if "style_drift_gate_max_alerts" in val and _as_int(val.get("style_drift_gate_max_alerts", 0)) < 0:
+        issues.append(ValidationIssue("error", "validation.style_drift_gate_max_alerts", "必须 >= 0"))
+    if "style_drift_gate_max_ratio" in val and _as_float(val.get("style_drift_gate_max_ratio", 0.0)) <= 0.0:
+        issues.append(ValidationIssue("error", "validation.style_drift_gate_max_ratio", "必须 > 0"))
+    if "style_drift_gate_hard_fail" in val and not isinstance(val.get("style_drift_gate_hard_fail"), bool):
+        issues.append(ValidationIssue("error", "validation.style_drift_gate_hard_fail", "必须是布尔值"))
+    if "style_drift_gate_lookback_days" in val and _as_int(val.get("style_drift_gate_lookback_days", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.style_drift_gate_lookback_days", "必须 >= 1"))
     if "ops_temporal_audit_enabled" in val and not isinstance(val.get("ops_temporal_audit_enabled"), bool):
         issues.append(ValidationIssue("error", "validation.ops_temporal_audit_enabled", "必须是布尔值"))
     if "ops_temporal_audit_lookback_days" in val and _as_int(val.get("ops_temporal_audit_lookback_days", 0)) < 1:

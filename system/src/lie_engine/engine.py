@@ -9,6 +9,7 @@ import re
 import sqlite3
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -16,7 +17,7 @@ from lie_engine.backtest import BacktestConfig, run_walk_forward_backtest
 from lie_engine.config import SystemSettings, assert_valid_settings, load_settings
 from lie_engine.data import DataBus, build_provider_stack
 from lie_engine.data.storage import append_sqlite, write_csv, write_json, write_markdown
-from lie_engine.models import BacktestResult, NewsEvent, RegimeLabel, ReviewDelta, TradePlan
+from lie_engine.models import BacktestResult, NewsEvent, RegimeLabel, RegimeState, ReviewDelta, TradePlan
 from lie_engine.orchestration import (
     ArchitectureOrchestrator,
     DependencyOrchestrator,
@@ -1472,7 +1473,13 @@ class LieEngine:
             confidence_min=float(runtime_params["signal_confidence_min"]),
             convexity_min=float(runtime_params["convexity_min"]),
         )
-        signals = scan_signals(bars=bars, regime=regime.consensus, cfg=signal_cfg)
+        market_factor_state = self._market_factor_state(sentiment=ingest.sentiment, regime=regime, bars=bars)
+        signals = scan_signals(
+            bars=bars,
+            regime=regime.consensus,
+            cfg=signal_cfg,
+            market_factor_state=market_factor_state,
+        )
 
         recent_trades = self._load_recent_trades(300)
         win_rate, payoff = infer_edge_from_trades(recent_trades)
@@ -1543,6 +1550,7 @@ class LieEngine:
             "history": mode_history,
             "mode_health": mode_health,
             "risk_control": risk_control,
+            "market_factor_state": market_factor_state,
         }
 
         daily_md = render_daily_briefing(
@@ -1601,6 +1609,9 @@ class LieEngine:
                     "stop_price",
                     "target_price",
                     "can_short",
+                    "factor_exposure_score",
+                    "factor_penalty",
+                    "factor_flags",
                     "notes",
                 ]
             )
@@ -1681,6 +1692,7 @@ class LieEngine:
         symbols = self._core_symbols()
         bars, ingest = self._run_ingestion(as_of, symbols)
         regime = self._regime_from_bars(as_of=as_of, bars=bars)
+        market_factor_state = self._market_factor_state(sentiment=ingest.sentiment, regime=regime, bars=bars)
         live_params = self._load_live_params()
         runtime_params = self._resolve_runtime_params(regime=regime, live_params=live_params)
         runtime_mode = str(runtime_params.get("mode", "base"))
@@ -1712,6 +1724,7 @@ class LieEngine:
             "runtime_mode": runtime_mode,
             "mode_health": mode_health,
             "risk_control": risk_control,
+            "market_factor_state": market_factor_state,
             "risk_multiplier": float(risk_control.get("risk_multiplier", 1.0)),
             "protection_mode": regime.protection_mode or guard.black_swan_trigger or guard.major_event_window or (not ingest.quality.passed),
         }
@@ -1743,6 +1756,7 @@ class LieEngine:
         symbols = self._core_symbols()
         bars, ingest = self._run_ingestion(as_of, symbols)
         regime = self._regime_from_bars(as_of=as_of, bars=bars)
+        market_factor_state = self._market_factor_state(sentiment=ingest.sentiment, regime=regime, bars=bars)
         live_params = self._load_live_params()
         runtime_params = self._resolve_runtime_params(regime=regime, live_params=live_params)
         runtime_mode = str(runtime_params.get("mode", "base"))
@@ -1776,6 +1790,7 @@ class LieEngine:
             "runtime_mode": runtime_mode,
             "mode_health": mode_health,
             "risk_control": risk_control,
+            "market_factor_state": market_factor_state,
             "risk_multiplier": float(risk_control.get("risk_multiplier", 1.0)),
             "black_swan_score": guard.black_swan_score,
             "major_event_window": guard.major_event_window,
@@ -2487,6 +2502,561 @@ class LieEngine:
             "source_confidence_score": score,
         }
 
+    @staticmethod
+    def _rank_corr(a: pd.Series, b: pd.Series) -> float:
+        x = pd.to_numeric(a, errors="coerce")
+        y = pd.to_numeric(b, errors="coerce")
+        frame = pd.DataFrame({"x": x, "y": y}).dropna()
+        if len(frame) < 4:
+            return 0.0
+        corr = frame["x"].rank().corr(frame["y"].rank())
+        if corr is None or not np.isfinite(corr):
+            return 0.0
+        return float(corr)
+
+    def _cross_section_style_state(self, bars: pd.DataFrame) -> dict[str, float]:
+        neutral = {
+            "momentum_preference": 0.55,
+            "value_preference": 0.50,
+            "size_preference": 0.50,
+            "dividend_preference": 0.55,
+            "crowding_aversion": 0.50,
+            "style_signal_strength": 0.0,
+            "style_sample_size": 0.0,
+        }
+        if bars.empty:
+            return dict(neutral)
+
+        work = bars.copy()
+        work["ts"] = pd.to_datetime(work["ts"], errors="coerce")
+        work = work.dropna(subset=["ts"]).sort_values(["symbol", "ts"])
+        if work.empty:
+            return dict(neutral)
+
+        rows: list[dict[str, float]] = []
+        for _, g in work.groupby("symbol"):
+            g = g.tail(160).copy()
+            if len(g) < 25:
+                continue
+            close = pd.to_numeric(g["close"], errors="coerce")
+            volume = pd.to_numeric(g["volume"], errors="coerce")
+            if close.dropna().empty:
+                continue
+
+            close_last = float(close.iloc[-1])
+            close_20 = float(close.iloc[-21]) if len(close) >= 21 else float(close.iloc[0])
+            close_60 = float(close.iloc[-61]) if len(close) >= 61 else float(close.iloc[0])
+            ret20 = 0.0 if abs(close_20) <= 1e-9 else (close_last / close_20 - 1.0)
+            ret60 = 0.0 if abs(close_60) <= 1e-9 else (close_last / close_60 - 1.0)
+            ma60 = float(close.tail(60).mean()) if len(close) >= 60 else float(close.mean())
+            turnover20 = float((close * volume).tail(20).mean()) if not volume.dropna().empty else 1.0
+            vol20 = float(close.pct_change().tail(20).std(ddof=0))
+
+            last = g.iloc[-1]
+            market_cap = pd.to_numeric(pd.Series([last.get("market_cap")]), errors="coerce").iloc[0]
+            pe_ttm = pd.to_numeric(pd.Series([last.get("pe_ttm")]), errors="coerce").iloc[0]
+            pb = pd.to_numeric(pd.Series([last.get("pb")]), errors="coerce").iloc[0]
+            dividend_yield = pd.to_numeric(pd.Series([last.get("dividend_yield")]), errors="coerce").iloc[0]
+
+            if np.isfinite(market_cap) and float(market_cap) > 0:
+                size_score = -float(np.log10(max(1.0, float(market_cap))))
+            else:
+                size_score = -float(np.log10(max(1.0, turnover20)))
+
+            if np.isfinite(pe_ttm) and float(pe_ttm) > 0:
+                value_score = -float(np.log(max(1e-9, float(pe_ttm))))
+            elif np.isfinite(pb) and float(pb) > 0:
+                value_score = -float(np.log(max(1e-9, float(pb))))
+            else:
+                value_score = -(close_last / max(ma60, 1e-9) - 1.0)
+
+            if np.isfinite(dividend_yield) and float(dividend_yield) >= 0:
+                dividend_score = float(dividend_yield)
+            else:
+                dividend_score = -vol20
+
+            crowd_score = float(np.log10(max(1.0, turnover20))) + 5.0 * vol20
+            rows.append(
+                {
+                    "ret20": float(ret20),
+                    "momentum_score": float(ret60),
+                    "size_score": float(size_score),
+                    "value_score": float(value_score),
+                    "dividend_score": float(dividend_score),
+                    "crowd_score": float(crowd_score),
+                }
+            )
+
+        frame = pd.DataFrame(rows)
+        if frame.empty or len(frame) < 4:
+            out = dict(neutral)
+            out["style_sample_size"] = float(len(frame))
+            return out
+
+        corr_mom = self._rank_corr(frame["momentum_score"], frame["ret20"])
+        corr_size = self._rank_corr(frame["size_score"], frame["ret20"])
+        corr_value = self._rank_corr(frame["value_score"], frame["ret20"])
+        corr_div = self._rank_corr(frame["dividend_score"], frame["ret20"])
+        corr_crowd = self._rank_corr(frame["crowd_score"], frame["ret20"])
+
+        out = {
+            "momentum_preference": self._clamp_float(0.55 + 0.45 * corr_mom, 0.0, 1.5),
+            "value_preference": self._clamp_float(0.50 + 0.50 * corr_value, 0.0, 1.5),
+            "size_preference": self._clamp_float(0.50 + 0.50 * corr_size, 0.0, 1.5),
+            "dividend_preference": self._clamp_float(0.55 + 0.45 * corr_div, 0.0, 1.5),
+            "crowding_aversion": self._clamp_float(0.50 - 0.50 * corr_crowd, 0.0, 1.5),
+            "style_signal_strength": self._clamp_float(
+                float(np.mean([abs(corr_mom), abs(corr_size), abs(corr_value), abs(corr_div), abs(corr_crowd)])),
+                0.0,
+                1.0,
+            ),
+            "style_sample_size": float(len(frame)),
+        }
+        return out
+
+    @staticmethod
+    def _style_feature_panel(bars: pd.DataFrame) -> pd.DataFrame:
+        if bars.empty:
+            return pd.DataFrame(
+                columns=[
+                    "ts",
+                    "symbol",
+                    "fwd_ret1",
+                    "momentum_score",
+                    "value_score",
+                    "size_score",
+                    "dividend_score",
+                    "crowd_score",
+                ]
+            )
+
+        work = bars.copy()
+        work["ts"] = pd.to_datetime(work["ts"], errors="coerce")
+        work = work.dropna(subset=["ts"]).sort_values(["symbol", "ts"]).reset_index(drop=True)
+        if work.empty:
+            return pd.DataFrame(columns=["ts", "symbol", "fwd_ret1", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
+
+        work["close"] = pd.to_numeric(work["close"], errors="coerce")
+        work["volume"] = pd.to_numeric(work["volume"], errors="coerce")
+        work = work.dropna(subset=["close"])
+        if work.empty:
+            return pd.DataFrame(columns=["ts", "symbol", "fwd_ret1", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
+
+        by_symbol = work.groupby("symbol", group_keys=False)
+        work["ret1"] = by_symbol["close"].pct_change()
+        work["ret60"] = by_symbol["close"].pct_change(60)
+        work["ma60"] = by_symbol["close"].transform(lambda s: s.rolling(60, min_periods=20).mean())
+        work["vol20"] = by_symbol["ret1"].transform(lambda s: s.rolling(20, min_periods=10).std(ddof=0))
+
+        turnover = work["close"] * work["volume"].fillna(0.0)
+        work["turnover20"] = turnover.groupby(work["symbol"]).transform(lambda s: s.rolling(20, min_periods=10).mean())
+        work["fwd_ret1"] = by_symbol["close"].shift(-1) / work["close"] - 1.0
+
+        if "market_cap" in work.columns:
+            mc = pd.to_numeric(work["market_cap"], errors="coerce")
+        else:
+            mc = pd.Series(np.nan, index=work.index, dtype=float)
+        if "pe_ttm" in work.columns:
+            pe = pd.to_numeric(work["pe_ttm"], errors="coerce")
+        else:
+            pe = pd.Series(np.nan, index=work.index, dtype=float)
+        if "pb" in work.columns:
+            pb = pd.to_numeric(work["pb"], errors="coerce")
+        else:
+            pb = pd.Series(np.nan, index=work.index, dtype=float)
+        if "dividend_yield" in work.columns:
+            divy = pd.to_numeric(work["dividend_yield"], errors="coerce")
+        else:
+            divy = pd.Series(np.nan, index=work.index, dtype=float)
+
+        safe_turnover = work["turnover20"].replace(0.0, np.nan)
+        work["size_score"] = np.where(
+            (mc > 0) & np.isfinite(mc),
+            -np.log10(np.maximum(1.0, mc)),
+            -np.log10(np.maximum(1.0, safe_turnover.fillna(1.0))),
+        )
+        fallback_value = -(work["close"] / work["ma60"].replace(0.0, np.nan) - 1.0)
+        work["value_score"] = np.where(
+            (pe > 0) & np.isfinite(pe),
+            -np.log(np.maximum(pe, 1e-9)),
+            np.where((pb > 0) & np.isfinite(pb), -np.log(np.maximum(pb, 1e-9)), fallback_value),
+        )
+        work["momentum_score"] = work["ret60"]
+        work["dividend_score"] = np.where((divy >= 0) & np.isfinite(divy), divy, -work["vol20"])
+        work["crowd_score"] = np.log10(np.maximum(1.0, safe_turnover.fillna(1.0))) + 5.0 * work["vol20"].fillna(0.0)
+
+        keep_cols = [
+            "ts",
+            "symbol",
+            "fwd_ret1",
+            "momentum_score",
+            "value_score",
+            "size_score",
+            "dividend_score",
+            "crowd_score",
+        ]
+        panel = work[keep_cols].replace([np.inf, -np.inf], np.nan).dropna(subset=["fwd_ret1"])
+        return panel
+
+    @staticmethod
+    def _bucket_spread(day_df: pd.DataFrame, score_col: str, ret_col: str = "fwd_ret1") -> float | None:
+        if day_df.empty or score_col not in day_df.columns or ret_col not in day_df.columns:
+            return None
+        frame = day_df[[score_col, ret_col]].dropna()
+        if len(frame) < 6:
+            return None
+        q_lo = float(frame[score_col].quantile(0.25))
+        q_hi = float(frame[score_col].quantile(0.75))
+        if not np.isfinite(q_lo) or not np.isfinite(q_hi) or q_hi <= q_lo:
+            return None
+        lo = frame[frame[score_col] <= q_lo][ret_col]
+        hi = frame[frame[score_col] >= q_hi][ret_col]
+        if lo.empty or hi.empty:
+            return None
+        return float(hi.mean() - lo.mean())
+
+    def _review_style_diagnostics(self, *, start: date, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        lookback_days = max(30, int(val.get("style_attribution_lookback_days", 180)))
+        drift_window = max(5, int(val.get("style_drift_window_days", 20)))
+        min_sample_days = max(8, int(val.get("style_drift_min_sample_days", 20)))
+        drift_gap_max = self._clamp_float(float(val.get("style_drift_gap_max", 0.010)), 0.001, 0.10)
+        block_on_alert = bool(val.get("style_drift_block_on_alert", False))
+
+        fetch_start = max(start, as_of - timedelta(days=max(60, lookback_days * 2)))
+        bars, _ = self._run_ingestion_range(start=fetch_start, end=as_of, symbols=self._core_symbols())
+        panel = self._style_feature_panel(bars)
+        if panel.empty:
+            return {
+                "active": False,
+                "reason": "insufficient_panel",
+                "lookback_days": int(lookback_days),
+                "sample_days": 0,
+                "drift_window_days": int(drift_window),
+                "drift_gap_max": float(drift_gap_max),
+                "block_on_alert": bool(block_on_alert),
+            }
+
+        panel = panel[panel["ts"].dt.date <= as_of].copy()
+        if panel.empty:
+            return {
+                "active": False,
+                "reason": "empty_after_cutoff",
+                "lookback_days": int(lookback_days),
+                "sample_days": 0,
+                "drift_window_days": int(drift_window),
+                "drift_gap_max": float(drift_gap_max),
+                "block_on_alert": bool(block_on_alert),
+            }
+
+        style_map = {
+            "momentum": "momentum_score",
+            "value": "value_score",
+            "size": "size_score",
+            "dividend": "dividend_score",
+        }
+        daily = panel.groupby(panel["ts"].dt.date)
+        spreads_by_style: dict[str, list[float]] = {k: [] for k in style_map}
+        for _, day_df in daily:
+            for style, col in style_map.items():
+                spread = self._bucket_spread(day_df, score_col=col, ret_col="fwd_ret1")
+                if spread is not None and np.isfinite(spread):
+                    spreads_by_style[style].append(float(spread))
+
+        summary: dict[str, dict[str, float]] = {}
+        drift_by_style: dict[str, float] = {}
+        for style, arr in spreads_by_style.items():
+            if not arr:
+                summary[style] = {"avg_spread": 0.0, "win_rate": 0.0, "sample_days": 0.0, "recent_avg": 0.0, "prev_avg": 0.0}
+                drift_by_style[style] = 0.0
+                continue
+            ser = pd.Series(arr, dtype=float)
+            avg_spread = float(ser.mean())
+            win_rate = float((ser > 0.0).mean())
+            recent = ser.tail(drift_window)
+            prev = ser.iloc[max(0, len(ser) - drift_window * 2) : max(0, len(ser) - drift_window)]
+            if prev.empty:
+                prev = ser.head(max(1, len(ser) // 2))
+            recent_avg = float(recent.mean()) if not recent.empty else 0.0
+            prev_avg = float(prev.mean()) if not prev.empty else 0.0
+            drift_gap = abs(recent_avg - prev_avg)
+            drift_by_style[style] = float(drift_gap)
+            summary[style] = {
+                "avg_spread": avg_spread,
+                "win_rate": win_rate,
+                "sample_days": float(len(ser)),
+                "recent_avg": recent_avg,
+                "prev_avg": prev_avg,
+            }
+
+        dominant_style = "neutral"
+        dominant_val = 0.0
+        for style, stats in summary.items():
+            v = float(stats.get("avg_spread", 0.0))
+            if abs(v) > abs(dominant_val):
+                dominant_val = v
+                dominant_style = style
+        dominant_direction = "long_high" if dominant_val >= 0 else "long_low"
+
+        sample_days = int(max((len(x) for x in spreads_by_style.values()), default=0))
+        drift_score = float(max(drift_by_style.values())) if drift_by_style else 0.0
+        alerts = [f"style_drift:{k}" for k, v in drift_by_style.items() if float(v) > float(drift_gap_max)]
+        active = sample_days >= min_sample_days
+        if not active:
+            alerts.append("style_drift_inactive")
+
+        return {
+            "active": bool(active),
+            "lookback_days": int(lookback_days),
+            "sample_days": int(sample_days),
+            "drift_window_days": int(drift_window),
+            "drift_gap_max": float(drift_gap_max),
+            "block_on_alert": bool(block_on_alert),
+            "dominant_style": dominant_style,
+            "dominant_direction": dominant_direction,
+            "dominant_spread": float(dominant_val),
+            "style_spreads": summary,
+            "style_drift_gap": {k: float(v) for k, v in drift_by_style.items()},
+            "style_drift_score": float(drift_score),
+            "alerts": alerts,
+        }
+
+    def _apply_style_drift_adaptive_guard(
+        self,
+        *,
+        review: ReviewDelta,
+        current_params: dict[str, float],
+        style_diag: dict[str, Any],
+    ) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = bool(val.get("style_drift_adaptive_enabled", True))
+        summary: dict[str, Any] = {
+            "enabled": enabled,
+            "active": bool(style_diag.get("active", False)),
+            "applied": False,
+            "blocked": False,
+            "drift_ratio": 0.0,
+            "intensity": 0.0,
+            "confidence_step": 0.0,
+            "trade_step": 0,
+            "hold_step": 0,
+            "alerts": [],
+        }
+        if not enabled:
+            summary["reason"] = "disabled"
+            return summary
+        if not bool(style_diag.get("active", False)):
+            summary["reason"] = "inactive"
+            return summary
+
+        drift_gap_max = self._clamp_float(float(style_diag.get("drift_gap_max", val.get("style_drift_gap_max", 0.01))), 1e-6, 1.0)
+        drift_score = self._clamp_float(float(style_diag.get("style_drift_score", 0.0)), 0.0, 10.0)
+        drift_ratio = float(drift_score / max(drift_gap_max, 1e-9))
+        drift_alerts = [str(x) for x in style_diag.get("alerts", []) if str(x).startswith("style_drift:")]
+        summary["drift_ratio"] = float(drift_ratio)
+        summary["alerts"] = list(drift_alerts)
+
+        trigger_ratio = self._clamp_float(float(val.get("style_drift_adaptive_trigger_ratio", 1.0)), 0.5, 5.0)
+        ratio_for_max = self._clamp_float(float(val.get("style_drift_adaptive_ratio_for_max", 2.0)), trigger_ratio + 0.05, 8.0)
+        block_ratio = self._clamp_float(float(val.get("style_drift_adaptive_block_ratio", 1.8)), 1.0, 12.0)
+        conf_step_max = self._clamp_float(float(val.get("style_drift_adaptive_confidence_step_max", 6.0)), 0.0, 20.0)
+        trade_step_max = self._clamp_int(float(val.get("style_drift_adaptive_trade_reduction_max", 2.0)), 0, 4)
+        hold_step_max = self._clamp_int(float(val.get("style_drift_adaptive_hold_reduction_max", 2.0)), 0, 10)
+        block_on_alert = bool(style_diag.get("block_on_alert", False))
+
+        trigger = bool(drift_alerts) or bool(drift_ratio >= trigger_ratio)
+        if not trigger:
+            summary["reason"] = "no_trigger"
+            return summary
+
+        raw_intensity = (drift_ratio - trigger_ratio) / max(1e-6, ratio_for_max - trigger_ratio)
+        intensity = self._clamp_float(raw_intensity, 0.0, 1.0)
+        if drift_alerts and intensity < 0.20:
+            intensity = 0.20
+        summary["intensity"] = float(intensity)
+
+        conf_step = 0.0
+        if conf_step_max > 0.0:
+            conf_step = conf_step_max * intensity
+            if drift_alerts:
+                conf_step = max(conf_step, 1.0)
+        trade_step = 0
+        if trade_step_max > 0:
+            trade_step = int(round(trade_step_max * intensity))
+            if drift_alerts and trade_step <= 0:
+                trade_step = 1
+            trade_step = int(min(trade_step_max, max(0, trade_step)))
+        hold_step = 0
+        if hold_step_max > 0:
+            hold_step = int(round(hold_step_max * intensity))
+            if drift_alerts and hold_step <= 0:
+                hold_step = 1
+            hold_step = int(min(hold_step_max, max(0, hold_step)))
+
+        summary["confidence_step"] = float(conf_step)
+        summary["trade_step"] = int(trade_step)
+        summary["hold_step"] = int(hold_step)
+
+        base_conf = float(review.parameter_changes.get("signal_confidence_min", current_params.get("signal_confidence_min", 60.0)))
+        new_conf = float(self._clamp_float(base_conf + conf_step, 50.0, 90.0))
+        review.parameter_changes["signal_confidence_min"] = new_conf
+
+        base_trades = self._clamp_int(
+            float(review.parameter_changes.get("max_daily_trades", current_params.get("max_daily_trades", 2.0))),
+            1,
+            5,
+        )
+        review.parameter_changes["max_daily_trades"] = float(max(1, base_trades - int(trade_step)))
+
+        base_hold = self._clamp_int(
+            float(review.parameter_changes.get("hold_days", current_params.get("hold_days", 5.0))),
+            1,
+            20,
+        )
+        review.parameter_changes["hold_days"] = float(max(1, base_hold - int(hold_step)))
+
+        def _append_reason(key: str, msg: str) -> None:
+            prior = str(review.change_reasons.get(key, "")).strip("；").strip()
+            review.change_reasons[key] = (prior + "；" + msg).strip("；")
+
+        guard_reason = (
+            "风格漂移自适应收敛"
+            + f"(ratio={drift_ratio:.2f}, intensity={intensity:.2f})"
+        )
+        _append_reason("signal_confidence_min", guard_reason + "，上调信号门槛")
+        _append_reason("max_daily_trades", guard_reason + "，下调日内交易次数")
+        _append_reason("hold_days", guard_reason + "，缩短持有暴露")
+
+        blocked = bool((block_on_alert and bool(drift_alerts)) or (drift_ratio >= block_ratio))
+        if blocked:
+            review.pass_gate = False
+            defect_code = "STYLE_DRIFT_SEVERE" if drift_ratio >= block_ratio else "STYLE_DRIFT_ALERT"
+            if defect_code not in review.defects:
+                review.defects.append(defect_code)
+
+        review.notes.append(
+            "style_drift_guard="
+            + f"ratio={drift_ratio:.2f}; intensity={intensity:.2f}; "
+            + f"conf_step={conf_step:.2f}; trade_step={trade_step}; hold_step={hold_step}; "
+            + f"blocked={blocked}"
+        )
+        if drift_alerts:
+            review.notes.append("style_drift_guard_alerts=" + ",".join(drift_alerts))
+
+        summary["applied"] = True
+        summary["blocked"] = bool(blocked)
+        summary["block_on_alert"] = bool(block_on_alert)
+        summary["block_ratio"] = float(block_ratio)
+        summary["trigger_ratio"] = float(trigger_ratio)
+        summary["ratio_for_max"] = float(ratio_for_max)
+        summary["reason"] = "applied"
+        return summary
+
+    def _market_factor_state(
+        self,
+        *,
+        sentiment: dict[str, float],
+        regime: RegimeState,
+        bars: pd.DataFrame | None = None,
+    ) -> dict[str, float]:
+        def _f(key: str, default: float) -> float:
+            try:
+                out = float(sentiment.get(key, default))
+            except (TypeError, ValueError):
+                out = float(default)
+            if not np.isfinite(out):
+                return float(default)
+            return out
+
+        pcr = _f("pcr_50etf", 0.9)
+        iv = _f("iv_50etf", 0.22)
+        north = _f("northbound_netflow", 0.0)
+        margin = _f("margin_balance_chg", 0.0)
+        atr_z = float(max(0.0, regime.atr_z))
+        style_state = self._cross_section_style_state(bars if isinstance(bars, pd.DataFrame) else pd.DataFrame())
+        style_strength = self._clamp_float(float(style_state.get("style_signal_strength", 0.0)), 0.0, 1.0)
+        style_weight = self._clamp_float(0.20 + 0.35 * style_strength, 0.20, 0.55)
+
+        valuation_pressure = self._clamp_float(
+            0.40 + max(0.0, pcr - 1.0) * 0.45 + max(0.0, iv - 0.24) * 1.10 + max(0.0, atr_z - 1.0) * 0.15,
+            0.0,
+            1.5,
+        )
+        momentum_preference = self._clamp_float(
+            0.55 + np.tanh(north / 3e9) * 0.25 + np.tanh(margin * 15.0) * 0.20,
+            0.0,
+            1.5,
+        )
+        crowding_aversion = self._clamp_float(
+            0.35 + max(0.0, iv - 0.24) * 1.20 + max(0.0, atr_z - 1.2) * 0.20,
+            0.0,
+            1.5,
+        )
+        small_cap_pressure = self._clamp_float(
+            0.30 + max(0.0, -north / 3e9) * 0.35 + max(0.0, pcr - 1.05) * 0.30,
+            0.0,
+            1.5,
+        )
+        dividend_preference = self._clamp_float(
+            0.50 + max(0.0, pcr - 1.0) * 0.12 + max(0.0, iv - 0.24) * 0.25 + np.tanh(-north / 3e9) * 0.08,
+            0.0,
+            1.5,
+        )
+
+        if regime.consensus in {RegimeLabel.RANGE, RegimeLabel.UNCERTAIN, RegimeLabel.DOWNTREND}:
+            valuation_pressure = self._clamp_float(valuation_pressure + 0.12, 0.0, 1.5)
+            small_cap_pressure = self._clamp_float(small_cap_pressure + 0.10, 0.0, 1.5)
+            dividend_preference = self._clamp_float(dividend_preference + 0.08, 0.0, 1.5)
+
+        style_value = self._clamp_float(0.30 + 0.90 * float(style_state.get("value_preference", 0.50)), 0.0, 1.5)
+        style_mom = self._clamp_float(float(style_state.get("momentum_preference", 0.55)), 0.0, 1.5)
+        style_crowd = self._clamp_float(float(style_state.get("crowding_aversion", 0.50)), 0.0, 1.5)
+        style_small_cap_pressure = self._clamp_float(
+            0.80 - 0.70 * float(style_state.get("size_preference", 0.50)),
+            0.0,
+            1.5,
+        )
+        style_dividend = self._clamp_float(float(style_state.get("dividend_preference", 0.55)), 0.0, 1.5)
+
+        valuation_pressure = self._clamp_float(
+            (1.0 - style_weight) * valuation_pressure + style_weight * style_value,
+            0.0,
+            1.5,
+        )
+        momentum_preference = self._clamp_float(
+            (1.0 - style_weight) * momentum_preference + style_weight * style_mom,
+            0.0,
+            1.5,
+        )
+        crowding_aversion = self._clamp_float(
+            (1.0 - style_weight) * crowding_aversion + style_weight * style_crowd,
+            0.0,
+            1.5,
+        )
+        small_cap_pressure = self._clamp_float(
+            (1.0 - style_weight) * small_cap_pressure + style_weight * style_small_cap_pressure,
+            0.0,
+            1.5,
+        )
+        dividend_preference = self._clamp_float(
+            (1.0 - style_weight) * dividend_preference + style_weight * style_dividend,
+            0.0,
+            1.5,
+        )
+
+        return {
+            "valuation_pressure": float(valuation_pressure),
+            "momentum_preference": float(momentum_preference),
+            "crowding_aversion": float(crowding_aversion),
+            "small_cap_pressure": float(small_cap_pressure),
+            "dividend_preference": float(dividend_preference),
+            "style_weight": float(style_weight),
+            "style_signal_strength": float(style_strength),
+            "style_sample_size": float(style_state.get("style_sample_size", 0.0)),
+            "value_preference": float(style_state.get("value_preference", 0.50)),
+            "size_preference": float(style_state.get("size_preference", 0.50)),
+        }
+
     def run_review(self, as_of: date) -> ReviewDelta:
         start = self._review_backtest_start(as_of=as_of)
         bt = self.run_backtest(start=start, end=as_of)
@@ -2513,6 +3083,18 @@ class LieEngine:
             factor_contrib=factor_contrib,
             thresholds=thresholds,
         )
+        style_diag = self._review_style_diagnostics(start=start, as_of=as_of)
+        review.style_diagnostics = style_diag
+        review.notes.append(
+            "style_diag="
+            + f"active={bool(style_diag.get('active', False))}; "
+            + f"dominant={style_diag.get('dominant_style', 'neutral')}; "
+            + f"dir={style_diag.get('dominant_direction', 'na')}; "
+            + f"drift={float(style_diag.get('style_drift_score', 0.0)):.4f}; "
+            + f"sample_days={int(style_diag.get('sample_days', 0))}"
+        )
+        if bool(style_diag.get("active", False)) and style_diag.get("alerts"):
+            review.notes.append("style_diag_alerts=" + ",".join(str(x) for x in style_diag.get("alerts", [])))
         strategy_candidate = self._load_latest_strategy_candidate(as_of=as_of)
         strategy_lab_autorun: dict[str, Any] = {}
         if not strategy_candidate and bool(self.settings.validation.get("review_autorun_strategy_lab_if_missing", False)):
@@ -2548,6 +3130,13 @@ class LieEngine:
             current_params=params,
             mode_health=mode_health,
         )
+        style_drift_guard = self._apply_style_drift_adaptive_guard(
+            review=review,
+            current_params=params,
+            style_diag=style_diag,
+        )
+        style_diag["adaptive_guard"] = style_drift_guard
+        review.style_diagnostics = style_diag
         review.notes.append(
             "mode_health="
             + f"runtime_mode={runtime_mode}; passed={mode_health.get('passed', True)}; "
@@ -2583,7 +3172,9 @@ class LieEngine:
         audit_payload["mode_history"] = mode_history
         audit_payload["mode_health"] = mode_health
         audit_payload["mode_adaptive"] = mode_adaptive
+        audit_payload["style_drift_guard"] = style_drift_guard
         audit_payload["slot_regime_tuning"] = slot_regime_tuning
+        audit_payload["style_diagnostics"] = style_diag
         audit_payload["generated_at"] = datetime.now().isoformat()
         write_markdown(delta_path, yaml.safe_dump(audit_payload, allow_unicode=True, sort_keys=False))
 
@@ -2609,6 +3200,13 @@ class LieEngine:
                 "mode_adaptive_applied": bool(mode_adaptive.get("applied", False)),
                 "mode_adaptive_direction": str(mode_adaptive.get("direction", "none")),
                 "slot_regime_tuning_changed": bool(slot_regime_tuning.get("changed", False)),
+                "style_drift_score": float(style_diag.get("style_drift_score", 0.0)),
+                "style_drift_alerts": int(
+                    sum(1 for x in style_diag.get("alerts", []) if str(x).startswith("style_drift:"))
+                ),
+                "style_drift_guard_applied": bool(style_drift_guard.get("applied", False)),
+                "style_drift_guard_blocked": bool(style_drift_guard.get("blocked", False)),
+                "style_drift_guard_intensity": float(style_drift_guard.get("intensity", 0.0)),
             },
             checks={
                 "positive_window_ratio": float(bt.positive_window_ratio),

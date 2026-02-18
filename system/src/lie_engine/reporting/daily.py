@@ -115,8 +115,17 @@ def render_daily_briefing(
         lines.append("- 今日无可交易信号（或处于保护模式）")
     else:
         for s in signals:
+            factor_txt = ""
+            if float(getattr(s, "factor_exposure_score", 0.0)) > 0:
+                factor_txt = (
+                    f" | 因子风险 `{float(getattr(s, 'factor_exposure_score', 0.0)):.2f}`"
+                    + f" 惩罚 `{float(getattr(s, 'factor_penalty', 0.0)):.1f}`"
+                )
+                flags = getattr(s, "factor_flags", [])
+                if isinstance(flags, list) and flags:
+                    factor_txt += f" ({','.join(str(x) for x in flags)})"
             lines.append(
-                f"- `{s.symbol}` {s.side.value} | 位置 `{s.position_score:.1f}` 结构 `{s.structure_score:.1f}` 动能 `{s.momentum_score:.1f}` | 置信 `{s.confidence:.1f}%` {_signal_emoji(s.confidence)} | 凸性 `{s.convexity_ratio:.2f}`"
+                f"- `{s.symbol}` {s.side.value} | 位置 `{s.position_score:.1f}` 结构 `{s.structure_score:.1f}` 动能 `{s.momentum_score:.1f}` | 置信 `{s.confidence:.1f}%` {_signal_emoji(s.confidence)} | 凸性 `{s.convexity_ratio:.2f}`{factor_txt}"
             )
     lines.append("")
 

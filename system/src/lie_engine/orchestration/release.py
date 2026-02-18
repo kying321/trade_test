@@ -541,6 +541,8 @@ class ReleaseOrchestrator:
         drift_active = bool(mode_drift.get("active", False))
         drift_checks = mode_drift.get("checks", {}) if isinstance(mode_drift.get("checks", {}), dict) else {}
         mode_drift_ok = all(bool(v) for v in drift_checks.values()) if drift_active else True
+        style_drift = self._style_drift_metrics(as_of=as_of)
+        style_drift_ok = bool(style_drift.get("gate_ok", True))
         stress_matrix_trend = self._stress_matrix_trend_metrics(as_of=as_of)
         stress_active = bool(stress_matrix_trend.get("active", False))
         stress_checks = (
@@ -640,6 +642,7 @@ class ReleaseOrchestrator:
             "temporal_audit_ok": temporal_audit_ok,
             "slot_anomaly_ok": slot_anomaly_ok,
             "mode_drift_ok": mode_drift_ok,
+            "style_drift_ok": style_drift_ok,
             "stress_matrix_trend_ok": stress_matrix_trend_ok,
             "stress_autorun_history_ok": stress_autorun_history_ok,
             "stress_autorun_adaptive_ok": stress_autorun_adaptive_ok,
@@ -662,6 +665,7 @@ class ReleaseOrchestrator:
             temporal_audit=temporal_audit,
             slot_anomaly=slot_anomaly,
             mode_drift=mode_drift,
+            style_drift=style_drift,
             reconcile_drift=reconcile_drift,
         )
         checks["rollback_anchor_ready"] = bool(rollback_recommendation.get("anchor_ready", True))
@@ -683,6 +687,7 @@ class ReleaseOrchestrator:
             "temporal_audit": temporal_audit,
             "slot_anomaly": slot_anomaly,
             "mode_drift": mode_drift,
+            "style_drift": style_drift,
             "stress_matrix_trend": stress_matrix_trend,
             "stress_autorun_history": stress_autorun_history,
             "stress_autorun_adaptive": stress_autorun_adaptive,
@@ -4176,6 +4181,7 @@ class ReleaseOrchestrator:
         temporal_audit: dict[str, Any],
         slot_anomaly: dict[str, Any],
         mode_drift: dict[str, Any],
+        style_drift: dict[str, Any],
         reconcile_drift: dict[str, Any],
     ) -> dict[str, Any]:
         score = 0
@@ -4202,6 +4208,9 @@ class ReleaseOrchestrator:
         if not bool(checks.get("mode_drift_ok", True)):
             score += 2
             reason_codes.append("mode_drift")
+        if not bool(checks.get("style_drift_ok", True)):
+            score += 1
+            reason_codes.append("style_drift")
         if not bool(checks.get("reconcile_drift_ok", True)):
             score += 2
             reason_codes.append("reconcile_drift")
@@ -4247,6 +4256,7 @@ class ReleaseOrchestrator:
         temporal_alerts = temporal_audit.get("alerts", []) if isinstance(temporal_audit.get("alerts", []), list) else []
         slot_alerts = slot_anomaly.get("alerts", []) if isinstance(slot_anomaly.get("alerts", []), list) else []
         drift_alerts = mode_drift.get("alerts", []) if isinstance(mode_drift.get("alerts", []), list) else []
+        style_alerts = style_drift.get("alerts", []) if isinstance(style_drift.get("alerts", []), list) else []
         reconcile_alerts = (
             reconcile_drift.get("alerts", []) if isinstance(reconcile_drift.get("alerts", []), list) else []
         )
@@ -4265,6 +4275,7 @@ class ReleaseOrchestrator:
             + list(temporal_alerts[:2])
             + list(slot_alerts[:2])
             + list(drift_alerts[:2])
+            + list(style_alerts[:2])
             + list(reconcile_alerts[:2]),
         }
 
@@ -4325,6 +4336,116 @@ class ReleaseOrchestrator:
                 "profit_factor": float(pf),
             }
         return out
+
+    def _style_drift_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = bool(val.get("style_drift_gate_enabled", True))
+        require_active = bool(val.get("style_drift_gate_require_active", False))
+        allow_alerts = bool(val.get("style_drift_gate_allow_alerts", True))
+        max_alerts = max(0, int(self._safe_float(val.get("style_drift_gate_max_alerts", 0), 0)))
+        max_ratio = max(0.0, self._safe_float(val.get("style_drift_gate_max_ratio", 2.0), 2.0))
+        hard_fail = bool(val.get("style_drift_gate_hard_fail", True))
+        lookback_days = max(1, int(self._safe_float(val.get("style_drift_gate_lookback_days", 7), 7)))
+
+        if not enabled:
+            return {
+                "active": False,
+                "enabled": False,
+                "checks": {},
+                "thresholds": {},
+                "metrics": {},
+                "alerts": [],
+                "gate_ok": True,
+                "monitor_failed": False,
+                "hard_fail": bool(hard_fail),
+                "source_date": "",
+            }
+
+        review_payload: dict[str, Any] = {}
+        source_date = ""
+        for i in range(lookback_days):
+            day = as_of - timedelta(days=i)
+            p = self.output_dir / "review" / f"{day.isoformat()}_param_delta.yaml"
+            if not p.exists():
+                continue
+            try:
+                raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            except Exception:
+                raw = {}
+            if isinstance(raw, dict):
+                review_payload = raw
+                source_date = day.isoformat()
+                break
+
+        style_diag = (
+            review_payload.get("style_diagnostics", {})
+            if isinstance(review_payload.get("style_diagnostics", {}), dict)
+            else {}
+        )
+        has_diag = bool(style_diag)
+        monitor_active = bool(has_diag or require_active)
+
+        drift_score = self._safe_float(style_diag.get("style_drift_score", 0.0), 0.0)
+        drift_gap_max = self._safe_float(
+            style_diag.get("drift_gap_max", val.get("style_drift_gap_max", 0.01)),
+            self._safe_float(val.get("style_drift_gap_max", 0.01), 0.01),
+        )
+        if drift_gap_max <= 0.0:
+            drift_gap_max = self._safe_float(val.get("style_drift_gap_max", 0.01), 0.01)
+            if drift_gap_max <= 0.0:
+                drift_gap_max = 0.01
+        drift_ratio = float(drift_score / max(drift_gap_max, 1e-9))
+        drift_alerts = [str(x) for x in style_diag.get("alerts", []) if str(x).startswith("style_drift:")]
+        drift_alert_count = int(len(drift_alerts))
+        diag_active = bool(style_diag.get("active", False))
+
+        checks = {
+            "diag_present_ok": bool((not require_active) or has_diag),
+            "active_ok": bool((not require_active) or diag_active),
+            "drift_ratio_ok": bool((not has_diag) or (drift_ratio <= max_ratio)),
+            "alerts_ok": bool((not has_diag) or allow_alerts or (drift_alert_count <= max_alerts)),
+        }
+        base_ok = bool(all(bool(v) for v in checks.values()))
+        monitor_failed = bool(monitor_active and (not base_ok))
+        gate_ok = bool(base_ok) if hard_fail else True
+
+        alerts: list[str] = []
+        if monitor_active:
+            if not bool(checks.get("diag_present_ok", True)):
+                alerts.append("style_drift_gate_missing_diagnostics")
+            if not bool(checks.get("active_ok", True)):
+                alerts.append("style_drift_gate_inactive")
+            if not bool(checks.get("drift_ratio_ok", True)):
+                alerts.append("style_drift_gate_ratio_high")
+            if not bool(checks.get("alerts_ok", True)):
+                alerts.append("style_drift_gate_alert_count_high")
+
+        return {
+            "active": bool(monitor_active),
+            "enabled": True,
+            "checks": checks,
+            "thresholds": {
+                "style_drift_gate_require_active": bool(require_active),
+                "style_drift_gate_allow_alerts": bool(allow_alerts),
+                "style_drift_gate_max_alerts": int(max_alerts),
+                "style_drift_gate_max_ratio": float(max_ratio),
+                "style_drift_gate_hard_fail": bool(hard_fail),
+                "style_drift_gate_lookback_days": int(lookback_days),
+            },
+            "metrics": {
+                "drift_score": float(drift_score),
+                "drift_gap_max": float(drift_gap_max),
+                "drift_ratio": float(drift_ratio),
+                "drift_alert_count": int(drift_alert_count),
+                "diag_active": bool(diag_active),
+            },
+            "alerts": alerts,
+            "source_date": str(source_date),
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "hard_fail": bool(hard_fail),
+            "style_drift_alerts": drift_alerts[:20],
+        }
 
     def _mode_drift_metrics(self, *, as_of: date) -> dict[str, Any]:
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
@@ -5196,6 +5317,10 @@ class ReleaseOrchestrator:
         drift_active = bool(mode_drift.get("active", False))
         drift_checks = mode_drift.get("checks", {}) if isinstance(mode_drift.get("checks", {}), dict) else {}
         drift_all_ok = all(bool(v) for v in drift_checks.values()) if drift_active else True
+        style_drift = gate.get("style_drift", {}) if isinstance(gate.get("style_drift", {}), dict) else {}
+        style_drift_active = bool(style_drift.get("active", False))
+        style_drift_checks = style_drift.get("checks", {}) if isinstance(style_drift.get("checks", {}), dict) else {}
+        style_drift_all_ok = bool(style_drift.get("gate_ok", True))
         stress_matrix_trend = (
             gate.get("stress_matrix_trend", {}) if isinstance(gate.get("stress_matrix_trend", {}), dict) else {}
         )
@@ -5290,6 +5415,7 @@ class ReleaseOrchestrator:
             or (temporal_active and not temporal_all_ok)
             or (slot_active and not slot_all_ok)
             or (drift_active and not drift_all_ok)
+            or (style_drift_active and not style_drift_all_ok)
             or (stress_active and not stress_all_ok)
             or (stress_auto_adaptive_active and not stress_auto_adaptive_all_ok)
             or (stress_reason_drift_active and not stress_reason_drift_all_ok)
@@ -5305,6 +5431,7 @@ class ReleaseOrchestrator:
             or (not temporal_active)
             or (not slot_active)
             or (not drift_active)
+            or (not style_drift_active)
             or (not stress_active)
             or (not stress_auto_adaptive_active)
             or (not stress_reason_drift_active)
@@ -5330,6 +5457,7 @@ class ReleaseOrchestrator:
             "temporal_audit": temporal_audit,
             "slot_anomaly": slot_anomaly,
             "mode_drift": mode_drift,
+            "style_drift": style_drift,
             "stress_matrix_trend": stress_matrix_trend,
             "stress_autorun_history": stress_autorun_history,
             "stress_autorun_adaptive": stress_autorun_adaptive,
@@ -5517,6 +5645,31 @@ class ReleaseOrchestrator:
         )
         lines.append(f"- alerts: `{', '.join(mode_drift.get('alerts', [])) if mode_drift.get('alerts') else 'NONE'}`")
         for k, v in drift_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## 风格漂移门禁")
+        lines.append(f"- active: `{style_drift.get('active', False)}`")
+        lines.append(
+            f"- source_date: `{str(style_drift.get('source_date', '') or 'N/A')}` | "
+            + f"hard_fail=`{bool(style_drift.get('hard_fail', False))}`"
+        )
+        style_metrics = style_drift.get("metrics", {}) if isinstance(style_drift.get("metrics", {}), dict) else {}
+        lines.append(
+            "- drift(score/gap/ratio): "
+            + f"`{self._safe_float(style_metrics.get('drift_score', 0.0), 0.0):.5f}` / "
+            + f"`{self._safe_float(style_metrics.get('drift_gap_max', 0.0), 0.0):.5f}` / "
+            + f"`{self._safe_float(style_metrics.get('drift_ratio', 0.0), 0.0):.3f}`"
+        )
+        lines.append(
+            "- alerts(count/monitor_failed/gate_ok): "
+            + f"`{int(self._safe_float(style_metrics.get('drift_alert_count', 0), 0))}` / "
+            + f"`{bool(style_drift.get('monitor_failed', False))}` / "
+            + f"`{bool(style_drift.get('gate_ok', True))}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(style_drift.get('alerts', [])) if style_drift.get('alerts') else 'NONE'}`"
+        )
+        for k, v in style_drift_checks.items():
             lines.append(f"- `{k}`: `{v}`")
         lines.append("")
         lines.append("## Stress Matrix 趋势")
@@ -5912,6 +6065,7 @@ class ReleaseOrchestrator:
         temporal_audit: dict[str, Any] | None = None,
         slot_anomaly: dict[str, Any] | None = None,
         mode_drift: dict[str, Any] | None = None,
+        style_drift: dict[str, Any] | None = None,
         stress_matrix_trend: dict[str, Any] | None = None,
         reconcile_drift: dict[str, Any] | None = None,
         rollback_recommendation: dict[str, Any] | None = None,
@@ -5973,6 +6127,15 @@ class ReleaseOrchestrator:
                     "code": "MODE_DRIFT",
                     "message": "实盘与回测模式表现出现漂移",
                     "action": "先核验 live/backtest 口径一致性，再收紧该模式参数并复跑近窗回测。",
+                }
+            )
+        if not bool(checks.get("style_drift_ok", True)):
+            defects.append(
+                {
+                    "category": "model",
+                    "code": "STYLE_DRIFT_GATE",
+                    "message": "风格漂移门禁触发",
+                    "action": "先收敛信号门槛与交易频次，再核验风格归因样本与漂移阈值配置。",
                 }
             )
         if not bool(checks.get("temporal_audit_ok", True)):
@@ -6392,6 +6555,44 @@ class ReleaseOrchestrator:
                         "message": "模式盈亏比偏离回测基线",
                         "action": "复核止损/止盈执行偏差与行情跳空影响，必要时降低模式风险乘子。",
                         "modes": offenders[:10],
+                    }
+                )
+
+        style_payload = style_drift if isinstance(style_drift, dict) else {}
+        style_active = bool(style_payload.get("active", False))
+        style_checks = style_payload.get("checks", {}) if isinstance(style_payload.get("checks", {}), dict) else {}
+        style_metrics = style_payload.get("metrics", {}) if isinstance(style_payload.get("metrics", {}), dict) else {}
+        if style_active:
+            if not bool(style_checks.get("active_ok", True)):
+                defects.append(
+                    {
+                        "category": "model",
+                        "code": "STYLE_DRIFT_INACTIVE",
+                        "message": "风格漂移监控样本未激活（active=false）",
+                        "action": "补齐风格分桶样本并核验截止日窗口后再恢复风格门禁。",
+                    }
+                )
+            if not bool(style_checks.get("drift_ratio_ok", True)):
+                defects.append(
+                    {
+                        "category": "model",
+                        "code": "STYLE_DRIFT_RATIO",
+                        "message": (
+                            "风格漂移比例超限："
+                            + f"{self._safe_float(style_metrics.get('drift_ratio', 0.0), 0.0):.3f} > "
+                            + f"{self._safe_float((style_payload.get('thresholds', {}) or {}).get('style_drift_gate_max_ratio', 0.0), 0.0):.3f}"
+                        ),
+                        "action": "按漂移强度分段收敛参数，并复核 style_drift_gap_max 与 lookback 配置。",
+                    }
+                )
+            if not bool(style_checks.get("alerts_ok", True)):
+                defects.append(
+                    {
+                        "category": "model",
+                        "code": "STYLE_DRIFT_ALERTS",
+                        "message": "风格漂移告警数超出门禁阈值",
+                        "action": "优先排查 dominant style 切换与分桶收益稳定性，再决定是否解除硬门禁。",
+                        "alerts": list(style_payload.get("style_drift_alerts", []))[:10],
                     }
                 )
 
@@ -7022,6 +7223,12 @@ class ReleaseOrchestrator:
                 "- 模式漂移: "
                 + f"active={drift_payload.get('active', False)}, alerts={drift_payload.get('alerts', [])}"
             )
+        if style_payload:
+            lines.append(
+                "- 风格漂移门禁: "
+                + f"active={style_payload.get('active', False)}, alerts={style_payload.get('alerts', [])}, "
+                + f"gate_ok={style_payload.get('gate_ok', True)}"
+            )
         if stress_payload:
             lines.append(
                 "- Stress Matrix 趋势: "
@@ -7197,6 +7404,9 @@ class ReleaseOrchestrator:
             drift_checks = mode_drift.get("checks", {}) if isinstance(mode_drift.get("checks", {}), dict) else {}
             drift_active = bool(mode_drift.get("active", False))
             drift_ok = all(bool(v) for v in drift_checks.values()) if drift_active else True
+            style_drift = gate.get("style_drift", {}) if isinstance(gate.get("style_drift", {}), dict) else {}
+            style_drift_active = bool(style_drift.get("active", False))
+            style_drift_ok = bool(style_drift.get("gate_ok", True))
             stress_matrix_trend = (
                 gate.get("stress_matrix_trend", {})
                 if isinstance(gate.get("stress_matrix_trend", {}), dict)
@@ -7365,6 +7575,9 @@ class ReleaseOrchestrator:
                     "mode_drift_active": drift_active,
                     "mode_drift_ok": drift_ok,
                     "mode_drift_alerts": list(mode_drift.get("alerts", [])),
+                    "style_drift_active": style_drift_active,
+                    "style_drift_ok": style_drift_ok,
+                    "style_drift_alerts": list(style_drift.get("alerts", [])),
                     "stress_matrix_trend_active": stress_active,
                     "stress_matrix_trend_ok": stress_ok,
                     "stress_matrix_trend_alerts": list(stress_matrix_trend.get("alerts", [])),
@@ -7423,6 +7636,7 @@ class ReleaseOrchestrator:
                 temporal_audit=temporal_audit,
                 slot_anomaly=slot_anomaly,
                 mode_drift=mode_drift,
+                style_drift=style_drift,
                 stress_matrix_trend=stress_matrix_trend,
                 reconcile_drift=reconcile_drift,
                 rollback_recommendation=rollback_rec,

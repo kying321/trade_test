@@ -67,6 +67,25 @@ class ConfigValidationTests(unittest.TestCase):
                     "mode_drift_win_rate_max_gap": 0.12,
                     "mode_drift_profit_factor_max_gap": 0.40,
                     "mode_drift_focus_runtime_mode_only": True,
+                    "style_attribution_lookback_days": 180,
+                    "style_drift_window_days": 20,
+                    "style_drift_min_sample_days": 20,
+                    "style_drift_gap_max": 0.01,
+                    "style_drift_block_on_alert": False,
+                    "style_drift_adaptive_enabled": True,
+                    "style_drift_adaptive_confidence_step_max": 6.0,
+                    "style_drift_adaptive_trade_reduction_max": 2,
+                    "style_drift_adaptive_hold_reduction_max": 2,
+                    "style_drift_adaptive_trigger_ratio": 1.0,
+                    "style_drift_adaptive_ratio_for_max": 2.0,
+                    "style_drift_adaptive_block_ratio": 1.8,
+                    "style_drift_gate_enabled": True,
+                    "style_drift_gate_require_active": False,
+                    "style_drift_gate_allow_alerts": True,
+                    "style_drift_gate_max_alerts": 0,
+                    "style_drift_gate_max_ratio": 2.0,
+                    "style_drift_gate_hard_fail": True,
+                    "style_drift_gate_lookback_days": 7,
                     "ops_temporal_audit_enabled": True,
                     "ops_temporal_audit_lookback_days": 45,
                     "ops_temporal_audit_min_samples": 1,
@@ -274,6 +293,25 @@ class ConfigValidationTests(unittest.TestCase):
                     "mode_drift_win_rate_max_gap": 1.2,
                     "mode_drift_profit_factor_max_gap": 0.0,
                     "mode_drift_focus_runtime_mode_only": "yes",
+                    "style_attribution_lookback_days": 1,
+                    "style_drift_window_days": 1,
+                    "style_drift_min_sample_days": 2,
+                    "style_drift_gap_max": -0.1,
+                    "style_drift_block_on_alert": "yes",
+                    "style_drift_adaptive_enabled": "yes",
+                    "style_drift_adaptive_confidence_step_max": -0.1,
+                    "style_drift_adaptive_trade_reduction_max": -1,
+                    "style_drift_adaptive_hold_reduction_max": -1,
+                    "style_drift_adaptive_trigger_ratio": 0.0,
+                    "style_drift_adaptive_ratio_for_max": 0.0,
+                    "style_drift_adaptive_block_ratio": 0.8,
+                    "style_drift_gate_enabled": "yes",
+                    "style_drift_gate_require_active": "yes",
+                    "style_drift_gate_allow_alerts": "yes",
+                    "style_drift_gate_max_alerts": -1,
+                    "style_drift_gate_max_ratio": 0.0,
+                    "style_drift_gate_hard_fail": "yes",
+                    "style_drift_gate_lookback_days": 0,
                     "ops_temporal_audit_enabled": "yes",
                     "ops_temporal_audit_lookback_days": 0,
                     "ops_temporal_audit_min_samples": 0,
@@ -458,6 +496,25 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.mode_drift_win_rate_max_gap", paths)
         self.assertIn("validation.mode_drift_profit_factor_max_gap", paths)
         self.assertIn("validation.mode_drift_focus_runtime_mode_only", paths)
+        self.assertIn("validation.style_attribution_lookback_days", paths)
+        self.assertIn("validation.style_drift_window_days", paths)
+        self.assertIn("validation.style_drift_min_sample_days", paths)
+        self.assertIn("validation.style_drift_gap_max", paths)
+        self.assertIn("validation.style_drift_block_on_alert", paths)
+        self.assertIn("validation.style_drift_adaptive_enabled", paths)
+        self.assertIn("validation.style_drift_adaptive_confidence_step_max", paths)
+        self.assertIn("validation.style_drift_adaptive_trade_reduction_max", paths)
+        self.assertIn("validation.style_drift_adaptive_hold_reduction_max", paths)
+        self.assertIn("validation.style_drift_adaptive_trigger_ratio", paths)
+        self.assertIn("validation.style_drift_adaptive_ratio_for_max", paths)
+        self.assertIn("validation.style_drift_adaptive_block_ratio", paths)
+        self.assertIn("validation.style_drift_gate_enabled", paths)
+        self.assertIn("validation.style_drift_gate_require_active", paths)
+        self.assertIn("validation.style_drift_gate_allow_alerts", paths)
+        self.assertIn("validation.style_drift_gate_max_alerts", paths)
+        self.assertIn("validation.style_drift_gate_max_ratio", paths)
+        self.assertIn("validation.style_drift_gate_hard_fail", paths)
+        self.assertIn("validation.style_drift_gate_lookback_days", paths)
         self.assertIn("validation.ops_temporal_audit_enabled", paths)
         self.assertIn("validation.ops_temporal_audit_lookback_days", paths)
         self.assertIn("validation.ops_temporal_audit_min_samples", paths)

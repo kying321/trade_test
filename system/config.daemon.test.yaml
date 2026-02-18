@@ -69,6 +69,25 @@ validation:
   mode_drift_win_rate_max_gap: 0.15
   mode_drift_profit_factor_max_gap: 0.50
   mode_drift_focus_runtime_mode_only: true
+  style_attribution_lookback_days: 120
+  style_drift_window_days: 15
+  style_drift_min_sample_days: 10
+  style_drift_gap_max: 0.012
+  style_drift_block_on_alert: false
+  style_drift_adaptive_enabled: true
+  style_drift_adaptive_confidence_step_max: 5.0
+  style_drift_adaptive_trade_reduction_max: 2
+  style_drift_adaptive_hold_reduction_max: 1
+  style_drift_adaptive_trigger_ratio: 1.0
+  style_drift_adaptive_ratio_for_max: 2.0
+  style_drift_adaptive_block_ratio: 1.7
+  style_drift_gate_enabled: true
+  style_drift_gate_require_active: false
+  style_drift_gate_allow_alerts: true
+  style_drift_gate_max_alerts: 0
+  style_drift_gate_max_ratio: 2.0
+  style_drift_gate_hard_fail: true
+  style_drift_gate_lookback_days: 5
   ops_temporal_audit_enabled: true
   ops_temporal_audit_lookback_days: 45
   ops_temporal_audit_min_samples: 1

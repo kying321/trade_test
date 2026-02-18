@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lie_engine.engine import LieEngine
 from lie_engine.models import BacktestResult, ReviewDelta
+from tests.helpers import make_bars, make_multi_symbol_bars
 
 
 class EngineIntegrationTests(unittest.TestCase):
@@ -31,6 +32,7 @@ class EngineIntegrationTests(unittest.TestCase):
         cfg_data["validation"]["review_autorun_strategy_lab_if_missing"] = False
         cfg_data["validation"]["use_mode_profiles"] = False
         cfg_data["validation"]["review_backtest_lookback_days"] = 540
+        cfg_data["validation"]["style_drift_adaptive_enabled"] = False
         cfg_path = tmp_root / "config.yaml"
         cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
         return LieEngine(config_path=cfg_path), tmp_root
@@ -51,6 +53,28 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue((tmp_root / "output" / "artifacts" / "manifests" / "eod_2026-02-13.json").exists())
         self.assertIn("mode_feedback", out)
         self.assertIn("broker_snapshot", out)
+
+    def test_market_factor_state_includes_cross_section_style(self) -> None:
+        eng, _ = self._make_engine()
+        bars = make_multi_symbol_bars()
+        as_of = pd.to_datetime(bars["ts"]).max().date()
+        regime = eng._regime_from_bars(as_of=as_of, bars=bars)
+        state = eng._market_factor_state(
+            sentiment={
+                "pcr_50etf": 0.95,
+                "iv_50etf": 0.21,
+                "northbound_netflow": 1.5e8,
+                "margin_balance_chg": 0.002,
+            },
+            regime=regime,
+            bars=bars,
+        )
+        self.assertIn("value_preference", state)
+        self.assertIn("size_preference", state)
+        self.assertIn("dividend_preference", state)
+        self.assertGreaterEqual(float(state.get("style_sample_size", 0.0)), 4.0)
+        self.assertGreaterEqual(float(state.get("style_weight", 0.0)), 0.2)
+        self.assertLessEqual(float(state.get("style_weight", 0.0)), 0.55)
 
     def test_mode_history_stats_aggregates_backtest_manifests(self) -> None:
         eng, tmp_root = self._make_engine()
@@ -224,6 +248,120 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("mode_adaptive", payload)
         self.assertTrue(bool(payload.get("mode_adaptive", {}).get("applied", False)))
         self.assertEqual(str(payload.get("mode_adaptive", {}).get("direction", "")), "expand")
+
+    def test_run_review_emits_style_diagnostics(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+
+        eng.run_backtest = lambda start, end: BacktestResult(  # type: ignore[method-assign]
+            start=start,
+            end=end,
+            total_return=0.12,
+            annual_return=0.06,
+            max_drawdown=0.10,
+            win_rate=0.52,
+            profit_factor=1.3,
+            expectancy=0.01,
+            trades=120,
+            violations=0,
+            positive_window_ratio=0.85,
+            equity_curve=[],
+            by_asset={},
+        )
+        eng._estimate_factor_contrib_120d = lambda as_of: {  # type: ignore[method-assign]
+            "macro": 0.2,
+            "industry": 0.2,
+            "news": 0.2,
+            "sentiment": 0.2,
+            "fundamental": 0.1,
+            "technical": 0.1,
+        }
+
+        symbols = ["300750", "002050", "603026", "000830", "600519", "601318", "000001", "600000"]
+        frames = []
+        for i, symbol in enumerate(symbols):
+            frame = make_bars(symbol, n=280, trend=0.03 + 0.01 * i, seed=100 + i)
+            frame["market_cap"] = float((i + 1) * 1e10)
+            frame["pe_ttm"] = float(10 + 5 * i)
+            frame["dividend_yield"] = float(0.005 * i)
+            frames.append(frame)
+        bars = pd.concat(frames, ignore_index=True)
+        eng._run_ingestion_range = lambda start, end, symbols: (bars, None)  # type: ignore[method-assign]
+
+        review = eng.run_review(d)
+        self.assertIn("style_spreads", review.style_diagnostics)
+        self.assertIn("style_drift_score", review.style_diagnostics)
+        self.assertTrue(any("style_diag=" in n for n in review.notes))
+
+        delta_path = tmp_root / "output" / "review" / "2026-02-13_param_delta.yaml"
+        payload = yaml.safe_load(delta_path.read_text(encoding="utf-8"))
+        self.assertIn("style_diagnostics", payload)
+        self.assertIn("style_spreads", payload.get("style_diagnostics", {}))
+
+    def test_run_review_applies_style_drift_adaptive_guard(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"].update(
+            {
+                "style_drift_adaptive_enabled": True,
+                "style_drift_adaptive_confidence_step_max": 6.0,
+                "style_drift_adaptive_trade_reduction_max": 2,
+                "style_drift_adaptive_hold_reduction_max": 2,
+                "style_drift_adaptive_trigger_ratio": 1.0,
+                "style_drift_adaptive_ratio_for_max": 2.0,
+                "style_drift_adaptive_block_ratio": 1.8,
+            }
+        )
+        eng._resolve_review_runtime_mode = lambda start, as_of: "swing"  # type: ignore[method-assign]
+        eng._mode_history_stats = lambda as_of: {  # type: ignore[method-assign]
+            "as_of": as_of.isoformat(),
+            "lookback_days": 365,
+            "modes": {},
+        }
+        eng._review_style_diagnostics = lambda start, as_of: {  # type: ignore[method-assign]
+            "active": True,
+            "drift_gap_max": 0.01,
+            "style_drift_score": 0.02,
+            "alerts": ["style_drift:momentum"],
+            "block_on_alert": False,
+        }
+        eng.run_backtest = lambda start, end: BacktestResult(  # type: ignore[method-assign]
+            start=start,
+            end=end,
+            total_return=0.12,
+            annual_return=0.06,
+            max_drawdown=0.10,
+            win_rate=0.52,
+            profit_factor=1.3,
+            expectancy=0.01,
+            trades=120,
+            violations=0,
+            positive_window_ratio=0.85,
+            equity_curve=[],
+            by_asset={},
+        )
+        eng._estimate_factor_contrib_120d = lambda as_of: {  # type: ignore[method-assign]
+            "macro": 0.2,
+            "industry": 0.2,
+            "news": 0.2,
+            "sentiment": 0.2,
+            "fundamental": 0.1,
+            "technical": 0.1,
+        }
+
+        review = eng.run_review(d)
+        self.assertIn("STYLE_DRIFT_SEVERE", review.defects)
+        self.assertFalse(bool(review.pass_gate))
+        self.assertGreater(float(review.parameter_changes.get("signal_confidence_min", 0.0)), 60.0)
+        self.assertLessEqual(float(review.parameter_changes.get("max_daily_trades", 9.0)), 1.0)
+        self.assertLess(float(review.parameter_changes.get("hold_days", 99.0)), 5.0)
+        self.assertTrue(any("style_drift_guard=" in n for n in review.notes))
+
+        delta_path = tmp_root / "output" / "review" / "2026-02-13_param_delta.yaml"
+        payload = yaml.safe_load(delta_path.read_text(encoding="utf-8"))
+        self.assertIn("style_drift_guard", payload)
+        self.assertTrue(bool(payload.get("style_drift_guard", {}).get("blocked", False)))
 
     def test_run_eod_blocks_new_positions_under_major_event_window(self) -> None:
         eng, _ = self._make_engine()
@@ -543,6 +681,8 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("passed", gate)
         self.assertIn("slot_anomaly", gate)
         self.assertIn("reconcile_drift", gate)
+        self.assertIn("style_drift", gate)
+        self.assertIn("style_drift_ok", gate["checks"])
         self.assertIn("rollback_recommendation", gate)
         self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_gate_report.json").exists())
 
