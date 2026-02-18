@@ -1,17 +1,23 @@
 [
   {
-    "symbol": "000001",
-    "side": "SHORT",
-    "regime": "震荡",
-    "position_score": 5.0,
-    "structure_score": 4.0,
-    "momentum_score": 2.0,
-    "confidence": 78.57142857142857,
-    "convexity_ratio": 3.1999999999999953,
-    "entry_price": 56.6035789005079,
-    "stop_price": 58.186732880975214,
-    "target_price": 51.537486163012495,
+    "symbol": "600519",
+    "side": "LONG",
+    "regime": "强趋势",
+    "position_score": 3.0,
+    "structure_score": 5.0,
+    "momentum_score": 3.0,
+    "confidence": 60.07106436456296,
+    "convexity_ratio": 3.0248214911203966,
+    "entry_price": 115.49013830372746,
+    "stop_price": 112.79866963749406,
+    "target_price": 123.63135056802741,
     "can_short": false,
-    "notes": "S点触发但标的不支持直接做空，转译为减仓/平仓+指数对冲腿"
+    "factor_exposure_score": 0.43794627219901,
+    "factor_penalty": 9.63481798837822,
+    "factor_flags": [
+      "valuation_headwind",
+      "small_cap_risk"
+    ],
+    "notes": "Regime: 强趋势; target_mult=3.02 | factor=valuation_headwind,small_cap_risk"
   }
 ]

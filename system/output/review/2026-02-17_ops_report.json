@@ -1,0 +1,1653 @@
+{
+  "date": "2026-02-17",
+  "status": "red",
+  "window_days": 7,
+  "health_ratio": 1.0,
+  "gate_passed": false,
+  "latest_tests": {
+    "found": true,
+    "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/logs/tests_20260218_100550.json",
+    "returncode": 0,
+    "has_output": true
+  },
+  "scheduler": {
+    "date": null,
+    "executed_slots": [],
+    "history_count": 0
+  },
+  "state_stability": {
+    "active": true,
+    "window_days": 20,
+    "samples": 6,
+    "min_samples": 5,
+    "metrics": {
+      "switch_count": 3,
+      "switch_rate": 0.6,
+      "risk_multiplier_min": 0.85,
+      "risk_multiplier_avg": 0.9,
+      "risk_multiplier_drift": 0.0,
+      "source_confidence_min": 0.7567670195978391,
+      "source_confidence_avg": 0.7703461478837679,
+      "mode_health_fail_days": 0
+    },
+    "thresholds": {
+      "mode_switch_max_rate": 0.45,
+      "ops_risk_multiplier_floor": 0.35,
+      "ops_risk_multiplier_drift_max": 0.3,
+      "ops_source_confidence_floor": 0.75,
+      "ops_mode_health_fail_days_max": 2
+    },
+    "checks": {
+      "switch_rate_ok": false,
+      "risk_multiplier_floor_ok": true,
+      "risk_multiplier_drift_ok": true,
+      "source_confidence_floor_ok": true,
+      "mode_health_fail_days_ok": true
+    },
+    "alerts": [
+      "mode_switch_rate_high"
+    ],
+    "series": [
+      {
+        "date": "2026-02-12",
+        "runtime_mode": "swing",
+        "risk_multiplier": 0.85,
+        "source_confidence_score": 0.7567670195978391,
+        "mode_health_passed": true
+      },
+      {
+        "date": "2026-02-13",
+        "runtime_mode": "swing",
+        "risk_multiplier": 0.85,
+        "source_confidence_score": 0.7595814532283635,
+        "mode_health_passed": true
+      },
+      {
+        "date": "2026-02-14",
+        "runtime_mode": "swing",
+        "risk_multiplier": 1.0,
+        "source_confidence_score": 0.7929155222726977,
+        "mode_health_passed": true
+      },
+      {
+        "date": "2026-02-15",
+        "runtime_mode": "ultra_short",
+        "risk_multiplier": 0.85,
+        "source_confidence_score": 0.7706595460863835,
+        "mode_health_passed": true
+      },
+      {
+        "date": "2026-02-16",
+        "runtime_mode": "swing",
+        "risk_multiplier": 1.0,
+        "source_confidence_score": 0.7812627260504297,
+        "mode_health_passed": true
+      },
+      {
+        "date": "2026-02-17",
+        "runtime_mode": "ultra_short",
+        "risk_multiplier": 0.85,
+        "source_confidence_score": 0.7608906200668941,
+        "mode_health_passed": true
+      }
+    ]
+  },
+  "temporal_audit": {
+    "active": true,
+    "enabled": true,
+    "lookback_days": 45,
+    "autofix_enabled": true,
+    "samples": 3,
+    "min_samples": 1,
+    "checks": {
+      "missing_ratio_ok": false,
+      "leak_ratio_ok": true,
+      "strict_cutoff_ok": true
+    },
+    "thresholds": {
+      "ops_temporal_audit_missing_ratio_max": 0.2,
+      "ops_temporal_audit_leak_ratio_max": 0.0,
+      "ops_temporal_audit_autofix_max_writes": 3,
+      "ops_temporal_audit_autofix_fix_strict_cutoff": true,
+      "ops_temporal_audit_autofix_require_safe": true,
+      "ops_temporal_audit_autofix_patch_retention_days": 30,
+      "ops_temporal_audit_autofix_patch_checksum_index_enabled": true
+    },
+    "metrics": {
+      "missing_count": 3,
+      "missing_ratio": 1.0,
+      "leak_count": 0,
+      "leak_ratio": 0.0,
+      "strict_cutoff_disabled_count": 0,
+      "strict_cutoff_disabled_ratio": 0.0,
+      "autofix_attempted_count": 3,
+      "autofix_attempted_ratio": 1.0,
+      "autofix_applied_count": 0,
+      "autofix_applied_ratio": 0.0,
+      "autofix_failed_count": 0,
+      "autofix_failed_ratio": 0.0,
+      "autofix_skipped_count": 3,
+      "autofix_writes": 0,
+      "autofix_artifact_written": true,
+      "autofix_artifact_total_events": 3,
+      "autofix_artifact_applied_count": 0,
+      "autofix_artifact_failed_count": 0,
+      "autofix_artifact_skipped_count": 3,
+      "autofix_artifact_failed": false,
+      "autofix_artifact_retention_days": 30,
+      "autofix_artifact_rotated_out_count": 0,
+      "autofix_artifact_rotation_failed": false,
+      "autofix_artifact_checksum_index_enabled": true,
+      "autofix_artifact_checksum_index_written": true,
+      "autofix_artifact_checksum_index_entries": 1,
+      "autofix_artifact_checksum_index_failed": false
+    },
+    "alerts": [
+      "temporal_audit_missing_high"
+    ],
+    "artifacts": {
+      "autofix_patch": {
+        "written": true,
+        "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_temporal_autofix_patch.json",
+        "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_temporal_autofix_patch.md",
+        "total_events": 3,
+        "applied_count": 0,
+        "failed_count": 0,
+        "skipped_count": 3,
+        "retention_days": 30,
+        "rotated_out_count": 0,
+        "rotated_out_dates": [],
+        "rotation_failed": false,
+        "checksum_index_enabled": true,
+        "checksum_index_written": true,
+        "checksum_index_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/temporal_autofix_patch_checksum_index.json",
+        "checksum_index_entries": 1,
+        "checksum_index_failed": false,
+        "reason": ""
+      }
+    },
+    "series": [
+      {
+        "date": "2026-02-14",
+        "run_type": "strategy_lab",
+        "run_id": "20260214_132758",
+        "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_132758.json",
+        "missing": true,
+        "leak": false,
+        "strict_cutoff_enforced": true,
+        "cutoff_date": "2026-02-14",
+        "cutoff_ts": "",
+        "bar_max_ts": "",
+        "news_max_ts": "",
+        "report_max_ts": "",
+        "autofix": {
+          "enabled": true,
+          "attempted": true,
+          "applied": false,
+          "reason": "candidate_missing_or_invalid",
+          "error": "",
+          "patched_fields": [],
+          "strict_patched": false,
+          "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_132758.json",
+          "summary_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_132754/summary.json",
+          "patch_delta": {
+            "cutoff_ts": {
+              "before": "",
+              "after": "2026-02-14T23:59:59",
+              "source": "derived_cutoff_date"
+            }
+          },
+          "strict_delta": {}
+        }
+      },
+      {
+        "date": "2026-02-14",
+        "run_type": "strategy_lab",
+        "run_id": "20260214_140526",
+        "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140526.json",
+        "missing": true,
+        "leak": false,
+        "strict_cutoff_enforced": true,
+        "cutoff_date": "2026-02-14",
+        "cutoff_ts": "",
+        "bar_max_ts": "",
+        "news_max_ts": "",
+        "report_max_ts": "",
+        "autofix": {
+          "enabled": true,
+          "attempted": true,
+          "applied": false,
+          "reason": "candidate_missing_or_invalid",
+          "error": "",
+          "patched_fields": [],
+          "strict_patched": false,
+          "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140526.json",
+          "summary_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140526/summary.json",
+          "patch_delta": {
+            "cutoff_ts": {
+              "before": "",
+              "after": "2026-02-14T23:59:59",
+              "source": "derived_cutoff_date"
+            }
+          },
+          "strict_delta": {}
+        }
+      },
+      {
+        "date": "2026-02-14",
+        "run_type": "strategy_lab",
+        "run_id": "20260214_140611",
+        "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140611.json",
+        "missing": true,
+        "leak": false,
+        "strict_cutoff_enforced": true,
+        "cutoff_date": "2026-02-11",
+        "cutoff_ts": "",
+        "bar_max_ts": "",
+        "news_max_ts": "",
+        "report_max_ts": "",
+        "autofix": {
+          "enabled": true,
+          "attempted": true,
+          "applied": false,
+          "reason": "candidate_missing_or_invalid",
+          "error": "",
+          "patched_fields": [],
+          "strict_patched": false,
+          "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140611.json",
+          "summary_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140607/summary.json",
+          "patch_delta": {
+            "cutoff_ts": {
+              "before": "",
+              "after": "2026-02-11T23:59:59",
+              "source": "derived_cutoff_date"
+            }
+          },
+          "strict_delta": {}
+        }
+      }
+    ]
+  },
+  "slot_anomaly": {
+    "active": true,
+    "window_days": 7,
+    "samples": 6,
+    "min_samples": 3,
+    "metrics": {
+      "expected_slots": 24,
+      "observed_slots": 24,
+      "missing_slots": 0,
+      "anomaly_slots": 17,
+      "missing_ratio": 0.0,
+      "premarket_anomaly_ratio": 0.6666666666666666,
+      "intraday_anomaly_ratio": 0.6666666666666666,
+      "eod_anomaly_ratio": 0.8333333333333334,
+      "eod_quality_anomaly_ratio": 0.8333333333333334,
+      "eod_risk_anomaly_ratio": 0.0,
+      "eod_unknown_regime_days": 0,
+      "eod_quality_regime_bucket_breaches": 1,
+      "eod_risk_regime_bucket_breaches": 0
+    },
+    "thresholds": {
+      "ops_slot_missing_ratio_max": 0.35,
+      "ops_slot_premarket_anomaly_ratio_max": 0.5,
+      "ops_slot_intraday_anomaly_ratio_max": 0.5,
+      "ops_slot_eod_anomaly_ratio_max": 0.5,
+      "ops_slot_eod_quality_anomaly_ratio_max": 0.5,
+      "ops_slot_eod_risk_anomaly_ratio_max": 0.5,
+      "ops_slot_eod_quality_anomaly_ratio_max_by_regime": {
+        "trend": 0.55,
+        "range": 0.5,
+        "extreme_vol": 0.35
+      },
+      "ops_slot_eod_risk_anomaly_ratio_max_by_regime": {
+        "trend": 0.55,
+        "range": 0.5,
+        "extreme_vol": 0.3
+      },
+      "ops_slot_source_confidence_floor": 0.75,
+      "ops_slot_risk_multiplier_floor": 0.2,
+      "ops_slot_use_live_regime_thresholds": true,
+      "live_regime_thresholds_applied": true
+    },
+    "checks": {
+      "missing_ratio_ok": true,
+      "premarket_anomaly_ok": false,
+      "intraday_anomaly_ok": false,
+      "eod_quality_anomaly_ok": false,
+      "eod_risk_anomaly_ok": true,
+      "eod_quality_regime_bucket_ok": false,
+      "eod_risk_regime_bucket_ok": true,
+      "eod_anomaly_ok": false
+    },
+    "alerts": [
+      "slot_premarket_anomaly_high",
+      "slot_intraday_anomaly_high",
+      "slot_eod_quality_anomaly_high",
+      "slot_eod_quality_regime_bucket_anomaly_high",
+      "slot_eod_anomaly_high"
+    ],
+    "slots": {
+      "premarket": {
+        "expected": 6,
+        "observed": 6,
+        "missing": 0,
+        "anomalies": 4,
+        "anomaly_ratio": 0.6666666666666666,
+        "missing_ratio": 0.0
+      },
+      "intraday": {
+        "expected": 12,
+        "observed": 12,
+        "missing": 0,
+        "anomalies": 8,
+        "anomaly_ratio": 0.6666666666666666,
+        "missing_ratio": 0.0
+      },
+      "eod": {
+        "expected": 6,
+        "observed": 6,
+        "missing": 0,
+        "anomalies": 5,
+        "anomaly_ratio": 0.8333333333333334,
+        "missing_ratio": 0.0,
+        "quality_anomalies": 5,
+        "risk_anomalies": 0,
+        "quality_anomaly_ratio": 0.8333333333333334,
+        "risk_anomaly_ratio": 0.0,
+        "regime_buckets": {
+          "trend": {
+            "days": 0,
+            "quality_anomalies": 0,
+            "risk_anomalies": 0,
+            "quality_anomaly_ratio": 0.0,
+            "risk_anomaly_ratio": 0.0,
+            "quality_threshold": 0.55,
+            "risk_threshold": 0.55,
+            "quality_ok": true,
+            "risk_ok": true
+          },
+          "range": {
+            "days": 6,
+            "quality_anomalies": 5,
+            "risk_anomalies": 0,
+            "quality_anomaly_ratio": 0.8333333333333334,
+            "risk_anomaly_ratio": 0.0,
+            "quality_threshold": 0.5,
+            "risk_threshold": 0.5,
+            "quality_ok": false,
+            "risk_ok": true
+          },
+          "extreme_vol": {
+            "days": 0,
+            "quality_anomalies": 0,
+            "risk_anomalies": 0,
+            "quality_anomaly_ratio": 0.0,
+            "risk_anomaly_ratio": 0.0,
+            "quality_threshold": 0.35,
+            "risk_threshold": 0.3,
+            "quality_ok": true,
+            "risk_ok": true
+          }
+        }
+      }
+    },
+    "series": [
+      {
+        "date": "2026-02-12",
+        "expected": 4,
+        "observed": 4,
+        "missing": 0,
+        "anomalies": 4,
+        "alerts": [
+          "premarket:quality_failed+quality_flags",
+          "intraday:quality_flags",
+          "intraday:quality_flags",
+          "eod:quality_failed"
+        ]
+      },
+      {
+        "date": "2026-02-13",
+        "expected": 4,
+        "observed": 4,
+        "missing": 0,
+        "anomalies": 1,
+        "alerts": [
+          "eod:quality_failed"
+        ]
+      },
+      {
+        "date": "2026-02-14",
+        "expected": 4,
+        "observed": 4,
+        "missing": 0,
+        "anomalies": 0,
+        "alerts": []
+      },
+      {
+        "date": "2026-02-15",
+        "expected": 4,
+        "observed": 4,
+        "missing": 0,
+        "anomalies": 4,
+        "alerts": [
+          "premarket:quality_failed+quality_flags",
+          "intraday:quality_flags",
+          "intraday:quality_flags",
+          "eod:quality_failed"
+        ]
+      },
+      {
+        "date": "2026-02-16",
+        "expected": 4,
+        "observed": 4,
+        "missing": 0,
+        "anomalies": 4,
+        "alerts": [
+          "premarket:quality_failed+quality_flags",
+          "intraday:quality_flags",
+          "intraday:quality_flags",
+          "eod:quality_failed"
+        ]
+      },
+      {
+        "date": "2026-02-17",
+        "expected": 4,
+        "observed": 4,
+        "missing": 0,
+        "anomalies": 4,
+        "alerts": [
+          "premarket:quality_failed+quality_flags",
+          "intraday:quality_flags",
+          "intraday:quality_flags",
+          "eod:quality_failed"
+        ]
+      }
+    ]
+  },
+  "mode_drift": {
+    "active": false,
+    "window_days": 120,
+    "runtime_mode": "ultra_short",
+    "focus_runtime_mode_only": true,
+    "min_live_trades": 30,
+    "checks": {
+      "samples_ok": false,
+      "win_rate_gap_ok": true,
+      "profit_factor_gap_ok": true
+    },
+    "thresholds": {
+      "mode_drift_win_rate_max_gap": 0.12,
+      "mode_drift_profit_factor_max_gap": 0.4
+    },
+    "summary": {
+      "scope_modes": 1,
+      "compared_modes": 0,
+      "active_modes": 0
+    },
+    "alerts": [
+      "mode_drift_missing_baseline:ultra_short",
+      "mode_drift_inactive"
+    ],
+    "modes": {
+      "ultra_short": {
+        "baseline": {
+          "samples": 0,
+          "win_rate": 0.0,
+          "profit_factor": 0.0
+        },
+        "live": {
+          "trades": 0,
+          "win_rate": 0.0,
+          "profit_factor": 0.0
+        },
+        "gaps": {
+          "win_rate_abs": 0.0,
+          "profit_factor_abs": 0.0
+        },
+        "checks": {
+          "baseline_ok": false,
+          "samples_ok": false,
+          "win_rate_gap_ok": true,
+          "profit_factor_gap_ok": true
+        },
+        "active": false,
+        "reason": "missing_backtest_baseline"
+      }
+    }
+  },
+  "style_drift": {
+    "active": true,
+    "enabled": true,
+    "checks": {
+      "diag_present_ok": true,
+      "active_ok": true,
+      "drift_ratio_ok": true,
+      "alerts_ok": true
+    },
+    "thresholds": {
+      "style_drift_gate_require_active": false,
+      "style_drift_gate_allow_alerts": true,
+      "style_drift_gate_max_alerts": 0,
+      "style_drift_gate_max_ratio": 2.0,
+      "style_drift_gate_hard_fail": true,
+      "style_drift_gate_lookback_days": 7
+    },
+    "metrics": {
+      "drift_score": 0.01403754015410851,
+      "drift_gap_max": 0.01,
+      "drift_ratio": 1.403754015410851,
+      "drift_alert_count": 3,
+      "diag_active": true
+    },
+    "alerts": [],
+    "source_date": "2026-02-17",
+    "gate_ok": true,
+    "monitor_failed": false,
+    "hard_fail": true,
+    "style_drift_alerts": [
+      "style_drift:value",
+      "style_drift:size",
+      "style_drift:dividend"
+    ]
+  },
+  "stress_matrix_trend": {
+    "active": false,
+    "enabled": true,
+    "window_runs": 8,
+    "samples": 0,
+    "min_samples": 3,
+    "checks": {
+      "robustness_drop_ok": true,
+      "annual_return_drop_ok": true,
+      "drawdown_rise_ok": true,
+      "fail_ratio_ok": true
+    },
+    "thresholds": {
+      "ops_stress_matrix_robustness_drop_max": 0.15,
+      "ops_stress_matrix_annual_return_drop_max": 0.08,
+      "ops_stress_matrix_drawdown_rise_max": 0.08,
+      "ops_stress_matrix_fail_ratio_max": 0.5
+    },
+    "metrics": {
+      "current": {},
+      "baseline": {},
+      "delta": {}
+    },
+    "alerts": [
+      "stress_matrix_insufficient_samples"
+    ],
+    "series": []
+  },
+  "stress_autorun_history": {
+    "active": false,
+    "enabled": true,
+    "window_days": 30,
+    "samples": 1,
+    "min_samples": 3,
+    "checks": {},
+    "thresholds": {
+      "ops_stress_autorun_history_window_days": 30,
+      "ops_stress_autorun_history_min_rounds": 3,
+      "ops_stress_autorun_history_retention_days": 30,
+      "ops_stress_autorun_history_checksum_index_enabled": true
+    },
+    "metrics": {
+      "payload_days": 1,
+      "triggered_days": 0,
+      "rounds_total": 1,
+      "triggered_rounds": 0,
+      "attempted_rounds": 0,
+      "ran_rounds": 0,
+      "skipped_rounds": 0,
+      "cooldown_skip_rounds": 0,
+      "max_runs_skip_rounds": 0,
+      "runner_unavailable_skip_rounds": 0,
+      "errored_rounds": 0,
+      "trigger_density": 0.0,
+      "attempt_rate_when_triggered": 0.0,
+      "run_rate_when_triggered": 0.0,
+      "cooldown_efficiency": 0.0,
+      "skip_reason_counts": {},
+      "trigger_reason_counts": {},
+      "artifact_written": true,
+      "artifact_failed": false,
+      "artifact_total_rounds": 1,
+      "artifact_retention_days": 30,
+      "artifact_rotated_out_count": 0,
+      "artifact_rotation_failed": false,
+      "artifact_checksum_index_enabled": true,
+      "artifact_checksum_index_written": true,
+      "artifact_checksum_index_entries": 1,
+      "artifact_checksum_index_failed": false
+    },
+    "alerts": [
+      "stress_autorun_history_insufficient_rounds"
+    ],
+    "artifacts": {
+      "history": {
+        "written": true,
+        "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_stress_autorun_history.json",
+        "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_stress_autorun_history.md",
+        "total_rounds": 1,
+        "retention_days": 30,
+        "rotated_out_count": 0,
+        "rotated_out_dates": [],
+        "rotation_failed": false,
+        "checksum_index_enabled": true,
+        "checksum_index_written": true,
+        "checksum_index_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/stress_autorun_history_checksum_index.json",
+        "checksum_index_entries": 1,
+        "checksum_index_failed": false,
+        "reason": ""
+      }
+    },
+    "series": [
+      {
+        "date": "2026-02-17",
+        "source": "review_loop_alert",
+        "round": 1,
+        "triggered": false,
+        "attempted": false,
+        "ran": false,
+        "skipped_reason": "",
+        "error": "",
+        "reason_codes": [],
+        "runs_used": 0,
+        "next_allowed_round": 1,
+        "cooldown_remaining_rounds": 0,
+        "max_runs": 1,
+        "max_runs_base": 1,
+        "adaptive_reason": "insufficient_rounds",
+        "adaptive_factor": 1.0,
+        "adaptive_trigger_density": 0.0
+      }
+    ]
+  },
+  "stress_autorun_adaptive": {
+    "active": false,
+    "enabled": true,
+    "window_days": 30,
+    "samples": 1,
+    "min_samples": 3,
+    "checks": {},
+    "thresholds": {
+      "ops_stress_autorun_adaptive_monitor_window_days": 30,
+      "ops_stress_autorun_adaptive_monitor_min_rounds": 3,
+      "ops_stress_autorun_adaptive_effective_base_ratio_floor": 0.5,
+      "ops_stress_autorun_adaptive_effective_base_ratio_ceiling": 2.0,
+      "ops_stress_autorun_adaptive_throttle_ratio_max": 0.85,
+      "ops_stress_autorun_adaptive_expand_ratio_max": 0.85
+    },
+    "metrics": {
+      "rounds_total": 1,
+      "effective_base_ratio_avg": 1.0,
+      "effective_base_ratio_min": 1.0,
+      "effective_base_ratio_max": 1.0,
+      "effective_base_ratio_latest": 1.0,
+      "throttle_rounds": 0,
+      "expand_rounds": 0,
+      "neutral_rounds": 1,
+      "throttle_ratio": 0.0,
+      "expand_ratio": 0.0,
+      "reason_counts": {
+        "insufficient_rounds": 1
+      }
+    },
+    "alerts": [
+      "stress_autorun_adaptive_insufficient_rounds"
+    ],
+    "series": [
+      {
+        "date": "2026-02-17",
+        "round": 1,
+        "max_runs": 1,
+        "max_runs_base": 1,
+        "effective_base_ratio": 1.0,
+        "adaptive_reason": "insufficient_rounds",
+        "adaptive_factor": 1.0,
+        "adaptive_trigger_density": 0.0,
+        "triggered": false,
+        "ran": false,
+        "skipped_reason": ""
+      }
+    ]
+  },
+  "stress_autorun_reason_drift": {
+    "active": false,
+    "enabled": true,
+    "window_days": 30,
+    "samples": 1,
+    "min_samples": 6,
+    "checks": {},
+    "thresholds": {
+      "ops_stress_autorun_reason_drift_window_days": 30,
+      "ops_stress_autorun_reason_drift_min_rounds": 6,
+      "ops_stress_autorun_reason_drift_recent_rounds": 4,
+      "ops_stress_autorun_reason_drift_mix_gap_max": 0.35,
+      "ops_stress_autorun_reason_drift_change_point_gap_max": 0.45,
+      "ops_stress_autorun_reason_drift_retention_days": 30,
+      "ops_stress_autorun_reason_drift_checksum_index_enabled": true
+    },
+    "metrics": {
+      "rounds_total": 1,
+      "baseline_rounds": 0,
+      "recent_rounds": 1,
+      "baseline_high_ratio": 0.0,
+      "baseline_low_ratio": 0.0,
+      "baseline_other_ratio": 0.0,
+      "recent_high_ratio": 0.0,
+      "recent_low_ratio": 0.0,
+      "recent_other_ratio": 1.0,
+      "reason_mix_gap": 0.0,
+      "change_point_gap": 0.0,
+      "reason_counts": {
+        "insufficient_rounds": 1
+      },
+      "transition_counts": {},
+      "window_trace_points": 0,
+      "artifact_written": true,
+      "artifact_failed": false,
+      "artifact_total_rounds": 1,
+      "artifact_retention_days": 30,
+      "artifact_rotated_out_count": 0,
+      "artifact_rotation_failed": false,
+      "artifact_checksum_index_enabled": true,
+      "artifact_checksum_index_written": true,
+      "artifact_checksum_index_entries": 1,
+      "artifact_checksum_index_failed": false
+    },
+    "alerts": [
+      "stress_autorun_reason_drift_insufficient_rounds"
+    ],
+    "artifacts": {
+      "reason_drift": {
+        "written": true,
+        "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_stress_autorun_reason_drift.json",
+        "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_stress_autorun_reason_drift.md",
+        "total_rounds": 1,
+        "transition_count": 0,
+        "window_trace_points": 0,
+        "retention_days": 30,
+        "rotated_out_count": 0,
+        "rotated_out_dates": [],
+        "rotation_failed": false,
+        "checksum_index_enabled": true,
+        "checksum_index_written": true,
+        "checksum_index_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/stress_autorun_reason_drift_checksum_index.json",
+        "checksum_index_entries": 1,
+        "checksum_index_failed": false,
+        "reason": ""
+      }
+    },
+    "series": [
+      {
+        "date": "2026-02-17",
+        "round": 1,
+        "adaptive_reason": "insufficient_rounds",
+        "reason_bucket": "other"
+      }
+    ],
+    "window_trace": []
+  },
+  "reconcile_drift": {
+    "active": true,
+    "window_days": 7,
+    "samples": 6,
+    "min_samples": 3,
+    "metrics": {
+      "missing_days": 0,
+      "missing_ratio": 0.0,
+      "plan_gap_breach_ratio": 0.0,
+      "closed_count_gap_breach_ratio": 0.0,
+      "closed_pnl_gap_breach_ratio": 0.0,
+      "open_gap_breach_ratio": 0.0,
+      "avg_plan_gap_ratio": 0.0,
+      "avg_closed_count_gap_ratio": 0.0,
+      "avg_closed_pnl_gap_abs": 0.0,
+      "avg_open_gap_ratio": 0.0,
+      "open_gap_samples": 1,
+      "broker_monitor_enabled": true,
+      "broker_expected_days": 6,
+      "broker_missing_days": 1,
+      "broker_missing_ratio": 0.16666666666666666,
+      "broker_samples": 5,
+      "broker_count_breach_ratio": 0.0,
+      "broker_pnl_breach_ratio": 0.0,
+      "broker_contract_schema_invalid_days": 0,
+      "broker_contract_numeric_invalid_days": 0,
+      "broker_contract_symbol_invalid_days": 0,
+      "broker_contract_schema_invalid_ratio": 0.0,
+      "broker_contract_numeric_invalid_ratio": 0.0,
+      "broker_contract_symbol_invalid_ratio": 0.0,
+      "broker_symbol_noncanonical_total": 0,
+      "broker_side_noncanonical_total": 0,
+      "broker_symbol_rows_total": 0,
+      "broker_contract_symbol_noncanonical_ratio": 0.0,
+      "broker_contract_side_noncanonical_ratio": 0.0,
+      "broker_canonical_eligible_days": 5,
+      "broker_canonical_written_days": 5,
+      "broker_canonical_write_fail_days": 0,
+      "broker_canonical_write_fail_ratio": 0.0,
+      "broker_canonical_symbol_noncanonical_total": 0,
+      "broker_canonical_side_noncanonical_total": 0,
+      "broker_canonical_symbol_noncanonical_ratio": 0.0,
+      "broker_canonical_side_noncanonical_ratio": 0.0,
+      "broker_row_diff_samples": 0,
+      "broker_row_diff_min_samples": 1,
+      "broker_row_diff_skipped_days": 1,
+      "broker_row_diff_breach_days": 0,
+      "broker_row_diff_breach_ratio": 0.0,
+      "broker_row_diff_avg_key_mismatch": 0.0,
+      "broker_row_diff_avg_count_gap": 0.0,
+      "broker_row_diff_notional_samples": 0,
+      "broker_row_diff_avg_notional_gap": 0.0,
+      "broker_row_diff_canonical_preferred_days": 0,
+      "broker_row_diff_canonical_preferred_ratio": 0.0,
+      "broker_row_diff_alias_hits_total": 0,
+      "broker_row_diff_symbol_alias_hits_total": 0,
+      "broker_row_diff_side_alias_hits_total": 0,
+      "broker_row_diff_compared_rows_total": 0,
+      "broker_row_diff_alias_hit_rate": 0.0,
+      "broker_row_diff_unresolved_rows_total": 0,
+      "broker_row_diff_input_rows_total": 0,
+      "broker_row_diff_unresolved_row_ratio": 0.0,
+      "broker_row_diff_unresolved_keys_total": 0,
+      "broker_row_diff_union_keys_total": 0,
+      "broker_row_diff_unresolved_key_ratio": 0.0,
+      "broker_row_diff_symbol_alias_size": 0,
+      "broker_row_diff_side_alias_size": 0,
+      "broker_row_diff_artifact_written": false,
+      "broker_row_diff_artifact_sample_rows": 0,
+      "broker_row_diff_artifact_breach_rows": 0,
+      "broker_row_diff_artifact_retention_days": 30,
+      "broker_row_diff_artifact_rotated_out_count": 0,
+      "broker_row_diff_artifact_rotation_failed": false,
+      "broker_row_diff_artifact_checksum_index_enabled": true,
+      "broker_row_diff_artifact_checksum_index_written": true,
+      "broker_row_diff_artifact_checksum_index_entries": 0,
+      "broker_row_diff_artifact_checksum_index_failed": false,
+      "broker_row_diff_artifact_failed": false,
+      "avg_broker_count_gap_ratio": 0.0,
+      "avg_broker_pnl_gap_abs": 0.0
+    },
+    "thresholds": {
+      "ops_reconcile_missing_ratio_max": 0.35,
+      "ops_reconcile_plan_gap_ratio_max": 0.1,
+      "ops_reconcile_closed_count_gap_ratio_max": 0.1,
+      "ops_reconcile_closed_pnl_gap_abs_max": 0.001,
+      "ops_reconcile_open_gap_ratio_max": 0.25,
+      "ops_reconcile_broker_gap_ratio_max": 0.1,
+      "ops_reconcile_broker_pnl_gap_abs_max": 0.001,
+      "ops_reconcile_broker_missing_ratio_max": 0.5,
+      "ops_reconcile_broker_contract_schema_invalid_ratio_max": 0.1,
+      "ops_reconcile_broker_contract_numeric_invalid_ratio_max": 0.1,
+      "ops_reconcile_broker_contract_symbol_invalid_ratio_max": 0.1,
+      "ops_reconcile_broker_contract_symbol_noncanonical_ratio_max": 0.4,
+      "ops_reconcile_broker_closed_pnl_abs_hard_max": 1000000000.0,
+      "ops_reconcile_broker_position_qty_abs_hard_max": 1000000000.0,
+      "ops_reconcile_broker_position_notional_abs_hard_max": 10000000000.0,
+      "ops_reconcile_broker_price_abs_hard_max": 100000000.0,
+      "ops_reconcile_require_broker_snapshot": false,
+      "ops_reconcile_broker_contract_emit_canonical_view": true,
+      "ops_reconcile_broker_contract_canonical_dir": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/broker_snapshot_canonical",
+      "ops_reconcile_broker_row_diff_min_samples": 1,
+      "ops_reconcile_broker_row_diff_breach_ratio_max": 0.2,
+      "ops_reconcile_broker_row_diff_key_mismatch_max": 0.25,
+      "ops_reconcile_broker_row_diff_count_gap_max": 0.25,
+      "ops_reconcile_broker_row_diff_notional_gap_max": 0.5,
+      "ops_reconcile_broker_row_diff_alias_monitor_enabled": true,
+      "ops_reconcile_broker_row_diff_alias_hit_rate_min": 0.0,
+      "ops_reconcile_broker_row_diff_unresolved_key_ratio_max": 0.3,
+      "ops_reconcile_broker_row_diff_asof_only": true,
+      "ops_reconcile_broker_row_diff_artifact_retention_days": 30,
+      "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled": true,
+      "ops_reconcile_broker_row_diff_symbol_alias_size": 0,
+      "ops_reconcile_broker_row_diff_side_alias_size": 0
+    },
+    "checks": {
+      "missing_ratio_ok": true,
+      "plan_count_gap_ok": true,
+      "closed_count_gap_ok": true,
+      "closed_pnl_gap_ok": true,
+      "open_count_gap_ok": true,
+      "broker_missing_ratio_ok": true,
+      "broker_count_gap_ok": true,
+      "broker_pnl_gap_ok": true,
+      "broker_contract_schema_ok": true,
+      "broker_contract_numeric_ok": true,
+      "broker_contract_symbol_ok": true,
+      "broker_contract_canonical_view_ok": true,
+      "broker_row_diff_ok": true,
+      "broker_row_diff_alias_drift_ok": true,
+      "broker_row_diff_artifact_rotation_ok": true,
+      "broker_row_diff_artifact_checksum_index_ok": true
+    },
+    "alerts": [],
+    "artifacts": {
+      "row_diff": {
+        "written": false,
+        "json": "",
+        "md": "",
+        "sample_rows": 0,
+        "breach_rows": 0,
+        "retention_days": 30,
+        "rotated_out_count": 0,
+        "rotated_out_dates": [],
+        "rotation_failed": false,
+        "checksum_index_enabled": true,
+        "checksum_index_written": true,
+        "checksum_index_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/reconcile_row_diff_checksum_index.json",
+        "checksum_index_entries": 0,
+        "checksum_index_failed": false,
+        "reason": "no_row_diff_samples"
+      }
+    },
+    "series": [
+      {
+        "date": "2026-02-12",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": true,
+          "found": false,
+          "contract_lint": {
+            "schema_ok": true,
+            "numeric_ok": true,
+            "symbol_ok": true,
+            "schema_errors": [],
+            "numeric_errors": [],
+            "symbol_errors": [],
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "canonical_view": {
+            "enabled": true,
+            "eligible": false,
+            "written": false,
+            "write_error": "",
+            "path": "",
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "row_diff": {
+            "active": false,
+            "skipped": true,
+            "reason": "",
+            "source": "",
+            "key_mismatch_ratio": 0.0,
+            "count_gap_ratio": 0.0,
+            "notional_gap_ratio": 0.0,
+            "notional_comparable": false,
+            "broker_rows": 0,
+            "system_rows": 0,
+            "alias_hits": 0,
+            "symbol_alias_hits": 0,
+            "side_alias_hits": 0,
+            "alias_hit_rate": 0.0,
+            "unresolved_rows": 0,
+            "input_rows": 0,
+            "unresolved_row_ratio": 0.0,
+            "unresolved_keys": 0,
+            "union_keys": 0,
+            "unresolved_key_ratio": 0.0,
+            "missing_on_broker": [],
+            "extra_on_broker": [],
+            "breached": false
+          }
+        },
+        "alerts": [
+          "broker_snapshot_missing"
+        ]
+      },
+      {
+        "date": "2026-02-13",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": true,
+          "found": true,
+          "contract_lint": {
+            "schema_ok": true,
+            "numeric_ok": true,
+            "symbol_ok": true,
+            "schema_errors": [],
+            "numeric_errors": [],
+            "symbol_errors": [],
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "canonical_view": {
+            "enabled": true,
+            "eligible": true,
+            "written": true,
+            "write_error": "",
+            "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/broker_snapshot_canonical/2026-02-13.json",
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "row_diff": {
+            "active": false,
+            "skipped": true,
+            "reason": "",
+            "source": "",
+            "key_mismatch_ratio": 0.0,
+            "count_gap_ratio": 0.0,
+            "notional_gap_ratio": 0.0,
+            "notional_comparable": false,
+            "broker_rows": 0,
+            "system_rows": 0,
+            "alias_hits": 0,
+            "symbol_alias_hits": 0,
+            "side_alias_hits": 0,
+            "alias_hit_rate": 0.0,
+            "unresolved_rows": 0,
+            "input_rows": 0,
+            "unresolved_row_ratio": 0.0,
+            "unresolved_keys": 0,
+            "union_keys": 0,
+            "unresolved_key_ratio": 0.0,
+            "missing_on_broker": [],
+            "extra_on_broker": [],
+            "breached": false
+          }
+        },
+        "alerts": []
+      },
+      {
+        "date": "2026-02-14",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": true,
+          "found": true,
+          "contract_lint": {
+            "schema_ok": true,
+            "numeric_ok": true,
+            "symbol_ok": true,
+            "schema_errors": [],
+            "numeric_errors": [],
+            "symbol_errors": [],
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "canonical_view": {
+            "enabled": true,
+            "eligible": true,
+            "written": true,
+            "write_error": "",
+            "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/broker_snapshot_canonical/2026-02-14.json",
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "row_diff": {
+            "active": false,
+            "skipped": true,
+            "reason": "",
+            "source": "",
+            "key_mismatch_ratio": 0.0,
+            "count_gap_ratio": 0.0,
+            "notional_gap_ratio": 0.0,
+            "notional_comparable": false,
+            "broker_rows": 0,
+            "system_rows": 0,
+            "alias_hits": 0,
+            "symbol_alias_hits": 0,
+            "side_alias_hits": 0,
+            "alias_hit_rate": 0.0,
+            "unresolved_rows": 0,
+            "input_rows": 0,
+            "unresolved_row_ratio": 0.0,
+            "unresolved_keys": 0,
+            "union_keys": 0,
+            "unresolved_key_ratio": 0.0,
+            "missing_on_broker": [],
+            "extra_on_broker": [],
+            "breached": false
+          }
+        },
+        "alerts": []
+      },
+      {
+        "date": "2026-02-15",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": true,
+          "found": true,
+          "contract_lint": {
+            "schema_ok": true,
+            "numeric_ok": true,
+            "symbol_ok": true,
+            "schema_errors": [],
+            "numeric_errors": [],
+            "symbol_errors": [],
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "canonical_view": {
+            "enabled": true,
+            "eligible": true,
+            "written": true,
+            "write_error": "",
+            "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/broker_snapshot_canonical/2026-02-15.json",
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "row_diff": {
+            "active": false,
+            "skipped": true,
+            "reason": "",
+            "source": "",
+            "key_mismatch_ratio": 0.0,
+            "count_gap_ratio": 0.0,
+            "notional_gap_ratio": 0.0,
+            "notional_comparable": false,
+            "broker_rows": 0,
+            "system_rows": 0,
+            "alias_hits": 0,
+            "symbol_alias_hits": 0,
+            "side_alias_hits": 0,
+            "alias_hit_rate": 0.0,
+            "unresolved_rows": 0,
+            "input_rows": 0,
+            "unresolved_row_ratio": 0.0,
+            "unresolved_keys": 0,
+            "union_keys": 0,
+            "unresolved_key_ratio": 0.0,
+            "missing_on_broker": [],
+            "extra_on_broker": [],
+            "breached": false
+          }
+        },
+        "alerts": []
+      },
+      {
+        "date": "2026-02-16",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": true,
+          "found": true,
+          "contract_lint": {
+            "schema_ok": true,
+            "numeric_ok": true,
+            "symbol_ok": true,
+            "schema_errors": [],
+            "numeric_errors": [],
+            "symbol_errors": [],
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "canonical_view": {
+            "enabled": true,
+            "eligible": true,
+            "written": true,
+            "write_error": "",
+            "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/broker_snapshot_canonical/2026-02-16.json",
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "row_diff": {
+            "active": false,
+            "skipped": true,
+            "reason": "",
+            "source": "",
+            "key_mismatch_ratio": 0.0,
+            "count_gap_ratio": 0.0,
+            "notional_gap_ratio": 0.0,
+            "notional_comparable": false,
+            "broker_rows": 0,
+            "system_rows": 0,
+            "alias_hits": 0,
+            "symbol_alias_hits": 0,
+            "side_alias_hits": 0,
+            "alias_hit_rate": 0.0,
+            "unresolved_rows": 0,
+            "input_rows": 0,
+            "unresolved_row_ratio": 0.0,
+            "unresolved_keys": 0,
+            "union_keys": 0,
+            "unresolved_key_ratio": 0.0,
+            "missing_on_broker": [],
+            "extra_on_broker": [],
+            "breached": false
+          }
+        },
+        "alerts": []
+      },
+      {
+        "date": "2026-02-17",
+        "missing": false,
+        "manifest": {
+          "plans": 0,
+          "closed_trades": 0,
+          "closed_pnl": 0.0,
+          "open_positions": 0
+        },
+        "csv": {
+          "found": true,
+          "rows": 0
+        },
+        "db": {
+          "latest_positions_rows": 0,
+          "executed_closed_rows": 0,
+          "executed_closed_pnl": 0.0
+        },
+        "gaps": {
+          "plan_count_ratio": 0.0,
+          "closed_count_ratio": 0.0,
+          "closed_pnl_abs": 0.0,
+          "open_count_ratio": 0.0,
+          "broker_open_count_ratio": 0.0,
+          "broker_closed_pnl_abs": 0.0
+        },
+        "broker": {
+          "monitor_enabled": true,
+          "found": true,
+          "contract_lint": {
+            "schema_ok": true,
+            "numeric_ok": true,
+            "symbol_ok": true,
+            "schema_errors": [],
+            "numeric_errors": [],
+            "symbol_errors": [],
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "canonical_view": {
+            "enabled": true,
+            "eligible": true,
+            "written": true,
+            "write_error": "",
+            "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/broker_snapshot_canonical/2026-02-17.json",
+            "symbol_noncanonical_count": 0,
+            "side_noncanonical_count": 0,
+            "position_rows": 0
+          },
+          "row_diff": {
+            "active": true,
+            "skipped": true,
+            "reason": "system_state_missing_or_stale",
+            "source": "",
+            "key_mismatch_ratio": 0.0,
+            "count_gap_ratio": 0.0,
+            "notional_gap_ratio": 0.0,
+            "notional_comparable": false,
+            "broker_rows": 0,
+            "system_rows": 0,
+            "alias_hits": 0,
+            "symbol_alias_hits": 0,
+            "side_alias_hits": 0,
+            "alias_hit_rate": 0.0,
+            "unresolved_rows": 0,
+            "input_rows": 0,
+            "unresolved_row_ratio": 0.0,
+            "unresolved_keys": 0,
+            "union_keys": 0,
+            "unresolved_key_ratio": 0.0,
+            "missing_on_broker": [],
+            "extra_on_broker": [],
+            "breached": false
+          }
+        },
+        "alerts": []
+      }
+    ]
+  },
+  "artifact_governance": {
+    "active": true,
+    "as_of": "2026-02-17",
+    "checks": {
+      "required_profiles_present_ok": true,
+      "policy_alignment_ok": true,
+      "legacy_alignment_ok": true,
+      "baseline_freeze_ok": true,
+      "strict_mode_ok": true
+    },
+    "metrics": {
+      "profiles_total": 4,
+      "profiles_active": 2,
+      "profiles_with_override": 4,
+      "required_missing_profiles": 0,
+      "policy_mismatch_profiles": 0,
+      "legacy_policy_drift_profiles": 0,
+      "baseline_defined_profiles": 4,
+      "baseline_drift_profiles": 0,
+      "strict_mode_enabled": false,
+      "strict_mode_blocked": false
+    },
+    "alerts": [],
+    "profiles": [
+      {
+        "profile": "temporal_autofix_patch",
+        "active": true,
+        "profile_override": true,
+        "legacy_retention_days": 30,
+        "legacy_checksum_index_enabled": true,
+        "policy_retention_days": 30,
+        "policy_checksum_index_enabled": true,
+        "policy_json_glob": "*_temporal_autofix_patch.json",
+        "policy_md_glob": "*_temporal_autofix_patch.md",
+        "policy_checksum_index_filename": "temporal_autofix_patch_checksum_index.json",
+        "artifact_present": true,
+        "artifact_written": true,
+        "artifact_retention_days": 30,
+        "artifact_checksum_index_enabled": true,
+        "artifact_checksum_index_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/temporal_autofix_patch_checksum_index.json",
+        "required_profile_missing": false,
+        "retention_mismatch": false,
+        "checksum_switch_mismatch": false,
+        "index_filename_mismatch": false,
+        "policy_mismatch": false,
+        "legacy_policy_drift": false,
+        "baseline_defined": true,
+        "baseline_compare_keys": [
+          "checksum_index_enabled",
+          "checksum_index_filename",
+          "json_glob",
+          "md_glob",
+          "retention_days"
+        ],
+        "baseline_policy_drift": false,
+        "baseline_drift_fields": []
+      },
+      {
+        "profile": "stress_autorun_history",
+        "active": false,
+        "profile_override": true,
+        "legacy_retention_days": 30,
+        "legacy_checksum_index_enabled": true,
+        "policy_retention_days": 30,
+        "policy_checksum_index_enabled": true,
+        "policy_json_glob": "*_stress_autorun_history.json",
+        "policy_md_glob": "*_stress_autorun_history.md",
+        "policy_checksum_index_filename": "stress_autorun_history_checksum_index.json",
+        "artifact_present": true,
+        "artifact_written": true,
+        "artifact_retention_days": 30,
+        "artifact_checksum_index_enabled": true,
+        "artifact_checksum_index_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/stress_autorun_history_checksum_index.json",
+        "required_profile_missing": false,
+        "retention_mismatch": false,
+        "checksum_switch_mismatch": false,
+        "index_filename_mismatch": false,
+        "policy_mismatch": false,
+        "legacy_policy_drift": false,
+        "baseline_defined": true,
+        "baseline_compare_keys": [
+          "checksum_index_enabled",
+          "checksum_index_filename",
+          "json_glob",
+          "md_glob",
+          "retention_days"
+        ],
+        "baseline_policy_drift": false,
+        "baseline_drift_fields": []
+      },
+      {
+        "profile": "stress_autorun_reason_drift",
+        "active": false,
+        "profile_override": true,
+        "legacy_retention_days": 30,
+        "legacy_checksum_index_enabled": true,
+        "policy_retention_days": 30,
+        "policy_checksum_index_enabled": true,
+        "policy_json_glob": "*_stress_autorun_reason_drift.json",
+        "policy_md_glob": "*_stress_autorun_reason_drift.md",
+        "policy_checksum_index_filename": "stress_autorun_reason_drift_checksum_index.json",
+        "artifact_present": true,
+        "artifact_written": true,
+        "artifact_retention_days": 30,
+        "artifact_checksum_index_enabled": true,
+        "artifact_checksum_index_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/stress_autorun_reason_drift_checksum_index.json",
+        "required_profile_missing": false,
+        "retention_mismatch": false,
+        "checksum_switch_mismatch": false,
+        "index_filename_mismatch": false,
+        "policy_mismatch": false,
+        "legacy_policy_drift": false,
+        "baseline_defined": true,
+        "baseline_compare_keys": [
+          "checksum_index_enabled",
+          "checksum_index_filename",
+          "json_glob",
+          "md_glob",
+          "retention_days"
+        ],
+        "baseline_policy_drift": false,
+        "baseline_drift_fields": []
+      },
+      {
+        "profile": "reconcile_row_diff",
+        "active": true,
+        "profile_override": true,
+        "legacy_retention_days": 30,
+        "legacy_checksum_index_enabled": true,
+        "policy_retention_days": 30,
+        "policy_checksum_index_enabled": true,
+        "policy_json_glob": "*_reconcile_row_diff.json",
+        "policy_md_glob": "*_reconcile_row_diff.md",
+        "policy_checksum_index_filename": "reconcile_row_diff_checksum_index.json",
+        "artifact_present": true,
+        "artifact_written": false,
+        "artifact_retention_days": 30,
+        "artifact_checksum_index_enabled": true,
+        "artifact_checksum_index_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/reconcile_row_diff_checksum_index.json",
+        "required_profile_missing": false,
+        "retention_mismatch": false,
+        "checksum_switch_mismatch": false,
+        "index_filename_mismatch": false,
+        "policy_mismatch": false,
+        "legacy_policy_drift": false,
+        "baseline_defined": true,
+        "baseline_compare_keys": [
+          "checksum_index_enabled",
+          "checksum_index_filename",
+          "json_glob",
+          "md_glob",
+          "retention_days"
+        ],
+        "baseline_policy_drift": false,
+        "baseline_drift_fields": []
+      }
+    ]
+  },
+  "rollback_recommendation": {
+    "active": true,
+    "level": "soft",
+    "score": 5,
+    "reason_codes": [
+      "state_stability",
+      "temporal_audit",
+      "slot_anomaly"
+    ],
+    "action": "rollback_to_last_stable_anchor_after_partial_recheck",
+    "target_anchor": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-14.yaml",
+    "anchor_ready": true,
+    "cooldown_days": 1,
+    "candidates": [
+      {
+        "date": "2026-02-17",
+        "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-17.yaml",
+        "source": "params_backup"
+      },
+      {
+        "date": "2026-02-14",
+        "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-14.yaml",
+        "source": "params_backup"
+      },
+      {
+        "date": "2026-02-13",
+        "path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-13.yaml",
+        "source": "params_backup"
+      }
+    ],
+    "alerts": [
+      "mode_switch_rate_high",
+      "temporal_audit_missing_high",
+      "slot_premarket_anomaly_high",
+      "slot_intraday_anomaly_high",
+      "mode_drift_missing_baseline:ultra_short",
+      "mode_drift_inactive"
+    ]
+  },
+  "history": [
+    {
+      "date": "2026-02-11",
+      "healthy": true,
+      "missing": []
+    },
+    {
+      "date": "2026-02-12",
+      "healthy": true,
+      "missing": []
+    },
+    {
+      "date": "2026-02-13",
+      "healthy": true,
+      "missing": []
+    },
+    {
+      "date": "2026-02-14",
+      "healthy": true,
+      "missing": []
+    },
+    {
+      "date": "2026-02-15",
+      "healthy": true,
+      "missing": []
+    },
+    {
+      "date": "2026-02-16",
+      "healthy": true,
+      "missing": []
+    },
+    {
+      "date": "2026-02-17",
+      "healthy": true,
+      "missing": []
+    }
+  ]
+}

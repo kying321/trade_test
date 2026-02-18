@@ -1,0 +1,78 @@
+{
+  "date": "2026-02-17",
+  "total_events": 3,
+  "applied_count": 0,
+  "failed_count": 0,
+  "skipped_count": 3,
+  "top_reasons": [
+    {
+      "reason": "candidate_missing_or_invalid",
+      "count": 3
+    }
+  ],
+  "events": [
+    {
+      "date": "2026-02-14",
+      "run_type": "strategy_lab",
+      "run_id": "20260214_132758",
+      "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_132758.json",
+      "attempted": true,
+      "applied": false,
+      "reason": "candidate_missing_or_invalid",
+      "error": "",
+      "patched_fields": [],
+      "strict_patched": false,
+      "summary_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_132754/summary.json",
+      "patch_delta": {
+        "cutoff_ts": {
+          "before": "",
+          "after": "2026-02-14T23:59:59",
+          "source": "derived_cutoff_date"
+        }
+      },
+      "strict_delta": {}
+    },
+    {
+      "date": "2026-02-14",
+      "run_type": "strategy_lab",
+      "run_id": "20260214_140526",
+      "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140526.json",
+      "attempted": true,
+      "applied": false,
+      "reason": "candidate_missing_or_invalid",
+      "error": "",
+      "patched_fields": [],
+      "strict_patched": false,
+      "summary_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140526/summary.json",
+      "patch_delta": {
+        "cutoff_ts": {
+          "before": "",
+          "after": "2026-02-14T23:59:59",
+          "source": "derived_cutoff_date"
+        }
+      },
+      "strict_delta": {}
+    },
+    {
+      "date": "2026-02-14",
+      "run_type": "strategy_lab",
+      "run_id": "20260214_140611",
+      "manifest_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140611.json",
+      "attempted": true,
+      "applied": false,
+      "reason": "candidate_missing_or_invalid",
+      "error": "",
+      "patched_fields": [],
+      "strict_patched": false,
+      "summary_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140607/summary.json",
+      "patch_delta": {
+        "cutoff_ts": {
+          "before": "",
+          "after": "2026-02-11T23:59:59",
+          "source": "derived_cutoff_date"
+        }
+      },
+      "strict_delta": {}
+    }
+  ]
+}

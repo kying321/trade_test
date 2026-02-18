@@ -1,7 +1,7 @@
 {
   "runtime_mode": "ultra_short",
   "runtime_params": {
-    "signal_confidence_min": 55.53152958438447,
+    "signal_confidence_min": 56.39842015202605,
     "convexity_min": 1.956733065034328,
     "hold_days": 6.0,
     "max_daily_trades": 3.0
@@ -9,8 +9,8 @@
   "today": {
     "signals": 1,
     "plans": 0,
-    "avg_confidence": 78.57142857142857,
-    "avg_convexity": 3.1999999999999953,
+    "avg_confidence": 60.07106436456296,
+    "avg_convexity": 3.0248214911203966,
     "closed_trades": 0,
     "closed_pnl": 0.0
   },
@@ -43,5 +43,17 @@
     "mode_multiplier": 0.85,
     "mode_reason": "insufficient_samples",
     "source_confidence_score": 0.7706595460863835
+  },
+  "market_factor_state": {
+    "valuation_pressure": 0.657359207521479,
+    "momentum_preference": 0.6188389671205643,
+    "crowding_aversion": 0.4666962830823117,
+    "small_cap_pressure": 0.46381862394218054,
+    "dividend_preference": 0.5805918563103234,
+    "style_weight": 0.28615384615384615,
+    "style_signal_strength": 0.2461538461538461,
+    "style_sample_size": 13.0,
+    "value_preference": 0.1675824175824176,
+    "size_preference": 0.5357142857142857
   }
 }

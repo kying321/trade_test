@@ -1,0 +1,31 @@
+{
+  "date": "2026-02-17",
+  "metrics": {
+    "rounds_total": 1,
+    "baseline_rounds": 0,
+    "recent_rounds": 1,
+    "baseline_high_ratio": 0.0,
+    "baseline_low_ratio": 0.0,
+    "baseline_other_ratio": 0.0,
+    "recent_high_ratio": 0.0,
+    "recent_low_ratio": 0.0,
+    "recent_other_ratio": 1.0,
+    "reason_mix_gap": 0.0,
+    "change_point_gap": 0.0,
+    "reason_counts": {
+      "insufficient_rounds": 1
+    },
+    "transition_counts": {},
+    "window_trace_points": 0
+  },
+  "top_transitions": [],
+  "window_trace": [],
+  "series": [
+    {
+      "date": "2026-02-17",
+      "round": 1,
+      "adaptive_reason": "insufficient_rounds",
+      "reason_bucket": "other"
+    }
+  ]
+}

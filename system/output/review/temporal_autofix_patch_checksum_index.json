@@ -1,0 +1,18 @@
+{
+  "generated_for_date": "2026-02-17",
+  "retention_days": 30,
+  "rotated_out_dates": [],
+  "entry_count": 1,
+  "entries": [
+    {
+      "date": "2026-02-17",
+      "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_temporal_autofix_patch.json",
+      "json_sha256": "e06be20e4a075ea7ecacb73c6f2158aef6313bc6d4dde5bd049799e4bc775870",
+      "json_bytes": 2568,
+      "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_temporal_autofix_patch.md",
+      "md_sha256": "206d3d48a5f1813fa058a111d56dfa9aa416eb9f081d3012ff612a326423832f",
+      "md_bytes": 1603,
+      "pair_complete": true
+    }
+  ]
+}

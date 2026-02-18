@@ -1,0 +1,249 @@
+as_of: '2026-02-17'
+parameter_changes:
+  win_rate: 0.44531030337985
+  payoff: 1.4082688876895297
+  signal_confidence_min: 56.88537811561344
+  convexity_min: 2.392740144520729
+  hold_days: 10.0
+  max_daily_trades: 1.0
+factor_weights:
+  macro: 0.14585646364066165
+  industry: 0.2954779936064666
+  news: 0.12443065867957542
+  sentiment: 0.11097502843602539
+  fundamental: 0.13664687814355736
+  technical: 0.18661297749371356
+defects: []
+pass_gate: true
+notes:
+- All review gates passed
+- style_diag=active=True; dominant=size; dir=long_high; drift=0.0140; sample_days=247
+- style_diag_alerts=style_drift:value,style_drift:size,style_drift:dividend
+- strategy_lab_candidate=trend_convex_01; cutoff=2026-02-11; bar_max_ts=; news_max_ts=;
+  manifest=/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140611.json
+- style_drift_guard=ratio=1.40; intensity=0.40; conf_step=2.42; trade_step=1; hold_step=1;
+  blocked=False
+- style_drift_guard_alerts=style_drift:value,style_drift:size,style_drift:dividend
+- mode_health=runtime_mode=swing; passed=True; active=True
+- slot_regime_tuning=applied=True; changed=False; path=/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/slot_regime_thresholds_live.yaml
+change_reasons:
+  win_rate: 基于滚动样本外胜率做有界贝叶斯更新，避免过拟合漂移
+  payoff: 基于利润因子收缩更新，抑制极端窗口的偶然性
+  signal_confidence_min: 融合 strategy-lab 最优候选 `trend_convex_01`（小步收敛，step=0.18）；风格漂移自适应收敛(ratio=1.40,
+    intensity=0.40)，上调信号门槛
+  convexity_min: 融合 strategy-lab 最优候选 `trend_convex_01`（小步收敛，step=0.18）
+  hold_days: 融合 strategy-lab 最优候选 `trend_convex_01`（小步收敛，step=0.18）；风格漂移自适应收敛(ratio=1.40,
+    intensity=0.40)，缩短持有暴露
+  max_daily_trades: 融合 strategy-lab 最优候选 `trend_convex_01`（小步收敛，step=0.18）；风格漂移自适应收敛(ratio=1.40,
+    intensity=0.40)，下调日内交易次数
+factor_contrib_120d:
+  macro: 0.044507578574721464
+  industry: 0.9908148564295072
+  news: 0.04045236555873232
+  sentiment: 0.04254439061171477
+  technical: 0.28048741769919505
+  fundamental: 0.39118416352883395
+style_diagnostics:
+  active: true
+  lookback_days: 180
+  sample_days: 247
+  drift_window_days: 20
+  drift_gap_max: 0.01
+  block_on_alert: false
+  dominant_style: size
+  dominant_direction: long_high
+  dominant_spread: 0.11293206506025599
+  style_spreads:
+    momentum:
+      avg_spread: -0.040522757399029094
+      win_rate: 0.4846938775510204
+      sample_days: 196.0
+      recent_avg: -0.018522372267153326
+      prev_avg: -0.025476248539753405
+    value:
+      avg_spread: 0.10330854568912216
+      win_rate: 0.5021097046413502
+      sample_days: 237.0
+      recent_avg: 0.014201640211019223
+      prev_avg: 0.02519738564867847
+    size:
+      avg_spread: 0.11293206506025599
+      win_rate: 0.5182186234817814
+      sample_days: 247.0
+      recent_avg: 0.012389601252149449
+      prev_avg: 0.02642714140625796
+    dividend:
+      avg_spread: -0.11033035683713421
+      win_rate: 0.491869918699187
+      sample_days: 246.0
+      recent_avg: -0.012397947207914995
+      prev_avg: -0.024907902848184553
+  style_drift_gap:
+    momentum: 0.006953876272600079
+    value: 0.010995745437659249
+    size: 0.01403754015410851
+    dividend: 0.012509955640269558
+  style_drift_score: 0.01403754015410851
+  alerts:
+  - style_drift:value
+  - style_drift:size
+  - style_drift:dividend
+  adaptive_guard: &id001
+    enabled: true
+    active: true
+    applied: true
+    blocked: false
+    drift_ratio: 1.403754015410851
+    intensity: 0.403754015410851
+    confidence_step: 2.422524092465106
+    trade_step: 1
+    hold_step: 1
+    alerts:
+    - style_drift:value
+    - style_drift:size
+    - style_drift:dividend
+    block_on_alert: false
+    block_ratio: 1.8
+    trigger_ratio: 1.0
+    ratio_for_max: 2.0
+    reason: applied
+impact_window_days: 120
+rollback_anchor: /Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/params_live_backup_2026-02-17.yaml
+previous_parameters:
+  win_rate: 0.44528872114488127
+  payoff: 1.428948155871248
+  signal_confidence_min: 54.95895463196548
+  convexity_min: 2.392740144520729
+  hold_days: 11.0
+  max_daily_trades: 2.0
+parameter_deltas:
+  win_rate: 2.158223496873113e-05
+  payoff: -0.02067926818171828
+  signal_confidence_min: 1.9264234836479588
+  convexity_min: 0.0
+  hold_days: -1.0
+  max_daily_trades: -1.0
+strategy_lab_candidate:
+  manifest_path: /Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/manifests/strategy_lab_20260214_140611.json
+  summary_path: /Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/research/strategy_lab_20260214_140607/summary.json
+  cutoff_date: '2026-02-11'
+  cutoff_ts: '2026-02-11T23:59:59'
+  bar_max_ts: ''
+  news_max_ts: ''
+  report_max_ts: ''
+  strict_cutoff_enforced: true
+  candidate:
+    name: trend_convex_01
+    rationale: 趋势驱动+凸性约束
+    params:
+      signal_confidence_min: 48.543436937742044
+      convexity_min: 2.392740144520729
+      hold_days: 11
+      max_daily_trades: 2
+    train_metrics:
+      annual_return: 0.0
+      max_drawdown: 0.0
+      positive_window_ratio: 1.0
+      trades: 0
+    validation_metrics:
+      annual_return: 0.0
+      max_drawdown: 0.0
+      positive_window_ratio: 1.0
+      trades: 0
+      violations: 0
+    factor_alignment_train: 0.0
+    factor_alignment_validation: 0.0
+    score: 0.5545000000000001
+    review_metrics:
+      annual_return: 0.0
+      max_drawdown: 0.0
+      positive_window_ratio: 1.0
+      trades: 0
+      violations: 0
+    factor_alignment_review: 0.0
+    robustness_score: 0.8225000000000001
+    accepted: true
+strategy_lab_autorun: {}
+runtime_mode: swing
+mode_history:
+  as_of: '2026-02-17'
+  lookback_days: 365
+  modes:
+    swing:
+      samples: 2
+      avg_annual_return: 0.027678688922644072
+      avg_win_rate: 0.4437275974407865
+      avg_profit_factor: 1.290424299210212
+      avg_trades: 835.5
+      worst_drawdown: 0.17958424563701603
+      total_violations: 0
+mode_health:
+  passed: true
+  active: true
+  runtime_mode: swing
+  samples: 2
+  thresholds:
+    min_profit_factor: 1.0
+    min_win_rate: 0.4
+    max_drawdown_max: 0.18
+    max_violations: 0
+    min_samples: 1
+  stats:
+    avg_profit_factor: 1.290424299210212
+    avg_win_rate: 0.4437275974407865
+    worst_drawdown: 0.17958424563701603
+    total_violations: 0
+  failed_rules: []
+mode_adaptive:
+  enabled: true
+  applied: false
+  runtime_mode: swing
+  samples: 2
+  min_samples: 3
+  reason: insufficient_samples
+style_drift_guard: *id001
+slot_regime_tuning:
+  enabled: true
+  applied: true
+  path: /Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/slot_regime_thresholds_live.yaml
+  changed: false
+  skipped: false
+  ops_slot_regime_tune_missing_ratio_hard_cap: 0.8
+  slot_missing_ratio: 0.375
+  ops_slot_eod_quality_anomaly_ratio_max_by_regime:
+    trend: 0.55
+    range: 0.5
+    extreme_vol: 0.35
+  ops_slot_eod_risk_anomaly_ratio_max_by_regime:
+    trend: 0.55
+    range: 0.5
+    extreme_vol: 0.3
+  buckets:
+    trend:
+      days: 0
+      quality_anomaly_ratio: 0.0
+      risk_anomaly_ratio: 0.0
+      quality_before: 0.55
+      quality_after: 0.55
+      risk_before: 0.55
+      risk_after: 0.55
+      eligible: false
+    range:
+      days: 6
+      quality_anomaly_ratio: 0.8333333333333334
+      risk_anomaly_ratio: 0.0
+      quality_before: 0.5
+      quality_after: 0.5
+      risk_before: 0.5
+      risk_after: 0.5
+      eligible: false
+    extreme_vol:
+      days: 0
+      quality_anomaly_ratio: 0.0
+      risk_anomaly_ratio: 0.0
+      quality_before: 0.35
+      quality_after: 0.35
+      risk_before: 0.3
+      risk_after: 0.3
+      eligible: false
+generated_at: '2026-02-18T10:02:11.403360'

@@ -18,6 +18,10 @@
   },
   "metadata": {
     "cutoff_date": "2026-02-14",
-    "review_days": 2
+    "review_days": 2,
+    "cutoff_ts": "2026-02-14T23:59:59",
+    "bar_max_ts": "2026-02-14T23:59:59",
+    "news_max_ts": "2026-02-14T23:59:59",
+    "report_max_ts": "2026-02-14T23:59:59"
   }
 }

@@ -1,0 +1,45 @@
+{
+  "date": "2026-02-17",
+  "metrics": {
+    "payload_days": 1,
+    "triggered_days": 0,
+    "rounds_total": 1,
+    "triggered_rounds": 0,
+    "attempted_rounds": 0,
+    "ran_rounds": 0,
+    "skipped_rounds": 0,
+    "cooldown_skip_rounds": 0,
+    "max_runs_skip_rounds": 0,
+    "runner_unavailable_skip_rounds": 0,
+    "errored_rounds": 0,
+    "trigger_density": 0.0,
+    "attempt_rate_when_triggered": 0.0,
+    "run_rate_when_triggered": 0.0,
+    "cooldown_efficiency": 0.0,
+    "skip_reason_counts": {},
+    "trigger_reason_counts": {}
+  },
+  "top_skip_reasons": [],
+  "top_trigger_reasons": [],
+  "series": [
+    {
+      "date": "2026-02-17",
+      "source": "review_loop_alert",
+      "round": 1,
+      "triggered": false,
+      "attempted": false,
+      "ran": false,
+      "skipped_reason": "",
+      "error": "",
+      "reason_codes": [],
+      "runs_used": 0,
+      "next_allowed_round": 1,
+      "cooldown_remaining_rounds": 0,
+      "max_runs": 1,
+      "max_runs_base": 1,
+      "adaptive_reason": "insufficient_rounds",
+      "adaptive_factor": 1.0,
+      "adaptive_trigger_density": 0.0
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "generated_for_date": "2026-02-17",
+  "retention_days": 30,
+  "rotated_out_dates": [],
+  "entry_count": 1,
+  "entries": [
+    {
+      "date": "2026-02-17",
+      "json": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_stress_autorun_history.json",
+      "json_sha256": "d4f1e41d90ad50fea2ebd05b52af90e7227b220cef4237d63abfe93674f00316",
+      "json_bytes": 1111,
+      "md": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/review/2026-02-17_stress_autorun_history.md",
+      "md_sha256": "01d5498e7cb65c04683ca42a04cc4ebd044753dc6202a6d603fc0db24a951ed0",
+      "md_bytes": 338,
+      "pair_complete": true
+    }
+  ]
+}

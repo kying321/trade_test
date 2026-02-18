@@ -145,5 +145,9 @@
     "universe_source_notice": "index constituents are latest snapshot; survivorship bias may remain",
     "cache_hit": false,
     "cache_path": "/Users/jokenrobot/Downloads/离厄—技术分析原理/system/output/artifacts/research_cache/a60ee1167a58e425_meta.json"
-  }
+  },
+  "cutoff_ts": "2026-02-14T23:59:59",
+  "bar_max_ts": "2026-02-14T23:59:59",
+  "news_max_ts": "2026-02-14T23:59:59",
+  "report_max_ts": "2026-02-14T23:59:59"
 }
