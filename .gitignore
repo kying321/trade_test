@@ -25,8 +25,20 @@ system/output/artifacts/
 system/output/daily/
 system/output/logs/
 system/output/research/
+system/output/review/
+system/output/state/
 
-# keep review artifacts versionable; only ignore temp files
-system/output/review/*.tmp
-system/output/review/*.bak
-system/output/review/*.cache
+# keep directory docs/anchors only
+!system/output/README.md
+!system/output/.gitkeep
+
+# ===== Frontend / Node =====
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+
+# ===== Local runtime locks / pid / markers =====
+*.lock
+*.pid
+*.flag

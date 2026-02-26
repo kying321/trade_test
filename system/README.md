@@ -281,6 +281,11 @@ lie stress-matrix --date 2026-02-13 --modes ultra_short,swing,long
 # 可选：把 tests 日志也纳入提交
 ./scripts/auto_git_sync.sh --include-logs
 
+# 仓库卫生整理（清理本地缓存，不影响源码）
+./scripts/repo_hygiene.sh
+# 结构规范说明（提交区/运行区边界）
+# docs/REPO_STRUCTURE_STANDARD.md
+
 # 审查未通过时会自动生成：
 # output/review/YYYY-MM-DD_defect_plan_roundN.json
 # output/review/YYYY-MM-DD_defect_plan_roundN.md
