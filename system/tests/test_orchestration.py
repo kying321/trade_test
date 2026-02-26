@@ -11,7 +11,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lie_engine.models import NewsEvent, RegimeLabel
-from lie_engine.orchestration import build_guard_assessment, estimate_factor_contrib_120d
+from lie_engine.orchestration import build_guard_assessment, estimate_factor_contrib_120d, loss_cooldown_active
 from tests.helpers import make_multi_symbol_bars
 
 
@@ -100,7 +100,15 @@ class OrchestrationTests(unittest.TestCase):
             self.assertIn(key, contrib)
             self.assertGreaterEqual(float(contrib[key]), 0.0)
 
+    def test_loss_cooldown_is_evaluated_on_latest_trades(self) -> None:
+        trades = pd.DataFrame(
+            {
+                "date": ["2026-02-10", "2026-02-11", "2026-02-12", "2026-02-13"],
+                "pnl": [1.2, -0.1, -0.2, -0.3],
+            }
+        )
+        self.assertTrue(loss_cooldown_active(trades, cooldown_losses=3))
+
 
 if __name__ == "__main__":
     unittest.main()
-

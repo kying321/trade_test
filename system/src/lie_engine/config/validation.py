@@ -379,6 +379,221 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         issues.append(ValidationIssue("error", "validation.ops_stress_matrix_trend_window_runs", "必须 >= 2"))
     if "ops_stress_matrix_trend_min_runs" in val and _as_int(val.get("ops_stress_matrix_trend_min_runs", 0)) < 2:
         issues.append(ValidationIssue("error", "validation.ops_stress_matrix_trend_min_runs", "必须 >= 2"))
+    if "mode_stress_execution_friction_enabled" in val and not isinstance(
+        val.get("mode_stress_execution_friction_enabled"), bool
+    ):
+        issues.append(ValidationIssue("error", "validation.mode_stress_execution_friction_enabled", "必须是布尔值"))
+    if "mode_stress_execution_friction_scenarios" in val:
+        raw_scenarios = val.get("mode_stress_execution_friction_scenarios")
+        if not isinstance(raw_scenarios, list):
+            issues.append(
+                ValidationIssue("error", "validation.mode_stress_execution_friction_scenarios", "必须是列表")
+            )
+        else:
+            for idx, row in enumerate(raw_scenarios):
+                prefix = f"validation.mode_stress_execution_friction_scenarios[{idx}]"
+                if not isinstance(row, dict):
+                    issues.append(ValidationIssue("error", prefix, "必须是字典"))
+                    continue
+                if "execution_latency_days" in row and _as_int(row.get("execution_latency_days", -1)) < 0:
+                    issues.append(ValidationIssue("error", f"{prefix}.execution_latency_days", "必须 >= 0"))
+                if "latency_days" in row and _as_int(row.get("latency_days", -1)) < 0:
+                    issues.append(ValidationIssue("error", f"{prefix}.latency_days", "必须 >= 0"))
+                if "execution_friction_multiplier" in row and _as_float(
+                    row.get("execution_friction_multiplier", -1.0)
+                ) < 0.0:
+                    issues.append(
+                        ValidationIssue("error", f"{prefix}.execution_friction_multiplier", "必须 >= 0")
+                    )
+                if "friction_multiplier" in row and _as_float(row.get("friction_multiplier", -1.0)) < 0.0:
+                    issues.append(ValidationIssue("error", f"{prefix}.friction_multiplier", "必须 >= 0"))
+                if "execution_extra_slippage_bps" in row and _as_float(
+                    row.get("execution_extra_slippage_bps", -1.0)
+                ) < 0.0:
+                    issues.append(
+                        ValidationIssue("error", f"{prefix}.execution_extra_slippage_bps", "必须 >= 0")
+                    )
+                if "extra_slippage_bps" in row and _as_float(row.get("extra_slippage_bps", -1.0)) < 0.0:
+                    issues.append(ValidationIssue("error", f"{prefix}.extra_slippage_bps", "必须 >= 0"))
+    if "ops_stress_matrix_execution_friction_enabled" in val and not isinstance(
+        val.get("ops_stress_matrix_execution_friction_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue("error", "validation.ops_stress_matrix_execution_friction_enabled", "必须是布尔值")
+        )
+    if "ops_stress_matrix_execution_friction_require_active" in val and not isinstance(
+        val.get("ops_stress_matrix_execution_friction_require_active"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_require_active",
+                "必须是布尔值",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_enabled" in val and not isinstance(
+        val.get("ops_stress_matrix_execution_friction_trendline_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_enabled",
+                "必须是布尔值",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_require_active" in val and not isinstance(
+        val.get("ops_stress_matrix_execution_friction_trendline_require_active"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_require_active",
+                "必须是布尔值",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_require_samples" in val and not isinstance(
+        val.get("ops_stress_matrix_execution_friction_trendline_require_samples"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_require_samples",
+                "必须是布尔值",
+            )
+        )
+    for k in (
+        "ops_stress_matrix_execution_friction_trendline_staleness_guard_enabled",
+        "ops_stress_matrix_execution_friction_trendline_autotune_enabled",
+        "ops_stress_matrix_execution_friction_trendline_autotune_apply_enabled",
+        "ops_stress_matrix_execution_friction_trendline_controlled_apply_enabled",
+        "ops_stress_matrix_execution_friction_trendline_controlled_apply_manual_approval_required",
+        "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_enabled",
+        "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_drift_enabled",
+        "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_drift_gate_hard_fail",
+    ):
+        if k in val and not isinstance(val.get(k), bool):
+            issues.append(ValidationIssue("error", f"validation.{k}", "必须是布尔值"))
+    for k in (
+        "ops_stress_matrix_execution_friction_trendline_recent_runs",
+        "ops_stress_matrix_execution_friction_trendline_prior_runs",
+    ):
+        if k in val and _as_int(val.get(k, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{k}", "必须 >= 1"))
+    if "ops_stress_matrix_execution_friction_trendline_max_staleness_days" in val and _as_int(
+        val.get("ops_stress_matrix_execution_friction_trendline_max_staleness_days", -1)
+    ) < 0:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_max_staleness_days",
+                "必须 >= 0",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_controlled_apply_max_apply_window_days" in val and _as_int(
+        val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_max_apply_window_days", -1)
+    ) < 0:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_controlled_apply_max_apply_window_days",
+                "必须 >= 0",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_controlled_apply_approval_manifest_path" in val:
+        raw_path = val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_approval_manifest_path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_stress_matrix_execution_friction_trendline_controlled_apply_approval_manifest_path",
+                    "必须是非空字符串路径",
+                )
+            )
+    if "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_path" in val:
+        raw_path = val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_path",
+                    "必须是非空字符串路径",
+                )
+            )
+    if "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_retention_days" in val and _as_int(
+        val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_retention_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_retention_days",
+                "必须 >= 1",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_staleness_window_days" in val and _as_int(
+        val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_staleness_window_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_staleness_window_days",
+                "必须 >= 1",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_window_stale_ratio_max" in val:
+        ratio = _as_float(
+            val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_window_stale_ratio_max", -1.0),
+            -1.0,
+        )
+        if not (0.0 <= ratio <= 1.0):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_window_stale_ratio_max",
+                    "必须在 [0,1] 之间",
+                )
+            )
+    if "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_max" in val:
+        ratio = _as_float(
+            val.get(
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_max",
+                -1.0,
+            ),
+            -1.0,
+        )
+        if not (0.0 <= ratio <= 1.0):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_max",
+                    "必须在 [0,1] 之间",
+                )
+            )
+    if "ops_stress_matrix_execution_friction_trendline_autotune_lookback_runs" in val and _as_int(
+        val.get("ops_stress_matrix_execution_friction_trendline_autotune_lookback_runs", 0)
+    ) < 3:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_autotune_lookback_runs",
+                "必须 >= 3",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_autotune_min_transitions" in val and _as_int(
+        val.get("ops_stress_matrix_execution_friction_trendline_autotune_min_transitions", 0)
+    ) < 2:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_stress_matrix_execution_friction_trendline_autotune_min_transitions",
+                "必须 >= 2",
+            )
+        )
+    if "ops_stress_matrix_execution_friction_trendline_min_runs" in val and _as_int(
+        val.get("ops_stress_matrix_execution_friction_trendline_min_runs", 0)
+    ) < 2:
+        issues.append(
+            ValidationIssue("error", "validation.ops_stress_matrix_execution_friction_trendline_min_runs", "必须 >= 2")
+        )
     if "ops_stress_autorun_history_enabled" in val and not isinstance(val.get("ops_stress_autorun_history_enabled"), bool):
         issues.append(ValidationIssue("error", "validation.ops_stress_autorun_history_enabled", "必须是布尔值"))
     if "ops_stress_autorun_history_window_days" in val and _as_int(
@@ -389,6 +604,12 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         val.get("ops_stress_autorun_history_min_rounds", 0)
     ) < 1:
         issues.append(ValidationIssue("error", "validation.ops_stress_autorun_history_min_rounds", "必须 >= 1"))
+    if "ops_stress_autorun_history_no_trigger_min_payload_days" in val and _as_int(
+        val.get("ops_stress_autorun_history_no_trigger_min_payload_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_stress_autorun_history_no_trigger_min_payload_days", "必须 >= 1")
+        )
     if "ops_stress_autorun_history_retention_days" in val and _as_int(
         val.get("ops_stress_autorun_history_retention_days", 0)
     ) < 1:
@@ -498,11 +719,39 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         mr = _as_int(val.get("ops_stress_matrix_trend_min_runs", 0))
         if mr > wr:
             issues.append(ValidationIssue("error", "validation.ops_stress_matrix_trend_min_runs", "不能大于 ops_stress_matrix_trend_window_runs"))
+    if (
+        "ops_stress_matrix_execution_friction_trendline_min_runs" in val
+        and (
+            "ops_stress_matrix_execution_friction_trendline_recent_runs" in val
+            or "ops_stress_matrix_execution_friction_trendline_prior_runs" in val
+        )
+    ):
+        recent_runs = _as_int(val.get("ops_stress_matrix_execution_friction_trendline_recent_runs", 3))
+        prior_runs = _as_int(val.get("ops_stress_matrix_execution_friction_trendline_prior_runs", 3))
+        min_runs = _as_int(val.get("ops_stress_matrix_execution_friction_trendline_min_runs", 2))
+        if min_runs > (recent_runs + prior_runs):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_stress_matrix_execution_friction_trendline_min_runs",
+                    "不能大于 recent_runs + prior_runs",
+                )
+            )
     for k in (
         "ops_stress_matrix_robustness_drop_max",
         "ops_stress_matrix_annual_return_drop_max",
         "ops_stress_matrix_drawdown_rise_max",
         "ops_stress_matrix_fail_ratio_max",
+        "mode_stress_execution_friction_max_annual_drop",
+        "mode_stress_execution_friction_max_drawdown_rise",
+        "mode_stress_execution_friction_min_profit_factor_ratio",
+        "mode_stress_execution_friction_max_fail_ratio",
+        "mode_stress_execution_friction_max_positive_window_ratio_drop",
+        "ops_stress_matrix_execution_friction_trendline_max_annual_drop_rise",
+        "ops_stress_matrix_execution_friction_trendline_max_drawdown_rise",
+        "ops_stress_matrix_execution_friction_trendline_max_profit_factor_ratio_drop",
+        "ops_stress_matrix_execution_friction_trendline_autotune_quantile",
+        "ops_stress_matrix_execution_friction_trendline_autotune_step_max",
     ):
         if k in val:
             v = _as_float(val.get(k, 0.0))
@@ -527,6 +776,27 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
             v = _as_float(val.get(k, 0.0))
             if not (0.0 <= v <= 1.0):
                 issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
+    for k in ("ops_slot_degradation_soft_multiplier", "ops_slot_degradation_hard_multiplier"):
+        if k in val and _as_float(val.get(k, 0.0)) < 1.0:
+            issues.append(ValidationIssue("error", f"validation.{k}", "必须 >= 1"))
+    if "ops_slot_degradation_soft_multiplier" in val and "ops_slot_degradation_hard_multiplier" in val:
+        soft = _as_float(val.get("ops_slot_degradation_soft_multiplier", 1.0))
+        hard = _as_float(val.get("ops_slot_degradation_hard_multiplier", 1.0))
+        if hard < soft:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_slot_degradation_hard_multiplier",
+                    "不能小于 ops_slot_degradation_soft_multiplier",
+                )
+            )
+    for k in ("ops_slot_hysteresis_soft_streak_days", "ops_slot_hysteresis_hard_streak_days"):
+        if k in val and _as_int(val.get(k, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{k}", "必须 >= 1"))
+    if "ops_slot_degradation_enabled" in val and not isinstance(val.get("ops_slot_degradation_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.ops_slot_degradation_enabled", "必须是布尔值"))
+    if "ops_slot_hysteresis_enabled" in val and not isinstance(val.get("ops_slot_hysteresis_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.ops_slot_hysteresis_enabled", "必须是布尔值"))
     for map_key in (
         "ops_slot_eod_quality_anomaly_ratio_max_by_regime",
         "ops_slot_eod_risk_anomaly_ratio_max_by_regime",
@@ -586,6 +856,8 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         "ops_reconcile_plan_gap_ratio_max",
         "ops_reconcile_closed_count_gap_ratio_max",
         "ops_reconcile_open_gap_ratio_max",
+        "ops_reconcile_executed_dedup_pruned_ratio_max",
+        "ops_reconcile_executed_dedup_days_ratio_max",
         "ops_reconcile_broker_missing_ratio_max",
         "ops_reconcile_broker_gap_ratio_max",
         "ops_reconcile_broker_contract_schema_invalid_ratio_max",
@@ -607,6 +879,58 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         issues.append(ValidationIssue("error", "validation.ops_reconcile_closed_pnl_gap_abs_max", "必须 >= 0"))
     if "ops_reconcile_broker_pnl_gap_abs_max" in val and _as_float(val.get("ops_reconcile_broker_pnl_gap_abs_max", 0.0)) < 0.0:
         issues.append(ValidationIssue("error", "validation.ops_reconcile_broker_pnl_gap_abs_max", "必须 >= 0"))
+    if "ops_reconcile_executed_dedup_monitor_enabled" in val and not isinstance(
+        val.get("ops_reconcile_executed_dedup_monitor_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue("error", "validation.ops_reconcile_executed_dedup_monitor_enabled", "必须是布尔值")
+        )
+    if "ops_reconcile_executed_dedup_gate_hard_fail" in val and not isinstance(
+        val.get("ops_reconcile_executed_dedup_gate_hard_fail"), bool
+    ):
+        issues.append(
+            ValidationIssue("error", "validation.ops_reconcile_executed_dedup_gate_hard_fail", "必须是布尔值")
+        )
+    if "ops_reconcile_executed_dedup_restore_verify_enabled" in val and not isinstance(
+        val.get("ops_reconcile_executed_dedup_restore_verify_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_reconcile_executed_dedup_restore_verify_enabled",
+                "必须是布尔值",
+            )
+        )
+    if "ops_reconcile_executed_dedup_restore_verify_hard_fail" in val and not isinstance(
+        val.get("ops_reconcile_executed_dedup_restore_verify_hard_fail"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_reconcile_executed_dedup_restore_verify_hard_fail",
+                "必须是布尔值",
+            )
+        )
+    if "ops_reconcile_executed_dedup_restore_verify_max_age_days" in val and _as_int(
+        val.get("ops_reconcile_executed_dedup_restore_verify_max_age_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_reconcile_executed_dedup_restore_verify_max_age_days",
+                "必须 >= 1",
+            )
+        )
+    if "ops_reconcile_executed_dedup_restore_verify_min_backup_rows" in val and _as_int(
+        val.get("ops_reconcile_executed_dedup_restore_verify_min_backup_rows", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_reconcile_executed_dedup_restore_verify_min_backup_rows",
+                "必须 >= 1",
+            )
+        )
     for k in (
         "ops_reconcile_broker_closed_pnl_abs_hard_max",
         "ops_reconcile_broker_position_qty_abs_hard_max",
@@ -762,6 +1086,36 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                 "必须是布尔值",
             )
         )
+    if "ops_artifact_governance_baseline_snapshot_enabled" in val and not isinstance(
+        val.get("ops_artifact_governance_baseline_snapshot_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_artifact_governance_baseline_snapshot_enabled",
+                "必须是布尔值",
+            )
+        )
+    if "ops_artifact_governance_baseline_auto_promote_on_review_pass" in val and not isinstance(
+        val.get("ops_artifact_governance_baseline_auto_promote_on_review_pass"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_artifact_governance_baseline_auto_promote_on_review_pass",
+                "必须是布尔值",
+            )
+        )
+    for key in (
+        "ops_artifact_governance_baseline_snapshot_path",
+        "ops_artifact_governance_baseline_history_dir",
+    ):
+        if key in val:
+            raw = val.get(key)
+            if not isinstance(raw, str):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须是字符串"))
+            elif str(raw).strip() == "":
+                issues.append(ValidationIssue("error", f"validation.{key}", "不能为空"))
     if "ops_artifact_governance_profile_baseline" in val:
         baseline = val.get("ops_artifact_governance_profile_baseline")
         if not isinstance(baseline, dict):
@@ -817,6 +1171,1046 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         issues.append(ValidationIssue("error", "validation.ops_state_min_samples", "必须 >= 1"))
     if "ops_mode_health_fail_days_max" in val and _as_int(val.get("ops_mode_health_fail_days_max", 0)) < 0:
         issues.append(ValidationIssue("error", "validation.ops_mode_health_fail_days_max", "必须 >= 0"))
+    if "ops_state_switch_rate_max_by_mode" in val:
+        raw_map = val.get("ops_state_switch_rate_max_by_mode")
+        if not isinstance(raw_map, dict):
+            issues.append(ValidationIssue("error", "validation.ops_state_switch_rate_max_by_mode", "必须是字典"))
+        else:
+            for key, raw_v in raw_map.items():
+                if str(key).strip() == "":
+                    issues.append(
+                        ValidationIssue("error", "validation.ops_state_switch_rate_max_by_mode", "键不能为空")
+                    )
+                if _as_float(raw_v, -1.0) <= 0.0:
+                    issues.append(
+                        ValidationIssue(
+                            "error",
+                            f"validation.ops_state_switch_rate_max_by_mode.{key}",
+                            "必须 > 0",
+                        )
+                    )
+    for k in ("ops_state_hysteresis_soft_streak_days", "ops_state_hysteresis_hard_streak_days"):
+        if k in val and _as_int(val.get(k, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{k}", "必须 >= 1"))
+    for k in ("ops_state_degradation_soft_multiplier", "ops_state_degradation_hard_multiplier"):
+        if k in val and _as_float(val.get(k, 0.0)) < 1.0:
+            issues.append(ValidationIssue("error", f"validation.{k}", "必须 >= 1"))
+    if "ops_state_degradation_soft_multiplier" in val and "ops_state_degradation_hard_multiplier" in val:
+        soft = _as_float(val.get("ops_state_degradation_soft_multiplier", 1.0))
+        hard = _as_float(val.get("ops_state_degradation_hard_multiplier", 1.0))
+        if hard < soft:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_state_degradation_hard_multiplier",
+                    "不能小于 ops_state_degradation_soft_multiplier",
+                )
+            )
+    for k in ("ops_state_degradation_floor_soft_ratio", "ops_state_degradation_floor_hard_ratio"):
+        if k in val:
+            v = _as_float(val.get(k, 0.0))
+            if not (0.0 <= v <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
+    if "ops_state_degradation_floor_soft_ratio" in val and "ops_state_degradation_floor_hard_ratio" in val:
+        soft_r = _as_float(val.get("ops_state_degradation_floor_soft_ratio", 1.0))
+        hard_r = _as_float(val.get("ops_state_degradation_floor_hard_ratio", 1.0))
+        if hard_r > soft_r:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_state_degradation_floor_hard_ratio",
+                    "不能大于 ops_state_degradation_floor_soft_ratio",
+                )
+            )
+    if "ops_state_degradation_enabled" in val and not isinstance(val.get("ops_state_degradation_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.ops_state_degradation_enabled", "必须是布尔值"))
+    if "ops_state_hysteresis_enabled" in val and not isinstance(val.get("ops_state_hysteresis_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.ops_state_hysteresis_enabled", "必须是布尔值"))
+    if "ops_degradation_calibration_enabled" in val and not isinstance(
+        val.get("ops_degradation_calibration_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_enabled", "必须是布尔值")
+        )
+    if "ops_degradation_calibration_use_live_overrides" in val and not isinstance(
+        val.get("ops_degradation_calibration_use_live_overrides"), bool
+    ):
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_use_live_overrides", "必须是布尔值")
+        )
+    if "ops_degradation_calibration_live_params_path" in val:
+        raw = val.get("ops_degradation_calibration_live_params_path")
+        if not isinstance(raw, str):
+            issues.append(
+                ValidationIssue("error", "validation.ops_degradation_calibration_live_params_path", "必须是字符串")
+            )
+        elif str(raw).strip() == "":
+            issues.append(
+                ValidationIssue("error", "validation.ops_degradation_calibration_live_params_path", "不能为空")
+            )
+    if "ops_degradation_calibration_rollback_enabled" in val and not isinstance(
+        val.get("ops_degradation_calibration_rollback_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_rollback_enabled", "必须是布尔值")
+        )
+    if "ops_degradation_calibration_rollback_auto_promote_on_stable" in val and not isinstance(
+        val.get("ops_degradation_calibration_rollback_auto_promote_on_stable"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_calibration_rollback_auto_promote_on_stable",
+                "必须是布尔值",
+            )
+        )
+    if "release_decision_freshness_enabled" in val and not isinstance(
+        val.get("release_decision_freshness_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.release_decision_freshness_enabled",
+                "必须是布尔值",
+            )
+        )
+    if "release_decision_freshness_hard_fail" in val and not isinstance(
+        val.get("release_decision_freshness_hard_fail"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.release_decision_freshness_hard_fail",
+                "必须是布尔值",
+            )
+        )
+    for key in (
+        "release_decision_review_max_staleness_hours",
+        "release_decision_gate_max_staleness_hours",
+        "release_decision_eod_max_staleness_hours",
+    ):
+        if key in val and _as_int(val.get(key, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 1"))
+    if "ops_degradation_guardrail_dashboard_enabled" in val and not isinstance(
+        val.get("ops_degradation_guardrail_dashboard_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_dashboard_enabled",
+                "必须是布尔值",
+            )
+        )
+    if "ops_degradation_guardrail_dashboard_hard_fail" in val and not isinstance(
+        val.get("ops_degradation_guardrail_dashboard_hard_fail"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_dashboard_hard_fail",
+                "必须是布尔值",
+            )
+        )
+    if "ops_degradation_guardrail_dashboard_use_live_overrides" in val and not isinstance(
+        val.get("ops_degradation_guardrail_dashboard_use_live_overrides"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_dashboard_use_live_overrides",
+                "必须是布尔值",
+            )
+        )
+    if "ops_degradation_guardrail_dashboard_live_params_path" in val:
+        raw_live = val.get("ops_degradation_guardrail_dashboard_live_params_path")
+        if not isinstance(raw_live, str):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_degradation_guardrail_dashboard_live_params_path",
+                    "必须是字符串",
+                )
+            )
+        elif str(raw_live).strip() == "":
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_degradation_guardrail_dashboard_live_params_path",
+                    "不能为空",
+                )
+            )
+    if "ops_degradation_guardrail_dashboard_window_days" in val and _as_int(
+        val.get("ops_degradation_guardrail_dashboard_window_days", 0)
+    ) < 7:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_dashboard_window_days",
+                "必须 >= 7",
+            )
+        )
+    if "ops_degradation_guardrail_dashboard_min_samples" in val and _as_int(
+        val.get("ops_degradation_guardrail_dashboard_min_samples", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_dashboard_min_samples",
+                "必须 >= 1",
+            )
+        )
+    for key in (
+        "ops_degradation_guardrail_cooldown_hit_rate_max",
+        "ops_degradation_guardrail_suppressed_trigger_density_max",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    if "ops_degradation_guardrail_promotion_latency_days_max" in val and _as_int(
+        val.get("ops_degradation_guardrail_promotion_latency_days_max", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_promotion_latency_days_max",
+                "必须 >= 1",
+            )
+        )
+    if "ops_degradation_guardrail_false_positive_target_max" in val:
+        fp_target = _as_float(val.get("ops_degradation_guardrail_false_positive_target_max", -1.0))
+        if not (0.0 <= fp_target <= 1.0):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_degradation_guardrail_false_positive_target_max",
+                    "必须在 [0, 1]",
+                )
+            )
+    for key in (
+        "ops_degradation_guardrail_burnin_autofill_review_if_missing",
+        "ops_degradation_guardrail_burnin_require_min_samples_for_tune",
+        "ops_degradation_guardrail_burnin_light_backfill_enabled",
+        "ops_degradation_guardrail_burnin_low_cost_replay_enabled",
+        "ops_degradation_guardrail_burnin_use_live_overrides",
+        "ops_degradation_guardrail_burnin_budget_audit_enabled",
+        "ops_degradation_guardrail_burnin_budget_audit_auto_tune",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    if "ops_degradation_guardrail_burnin_live_params_path" in val:
+        raw = val.get("ops_degradation_guardrail_burnin_live_params_path")
+        if not isinstance(raw, str):
+            issues.append(
+                ValidationIssue("error", "validation.ops_degradation_guardrail_burnin_live_params_path", "必须是字符串")
+            )
+        elif str(raw).strip() == "":
+            issues.append(
+                ValidationIssue("error", "validation.ops_degradation_guardrail_burnin_live_params_path", "不能为空")
+            )
+    for key in (
+        "ops_degradation_guardrail_burnin_light_backfill_max_days_per_run",
+        "ops_degradation_guardrail_burnin_review_autofill_max_days_per_run",
+        "ops_degradation_guardrail_burnin_low_cost_replay_max_days_per_run",
+        "ops_degradation_guardrail_burnin_budget_audit_min_days",
+        "ops_degradation_guardrail_burnin_budget_audit_max_days",
+    ):
+        if key in val and _as_int(val.get(key, -1)) < 0:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 0"))
+    if "ops_degradation_guardrail_burnin_budget_audit_step_days" in val and _as_int(
+        val.get("ops_degradation_guardrail_burnin_budget_audit_step_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_burnin_budget_audit_step_days",
+                "必须 >= 1",
+            )
+        )
+    for key in (
+        "ops_degradation_guardrail_burnin_budget_audit_expand_recovery_ratio_min",
+        "ops_degradation_guardrail_burnin_budget_audit_shrink_recovery_ratio_max",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    if (
+        "ops_degradation_guardrail_burnin_budget_audit_expand_recovery_ratio_min" in val
+        and "ops_degradation_guardrail_burnin_budget_audit_shrink_recovery_ratio_max" in val
+        and _as_float(val.get("ops_degradation_guardrail_burnin_budget_audit_shrink_recovery_ratio_max", 0.0))
+        > _as_float(val.get("ops_degradation_guardrail_burnin_budget_audit_expand_recovery_ratio_min", 1.0))
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_burnin_budget_audit_shrink_recovery_ratio_max",
+                "不能大于 ops_degradation_guardrail_burnin_budget_audit_expand_recovery_ratio_min",
+            )
+        )
+    for key in (
+        "ops_degradation_guardrail_threshold_drift_enabled",
+        "ops_degradation_guardrail_threshold_drift_gate_hard_fail",
+        "ops_degradation_guardrail_threshold_drift_require_active",
+        "ops_degradation_guardrail_threshold_drift_autofix_enabled",
+        "ops_degradation_guardrail_threshold_drift_autofix_on_missing",
+        "ops_degradation_guardrail_threshold_drift_autofix_on_stale",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    if "ops_degradation_guardrail_threshold_drift_max_staleness_days" in val and _as_int(
+        val.get("ops_degradation_guardrail_threshold_drift_max_staleness_days", -1)
+    ) < 0:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_threshold_drift_max_staleness_days",
+                "必须 >= 0",
+            )
+        )
+    if "ops_degradation_guardrail_threshold_drift_min_burnin_samples" in val and _as_int(
+        val.get("ops_degradation_guardrail_threshold_drift_min_burnin_samples", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_threshold_drift_min_burnin_samples",
+                "必须 >= 1",
+            )
+        )
+    if "ops_degradation_guardrail_threshold_drift_autofix_window_days" in val and _as_int(
+        val.get("ops_degradation_guardrail_threshold_drift_autofix_window_days", 0)
+    ) < 7:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_threshold_drift_autofix_window_days",
+                "必须 >= 7",
+            )
+        )
+    for key in (
+        "ops_degradation_guardrail_threshold_drift_warn_ratio",
+        "ops_degradation_guardrail_threshold_drift_critical_ratio",
+    ):
+        if key in val and _as_float(val.get(key, -1.0)) < 0.0:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 0"))
+    for key in (
+        "ops_compaction_restore_trend_enabled",
+        "ops_compaction_restore_trend_gate_hard_fail",
+        "ops_compaction_restore_trend_require_active",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    if "ops_compaction_restore_trend_min_restore_required_runs" in val and _as_int(
+        val.get("ops_compaction_restore_trend_min_restore_required_runs", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_compaction_restore_trend_min_restore_required_runs", "必须 >= 1")
+        )
+    for key in (
+        "ops_guard_loop_frontend_snapshot_trend_enabled",
+        "ops_guard_loop_frontend_snapshot_trend_gate_hard_fail",
+        "ops_guard_loop_frontend_snapshot_trend_require_active",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    for key in (
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_enabled",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_enabled",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_require_zero_missed_runs",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_checksum_index_enabled",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_enabled",
+        "ops_guard_loop_frontend_snapshot_trend_gate_promote_on_burnin",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_enabled",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_manual_approval_required",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_dry_run",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_rollback_guard_enabled",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_checksum_index_enabled",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_enabled",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_gate_hard_fail",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    for key in (
+        "ops_guard_loop_frontend_snapshot_trend_window_days",
+        "ops_guard_loop_frontend_snapshot_trend_min_samples",
+        "ops_guard_loop_frontend_snapshot_trend_max_failure_streak",
+        "ops_guard_loop_frontend_snapshot_trend_max_timeout_streak",
+    ):
+        if key in val and _as_int(val.get(key, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 1"))
+    for key in (
+        "ops_guard_loop_frontend_snapshot_trend_max_failure_ratio",
+        "ops_guard_loop_frontend_snapshot_trend_max_timeout_ratio",
+        "ops_guard_loop_frontend_snapshot_trend_max_governance_failure_ratio",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    if "ops_guard_loop_frontend_snapshot_recovery_antiflap_cooldown_hours" in val:
+        cooldown_hours = _as_float(
+            val.get("ops_guard_loop_frontend_snapshot_recovery_antiflap_cooldown_hours", -1.0)
+        )
+        if cooldown_hours < 0.0:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_frontend_snapshot_recovery_antiflap_cooldown_hours",
+                    "必须 >= 0",
+                )
+            )
+    for key in (
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_window_runs",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_max_escalations",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_min_timeout_streak",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_window_days",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_min_samples",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_retention_days",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_long_days",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_min_long_samples",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_retention_days",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_window_days",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_samples",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_recent_days",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_prior_days",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_min_samples",
+    ):
+        if key in val and _as_int(val.get(key, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 1"))
+    if "ops_guard_loop_frontend_snapshot_trend_controlled_apply_max_apply_window_days" in val and _as_int(
+        val.get("ops_guard_loop_frontend_snapshot_trend_controlled_apply_max_apply_window_days", -1)
+    ) < 0:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_frontend_snapshot_trend_controlled_apply_max_apply_window_days",
+                "必须 >= 0",
+            )
+        )
+    if "ops_guard_loop_frontend_snapshot_trend_controlled_apply_approval_manifest_path" in val:
+        raw_path = str(
+            val.get("ops_guard_loop_frontend_snapshot_trend_controlled_apply_approval_manifest_path", "")
+        ).strip()
+        if not raw_path:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_frontend_snapshot_trend_controlled_apply_approval_manifest_path",
+                    "不能为空",
+                )
+            )
+    if "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_reason_missing_runs" in val and _as_int(
+        val.get("ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_reason_missing_runs", -1)
+    ) < 0:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_reason_missing_runs",
+                "必须 >= 0",
+            )
+        )
+    if "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_suppression_ratio" in val:
+        vv = _as_float(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_suppression_ratio",
+                -1.0,
+            )
+        )
+        if not (0.0 <= vv <= 1.0):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_suppression_ratio",
+                    "必须在 [0, 1]",
+                )
+            )
+    for key in (
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_non_apply_ratio",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_rollback_guard_ratio",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_apply_ratio",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_non_apply_ratio_rise",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise",
+        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_apply_ratio_drop",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    for key in (
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_suppression_ratio_delta",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_replay_missed_ratio_delta",
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_reason_missing_ratio_delta",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    if (
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_window_days" in val
+        and "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_long_days" in val
+    ):
+        short_days = _as_int(
+            val.get("ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_window_days", 1)
+        )
+        long_days = _as_int(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_long_days",
+                1,
+            )
+        )
+        if long_days < short_days:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_long_days",
+                    "不能小于 ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_window_days",
+                )
+            )
+    if (
+        "ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_window_runs" in val
+        and "ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_max_escalations" in val
+    ):
+        antiflap_window = _as_int(
+            val.get("ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_window_runs", 1)
+        )
+        antiflap_max = _as_int(
+            val.get("ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_max_escalations", 1)
+        )
+        if antiflap_max > antiflap_window:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_max_escalations",
+                    "不能大于 ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_window_runs",
+                )
+            )
+    if (
+        "ops_degradation_guardrail_threshold_drift_warn_ratio" in val
+        and "ops_degradation_guardrail_threshold_drift_critical_ratio" in val
+        and _as_float(val.get("ops_degradation_guardrail_threshold_drift_critical_ratio", 0.0))
+        < _as_float(val.get("ops_degradation_guardrail_threshold_drift_warn_ratio", 0.0))
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_guardrail_threshold_drift_critical_ratio",
+                "不能小于 ops_degradation_guardrail_threshold_drift_warn_ratio",
+            )
+        )
+    for key in (
+        "ops_guard_loop_cadence_non_apply_rollback_lift_enabled",
+        "ops_guard_loop_cadence_non_apply_rollback_lift_allow_upgrade_during_cooldown",
+        "ops_guard_loop_cadence_non_apply_rollback_lift_force_heavy_hard",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    if "ops_guard_loop_cadence_non_apply_rollback_lift_cooldown_days" in val and _as_int(
+        val.get("ops_guard_loop_cadence_non_apply_rollback_lift_cooldown_days", -1)
+    ) < 0:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_cadence_non_apply_rollback_lift_cooldown_days",
+                "必须 >= 0",
+            )
+        )
+    if "ops_guard_loop_cadence_non_apply_rollback_lift_lookback_days" in val and _as_int(
+        val.get("ops_guard_loop_cadence_non_apply_rollback_lift_lookback_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_cadence_non_apply_rollback_lift_lookback_days",
+                "必须 >= 1",
+            )
+        )
+    for key in (
+        "ops_guard_loop_cadence_non_apply_semantic_drift_window_days",
+        "ops_guard_loop_cadence_non_apply_semantic_drift_min_samples",
+    ):
+        if key in val and _as_int(val.get(key, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 1"))
+    for key in (
+        "ops_guard_loop_cadence_non_apply_semantic_drift_max_pulse_fail_ratio",
+        "ops_guard_loop_cadence_non_apply_semantic_drift_max_gap_backfill_fail_ratio",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    for key in (
+        "ops_guard_loop_cadence_non_apply_rollback_lift_light_streak_min",
+        "ops_guard_loop_cadence_non_apply_rollback_lift_heavy_streak_min",
+    ):
+        if key in val and _as_int(val.get(key, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 1"))
+    if (
+        "ops_guard_loop_cadence_non_apply_rollback_lift_light_streak_min" in val
+        and "ops_guard_loop_cadence_non_apply_rollback_lift_heavy_streak_min" in val
+    ):
+        light_min = _as_int(val.get("ops_guard_loop_cadence_non_apply_rollback_lift_light_streak_min", 1))
+        heavy_min = _as_int(val.get("ops_guard_loop_cadence_non_apply_rollback_lift_heavy_streak_min", 1))
+        if heavy_min < light_min:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_cadence_non_apply_rollback_lift_heavy_streak_min",
+                    "不能小于 ops_guard_loop_cadence_non_apply_rollback_lift_light_streak_min",
+                )
+            )
+    for key in (
+        "ops_guard_loop_cadence_non_apply_lift_trend_enabled",
+        "ops_guard_loop_cadence_non_apply_lift_trend_gate_hard_fail",
+        "ops_guard_loop_cadence_non_apply_lift_trend_require_active",
+        "ops_guard_loop_cadence_non_apply_lift_trend_checksum_index_enabled",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    for key in (
+        "ops_guard_loop_cadence_non_apply_lift_trend_window_days",
+        "ops_guard_loop_cadence_non_apply_lift_trend_min_samples",
+        "ops_guard_loop_cadence_non_apply_lift_trend_retention_days",
+    ):
+        if key in val and _as_int(val.get(key, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 1"))
+    for key in (
+        "ops_guard_loop_cadence_non_apply_lift_trend_applied_rate_min",
+        "ops_guard_loop_cadence_non_apply_lift_trend_cooldown_block_rate_max",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    for key in (
+        "ops_guard_loop_cadence_lift_trend_preset_light_applied_delta_max",
+        "ops_guard_loop_cadence_lift_trend_preset_heavy_applied_delta_max",
+        "ops_guard_loop_cadence_lift_trend_preset_light_cooldown_delta_min",
+        "ops_guard_loop_cadence_lift_trend_preset_heavy_cooldown_delta_min",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -9.0))
+            if not (-1.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [-1, 1]"))
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_light_applied_delta_max" in val
+        and "ops_guard_loop_cadence_lift_trend_preset_heavy_applied_delta_max" in val
+    ):
+        light_applied = _as_float(val.get("ops_guard_loop_cadence_lift_trend_preset_light_applied_delta_max", -0.15))
+        heavy_applied = _as_float(val.get("ops_guard_loop_cadence_lift_trend_preset_heavy_applied_delta_max", -0.30))
+        if heavy_applied > light_applied:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_cadence_lift_trend_preset_heavy_applied_delta_max",
+                    "不能大于 ops_guard_loop_cadence_lift_trend_preset_light_applied_delta_max",
+                )
+            )
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_light_cooldown_delta_min" in val
+        and "ops_guard_loop_cadence_lift_trend_preset_heavy_cooldown_delta_min" in val
+    ):
+        light_cooldown = _as_float(val.get("ops_guard_loop_cadence_lift_trend_preset_light_cooldown_delta_min", 0.15))
+        heavy_cooldown = _as_float(val.get("ops_guard_loop_cadence_lift_trend_preset_heavy_cooldown_delta_min", 0.30))
+        if heavy_cooldown < light_cooldown:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_cadence_lift_trend_preset_heavy_cooldown_delta_min",
+                    "不能小于 ops_guard_loop_cadence_lift_trend_preset_light_cooldown_delta_min",
+                )
+            )
+    for key in (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_window_days",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_retention_days",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_min_samples",
+    ):
+        if key in val and _as_int(val.get(key, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 1"))
+    for key in (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_min_recovery_link_rate",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_min_retro_found_rate",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_enabled" in val
+        and not isinstance(val.get("ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_enabled"), bool)
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_enabled",
+                "必须是布尔值",
+            )
+        )
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_min_samples" in val
+        and _as_int(val.get("ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_min_samples", 0)) < 1
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_min_samples",
+                "必须 >= 1",
+            )
+        )
+    for key in (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_enabled",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_anti_flap_enabled",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_staleness_guard_enabled",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_apply_cooldown_days" in val
+        and _as_int(val.get("ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_apply_cooldown_days", -1)) < 0
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_apply_cooldown_days",
+                "必须 >= 0",
+            )
+        )
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_anti_flap_window_days" in val
+        and _as_int(val.get("ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_anti_flap_window_days", 0)) < 1
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_anti_flap_window_days",
+                "必须 >= 1",
+            )
+        )
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_max_staleness_days" in val
+        and _as_int(val.get("ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_max_staleness_days", -1)) < 0
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_max_staleness_days",
+                "必须 >= 0",
+            )
+        )
+    for key in (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_step_max",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_low",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_high",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_applied_gap_min",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_cooldown_gap_min",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_anti_flap_min_delta",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_low" in val
+        and "ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_high" in val
+    ):
+        low = _as_float(val.get("ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_low", 0.0))
+        high = _as_float(val.get("ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_high", 1.0))
+        if high < low:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_high",
+                    "不能小于 ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_low",
+                )
+            )
+    if (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_trendline_enabled" in val
+        and not isinstance(val.get("ops_guard_loop_cadence_lift_trend_preset_drift_trendline_enabled"), bool)
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_guard_loop_cadence_lift_trend_preset_drift_trendline_enabled",
+                "必须是布尔值",
+            )
+        )
+    for key in (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_trendline_recent_days",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_trendline_prior_days",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_trendline_min_samples",
+    ):
+        if key in val and _as_int(val.get(key, 0)) < 1:
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须 >= 1"))
+    for key in (
+        "ops_guard_loop_cadence_lift_trend_preset_drift_trendline_max_recovery_link_drop",
+        "ops_guard_loop_cadence_lift_trend_preset_drift_trendline_max_retro_found_drop",
+    ):
+        if key in val:
+            vv = _as_float(val.get(key, -1.0))
+            if not (0.0 <= vv <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    if "ops_weekly_guardrail_enabled" in val and not isinstance(val.get("ops_weekly_guardrail_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.ops_weekly_guardrail_enabled", "必须是布尔值"))
+    if "ops_weekly_guardrail_weekday" in val:
+        weekday = _as_int(val.get("ops_weekly_guardrail_weekday", 0))
+        if not (1 <= weekday <= 7):
+            issues.append(ValidationIssue("error", "validation.ops_weekly_guardrail_weekday", "必须在 [1, 7]"))
+    if "ops_weekly_guardrail_trigger_slot" in val and not _validate_hhmm(val.get("ops_weekly_guardrail_trigger_slot")):
+        issues.append(ValidationIssue("error", "validation.ops_weekly_guardrail_trigger_slot", "必须为 HH:MM"))
+    if "ops_weekly_guardrail_burnin_days" in val and _as_int(val.get("ops_weekly_guardrail_burnin_days", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.ops_weekly_guardrail_burnin_days", "必须 >= 1"))
+    if "ops_weekly_guardrail_drift_window_days" in val and _as_int(
+        val.get("ops_weekly_guardrail_drift_window_days", 0)
+    ) < 7:
+        issues.append(ValidationIssue("error", "validation.ops_weekly_guardrail_drift_window_days", "必须 >= 7"))
+    for key in (
+        "ops_weekly_guardrail_auto_tune",
+        "ops_weekly_guardrail_run_stable_replay",
+        "ops_weekly_guardrail_require_ops_window",
+        "ops_weekly_guardrail_require_burnin_coverage",
+        "ops_weekly_guardrail_compact_enabled",
+        "ops_weekly_guardrail_compact_dry_run",
+        "ops_weekly_guardrail_compact_verify_restore",
+        "ops_weekly_guardrail_compact_verify_keep_temp_db",
+        "ops_weekly_guardrail_compact_controlled_apply_enabled",
+        "ops_weekly_guardrail_compact_controlled_apply_require_restore_verify_pass",
+        "ops_weekly_guardrail_compact_controlled_apply_require_weekly_status_ok",
+    ):
+        if key in val and not isinstance(val.get(key), bool):
+            issues.append(ValidationIssue("error", f"validation.{key}", "必须是布尔值"))
+    if "ops_weekly_guardrail_compact_window_days" in val and _as_int(
+        val.get("ops_weekly_guardrail_compact_window_days", 0)
+    ) < 7:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_weekly_guardrail_compact_window_days",
+                "必须 >= 7",
+            )
+        )
+    if "ops_weekly_guardrail_compact_chunk_days" in val and _as_int(
+        val.get("ops_weekly_guardrail_compact_chunk_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_weekly_guardrail_compact_chunk_days",
+                "必须 >= 1",
+            )
+        )
+    if "ops_weekly_guardrail_compact_controlled_apply_stability_weeks" in val and _as_int(
+        val.get("ops_weekly_guardrail_compact_controlled_apply_stability_weeks", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_weekly_guardrail_compact_controlled_apply_stability_weeks",
+                "必须 >= 1",
+            )
+        )
+    if "ops_weekly_guardrail_compact_controlled_apply_cadence_weeks" in val and _as_int(
+        val.get("ops_weekly_guardrail_compact_controlled_apply_cadence_weeks", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_weekly_guardrail_compact_controlled_apply_cadence_weeks",
+                "必须 >= 1",
+            )
+        )
+    if "ops_weekly_guardrail_compact_controlled_apply_delete_budget_rows" in val and _as_int(
+        val.get("ops_weekly_guardrail_compact_controlled_apply_delete_budget_rows", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_weekly_guardrail_compact_controlled_apply_delete_budget_rows",
+                "必须 >= 1",
+            )
+        )
+    if "ops_weekly_guardrail_compact_max_delete_rows" in val:
+        raw = val.get("ops_weekly_guardrail_compact_max_delete_rows")
+        raw_txt = str(raw).strip().lower()
+        if raw not in {None, "", "none", "None"} and raw_txt not in {"none"} and _as_int(raw, 0) < 1:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_weekly_guardrail_compact_max_delete_rows",
+                    "必须 >= 1 或为空",
+                )
+            )
+    if "weekly_guardrail_history_limit" in val and _as_int(val.get("weekly_guardrail_history_limit", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.weekly_guardrail_history_limit", "必须 >= 1"))
+    for key in (
+        "ops_degradation_calibration_rollback_active_snapshot_path",
+        "ops_degradation_calibration_rollback_history_dir",
+    ):
+        if key in val:
+            raw = val.get(key)
+            if not isinstance(raw, str):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须是字符串"))
+            elif str(raw).strip() == "":
+                issues.append(ValidationIssue("error", f"validation.{key}", "不能为空"))
+    if "ops_degradation_calibration_window_days" in val and _as_int(
+        val.get("ops_degradation_calibration_window_days", 0)
+    ) < 3:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_window_days", "必须 >= 3")
+        )
+    if "ops_degradation_calibration_rollback_window_days" in val and _as_int(
+        val.get("ops_degradation_calibration_rollback_window_days", 0)
+    ) < 3:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_rollback_window_days", "必须 >= 3")
+        )
+    if "ops_degradation_calibration_rollback_recent_days" in val and _as_int(
+        val.get("ops_degradation_calibration_rollback_recent_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_rollback_recent_days", "必须 >= 1")
+        )
+    if "ops_degradation_calibration_rollback_cooldown_days" in val and _as_int(
+        val.get("ops_degradation_calibration_rollback_cooldown_days", -1)
+    ) < 0:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_rollback_cooldown_days", "必须 >= 0")
+        )
+    if "ops_degradation_calibration_rollback_promotion_cooldown_days" in val and _as_int(
+        val.get("ops_degradation_calibration_rollback_promotion_cooldown_days", -1)
+    ) < 0:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_calibration_rollback_promotion_cooldown_days",
+                "必须 >= 0",
+            )
+        )
+    if "ops_degradation_calibration_rollback_hysteresis_window_days" in val and _as_int(
+        val.get("ops_degradation_calibration_rollback_hysteresis_window_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_degradation_calibration_rollback_hysteresis_window_days",
+                "必须 >= 1",
+            )
+        )
+    if "ops_degradation_calibration_rollback_window_days" in val and "ops_degradation_calibration_rollback_recent_days" in val:
+        wd = _as_int(val.get("ops_degradation_calibration_rollback_window_days", 0))
+        rd = _as_int(val.get("ops_degradation_calibration_rollback_recent_days", 0))
+        if wd > 0 and rd > wd:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_degradation_calibration_rollback_recent_days",
+                    "不能大于 ops_degradation_calibration_rollback_window_days",
+                )
+            )
+    if "ops_degradation_calibration_min_samples" in val and _as_int(
+        val.get("ops_degradation_calibration_min_samples", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_min_samples", "必须 >= 1")
+        )
+    if "ops_degradation_calibration_rollback_min_samples" in val and _as_int(
+        val.get("ops_degradation_calibration_rollback_min_samples", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_rollback_min_samples", "必须 >= 1")
+        )
+    if "ops_degradation_calibration_rollback_stable_min_samples" in val and _as_int(
+        val.get("ops_degradation_calibration_rollback_stable_min_samples", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_rollback_stable_min_samples", "必须 >= 1")
+        )
+    for key in (
+        "ops_degradation_calibration_fp_target",
+        "ops_degradation_calibration_fn_target",
+        "ops_degradation_calibration_floor_ratio_min",
+        "ops_degradation_calibration_floor_ratio_max",
+        "ops_degradation_calibration_rollback_fn_rise_min",
+        "ops_degradation_calibration_rollback_gate_fail_rise_min",
+        "ops_degradation_calibration_rollback_stable_fn_rate_max",
+        "ops_degradation_calibration_rollback_stable_gate_fail_ratio_max",
+        "ops_degradation_calibration_rollback_trigger_hysteresis_buffer",
+        "ops_degradation_calibration_rollback_stable_hysteresis_buffer",
+    ):
+        if key in val:
+            ratio = _as_float(val.get(key, 0.0))
+            if not (0.0 <= ratio <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 [0, 1]"))
+    for key in (
+        "ops_degradation_calibration_step_multiplier",
+        "ops_degradation_calibration_step_floor_ratio",
+    ):
+        if key in val:
+            ratio = _as_float(val.get(key, 0.0))
+            if not (0.0 < ratio <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{key}", "必须在 (0, 1]"))
+    if "ops_degradation_calibration_step_streak_days" in val and _as_int(
+        val.get("ops_degradation_calibration_step_streak_days", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_step_streak_days", "必须 >= 1")
+        )
+    if "ops_degradation_calibration_multiplier_min" in val and _as_float(
+        val.get("ops_degradation_calibration_multiplier_min", 0.0)
+    ) < 1.0:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_multiplier_min", "必须 >= 1")
+        )
+    if "ops_degradation_calibration_multiplier_max" in val and _as_float(
+        val.get("ops_degradation_calibration_multiplier_max", 0.0)
+    ) < 1.0:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_multiplier_max", "必须 >= 1")
+        )
+    if "ops_degradation_calibration_multiplier_min" in val and "ops_degradation_calibration_multiplier_max" in val:
+        min_mult = _as_float(val.get("ops_degradation_calibration_multiplier_min", 1.0))
+        max_mult = _as_float(val.get("ops_degradation_calibration_multiplier_max", 1.0))
+        if max_mult < min_mult:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_degradation_calibration_multiplier_max",
+                    "不能小于 ops_degradation_calibration_multiplier_min",
+                )
+            )
+    if "ops_degradation_calibration_floor_ratio_min" in val and "ops_degradation_calibration_floor_ratio_max" in val:
+        min_ratio = _as_float(val.get("ops_degradation_calibration_floor_ratio_min", 0.0))
+        max_ratio = _as_float(val.get("ops_degradation_calibration_floor_ratio_max", 0.0))
+        if max_ratio < min_ratio:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_degradation_calibration_floor_ratio_max",
+                    "不能小于 ops_degradation_calibration_floor_ratio_min",
+                )
+            )
+    if "ops_degradation_calibration_streak_min" in val and _as_int(
+        val.get("ops_degradation_calibration_streak_min", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_streak_min", "必须 >= 1")
+        )
+    if "ops_degradation_calibration_streak_max" in val and _as_int(
+        val.get("ops_degradation_calibration_streak_max", 0)
+    ) < 1:
+        issues.append(
+            ValidationIssue("error", "validation.ops_degradation_calibration_streak_max", "必须 >= 1")
+        )
+    if "ops_degradation_calibration_streak_min" in val and "ops_degradation_calibration_streak_max" in val:
+        min_streak = _as_int(val.get("ops_degradation_calibration_streak_min", 1))
+        max_streak = _as_int(val.get("ops_degradation_calibration_streak_max", 1))
+        if max_streak < min_streak:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.ops_degradation_calibration_streak_max",
+                    "不能小于 ops_degradation_calibration_streak_min",
+                )
+            )
     for k in ("mode_switch_max_rate", "ops_risk_multiplier_floor", "ops_risk_multiplier_drift_max", "ops_source_confidence_floor"):
         if k in val:
             v = _as_float(val.get(k, 0.0))

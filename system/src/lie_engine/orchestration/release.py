@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from contextlib import closing
 import csv
+import hashlib
+import json
 import math
+import shutil
 import sqlite3
 from typing import Any, Callable, ClassVar
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -15,6 +19,7 @@ from lie_engine.config import SystemSettings
 from lie_engine.data.storage import write_json, write_markdown
 from lie_engine.models import ReviewDelta
 from lie_engine.orchestration.artifact_governance import apply_dated_artifact_governance
+from lie_engine.orchestration.events import append_event_envelope, build_event_envelope, derive_trace_id
 
 
 @dataclass(slots=True)
@@ -25,11 +30,12 @@ class ReleaseOrchestrator:
     backtest_snapshot: Callable[[date], dict[str, Any]]
     run_review: Callable[[date], ReviewDelta]
     health_check: Callable[[date, bool], dict[str, Any]]
-    stable_replay_check: Callable[[date, int | None], dict[str, Any]]
+    stable_replay_check: Callable[..., dict[str, Any]]
     test_all: Callable[..., dict[str, Any]]
     load_json_safely: Callable[[Path], dict[str, Any]]
     sqlite_path: Path | None = None
     run_stress_matrix: Callable[[date, list[str] | None], dict[str, Any]] | None = None
+    run_degradation_calibration: Callable[[date], dict[str, Any]] | None = None
     ARTIFACT_GOVERNANCE_DEFAULTS: ClassVar[dict[str, dict[str, str]]] = {
         "stress_autorun_history": {
             "json_glob": "*_stress_autorun_history.json",
@@ -50,6 +56,26 @@ class ReleaseOrchestrator:
             "json_glob": "*_reconcile_row_diff.json",
             "md_glob": "*_reconcile_row_diff.md",
             "checksum_index_filename": "reconcile_row_diff_checksum_index.json",
+        },
+        "guard_loop_cadence_lift_trend": {
+            "json_glob": "*_cadence_lift_trend.json",
+            "md_glob": "*_cadence_lift_trend.md",
+            "checksum_index_filename": "cadence_lift_trend_checksum_index.json",
+        },
+        "guard_loop_frontend_snapshot_antiflap_burnin": {
+            "json_glob": "*_frontend_snapshot_antiflap_burnin.json",
+            "md_glob": "*_frontend_snapshot_antiflap_burnin.md",
+            "checksum_index_filename": "frontend_snapshot_antiflap_burnin_checksum_index.json",
+        },
+        "guard_loop_frontend_snapshot_trend_controlled_apply": {
+            "json_glob": "*_frontend_snapshot_trend_controlled_apply.json",
+            "md_glob": "*_frontend_snapshot_trend_controlled_apply.md",
+            "checksum_index_filename": "frontend_snapshot_trend_controlled_apply_checksum_index.json",
+        },
+        "event_stream": {
+            "json_glob": "*_events.ndjson",
+            "md_glob": "*_events.__none__",
+            "checksum_index_filename": "event_stream_checksum_index.json",
         },
     }
     ARTIFACT_GOVERNANCE_LEGACY_KEYS: ClassVar[dict[str, dict[str, Any]]] = {
@@ -77,6 +103,35 @@ class ReleaseOrchestrator:
             "checksum_key": "ops_reconcile_broker_row_diff_artifact_checksum_index_enabled",
             "checksum_default": True,
         },
+        "guard_loop_cadence_lift_trend": {
+            "retention_key": "ops_guard_loop_cadence_non_apply_lift_trend_retention_days",
+            "retention_default": 30,
+            "checksum_key": "ops_guard_loop_cadence_non_apply_lift_trend_checksum_index_enabled",
+            "checksum_default": True,
+        },
+        "guard_loop_frontend_snapshot_antiflap_burnin": {
+            "retention_key": "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_retention_days",
+            "retention_default": 30,
+            "checksum_key": "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_checksum_index_enabled",
+            "checksum_default": True,
+        },
+        "guard_loop_frontend_snapshot_trend_controlled_apply": {
+            "retention_key": "ops_guard_loop_frontend_snapshot_trend_controlled_apply_retention_days",
+            "retention_default": 60,
+            "checksum_key": "ops_guard_loop_frontend_snapshot_trend_controlled_apply_checksum_index_enabled",
+            "checksum_default": True,
+        },
+    }
+    ARTIFACT_GOVERNANCE_BASELINE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "json_glob",
+        "md_glob",
+        "checksum_index_filename",
+        "retention_days",
+        "checksum_index_enabled",
+    )
+    OPS_ALERT_SEVERITY_OVERRIDES: ClassVar[dict[str, str]] = {
+        "workflow_store_strict_mode_violation": "critical",
+        "artifact_governance_strict_mode_blocked": "critical",
     }
 
     @staticmethod
@@ -98,6 +153,1842 @@ class ReleaseOrchestrator:
         if txt in {"0", "false", "f", "no", "n", "off"}:
             return False
         return bool(default)
+
+    @staticmethod
+    def _clamp_float(v: float, low: float, high: float) -> float:
+        if low > high:
+            low, high = high, low
+        return max(float(low), min(float(high), float(v)))
+
+    @classmethod
+    def _ops_alert_severity(cls, code: str, status: str = "yellow") -> str:
+        normalized = str(code or "").strip().lower()
+        if not normalized:
+            return "info"
+        if normalized in cls.OPS_ALERT_SEVERITY_OVERRIDES:
+            return str(cls.OPS_ALERT_SEVERITY_OVERRIDES[normalized])
+        critical_tokens = ("critical", "blocked", "violation", "breach", "hard_fail", "fail")
+        warning_tokens = ("warn", "drift", "overflow", "stale", "degraded", "missing", "high", "low", "drop", "rise")
+        if any(tok in normalized for tok in critical_tokens):
+            return "critical"
+        if any(tok in normalized for tok in warning_tokens):
+            return "warning"
+        if str(status or "").strip().lower() == "red":
+            return "warning"
+        return "info"
+
+    @classmethod
+    def _ops_alert_details(cls, alerts: list[Any], status: str = "yellow") -> list[dict[str, str]]:
+        details: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in alerts:
+            code = str(item or "").strip().lower()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            details.append(
+                {
+                    "code": code,
+                    "severity": cls._ops_alert_severity(code, status=status),
+                }
+            )
+        return details
+
+    def _emit_release_event(
+        self,
+        *,
+        as_of: date,
+        source: str,
+        event_type: str,
+        payload: dict[str, Any],
+        trace_id: str | None = None,
+        parent_event_id: str | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        envelope = build_event_envelope(
+            source=source,
+            event_type=event_type,
+            payload=payload,
+            as_of=as_of,
+            trace_id=trace_id,
+            parent_event_id=parent_event_id,
+        )
+        stream_path = append_event_envelope(
+            output_dir=self.output_dir,
+            envelope=envelope,
+            payload=payload,
+        )
+        return envelope.to_dict(), str(stream_path)
+
+    def _resolve_output_path(self, raw: str, *, fallback_rel: str) -> Path:
+        txt = str(raw or "").strip() or str(fallback_rel)
+        path = Path(txt)
+        if path.is_absolute():
+            return path
+        parts = list(path.parts)
+        if parts and str(parts[0]).strip().lower() == "output":
+            path = Path(*parts[1:]) if len(parts) > 1 else Path()
+        return self.output_dir / path
+
+    @staticmethod
+    def _canonical_json(value: Any) -> str:
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return "{}"
+
+    @staticmethod
+    def _parse_iso_datetime(value: Any) -> datetime | None:
+        if value is None:
+            return None
+        txt = str(value).strip()
+        if not txt:
+            return None
+        if txt.endswith("Z"):
+            txt = txt[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(txt)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_iso_date(value: Any) -> date | None:
+        if value is None:
+            return None
+        txt = str(value).strip()
+        if not txt:
+            return None
+        try:
+            return date.fromisoformat(txt[:10])
+        except Exception:
+            pass
+        parsed_dt = ReleaseOrchestrator._parse_iso_datetime(txt)
+        if parsed_dt is not None:
+            return parsed_dt.date()
+        return None
+
+    @staticmethod
+    def _extract_guard_loop_semantic_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+        source = payload if isinstance(payload, dict) else {}
+        daemon_payload = source.get("daemon", {}) if isinstance(source.get("daemon", {}), dict) else {}
+        pulse_payload = source.get("pulse", {}) if isinstance(source.get("pulse", {}), dict) else {}
+        pulse_status = str(pulse_payload.get("status", "unknown")).strip().lower() or "unknown"
+        pulse_reason = str(pulse_payload.get("reason", "")).strip()
+        pulse_ran = bool(pulse_payload.get("ran", False))
+        daemon_would_run = bool(daemon_payload.get("would_run_pulse", False))
+        pulse_counted = bool(pulse_ran or daemon_would_run or pulse_status in {"ok", "error", "skipped"})
+        if "semantic_ok" in pulse_payload:
+            pulse_semantic_ok = bool(pulse_payload.get("semantic_ok", False))
+        else:
+            pulse_semantic_ok = bool((not pulse_counted) or (pulse_status in {"ok", "skipped"}))
+
+        gap_payload = source.get("gap_backfill", {}) if isinstance(source.get("gap_backfill", {}), dict) else {}
+        gap_due = bool(gap_payload.get("due", False))
+        gap_status = str(gap_payload.get("status", "unknown")).strip().lower() or "unknown"
+        gap_results = gap_payload.get("results", {}) if isinstance(gap_payload.get("results", {}), dict) else {}
+        gap_semantic = (
+            gap_results.get("semantic", {})
+            if isinstance(gap_results.get("semantic", {}), dict)
+            else {}
+        )
+        gap_backfill_pulse_ok = bool(gap_semantic.get("pulse_ok", gap_status == "ok"))
+        gap_backfill_autorun_ok = bool(gap_semantic.get("autorun_retro_ok", gap_status == "ok"))
+        gap_autorun_retro_payload = (
+            gap_results.get("autorun_retro", {})
+            if isinstance(gap_results.get("autorun_retro", {}), dict)
+            else {}
+        )
+        gap_autorun_retro_run_ok = bool(gap_autorun_retro_payload.get("ok", False))
+        gap_autorun_retro_status = ""
+        gap_autorun_retro_result_payload = (
+            gap_autorun_retro_payload.get("payload", {})
+            if isinstance(gap_autorun_retro_payload.get("payload", {}), dict)
+            else {}
+        )
+        if isinstance(gap_autorun_retro_result_payload, dict):
+            gap_autorun_retro_status = (
+                str(gap_autorun_retro_result_payload.get("status", "")).strip().lower()
+            )
+        if not gap_autorun_retro_status:
+            gap_autorun_retro_status = str(gap_autorun_retro_payload.get("status", "")).strip().lower()
+        legacy_semantic_compat_applied = False
+        if (
+            gap_status == "error"
+            and (not gap_backfill_autorun_ok)
+            and gap_backfill_pulse_ok
+            and gap_autorun_retro_run_ok
+            and gap_autorun_retro_status in {"red", "yellow", "warn", "critical"}
+        ):
+            # Backward compatibility for historical guard-loop rows:
+            # old scripts marked autorun-retro risk colors (red/yellow) as semantic failures.
+            gap_backfill_autorun_ok = True
+            legacy_semantic_compat_applied = True
+        gap_backfill_executed = bool(
+            gap_due and gap_status not in {"unknown", "skipped", "dry_run", "none", "not_due"}
+        )
+        if gap_backfill_executed:
+            if gap_status == "ok" or legacy_semantic_compat_applied:
+                if isinstance(gap_semantic, dict) and gap_semantic:
+                    gap_backfill_semantic_ok = bool(gap_backfill_pulse_ok and gap_backfill_autorun_ok)
+                else:
+                    gap_backfill_semantic_ok = True
+            else:
+                gap_backfill_semantic_ok = False
+        else:
+            gap_backfill_semantic_ok = True
+
+        return {
+            "pulse_status": str(pulse_status),
+            "pulse_reason": str(pulse_reason),
+            "pulse_ran": bool(pulse_ran),
+            "pulse_counted": bool(pulse_counted),
+            "pulse_semantic_ok": bool(pulse_semantic_ok),
+            "gap_backfill_due": bool(gap_due),
+            "gap_backfill_status": str(gap_status),
+            "gap_backfill_executed": bool(gap_backfill_executed),
+            "gap_backfill_pulse_ok": bool(gap_backfill_pulse_ok),
+            "gap_backfill_autorun_retro_ok": bool(gap_backfill_autorun_ok),
+            "gap_backfill_semantic_ok": bool(gap_backfill_semantic_ok),
+            "gap_backfill_legacy_semantic_compat_applied": bool(legacy_semantic_compat_applied),
+        }
+
+    @staticmethod
+    def _extract_guard_loop_frontend_snapshot_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+        source = payload if isinstance(payload, dict) else {}
+        frontend_payload = (
+            source.get("frontend_snapshot", {})
+            if isinstance(source.get("frontend_snapshot", {}), dict)
+            else {}
+        )
+        frontend_trend_payload = (
+            frontend_payload.get("trend", {})
+            if isinstance(frontend_payload.get("trend", {}), dict)
+            else {}
+        )
+        due = bool(frontend_payload.get("due", False))
+        status = str(frontend_payload.get("status", "unknown")).strip().lower() or "unknown"
+        reason = str(frontend_payload.get("reason", "")).strip().lower()
+        result_payload = (
+            frontend_payload.get("result", {})
+            if isinstance(frontend_payload.get("result", {}), dict)
+            else {}
+        )
+        timed_out = bool(result_payload.get("timed_out", False) or reason == "timeout")
+        governance_payload = (
+            frontend_payload.get("governance", {})
+            if isinstance(frontend_payload.get("governance", {}), dict)
+            else {}
+        )
+        governance_rotation_failed = bool(governance_payload.get("rotation_failed", False))
+        governance_checksum_failed = bool(governance_payload.get("checksum_index_failed", False))
+        governance_failed = bool(governance_rotation_failed or governance_checksum_failed)
+        governance_checksum_index_enabled = bool(
+            governance_payload.get("checksum_index_enabled", False)
+        )
+        governance_checksum_index_path = str(
+            governance_payload.get("checksum_index_path", "")
+        ).strip()
+
+        artifact_payload = (
+            frontend_payload.get("artifact", {})
+            if isinstance(frontend_payload.get("artifact", {}), dict)
+            else {}
+        )
+        artifact_json_path = str(artifact_payload.get("json_path", "")).strip()
+        artifact_present = bool(artifact_json_path)
+
+        run_counted = bool(due or status in {"ok", "error", "dry_run"})
+        status_ok = bool((not run_counted) or (status in {"ok", "dry_run"}))
+        status_error = bool(run_counted and status == "error")
+        status_timeout = bool(run_counted and timed_out)
+        status_failure = bool(status_error and (not status_timeout))
+        trend_due_light = bool(
+            frontend_trend_payload.get(
+                "due_light",
+                source.get("frontend_snapshot_trend_due_light", False),
+            )
+        )
+        trend_due_heavy = bool(
+            frontend_trend_payload.get(
+                "due_heavy",
+                source.get("frontend_snapshot_trend_due_heavy", False),
+            )
+        )
+        trend_antiflap_payload = (
+            frontend_trend_payload.get("antiflap", {})
+            if isinstance(frontend_trend_payload.get("antiflap", {}), dict)
+            else {}
+        )
+        trend_antiflap_suppressed = bool(
+            trend_antiflap_payload.get(
+                "suppressed",
+                source.get("frontend_snapshot_trend_antiflap_suppressed", False),
+            )
+        )
+        trend_antiflap_reason_codes = (
+            [
+                str(x).strip()
+                for x in trend_antiflap_payload.get(
+                    "reason_codes",
+                    source.get("frontend_snapshot_trend_antiflap_reason_codes", []),
+                )
+                if str(x).strip()
+            ]
+            if isinstance(
+                trend_antiflap_payload.get(
+                    "reason_codes",
+                    source.get("frontend_snapshot_trend_antiflap_reason_codes", []),
+                ),
+                list,
+            )
+            else []
+        )
+        recovery_payload = (
+            source.get("recovery", {})
+            if isinstance(source.get("recovery", {}), dict)
+            else {}
+        )
+        recovery_mode = str(
+            recovery_payload.get("mode", source.get("recovery_mode", ""))
+        ).strip().lower()
+        recovery_reason_codes_source = recovery_payload.get(
+            "reason_codes",
+            source.get("recovery_reason_codes", []),
+        )
+        recovery_reason_codes = (
+            [str(x).strip() for x in recovery_reason_codes_source if str(x).strip()]
+            if isinstance(recovery_reason_codes_source, list)
+            else []
+        )
+        recovery_reason_code_set = {code for code in recovery_reason_codes if code}
+        replay_executed_light = bool(
+            "FRONTEND_SNAPSHOT_TREND_REPLAY_LIGHT" in recovery_reason_code_set
+            or "FRONTEND_SNAPSHOT_TREND_REPLAY_HEAVY" in recovery_reason_code_set
+        )
+        replay_executed_heavy = bool(
+            "FRONTEND_SNAPSHOT_TREND_REPLAY_HEAVY" in recovery_reason_code_set
+        )
+
+        return {
+            "frontend_snapshot_due": bool(due),
+            "frontend_snapshot_status": str(status),
+            "frontend_snapshot_reason": str(reason),
+            "frontend_snapshot_timed_out": bool(timed_out),
+            "frontend_snapshot_run_counted": bool(run_counted),
+            "frontend_snapshot_status_ok": bool(status_ok),
+            "frontend_snapshot_status_error": bool(status_error),
+            "frontend_snapshot_status_timeout": bool(status_timeout),
+            "frontend_snapshot_status_failure": bool(status_failure),
+            "frontend_snapshot_artifact_present": bool(artifact_present),
+            "frontend_snapshot_artifact_json": str(artifact_json_path),
+            "frontend_snapshot_governance_failed": bool(governance_failed),
+            "frontend_snapshot_governance_rotation_failed": bool(governance_rotation_failed),
+            "frontend_snapshot_governance_checksum_failed": bool(governance_checksum_failed),
+            "frontend_snapshot_governance_checksum_index_enabled": bool(
+                governance_checksum_index_enabled
+            ),
+            "frontend_snapshot_governance_checksum_index_path": str(
+                governance_checksum_index_path
+            ),
+            "frontend_snapshot_governance_retention_days": int(
+                ReleaseOrchestrator._safe_float(governance_payload.get("retention_days", 0), 0)
+            ),
+            "frontend_snapshot_governance_checksum_index_written": bool(
+                governance_payload.get("checksum_index_written", False)
+            ),
+            "frontend_snapshot_governance_checksum_index_entries": int(
+                ReleaseOrchestrator._safe_float(
+                    governance_payload.get("checksum_index_entries", 0),
+                    0,
+                )
+            ),
+            "frontend_snapshot_trend_due_light": bool(trend_due_light),
+            "frontend_snapshot_trend_due_heavy": bool(trend_due_heavy),
+            "frontend_snapshot_trend_antiflap_suppressed": bool(
+                trend_antiflap_suppressed
+            ),
+            "frontend_snapshot_trend_antiflap_reason_codes": list(
+                trend_antiflap_reason_codes
+            ),
+            "frontend_snapshot_recovery_mode": str(recovery_mode),
+            "frontend_snapshot_recovery_reason_codes": list(recovery_reason_codes),
+            "frontend_snapshot_replay_executed_light": bool(replay_executed_light),
+            "frontend_snapshot_replay_executed_heavy": bool(replay_executed_heavy),
+        }
+
+    def _load_guard_loop_semantic_rows(self, *, as_of: date, window_days: int) -> dict[str, Any]:
+        history_path = self.output_dir / "logs" / "guard_loop_history.jsonl"
+        if not history_path.exists():
+            return {"path": str(history_path), "found": False, "rows": []}
+
+        start_day = as_of - timedelta(days=max(1, int(window_days)) - 1)
+        rows: list[dict[str, Any]] = []
+        try:
+            with history_path.open("r", encoding="utf-8") as fp:
+                for raw in fp:
+                    line = str(raw).strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    ts = self._parse_iso_datetime(payload.get("ts"))
+                    daemon_payload = (
+                        payload.get("daemon", {})
+                        if isinstance(payload.get("daemon", {}), dict)
+                        else {}
+                    )
+                    daemon_date_txt = str(daemon_payload.get("date", "")).strip()
+                    row_day = None
+                    if daemon_date_txt:
+                        try:
+                            row_day = date.fromisoformat(daemon_date_txt[:10])
+                        except Exception:
+                            row_day = None
+                    if row_day is None and ts is not None:
+                        row_day = ts.date()
+                    if row_day is None:
+                        continue
+                    if row_day < start_day or row_day > as_of:
+                        continue
+                    semantic_payload = self._extract_guard_loop_semantic_payload(payload)
+                    rows.append(
+                        {
+                            "ts": str(payload.get("ts", "")),
+                            "date": row_day.isoformat(),
+                            **semantic_payload,
+                        }
+                    )
+        except Exception:
+            return {"path": str(history_path), "found": True, "rows": []}
+
+        rows.sort(key=lambda x: (str(x.get("date", "")), str(x.get("ts", ""))))
+        return {"path": str(history_path), "found": True, "rows": rows[-512:]}
+
+    def _load_guard_loop_frontend_snapshot_rows(self, *, as_of: date, window_days: int) -> dict[str, Any]:
+        history_path = self.output_dir / "logs" / "guard_loop_history.jsonl"
+        if not history_path.exists():
+            return {"path": str(history_path), "found": False, "rows": []}
+
+        start_day = as_of - timedelta(days=max(1, int(window_days)) - 1)
+        rows: list[dict[str, Any]] = []
+        try:
+            with history_path.open("r", encoding="utf-8") as fp:
+                for raw in fp:
+                    line = str(raw).strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    ts = self._parse_iso_datetime(payload.get("ts"))
+                    daemon_payload = (
+                        payload.get("daemon", {})
+                        if isinstance(payload.get("daemon", {}), dict)
+                        else {}
+                    )
+                    daemon_date_txt = str(daemon_payload.get("date", "")).strip()
+                    row_day = None
+                    if daemon_date_txt:
+                        try:
+                            row_day = date.fromisoformat(daemon_date_txt[:10])
+                        except Exception:
+                            row_day = None
+                    if row_day is None:
+                        row_day = self._parse_iso_date(payload.get("date"))
+                    if row_day is None and ts is not None:
+                        row_day = ts.date()
+                    if row_day is None:
+                        continue
+                    if row_day < start_day or row_day > as_of:
+                        continue
+                    frontend_payload = self._extract_guard_loop_frontend_snapshot_payload(payload)
+                    rows.append(
+                        {
+                            "ts": str(payload.get("ts", "")),
+                            "date": row_day.isoformat(),
+                            **frontend_payload,
+                        }
+                    )
+        except Exception:
+            return {"path": str(history_path), "found": True, "rows": []}
+
+        rows.sort(key=lambda x: (str(x.get("date", "")), str(x.get("ts", ""))))
+        return {"path": str(history_path), "found": True, "rows": rows[-1024:]}
+
+    @staticmethod
+    def _rollback_level_rank(level: Any) -> int:
+        txt = str(level or "").strip().lower()
+        if txt == "hard":
+            return 2
+        if txt == "soft":
+            return 1
+        return 0
+
+    def _cadence_non_apply_lift_snapshot(
+        self,
+        *,
+        rollback_recommendation: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        payload = rollback_recommendation if isinstance(rollback_recommendation, dict) else {}
+        lift = payload.get("cadence_non_apply_lift", {})
+        if not isinstance(lift, dict):
+            lift = {}
+        return {
+            "present": bool(lift),
+            "active": bool(lift.get("active", False)),
+            "applied": bool(lift.get("applied", False)),
+            "blocked_by_cooldown": bool(lift.get("blocked_by_cooldown", False)),
+            "cooldown_active": bool(lift.get("cooldown_active", False)),
+            "cooldown_remaining_days": max(
+                0,
+                int(self._safe_float(lift.get("cooldown_remaining_days", 0), 0)),
+            ),
+            "base_level": str(lift.get("base_level", "none") or "none"),
+            "requested_level": str(lift.get("requested_level", "none") or "none"),
+            "applied_level": str(lift.get("applied_level", "none") or "none"),
+            "reason": str(lift.get("reason", "") or ""),
+            "reason_code": str(lift.get("reason_code", "") or ""),
+        }
+
+    def _guard_loop_scorecards(
+        self,
+        *,
+        guard_loop_cadence_non_apply: dict[str, Any] | None,
+        guard_loop_cadence_non_apply_lift_trend: dict[str, Any] | None,
+        guard_loop_frontend_snapshot_trend: dict[str, Any] | None,
+        cadence_lift_snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        cadence_payload = guard_loop_cadence_non_apply if isinstance(guard_loop_cadence_non_apply, dict) else {}
+        cadence_checks = cadence_payload.get("checks", {}) if isinstance(cadence_payload.get("checks", {}), dict) else {}
+        cadence_metrics = (
+            cadence_payload.get("metrics", {})
+            if isinstance(cadence_payload.get("metrics", {}), dict)
+            else {}
+        )
+        cadence_alerts = cadence_payload.get("alerts", []) if isinstance(cadence_payload.get("alerts", []), list) else []
+        cadence_active = bool(cadence_payload.get("active", False))
+        cadence_ok = (
+            all(bool(v) for v in cadence_checks.values())
+            if cadence_active
+            else bool(cadence_payload.get("gate_ok", True))
+        )
+
+        lift_payload = (
+            guard_loop_cadence_non_apply_lift_trend
+            if isinstance(guard_loop_cadence_non_apply_lift_trend, dict)
+            else {}
+        )
+        lift_checks = lift_payload.get("checks", {}) if isinstance(lift_payload.get("checks", {}), dict) else {}
+        lift_metrics = lift_payload.get("metrics", {}) if isinstance(lift_payload.get("metrics", {}), dict) else {}
+        lift_alerts = lift_payload.get("alerts", []) if isinstance(lift_payload.get("alerts", []), list) else []
+        lift_active = bool(lift_payload.get("active", False))
+        lift_ok = (
+            all(bool(v) for v in lift_checks.values())
+            if lift_active
+            else bool(lift_payload.get("gate_ok", True))
+        )
+        frontend_payload = (
+            guard_loop_frontend_snapshot_trend
+            if isinstance(guard_loop_frontend_snapshot_trend, dict)
+            else {}
+        )
+        frontend_checks = (
+            frontend_payload.get("checks", {})
+            if isinstance(frontend_payload.get("checks", {}), dict)
+            else {}
+        )
+        frontend_metrics = (
+            frontend_payload.get("metrics", {})
+            if isinstance(frontend_payload.get("metrics", {}), dict)
+            else {}
+        )
+        frontend_alerts = (
+            frontend_payload.get("alerts", [])
+            if isinstance(frontend_payload.get("alerts", []), list)
+            else []
+        )
+        frontend_burnin_payload = (
+            frontend_payload.get("antiflap_burnin", {})
+            if isinstance(frontend_payload.get("antiflap_burnin", {}), dict)
+            else {}
+        )
+        frontend_burnin_metrics = (
+            frontend_burnin_payload.get("metrics", {})
+            if isinstance(frontend_burnin_payload.get("metrics", {}), dict)
+            else {}
+        )
+        frontend_burnin_alerts = (
+            frontend_burnin_payload.get("alerts", [])
+            if isinstance(frontend_burnin_payload.get("alerts", []), list)
+            else []
+        )
+        frontend_burnin_promotion = (
+            frontend_burnin_payload.get("promotion", {})
+            if isinstance(frontend_burnin_payload.get("promotion", {}), dict)
+            else {}
+        )
+        frontend_burnin_dual_window = (
+            frontend_burnin_payload.get("dual_window", {})
+            if isinstance(frontend_burnin_payload.get("dual_window", {}), dict)
+            else {}
+        )
+        frontend_burnin_dual_window_metrics = (
+            frontend_burnin_dual_window.get("metrics", {})
+            if isinstance(frontend_burnin_dual_window.get("metrics", {}), dict)
+            else {}
+        )
+        frontend_burnin_dual_window_checks = (
+            frontend_burnin_dual_window.get("checks", {})
+            if isinstance(frontend_burnin_dual_window.get("checks", {}), dict)
+            else {}
+        )
+        frontend_burnin_dual_window_alerts = (
+            frontend_burnin_dual_window.get("alerts", [])
+            if isinstance(frontend_burnin_dual_window.get("alerts", []), list)
+            else []
+        )
+        frontend_burnin_controlled_apply = (
+            frontend_burnin_promotion.get("controlled_apply", {})
+            if isinstance(frontend_burnin_promotion.get("controlled_apply", {}), dict)
+            else {}
+        )
+        frontend_burnin_controlled_apply_apply_gate = (
+            frontend_burnin_controlled_apply.get("apply_gate", {})
+            if isinstance(frontend_burnin_controlled_apply.get("apply_gate", {}), dict)
+            else {}
+        )
+        frontend_burnin_controlled_apply_approval = (
+            frontend_burnin_controlled_apply.get("approval", {})
+            if isinstance(frontend_burnin_controlled_apply.get("approval", {}), dict)
+            else {}
+        )
+        frontend_burnin_controlled_apply_proposal = (
+            frontend_burnin_controlled_apply.get("proposal", {})
+            if isinstance(frontend_burnin_controlled_apply.get("proposal", {}), dict)
+            else {}
+        )
+        frontend_burnin_controlled_apply_decision_envelope = (
+            frontend_burnin_controlled_apply.get("decision_envelope", {})
+            if isinstance(frontend_burnin_controlled_apply.get("decision_envelope", {}), dict)
+            else {}
+        )
+        frontend_burnin_controlled_apply_decision_approval_manifest = (
+            frontend_burnin_controlled_apply_decision_envelope.get("approval_manifest", {})
+            if isinstance(frontend_burnin_controlled_apply_decision_envelope.get("approval_manifest", {}), dict)
+            else {}
+        )
+        frontend_burnin_controlled_apply_decision_runbook = (
+            [
+                str(x).strip()
+                for x in frontend_burnin_controlled_apply_decision_envelope.get("runbook", [])
+                if str(x).strip()
+            ]
+            if isinstance(frontend_burnin_controlled_apply_decision_envelope.get("runbook", []), list)
+            else []
+        )
+        frontend_hard_fail_route_audit_payload = (
+            frontend_payload.get("hard_fail_apply_route_audit", {})
+            if isinstance(frontend_payload.get("hard_fail_apply_route_audit", {}), dict)
+            else {}
+        )
+        frontend_hard_fail_route_audit_checks = (
+            frontend_hard_fail_route_audit_payload.get("checks", {})
+            if isinstance(frontend_hard_fail_route_audit_payload.get("checks", {}), dict)
+            else {}
+        )
+        frontend_hard_fail_route_audit_metrics = (
+            frontend_hard_fail_route_audit_payload.get("metrics", {})
+            if isinstance(frontend_hard_fail_route_audit_payload.get("metrics", {}), dict)
+            else {}
+        )
+        frontend_hard_fail_route_audit_alerts = (
+            frontend_hard_fail_route_audit_payload.get("alerts", [])
+            if isinstance(frontend_hard_fail_route_audit_payload.get("alerts", []), list)
+            else []
+        )
+        frontend_burnin_active = bool(frontend_burnin_payload.get("active", False))
+        frontend_burnin_status = str(
+            frontend_burnin_payload.get("status", "inactive")
+        ).strip().lower() or "inactive"
+        frontend_burnin_ok = bool(frontend_burnin_payload.get("ok", True))
+        frontend_active = bool(frontend_payload.get("active", False))
+        frontend_gate_ok = (
+            all(bool(v) for v in frontend_checks.values())
+            if frontend_active
+            else bool(frontend_payload.get("gate_ok", True))
+        )
+        frontend_replay_expected_runs = int(
+            self._safe_float(frontend_metrics.get("replay_expected_runs", 0), 0)
+        )
+        frontend_replay_executed_runs = int(
+            self._safe_float(frontend_metrics.get("replay_executed_runs", 0), 0)
+        )
+        frontend_replay_missed_runs = int(
+            self._safe_float(frontend_metrics.get("replay_missed_runs", 0), 0)
+        )
+        frontend_replay_unexpected_execution_runs = int(
+            self._safe_float(frontend_metrics.get("replay_unexpected_execution_runs", 0), 0)
+        )
+        frontend_replay_due_but_reason_missing_runs = int(
+            self._safe_float(frontend_metrics.get("replay_due_but_reason_missing_runs", 0), 0)
+        )
+        frontend_replay_executed_total_runs = int(
+            self._safe_float(frontend_metrics.get("replay_executed_total_runs", 0), 0)
+        )
+        frontend_replay_convergence_rate = float(
+            self._safe_float(frontend_metrics.get("replay_convergence_rate", 1.0), 1.0)
+        )
+        frontend_replay_convergence_light_rate = float(
+            self._safe_float(frontend_metrics.get("replay_convergence_light_rate", 1.0), 1.0)
+        )
+        frontend_replay_convergence_heavy_rate = float(
+            self._safe_float(frontend_metrics.get("replay_convergence_heavy_rate", 1.0), 1.0)
+        )
+        frontend_replay_unexpected_execution_ratio = float(
+            self._safe_float(frontend_metrics.get("replay_unexpected_execution_ratio", 0.0), 0.0)
+        )
+        frontend_replay_antiflap_suppressed_runs = int(
+            self._safe_float(frontend_metrics.get("replay_antiflap_suppressed_runs", 0), 0)
+        )
+        frontend_replay_card_active = bool(
+            frontend_active
+            or frontend_replay_expected_runs > 0
+            or frontend_replay_executed_total_runs > 0
+        )
+        frontend_replay_card_ok = bool(
+            frontend_gate_ok
+            and frontend_replay_missed_runs <= 0
+            and frontend_replay_due_but_reason_missing_runs <= 0
+        )
+        frontend_replay_card_status = "inactive"
+        if frontend_replay_card_active:
+            if not frontend_replay_card_ok:
+                frontend_replay_card_status = "red"
+            elif frontend_replay_unexpected_execution_runs > 0:
+                frontend_replay_card_status = "yellow"
+            else:
+                frontend_replay_card_status = "green"
+
+        preset_active = bool(cadence_metrics.get("trend_preset_active", False))
+        preset_engaged = bool(cadence_metrics.get("trend_preset_engaged", False))
+        preset_traceable_ok = bool(cadence_checks.get("trend_preset_traceable_ok", True))
+        preset_recovery_link_ok = bool(cadence_checks.get("trend_preset_recovery_link_ok", True))
+        preset_retro_source_ok = bool(cadence_checks.get("trend_preset_retro_source_ok", True))
+        preset_drift_artifact_ok = bool(cadence_checks.get("trend_preset_drift_artifact_ok", True))
+        preset_drift_status_ok = bool(cadence_checks.get("trend_preset_drift_status_ok", True))
+        preset_drift_trendline_ok = bool(cadence_checks.get("trend_preset_drift_trendline_ok", True))
+        preset_drift_auto_tune_bounded_ok = bool(
+            cadence_checks.get("trend_preset_drift_auto_tune_bounded_ok", True)
+        )
+        preset_drift_auto_tune_handoff_ok = bool(
+            cadence_checks.get("trend_preset_drift_auto_tune_handoff_ok", True)
+        )
+        preset_ok = (
+            bool(
+                (not preset_active)
+                or (
+                    preset_traceable_ok
+                    and preset_recovery_link_ok
+                    and preset_retro_source_ok
+                    and preset_drift_artifact_ok
+                    and preset_drift_status_ok
+                    and preset_drift_trendline_ok
+                    and preset_drift_auto_tune_bounded_ok
+                    and preset_drift_auto_tune_handoff_ok
+                )
+            )
+            and bool(cadence_payload.get("gate_ok", True))
+        )
+        preset_alerts = [x for x in cadence_alerts if str(x).startswith("guard_loop_cadence_trend_preset_")]
+        preset_snapshot = cadence_lift_snapshot if isinstance(cadence_lift_snapshot, dict) else {}
+
+        def _card_status(*, active: bool, ok: bool) -> str:
+            if active:
+                return "green" if ok else "red"
+            return "inactive"
+
+        preset_status = "inactive"
+        if preset_engaged:
+            preset_status = "yellow" if preset_ok else "red"
+        elif preset_active:
+            preset_status = "green" if preset_ok else "red"
+        semantic_alerts = [
+            str(x)
+            for x in cadence_alerts
+            if str(x).startswith("guard_loop_cadence_pulse_semantic_")
+            or str(x).startswith("guard_loop_cadence_gap_backfill_semantic_")
+            or str(x).startswith("guard_loop_cadence_semantic_drift_")
+        ]
+        semantic_active = bool(
+            cadence_metrics.get("pulse_counted", False)
+            or cadence_metrics.get("gap_backfill_due", False)
+            or int(self._safe_float(cadence_metrics.get("pulse_semantic_drift_samples", 0), 0)) > 0
+            or int(
+                self._safe_float(
+                    cadence_metrics.get("gap_backfill_semantic_drift_samples", 0),
+                    0,
+                )
+            )
+            > 0
+        )
+        semantic_ok = bool(
+            bool(cadence_checks.get("pulse_semantic_ok", True))
+            and bool(cadence_checks.get("gap_backfill_semantic_ok", True))
+            and bool(cadence_checks.get("pulse_semantic_drift_ok", True))
+            and bool(cadence_checks.get("gap_backfill_semantic_drift_ok", True))
+        )
+        semantic_status = _card_status(active=semantic_active, ok=semantic_ok)
+        if (
+            semantic_status == "green"
+            and "guard_loop_cadence_semantic_drift_insufficient_samples" in set(semantic_alerts)
+        ):
+            semantic_status = "yellow"
+        frontend_apply_card_status = (
+            "inactive"
+            if not bool(frontend_burnin_controlled_apply.get("enabled", False))
+            else (
+                "green"
+                if bool(frontend_burnin_controlled_apply_apply_gate.get("apply_recommended", False))
+                else (
+                    "yellow"
+                    if str(frontend_burnin_controlled_apply_apply_gate.get("reason", "")).strip()
+                    in {
+                        "manual_approval_missing",
+                        "manual_approval_not_confirmed",
+                        "manual_approval_proposal_mismatch",
+                        "dry_run_pending_manual_apply",
+                    }
+                    else "red"
+                )
+            )
+        )
+        frontend_hard_fail_route_audit_active = bool(
+            frontend_hard_fail_route_audit_payload.get("active", False)
+        )
+        frontend_hard_fail_route_audit_status = str(
+            frontend_hard_fail_route_audit_payload.get("status", "inactive")
+        ).strip().lower() or "inactive"
+        frontend_hard_fail_route_audit_ok = bool(
+            frontend_hard_fail_route_audit_payload.get("ok", True)
+        )
+        if frontend_hard_fail_route_audit_active:
+            if frontend_hard_fail_route_audit_status == "red":
+                frontend_apply_card_status = "red"
+            elif (
+                frontend_hard_fail_route_audit_status == "yellow"
+                and frontend_apply_card_status == "green"
+            ):
+                frontend_apply_card_status = "yellow"
+
+        return {
+            "cadence_non_apply": {
+                "status": _card_status(active=cadence_active, ok=cadence_ok),
+                "active": bool(cadence_active),
+                "ok": bool(cadence_ok),
+                "alert_count": int(len(cadence_alerts)),
+                "streak_windows": int(self._safe_float(cadence_metrics.get("streak_windows", 0), 0)),
+                "due_light": bool(cadence_metrics.get("due_light", False)),
+                "due_heavy": bool(cadence_metrics.get("due_heavy", False)),
+            },
+            "cadence_lift_trend": {
+                "status": _card_status(active=lift_active, ok=lift_ok),
+                "active": bool(lift_active),
+                "ok": bool(lift_ok),
+                "alert_count": int(len(lift_alerts)),
+                "applied_rate": float(self._safe_float(lift_metrics.get("applied_rate", 0.0), 0.0)),
+                "cooldown_block_rate": float(
+                    self._safe_float(lift_metrics.get("cooldown_block_rate", 0.0), 0.0)
+                ),
+            },
+            "cadence_lift_preset": {
+                "status": preset_status,
+                "active": bool(preset_active),
+                "engaged": bool(preset_engaged),
+                "ok": bool(preset_ok),
+                "suggested_level": str(cadence_metrics.get("trend_preset_suggested_level", "none") or "none"),
+                "due_light": bool(cadence_metrics.get("trend_preset_due_light", False)),
+                "due_heavy": bool(cadence_metrics.get("trend_preset_due_heavy", False)),
+                "traceable_ok": bool(preset_traceable_ok),
+                "recovery_link_ok": bool(preset_recovery_link_ok),
+                "retro_source_ok": bool(preset_retro_source_ok),
+                "drift_artifact_ok": bool(preset_drift_artifact_ok),
+                "drift_status_ok": bool(preset_drift_status_ok),
+                "drift_trendline_ok": bool(preset_drift_trendline_ok),
+                "drift_auto_tune_bounded_ok": bool(preset_drift_auto_tune_bounded_ok),
+                "drift_auto_tune_handoff_ok": bool(preset_drift_auto_tune_handoff_ok),
+                "drift_status": str(cadence_metrics.get("trend_preset_drift_status", "unknown") or "unknown"),
+                "drift_trendline_status": str(
+                    cadence_metrics.get("trend_preset_drift_trendline_status", "unknown") or "unknown"
+                ),
+                "drift_samples": int(self._safe_float(cadence_metrics.get("trend_preset_drift_samples", 0), 0)),
+                "drift_min_samples": int(
+                    self._safe_float(cadence_metrics.get("trend_preset_drift_min_samples", 0), 0)
+                ),
+                "drift_tune_recommended": bool(
+                    cadence_metrics.get("trend_preset_drift_auto_tune_apply_recommended", False)
+                ),
+                "drift_tune_reason": str(
+                    cadence_metrics.get("trend_preset_drift_auto_tune_reason", "")
+                ),
+                "drift_tune_handoff_mode": str(
+                    cadence_metrics.get("trend_preset_drift_auto_tune_handoff_mode", "")
+                ),
+                "drift_tune_handoff_apply_allowed": bool(
+                    cadence_metrics.get("trend_preset_drift_auto_tune_handoff_apply_allowed", False)
+                ),
+                "drift_tune_handoff_apply_reason": str(
+                    cadence_metrics.get("trend_preset_drift_auto_tune_handoff_apply_reason", "")
+                ),
+                "drift_tune_handoff_cooldown_active": bool(
+                    cadence_metrics.get("trend_preset_drift_auto_tune_handoff_cooldown_active", False)
+                ),
+                "drift_tune_handoff_anti_flap_blocked": bool(
+                    cadence_metrics.get("trend_preset_drift_auto_tune_handoff_anti_flap_blocked", False)
+                ),
+                "reason_codes": list(cadence_metrics.get("trend_preset_reason_codes", [])),
+                "alert_count": int(len(preset_alerts)),
+                "applied_rate_delta": float(
+                    self._safe_float(cadence_metrics.get("trend_preset_applied_rate_delta", 0.0), 0.0)
+                ),
+                "cooldown_block_rate_delta": float(
+                    self._safe_float(cadence_metrics.get("trend_preset_cooldown_block_rate_delta", 0.0), 0.0)
+                ),
+                "rollback_snapshot": {
+                    "applied": bool(preset_snapshot.get("applied", False)),
+                    "blocked_by_cooldown": bool(preset_snapshot.get("blocked_by_cooldown", False)),
+                    "cooldown_remaining_days": int(
+                        self._safe_float(preset_snapshot.get("cooldown_remaining_days", 0), 0)
+                    ),
+                    "reason_code": str(preset_snapshot.get("reason_code", "")),
+                },
+            },
+            "pulse_backfill_semantic": {
+                "status": semantic_status,
+                "active": bool(semantic_active),
+                "ok": bool(semantic_ok),
+                "alert_count": int(len(semantic_alerts)),
+                "pulse_status": str(cadence_metrics.get("pulse_status", "unknown") or "unknown"),
+                "pulse_counted": bool(cadence_metrics.get("pulse_counted", False)),
+                "pulse_semantic_ok": bool(cadence_checks.get("pulse_semantic_ok", True)),
+                "gap_backfill_status": str(
+                    cadence_metrics.get("gap_backfill_status", "unknown") or "unknown"
+                ),
+                "gap_backfill_due": bool(cadence_metrics.get("gap_backfill_due", False)),
+                "gap_backfill_semantic_ok": bool(
+                    cadence_checks.get("gap_backfill_semantic_ok", True)
+                ),
+                "semantic_drift_status": str(
+                    cadence_metrics.get("semantic_drift_status", "unknown") or "unknown"
+                ),
+                "pulse_fail_ratio": float(
+                    self._safe_float(cadence_metrics.get("pulse_semantic_drift_fail_ratio", 0.0), 0.0)
+                ),
+                "gap_backfill_fail_ratio": float(
+                    self._safe_float(
+                        cadence_metrics.get("gap_backfill_semantic_drift_fail_ratio", 0.0),
+                        0.0,
+                    )
+                ),
+                "pulse_drift_ok": bool(cadence_checks.get("pulse_semantic_drift_ok", True)),
+                "gap_backfill_drift_ok": bool(
+                    cadence_checks.get("gap_backfill_semantic_drift_ok", True)
+                ),
+            },
+            "frontend_snapshot_replay_convergence": {
+                "status": str(frontend_replay_card_status),
+                "active": bool(frontend_replay_card_active),
+                "ok": bool(frontend_replay_card_ok),
+                "gate_ok": bool(frontend_gate_ok),
+                "alert_count": int(len(frontend_alerts)),
+                "expected_runs": int(frontend_replay_expected_runs),
+                "executed_runs": int(frontend_replay_executed_runs),
+                "missed_runs": int(frontend_replay_missed_runs),
+                "convergence_rate": float(frontend_replay_convergence_rate),
+                "convergence_light_rate": float(frontend_replay_convergence_light_rate),
+                "convergence_heavy_rate": float(frontend_replay_convergence_heavy_rate),
+                "unexpected_execution_runs": int(frontend_replay_unexpected_execution_runs),
+                "unexpected_execution_ratio": float(frontend_replay_unexpected_execution_ratio),
+                "antiflap_suppressed_runs": int(frontend_replay_antiflap_suppressed_runs),
+                "due_but_reason_missing_runs": int(
+                    frontend_replay_due_but_reason_missing_runs
+                ),
+            },
+            "frontend_snapshot_antiflap_burnin": {
+                "status": str(frontend_burnin_status),
+                "active": bool(frontend_burnin_active),
+                "ok": bool(frontend_burnin_ok),
+                "alert_count": int(len(frontend_burnin_alerts)),
+                "samples": int(self._safe_float(frontend_burnin_payload.get("samples", 0), 0)),
+                "min_samples": int(self._safe_float(frontend_burnin_payload.get("min_samples", 0), 0)),
+                "window_days": int(self._safe_float(frontend_burnin_payload.get("window_days", 0), 0)),
+                "suppressed_ratio": float(
+                    self._safe_float(frontend_burnin_metrics.get("suppressed_ratio", 0.0), 0.0)
+                ),
+                "replay_missed_runs": int(
+                    self._safe_float(frontend_burnin_metrics.get("replay_missed_runs", 0), 0)
+                ),
+                "reason_missing_runs": int(
+                    self._safe_float(frontend_burnin_metrics.get("reason_missing_runs", 0), 0)
+                ),
+                "promotion_enabled": bool(frontend_burnin_promotion.get("enabled", False)),
+                "promotion_eligible": bool(frontend_burnin_promotion.get("eligible", False)),
+                "promotion_recommendation": str(
+                    frontend_burnin_promotion.get("recommendation", "")
+                ),
+                "dual_window_enabled": bool(frontend_burnin_dual_window.get("enabled", False)),
+                "dual_window_active": bool(frontend_burnin_dual_window.get("active", False)),
+                "dual_window_status": str(frontend_burnin_dual_window.get("status", "inactive")),
+                "dual_window_ok": bool(frontend_burnin_dual_window.get("ok", True)),
+                "dual_window_long_window_days": int(
+                    self._safe_float(frontend_burnin_dual_window.get("long_window_days", 0), 0)
+                ),
+                "dual_window_long_samples": int(
+                    self._safe_float(frontend_burnin_dual_window.get("long_samples", 0), 0)
+                ),
+                "dual_window_min_long_samples": int(
+                    self._safe_float(frontend_burnin_dual_window.get("min_long_samples", 0), 0)
+                ),
+                "dual_window_suppression_ratio_delta": float(
+                    self._safe_float(
+                        frontend_burnin_dual_window_metrics.get("suppressed_ratio_delta", 0.0),
+                        0.0,
+                    )
+                ),
+                "dual_window_replay_missed_ratio_delta": float(
+                    self._safe_float(
+                        frontend_burnin_dual_window_metrics.get("replay_missed_ratio_delta", 0.0),
+                        0.0,
+                    )
+                ),
+                "dual_window_reason_missing_ratio_delta": float(
+                    self._safe_float(
+                        frontend_burnin_dual_window_metrics.get("reason_missing_ratio_delta", 0.0),
+                        0.0,
+                    )
+                ),
+                "dual_window_samples_ready_ok": bool(
+                    frontend_burnin_dual_window_checks.get("samples_ready_ok", True)
+                ),
+                "dual_window_suppression_delta_ok": bool(
+                    frontend_burnin_dual_window_checks.get("suppression_ratio_delta_ok", True)
+                ),
+                "dual_window_replay_delta_ok": bool(
+                    frontend_burnin_dual_window_checks.get("replay_missed_ratio_delta_ok", True)
+                ),
+                "dual_window_traceability_delta_ok": bool(
+                    frontend_burnin_dual_window_checks.get("traceability_ratio_delta_ok", True)
+                ),
+                "dual_window_alert_count": int(len(frontend_burnin_dual_window_alerts)),
+            },
+            "frontend_snapshot_hard_fail_controlled_apply": {
+                "status": str(frontend_apply_card_status),
+                "active": bool(frontend_burnin_controlled_apply.get("enabled", False)),
+                "enabled": bool(frontend_burnin_controlled_apply.get("enabled", False)),
+                "dry_run": bool(frontend_burnin_controlled_apply.get("dry_run", True)),
+                "proposal_generated": bool(frontend_burnin_controlled_apply_proposal.get("generated", False)),
+                "approval_found": bool(frontend_burnin_controlled_apply_approval.get("found", False)),
+                "approval_confirmed": bool(frontend_burnin_controlled_apply_approval.get("approved", False)),
+                "approval_matches_proposal": bool(
+                    frontend_burnin_controlled_apply_approval.get("matches_proposal", False)
+                ),
+                "rollback_guard_ok": bool(
+                    frontend_burnin_controlled_apply_apply_gate.get("rollback_guard_ok", True)
+                ),
+                "apply_recommended": bool(
+                    frontend_burnin_controlled_apply_apply_gate.get("apply_recommended", False)
+                ),
+                "reason": str(frontend_burnin_controlled_apply_apply_gate.get("reason", "")),
+                "proposal_id": str(frontend_burnin_controlled_apply_proposal.get("proposal_id", "")),
+                "decision": str(frontend_burnin_controlled_apply_decision_envelope.get("decision", "")),
+                "route": str(frontend_burnin_controlled_apply_decision_envelope.get("route", "")),
+                "stage": str(frontend_burnin_controlled_apply_decision_envelope.get("stage", "")),
+                "severity": str(frontend_burnin_controlled_apply_decision_envelope.get("severity", "")),
+                "headline": str(frontend_burnin_controlled_apply_decision_envelope.get("headline", "")),
+                "action": str(frontend_burnin_controlled_apply_decision_envelope.get("action", "")),
+                "approval_manifest_found": bool(
+                    frontend_burnin_controlled_apply_decision_approval_manifest.get("found", False)
+                ),
+                "approval_manifest_approved": bool(
+                    frontend_burnin_controlled_apply_decision_approval_manifest.get("approved", False)
+                ),
+                "approval_manifest_matches_proposal": bool(
+                    frontend_burnin_controlled_apply_decision_approval_manifest.get(
+                        "matches_proposal", False
+                    )
+                ),
+                "runbook": list(frontend_burnin_controlled_apply_decision_runbook),
+                "runbook_count": int(len(frontend_burnin_controlled_apply_decision_runbook)),
+                "route_audit_status": str(frontend_hard_fail_route_audit_status),
+                "route_audit_active": bool(frontend_hard_fail_route_audit_active),
+                "route_audit_ok": bool(frontend_hard_fail_route_audit_ok),
+                "route_audit_samples": int(
+                    self._safe_float(frontend_hard_fail_route_audit_payload.get("samples", 0), 0)
+                ),
+                "route_audit_window_days": int(
+                    self._safe_float(frontend_hard_fail_route_audit_payload.get("window_days", 0), 0)
+                ),
+                "route_audit_min_samples": int(
+                    self._safe_float(frontend_hard_fail_route_audit_payload.get("min_samples", 0), 0)
+                ),
+                "route_audit_apply_ratio": float(
+                    self._safe_float(frontend_hard_fail_route_audit_metrics.get("apply_ratio", 0.0), 0.0)
+                ),
+                "route_audit_non_apply_ratio": float(
+                    self._safe_float(frontend_hard_fail_route_audit_metrics.get("non_apply_ratio", 0.0), 0.0)
+                ),
+                "route_audit_rollback_guard_ratio": float(
+                    self._safe_float(
+                        frontend_hard_fail_route_audit_metrics.get("rollback_guard_blocked_ratio", 0.0),
+                        0.0,
+                    )
+                ),
+                "route_audit_trendline_non_apply_rise": float(
+                    self._safe_float(
+                        frontend_hard_fail_route_audit_metrics.get("trendline_non_apply_ratio_rise", 0.0),
+                        0.0,
+                    )
+                ),
+                "route_audit_trendline_rollback_guard_rise": float(
+                    self._safe_float(
+                        frontend_hard_fail_route_audit_metrics.get(
+                            "trendline_rollback_guard_blocked_ratio_rise",
+                            0.0,
+                        ),
+                        0.0,
+                    )
+                ),
+                "route_audit_trendline_apply_drop": float(
+                    self._safe_float(
+                        frontend_hard_fail_route_audit_metrics.get("trendline_apply_ratio_drop", 0.0),
+                        0.0,
+                    )
+                ),
+                "route_audit_samples_ready_ok": bool(
+                    frontend_hard_fail_route_audit_checks.get("samples_ready_ok", True)
+                ),
+                "route_audit_non_apply_ratio_ok": bool(
+                    frontend_hard_fail_route_audit_checks.get("non_apply_ratio_ok", True)
+                ),
+                "route_audit_rollback_guard_ratio_ok": bool(
+                    frontend_hard_fail_route_audit_checks.get("rollback_guard_ratio_ok", True)
+                ),
+                "route_audit_apply_ratio_ok": bool(
+                    frontend_hard_fail_route_audit_checks.get("apply_ratio_ok", True)
+                ),
+                "route_audit_trendline_samples_ok": bool(
+                    frontend_hard_fail_route_audit_checks.get("trendline_samples_ok", True)
+                ),
+                "route_audit_trendline_non_apply_rise_ok": bool(
+                    frontend_hard_fail_route_audit_checks.get("trendline_non_apply_ratio_rise_ok", True)
+                ),
+                "route_audit_trendline_rollback_guard_rise_ok": bool(
+                    frontend_hard_fail_route_audit_checks.get(
+                        "trendline_rollback_guard_blocked_ratio_rise_ok",
+                        True,
+                    )
+                ),
+                "route_audit_trendline_apply_drop_ok": bool(
+                    frontend_hard_fail_route_audit_checks.get("trendline_apply_ratio_drop_ok", True)
+                ),
+                "route_audit_alert_count": int(len(frontend_hard_fail_route_audit_alerts)),
+            },
+        }
+
+    def _stress_matrix_scorecards(
+        self,
+        *,
+        stress_matrix_trend: dict[str, Any] | None,
+        stress_matrix_execution_friction: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        trend_payload = stress_matrix_trend if isinstance(stress_matrix_trend, dict) else {}
+        trend_checks = trend_payload.get("checks", {}) if isinstance(trend_payload.get("checks", {}), dict) else {}
+        trend_active = bool(trend_payload.get("active", False))
+        trend_ok = (
+            all(bool(v) for v in trend_checks.values())
+            if trend_active
+            else bool(trend_payload.get("gate_ok", True))
+        )
+        trend_alerts = trend_payload.get("alerts", []) if isinstance(trend_payload.get("alerts", []), list) else []
+        trend_metrics = trend_payload.get("metrics", {}) if isinstance(trend_payload.get("metrics", {}), dict) else {}
+        trend_current = trend_metrics.get("current", {}) if isinstance(trend_metrics.get("current", {}), dict) else {}
+        trend_delta = trend_metrics.get("delta", {}) if isinstance(trend_metrics.get("delta", {}), dict) else {}
+
+        friction_payload = (
+            stress_matrix_execution_friction if isinstance(stress_matrix_execution_friction, dict) else {}
+        )
+        friction_checks = (
+            friction_payload.get("checks", {})
+            if isinstance(friction_payload.get("checks", {}), dict)
+            else {}
+        )
+        friction_active = bool(friction_payload.get("active", False))
+        friction_gate_ok = bool(friction_payload.get("gate_ok", True))
+        friction_ok = (
+            all(bool(v) for v in friction_checks.values())
+            if friction_active
+            else bool(friction_gate_ok)
+        )
+        friction_alerts = (
+            friction_payload.get("alerts", [])
+            if isinstance(friction_payload.get("alerts", []), list)
+            else []
+        )
+        friction_metrics = (
+            friction_payload.get("metrics", {})
+            if isinstance(friction_payload.get("metrics", {}), dict)
+            else {}
+        )
+        friction_trendline = (
+            friction_payload.get("trendline", {})
+            if isinstance(friction_payload.get("trendline", {}), dict)
+            else {}
+        )
+        friction_trendline_checks = (
+            friction_trendline.get("checks", {})
+            if isinstance(friction_trendline.get("checks", {}), dict)
+            else {}
+        )
+        friction_trendline_deltas = (
+            friction_trendline.get("deltas", {})
+            if isinstance(friction_trendline.get("deltas", {}), dict)
+            else {}
+        )
+        friction_trendline_alerts = (
+            friction_trendline.get("alerts", [])
+            if isinstance(friction_trendline.get("alerts", []), list)
+            else []
+        )
+        friction_trendline_auto_tune = (
+            friction_trendline.get("auto_tune", {})
+            if isinstance(friction_trendline.get("auto_tune", {}), dict)
+            else {}
+        )
+        friction_trendline_auto_tune_proposal = (
+            friction_trendline_auto_tune.get("proposal", {})
+            if isinstance(friction_trendline_auto_tune.get("proposal", {}), dict)
+            else {}
+        )
+        friction_trendline_auto_tune_proposal_artifact = (
+            friction_trendline_auto_tune_proposal.get("artifact", {})
+            if isinstance(friction_trendline_auto_tune_proposal.get("artifact", {}), dict)
+            else {}
+        )
+        friction_trendline_auto_tune_controlled_apply = (
+            friction_trendline_auto_tune.get("controlled_apply", {})
+            if isinstance(friction_trendline_auto_tune.get("controlled_apply", {}), dict)
+            else {}
+        )
+        friction_trendline_auto_tune_controlled_apply_ledger = (
+            friction_trendline_auto_tune_controlled_apply.get("ledger", {})
+            if isinstance(friction_trendline_auto_tune_controlled_apply.get("ledger", {}), dict)
+            else {}
+        )
+        friction_trendline_auto_tune_controlled_apply_ledger_drillbook = (
+            friction_trendline_auto_tune_controlled_apply_ledger.get("drillbook", {})
+            if isinstance(friction_trendline_auto_tune_controlled_apply_ledger.get("drillbook", {}), dict)
+            else {}
+        )
+        friction_trendline_auto_tune_controlled_apply_ledger_drillbook_workflows = (
+            friction_trendline_auto_tune_controlled_apply_ledger_drillbook.get("workflows", {})
+            if isinstance(
+                friction_trendline_auto_tune_controlled_apply_ledger_drillbook.get("workflows", {}),
+                dict,
+            )
+            else {}
+        )
+        friction_trendline_auto_tune_controlled_apply_ledger_replay = (
+            friction_trendline_auto_tune_controlled_apply_ledger_drillbook_workflows.get("replay", {})
+            if isinstance(
+                friction_trendline_auto_tune_controlled_apply_ledger_drillbook_workflows.get("replay", {}),
+                dict,
+            )
+            else {}
+        )
+        friction_trendline_auto_tune_controlled_apply_ledger_rollback = (
+            friction_trendline_auto_tune_controlled_apply_ledger_drillbook_workflows.get("rollback", {})
+            if isinstance(
+                friction_trendline_auto_tune_controlled_apply_ledger_drillbook_workflows.get(
+                    "rollback", {}
+                ),
+                dict,
+            )
+            else {}
+        )
+
+        def _card_status(*, active: bool, ok: bool) -> str:
+            if active:
+                return "green" if ok else "red"
+            return "inactive"
+
+        return {
+            "trend": {
+                "status": _card_status(active=trend_active, ok=trend_ok),
+                "active": bool(trend_active),
+                "ok": bool(trend_ok),
+                "alert_count": int(len(trend_alerts)),
+                "samples": int(self._safe_float(trend_payload.get("samples", 0), 0)),
+                "current_best_mode": str(trend_current.get("best_mode", "") or ""),
+                "robustness_drop": float(self._safe_float(trend_delta.get("robustness_drop", 0.0), 0.0)),
+                "fail_ratio": float(self._safe_float(trend_current.get("fail_ratio", 0.0), 0.0)),
+            },
+            "execution_friction": {
+                "status": _card_status(active=friction_active, ok=friction_ok),
+                "active": bool(friction_active),
+                "ok": bool(friction_ok),
+                "alert_count": int(len(friction_alerts)),
+                "reference_mode": str(friction_metrics.get("reference_mode", "") or ""),
+                "annual_drop": float(self._safe_float(friction_metrics.get("annual_drop", 0.0), 0.0)),
+                "drawdown_rise": float(self._safe_float(friction_metrics.get("drawdown_rise", 0.0), 0.0)),
+                "min_profit_factor_ratio": float(
+                    self._safe_float(friction_metrics.get("min_profit_factor_ratio", 0.0), 0.0)
+                ),
+                "max_fail_ratio": float(self._safe_float(friction_metrics.get("max_fail_ratio", 0.0), 0.0)),
+                "trendline_status": str(friction_trendline.get("status", "inactive") or "inactive"),
+                "trendline_ok": bool(friction_trendline_checks.get("trendline_ok", True)),
+                "trendline_source_staleness_ok": bool(
+                    friction_trendline_checks.get("source_staleness_ok", True)
+                ),
+                "trendline_auto_tune_bounded_ok": bool(
+                    friction_trendline_checks.get("auto_tune_bounded_ok", True)
+                ),
+                "trendline_alert_count": int(len(friction_trendline_alerts)),
+                "trendline_source_age_days": int(
+                    self._safe_float(friction_trendline.get("source_age_days", 0), 0)
+                ),
+                "trendline_annual_drop_rise": float(
+                    self._safe_float(friction_trendline_deltas.get("annual_drop_rise", 0.0), 0.0)
+                ),
+                "trendline_drawdown_rise_delta": float(
+                    self._safe_float(friction_trendline_deltas.get("drawdown_rise_delta", 0.0), 0.0)
+                ),
+                "trendline_profit_factor_ratio_drop": float(
+                    self._safe_float(friction_trendline_deltas.get("profit_factor_ratio_drop", 0.0), 0.0)
+                ),
+                "trendline_auto_tune_reason": str(
+                    friction_trendline_auto_tune.get("reason", "")
+                    or ""
+                ),
+                "trendline_auto_tune_proposal_generated": bool(
+                    friction_trendline_auto_tune_proposal.get("generated", False)
+                ),
+                "trendline_auto_tune_proposal_written": bool(
+                    friction_trendline_auto_tune_proposal_artifact.get("written", False)
+                ),
+                "trendline_controlled_apply_enabled": bool(
+                    friction_trendline_auto_tune_controlled_apply.get("enabled", False)
+                ),
+                "trendline_controlled_apply_applied": bool(
+                    friction_trendline_auto_tune_controlled_apply.get("applied", False)
+                ),
+                "trendline_controlled_apply_reason": str(
+                    friction_trendline_auto_tune_controlled_apply.get("reason", "") or ""
+                ),
+                "trendline_controlled_apply_duplicate_ok": bool(
+                    friction_trendline_checks.get("controlled_apply_duplicate_ok", True)
+                ),
+                "trendline_controlled_apply_ledger_write_ok": bool(
+                    friction_trendline_checks.get("controlled_apply_ledger_write_ok", True)
+                ),
+                "trendline_controlled_apply_ledger_drift_ok": bool(
+                    friction_trendline_checks.get("controlled_apply_ledger_drift_ok", True)
+                ),
+                "trendline_controlled_apply_ledger_artifact_ok": bool(
+                    friction_trendline_checks.get("controlled_apply_ledger_artifact_ok", True)
+                ),
+                "trendline_controlled_apply_ledger_entries": int(
+                    self._safe_float(
+                        friction_trendline_auto_tune_controlled_apply_ledger.get("entries", 0),
+                        0,
+                    )
+                ),
+                "trendline_controlled_apply_ledger_window_stale_ratio": float(
+                    self._safe_float(
+                        friction_trendline_auto_tune_controlled_apply_ledger.get(
+                            "window_stale_ratio", 0.0
+                        ),
+                        0.0,
+                    )
+                ),
+                "trendline_controlled_apply_ledger_duplicate_block_rate": float(
+                    self._safe_float(
+                        friction_trendline_auto_tune_controlled_apply_ledger.get(
+                            "duplicate_block_rate", 0.0
+                        ),
+                        0.0,
+                    )
+                ),
+                "trendline_controlled_apply_ledger_drillbook_written": bool(
+                    friction_trendline_auto_tune_controlled_apply_ledger_drillbook.get("written", False)
+                ),
+                "trendline_controlled_apply_ledger_drillbook_path": str(
+                    friction_trendline_auto_tune_controlled_apply_ledger_drillbook.get("json", "") or ""
+                ),
+                "trendline_controlled_apply_ledger_replay_recommended": bool(
+                    friction_trendline_auto_tune_controlled_apply_ledger_replay.get(
+                        "recommended", False
+                    )
+                ),
+                "trendline_controlled_apply_ledger_rollback_recommended": bool(
+                    friction_trendline_auto_tune_controlled_apply_ledger_rollback.get(
+                        "recommended", False
+                    )
+                ),
+            },
+        }
+
+    @staticmethod
+    def _parse_hhmm_to_minutes(raw: Any, fallback: int) -> int:
+        txt = str(raw or "").strip()
+        try:
+            hh, mm = txt.split(":")
+            h = int(hh)
+            m = int(mm)
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                return h * 60 + m
+        except Exception:
+            pass
+        return int(fallback)
+
+    def _review_required_for_gate(self, *, as_of: date) -> dict[str, Any]:
+        tz_name = str(getattr(self.settings, "timezone", "") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+        now = datetime.now(ZoneInfo(tz_name))
+        if as_of < now.date():
+            return {"required": True, "reason": "historical_day", "now": now.isoformat()}
+        if as_of > now.date():
+            return {"required": False, "reason": "future_day", "now": now.isoformat()}
+        schedule = self.settings.schedule if isinstance(self.settings.schedule, dict) else {}
+        review_minutes = self._parse_hhmm_to_minutes(
+            schedule.get("nightly_review", "20:30"),
+            fallback=20 * 60 + 30,
+        )
+        now_minutes = int(now.hour) * 60 + int(now.minute)
+        required = bool(now_minutes >= review_minutes)
+        return {
+            "required": required,
+            "reason": "after_review_slot" if required else "before_review_slot",
+            "now": now.isoformat(),
+            "review_minutes": int(review_minutes),
+            "now_minutes": int(now_minutes),
+        }
+
+    def _backtest_required_for_gate(self, *, as_of: date) -> dict[str, Any]:
+        tz_name = str(getattr(self.settings, "timezone", "") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+        now = datetime.now(ZoneInfo(tz_name))
+        if as_of < now.date():
+            return {"required": True, "reason": "historical_day", "now": now.isoformat()}
+        if as_of > now.date():
+            return {"required": False, "reason": "future_day", "now": now.isoformat()}
+        schedule = self.settings.schedule if isinstance(self.settings.schedule, dict) else {}
+        eod_minutes = self._parse_hhmm_to_minutes(
+            schedule.get("eod", "15:10"),
+            fallback=15 * 60 + 10,
+        )
+        now_minutes = int(now.hour) * 60 + int(now.minute)
+        required = bool(now_minutes >= eod_minutes)
+        return {
+            "required": required,
+            "reason": "after_eod_slot" if required else "before_eod_slot",
+            "now": now.isoformat(),
+            "eod_minutes": int(eod_minutes),
+            "now_minutes": int(now_minutes),
+        }
+
+    def _release_decision_freshness_metrics(
+        self,
+        *,
+        as_of: date,
+        review_delta_path: Path,
+        require_review: bool,
+    ) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(val.get("release_decision_freshness_enabled", True), True)
+        hard_fail = self._safe_bool(val.get("release_decision_freshness_hard_fail", True), True)
+        review_max_hours = max(
+            1,
+            int(self._safe_float(val.get("release_decision_review_max_staleness_hours", 24), 24)),
+        )
+        gate_max_hours = max(
+            1,
+            int(self._safe_float(val.get("release_decision_gate_max_staleness_hours", 12), 12)),
+        )
+        eod_max_hours = max(
+            1,
+            int(self._safe_float(val.get("release_decision_eod_max_staleness_hours", 12), 12)),
+        )
+        now_ts = datetime.now()
+        review_found = bool(review_delta_path.exists())
+        review_mtime = (
+            datetime.fromtimestamp(review_delta_path.stat().st_mtime)
+            if review_found
+            else None
+        )
+        review_age_hours = None
+        review_fresh = False
+        if review_mtime is not None:
+            review_age_hours = max(0.0, (now_ts - review_mtime).total_seconds() / 3600.0)
+            review_fresh = bool(review_age_hours <= float(review_max_hours))
+        alerts: list[str] = []
+        if enabled and bool(require_review):
+            if not review_found:
+                alerts.append("release_decision_review_missing")
+            elif not review_fresh:
+                alerts.append("release_decision_review_stale")
+        monitor_failed = bool(enabled and bool(require_review) and bool(alerts))
+        gate_ok = bool(not monitor_failed) if hard_fail else True
+        return {
+            "enabled": bool(enabled),
+            "active": bool(review_found and require_review),
+            "monitor_failed": bool(monitor_failed),
+            "gate_ok": bool(gate_ok),
+            "checks": {
+                "review_present_ok": bool((not enabled) or (not require_review) or review_found),
+                "review_staleness_ok": bool((not enabled) or (not require_review) or review_fresh),
+            },
+            "metrics": {
+                "review_found": bool(review_found),
+                "review_required": bool(require_review),
+                "review_age_hours": (float(review_age_hours) if review_age_hours is not None else None),
+                "review_fresh": bool(review_fresh),
+                "as_of": as_of.isoformat(),
+            },
+            "thresholds": {
+                "release_decision_freshness_enabled": bool(enabled),
+                "release_decision_freshness_hard_fail": bool(hard_fail),
+                "release_decision_review_max_staleness_hours": int(review_max_hours),
+                "release_decision_gate_max_staleness_hours": int(gate_max_hours),
+                "release_decision_eod_max_staleness_hours": int(eod_max_hours),
+            },
+            "alerts": alerts,
+        }
+
+    def _release_decision_snapshot_path(self, as_of: date) -> Path:
+        return self.output_dir / "review" / f"{as_of.isoformat()}_release_decision_snapshot.json"
+
+    def _build_release_decision_snapshot(
+        self,
+        *,
+        as_of: date,
+        checks: dict[str, Any],
+        metrics: dict[str, Any],
+        gate_passed: bool,
+        review_delta_path: Path,
+        rollback_recommendation: dict[str, Any] | None = None,
+        freshness: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        failed_checks = sorted([str(k) for k, v in checks.items() if not bool(v)])
+        payload_for_fingerprint = {
+            "date": as_of.isoformat(),
+            "checks": checks,
+            "metrics": metrics,
+            "gate_passed": bool(gate_passed),
+            "failed_checks": failed_checks,
+            "rollback_level": str((rollback_recommendation or {}).get("level", "")),
+            "rollback_action": str((rollback_recommendation or {}).get("action", "")),
+            "freshness": (
+                {
+                    "enabled": bool((freshness or {}).get("enabled", False)),
+                    "gate_ok": bool((freshness or {}).get("gate_ok", True)),
+                    "monitor_failed": bool((freshness or {}).get("monitor_failed", False)),
+                    "checks": (
+                        (freshness or {}).get("checks", {})
+                        if isinstance((freshness or {}).get("checks", {}), dict)
+                        else {}
+                    ),
+                    "alerts": (
+                        (freshness or {}).get("alerts", [])
+                        if isinstance((freshness or {}).get("alerts", []), list)
+                        else []
+                    ),
+                }
+                if isinstance(freshness, dict)
+                else {}
+            ),
+        }
+        fingerprint = hashlib.sha1(self._canonical_json(payload_for_fingerprint).encode("utf-8")).hexdigest()
+        decision_id = f"{as_of.isoformat()}_{fingerprint[:12]}"
+        review_manifest_path = self.output_dir / "artifacts" / "manifests" / f"review_{as_of.isoformat()}.json"
+        return {
+            "schema_version": 1,
+            "date": as_of.isoformat(),
+            "decision_id": decision_id,
+            "fingerprint": str(fingerprint),
+            "generated_at": datetime.now().isoformat(),
+            "gate_passed": bool(gate_passed),
+            "failed_checks": failed_checks,
+            "checks_summary": checks,
+            "metrics_summary": metrics,
+            "rollback_recommendation": (rollback_recommendation or {}),
+            "freshness": freshness if isinstance(freshness, dict) else {},
+            "refs": {
+                "review_param_delta": str(review_delta_path) if review_delta_path.exists() else "",
+                "review_manifest": str(review_manifest_path) if review_manifest_path.exists() else "",
+                "gate_report": str(self.output_dir / "review" / f"{as_of.isoformat()}_gate_report.json"),
+                "ops_report": str(self.output_dir / "review" / f"{as_of.isoformat()}_ops_report.json"),
+            },
+        }
+
+    def _artifact_governance_baseline_snapshot_enabled(self) -> bool:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        return self._safe_bool(val.get("ops_artifact_governance_baseline_snapshot_enabled", True), True)
+
+    def _artifact_governance_baseline_snapshot_path(self) -> Path:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        raw = str(
+            val.get(
+                "ops_artifact_governance_baseline_snapshot_path",
+                "artifacts/baselines/artifact_governance/active_baseline.yaml",
+            )
+        ).strip()
+        return self._resolve_output_path(
+            raw,
+            fallback_rel="artifacts/baselines/artifact_governance/active_baseline.yaml",
+        )
+
+    def _artifact_governance_baseline_history_dir(self) -> Path:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        raw = str(
+            val.get(
+                "ops_artifact_governance_baseline_history_dir",
+                "artifacts/baselines/artifact_governance/history",
+            )
+        ).strip()
+        return self._resolve_output_path(
+            raw,
+            fallback_rel="artifacts/baselines/artifact_governance/history",
+        )
+
+    def _normalize_artifact_governance_baseline_profiles(self, raw_profiles: Any) -> dict[str, dict[str, Any]]:
+        if not isinstance(raw_profiles, dict):
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for profile_name, raw_cfg in raw_profiles.items():
+            name = str(profile_name or "").strip()
+            if not name or not isinstance(raw_cfg, dict):
+                continue
+            cfg: dict[str, Any] = {}
+            if "json_glob" in raw_cfg:
+                txt = str(raw_cfg.get("json_glob", "")).strip()
+                if txt:
+                    cfg["json_glob"] = txt
+            if "md_glob" in raw_cfg:
+                txt = str(raw_cfg.get("md_glob", "")).strip()
+                if txt:
+                    cfg["md_glob"] = txt
+            if "checksum_index_filename" in raw_cfg:
+                txt = str(raw_cfg.get("checksum_index_filename", "")).strip()
+                if txt:
+                    cfg["checksum_index_filename"] = txt
+            if "retention_days" in raw_cfg:
+                cfg["retention_days"] = max(
+                    1,
+                    int(self._safe_float(raw_cfg.get("retention_days", 1), 1)),
+                )
+            if "checksum_index_enabled" in raw_cfg:
+                cfg["checksum_index_enabled"] = self._safe_bool(
+                    raw_cfg.get("checksum_index_enabled", False),
+                    False,
+                )
+            if cfg:
+                out[name] = cfg
+        return out
+
+    def _artifact_governance_baseline_profiles(self) -> dict[str, dict[str, Any]]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        config_raw = (
+            val.get("ops_artifact_governance_profile_baseline", {})
+            if isinstance(val.get("ops_artifact_governance_profile_baseline", {}), dict)
+            else {}
+        )
+        config_profiles = self._normalize_artifact_governance_baseline_profiles(config_raw)
+        if not self._artifact_governance_baseline_snapshot_enabled():
+            return config_profiles
+
+        snapshot_meta = self._load_artifact_governance_baseline_snapshot()
+        snapshot_profiles = (
+            snapshot_meta.get("profiles", {})
+            if isinstance(snapshot_meta.get("profiles", {}), dict)
+            else {}
+        )
+        if snapshot_profiles:
+            return self._normalize_artifact_governance_baseline_profiles(snapshot_profiles)
+        return config_profiles
+
+    def _load_artifact_governance_baseline_snapshot(self) -> dict[str, Any]:
+        enabled = self._artifact_governance_baseline_snapshot_enabled()
+        active_path = self._artifact_governance_baseline_snapshot_path()
+        if not enabled:
+            return {
+                "enabled": False,
+                "found": False,
+                "path": str(active_path),
+                "profiles": {},
+                "source": "disabled",
+            }
+        if not active_path.exists():
+            return {
+                "enabled": True,
+                "found": False,
+                "path": str(active_path),
+                "profiles": {},
+                "source": "snapshot",
+            }
+        try:
+            raw_payload = yaml.safe_load(active_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "found": False,
+                "path": str(active_path),
+                "profiles": {},
+                "source": "snapshot",
+                "error": f"{type(exc).__name__}:{exc}",
+            }
+        payload = raw_payload if isinstance(raw_payload, dict) else {}
+        payload_profiles = payload.get("profiles", {})
+        if not isinstance(payload_profiles, dict):
+            payload_profiles = payload
+        profiles = self._normalize_artifact_governance_baseline_profiles(payload_profiles)
+        return {
+            "enabled": True,
+            "found": True,
+            "path": str(active_path),
+            "history_path": str(payload.get("history_path", "")),
+            "snapshot_path": str(payload.get("snapshot_path", "")),
+            "rollback_anchor": str(payload.get("rollback_anchor", "")),
+            "promoted_at": str(payload.get("promoted_at", "")),
+            "as_of": str(payload.get("as_of", "")),
+            "profiles": profiles,
+            "source": "snapshot",
+        }
+
+    def _artifact_governance_policy_snapshot(self) -> dict[str, dict[str, Any]]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        raw_profiles = (
+            val.get("ops_artifact_governance_profiles", {})
+            if isinstance(val.get("ops_artifact_governance_profiles", {}), dict)
+            else {}
+        )
+        raw_baseline = (
+            val.get("ops_artifact_governance_profile_baseline", {})
+            if isinstance(val.get("ops_artifact_governance_profile_baseline", {}), dict)
+            else {}
+        )
+        profile_names: set[str] = {
+            str(name).strip()
+            for name in list(self.ARTIFACT_GOVERNANCE_DEFAULTS.keys()) + list(raw_profiles.keys()) + list(raw_baseline.keys())
+            if str(name).strip()
+        }
+        out: dict[str, dict[str, Any]] = {}
+        for profile_name in sorted(profile_names):
+            legacy = self._artifact_governance_legacy_defaults(profile_name=profile_name)
+            policy = self._artifact_governance_profile(
+                profile_name=profile_name,
+                fallback_retention_days=int(legacy.get("retention_days", 30)),
+                fallback_checksum_index_enabled=bool(legacy.get("checksum_index_enabled", True)),
+            )
+            out[profile_name] = {
+                "json_glob": str(policy.get("json_glob", "")),
+                "md_glob": str(policy.get("md_glob", "")),
+                "checksum_index_filename": str(policy.get("checksum_index_filename", "")),
+                "retention_days": int(self._safe_float(policy.get("retention_days", 30), 30)),
+                "checksum_index_enabled": bool(policy.get("checksum_index_enabled", True)),
+            }
+        return out
+
+    def _promote_artifact_governance_baseline(
+        self,
+        *,
+        as_of: date,
+        round_no: int,
+        gate: dict[str, Any],
+    ) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._artifact_governance_baseline_snapshot_enabled()
+        auto_promote = self._safe_bool(
+            val.get("ops_artifact_governance_baseline_auto_promote_on_review_pass", True),
+            True,
+        )
+        active_path = self._artifact_governance_baseline_snapshot_path()
+        history_dir = self._artifact_governance_baseline_history_dir()
+        if not enabled:
+            return {
+                "enabled": False,
+                "promoted": False,
+                "reason": "snapshot_disabled",
+                "active_path": str(active_path),
+            }
+        if not auto_promote:
+            return {
+                "enabled": True,
+                "promoted": False,
+                "reason": "auto_promote_disabled",
+                "active_path": str(active_path),
+            }
+
+        prev_snapshot = self._load_artifact_governance_baseline_snapshot()
+        rollback_anchor = str(prev_snapshot.get("snapshot_path", "") or prev_snapshot.get("path", "")).strip()
+        profiles = self._artifact_governance_policy_snapshot()
+        promoted_at = datetime.now().isoformat()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        history_path = history_dir / f"{as_of.isoformat()}_r{int(round_no):02d}_{stamp}.yaml"
+        payload = {
+            "schema_version": 1,
+            "as_of": as_of.isoformat(),
+            "round": int(round_no),
+            "promoted_at": promoted_at,
+            "profiles": profiles,
+            "snapshot_path": str(history_path),
+            "rollback_anchor": rollback_anchor,
+            "source_gate_passed": bool(gate.get("passed", False)),
+            "source_artifact_governance_ok": bool(
+                (gate.get("checks", {}) if isinstance(gate.get("checks", {}), dict) else {}).get(
+                    "artifact_governance_ok",
+                    False,
+                )
+            ),
+        }
+        try:
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            active_path.parent.mkdir(parents=True, exist_ok=True)
+            write_markdown(
+                history_path,
+                yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            )
+            active_payload = dict(payload)
+            active_payload["history_path"] = str(history_path)
+            write_markdown(
+                active_path,
+                yaml.safe_dump(active_payload, allow_unicode=True, sort_keys=False),
+            )
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "promoted": False,
+                "reason": "write_failed",
+                "active_path": str(active_path),
+                "history_path": str(history_path),
+                "rollback_anchor": rollback_anchor,
+                "error": f"{type(exc).__name__}:{exc}",
+            }
+        return {
+            "enabled": True,
+            "promoted": True,
+            "reason": "ok",
+            "active_path": str(active_path),
+            "history_path": str(history_path),
+            "snapshot_path": str(history_path),
+            "rollback_anchor": rollback_anchor,
+            "profiles_count": int(len(profiles)),
+            "promoted_at": promoted_at,
+            "as_of": as_of.isoformat(),
+            "round": int(round_no),
+        }
 
     @staticmethod
     def _extract_failed_tests(test_payload: dict[str, Any]) -> list[str]:
@@ -248,6 +2139,43 @@ class ReleaseOrchestrator:
             "checksum_index_enabled": bool(checksum_index_enabled),
         }
 
+    def _event_stream_artifact_metrics(self, *, as_of: date) -> dict[str, Any]:
+        event_stream_dir = self.output_dir / "logs" / "event_stream"
+        event_stream_dir.mkdir(parents=True, exist_ok=True)
+        event_files_before = sorted(event_stream_dir.glob("*_events.ndjson"))
+        legacy = self._artifact_governance_legacy_defaults(profile_name="event_stream")
+        policy = self._artifact_governance_profile(
+            profile_name="event_stream",
+            fallback_retention_days=max(1, int(legacy.get("retention_days", 30))),
+            fallback_checksum_index_enabled=bool(legacy.get("checksum_index_enabled", True)),
+        )
+        json_glob = str(policy.get("json_glob", "*_events.ndjson"))
+        md_glob = str(policy.get("md_glob", "*_events.__none__"))
+        checksum_index_filename = str(policy.get("checksum_index_filename", "event_stream_checksum_index.json"))
+
+        artifact = apply_dated_artifact_governance(
+            as_of=as_of,
+            directory=event_stream_dir,
+            json_glob=json_glob,
+            md_glob=md_glob,
+            retention_days=int(policy.get("retention_days", 30)),
+            checksum_index_enabled=bool(policy.get("checksum_index_enabled", True)),
+            checksum_index_filename=checksum_index_filename,
+        )
+        event_files_after = sorted(event_stream_dir.glob(json_glob))
+        latest = event_files_after[-1] if event_files_after else (event_files_before[-1] if event_files_before else None)
+        artifact["written"] = bool(artifact)
+        artifact["event_files_count"] = int(len(event_files_after))
+        artifact["latest_event_path"] = str(latest) if isinstance(latest, Path) else ""
+        artifact["json_glob"] = str(json_glob)
+        artifact["md_glob"] = str(md_glob)
+        artifact["checksum_index_filename"] = str(checksum_index_filename)
+        artifact["profile_override"] = bool(policy.get("profile_override", False))
+        return {
+            "active": bool(len(event_files_after) > 0),
+            "artifact": artifact,
+        }
+
     def _artifact_governance_metrics(
         self,
         *,
@@ -256,14 +2184,21 @@ class ReleaseOrchestrator:
         stress_autorun_history: dict[str, Any],
         stress_autorun_reason_drift: dict[str, Any],
         reconcile_drift: dict[str, Any],
+        guard_loop_cadence_non_apply_lift_trend: dict[str, Any],
+        event_stream: dict[str, Any],
     ) -> dict[str, Any]:
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         strict_mode_enabled = self._safe_bool(val.get("ops_artifact_governance_strict_mode_enabled", False), False)
-        baseline_profiles = (
-            val.get("ops_artifact_governance_profile_baseline", {})
-            if isinstance(val.get("ops_artifact_governance_profile_baseline", {}), dict)
-            else {}
+        baseline_profiles = self._artifact_governance_baseline_profiles()
+        baseline_snapshot_meta = self._load_artifact_governance_baseline_snapshot()
+        snapshot_profiles = self._normalize_artifact_governance_baseline_profiles(
+            baseline_snapshot_meta.get("profiles", {})
         )
+        baseline_source = "none"
+        if baseline_profiles:
+            baseline_source = "config"
+            if snapshot_profiles and baseline_profiles == snapshot_profiles:
+                baseline_source = "snapshot"
         artifacts_temporal = (
             temporal_audit.get("artifacts", {}) if isinstance(temporal_audit.get("artifacts", {}), dict) else {}
         )
@@ -300,6 +2235,21 @@ class ReleaseOrchestrator:
             if isinstance(artifacts_reconcile.get("row_diff", {}), dict)
             else {}
         )
+        artifacts_cadence_lift_trend = (
+            guard_loop_cadence_non_apply_lift_trend.get("artifacts", {})
+            if isinstance(guard_loop_cadence_non_apply_lift_trend.get("artifacts", {}), dict)
+            else {}
+        )
+        artifact_cadence_lift_trend = (
+            artifacts_cadence_lift_trend.get("trend", {})
+            if isinstance(artifacts_cadence_lift_trend.get("trend", {}), dict)
+            else {}
+        )
+        event_stream_artifact = (
+            event_stream.get("artifact", {})
+            if isinstance(event_stream.get("artifact", {}), dict)
+            else {}
+        )
 
         profile_inputs: list[dict[str, Any]] = [
             {
@@ -321,6 +2271,16 @@ class ReleaseOrchestrator:
                 "profile": "reconcile_row_diff",
                 "active": bool(reconcile_drift.get("active", False)),
                 "artifact": artifact_reconcile_row_diff,
+            },
+            {
+                "profile": "guard_loop_cadence_lift_trend",
+                "active": bool(guard_loop_cadence_non_apply_lift_trend.get("enabled", False)),
+                "artifact": artifact_cadence_lift_trend,
+            },
+            {
+                "profile": "event_stream",
+                "active": bool(event_stream.get("active", False)),
+                "artifact": event_stream_artifact,
             },
         ]
 
@@ -391,8 +2351,7 @@ class ReleaseOrchestrator:
             baseline_compare_keys = {
                 str(k)
                 for k in baseline_raw.keys()
-                if str(k)
-                in {"json_glob", "md_glob", "checksum_index_filename", "retention_days", "checksum_index_enabled"}
+                if str(k) in set(self.ARTIFACT_GOVERNANCE_BASELINE_FIELDS)
             }
             baseline_drift_fields: list[str] = []
             if baseline_compare_keys:
@@ -505,9 +2464,1029 @@ class ReleaseOrchestrator:
                 "baseline_drift_profiles": int(baseline_drift),
                 "strict_mode_enabled": bool(strict_mode_enabled),
                 "strict_mode_blocked": bool(strict_mode_blocked),
+                "baseline_source": baseline_source,
+                "baseline_snapshot_enabled": bool(baseline_snapshot_meta.get("enabled", False)),
+                "baseline_snapshot_found": bool(baseline_snapshot_meta.get("found", False)),
+            },
+            "baseline": {
+                "source": baseline_source,
+                "snapshot": {
+                    "enabled": bool(baseline_snapshot_meta.get("enabled", False)),
+                    "found": bool(baseline_snapshot_meta.get("found", False)),
+                    "path": str(baseline_snapshot_meta.get("path", "")),
+                    "history_path": str(baseline_snapshot_meta.get("history_path", "")),
+                    "snapshot_path": str(baseline_snapshot_meta.get("snapshot_path", "")),
+                    "rollback_anchor": str(baseline_snapshot_meta.get("rollback_anchor", "")),
+                    "promoted_at": str(baseline_snapshot_meta.get("promoted_at", "")),
+                    "error": str(baseline_snapshot_meta.get("error", "")),
+                },
             },
             "alerts": alerts,
             "profiles": profile_rows,
+        }
+
+    def _degradation_snapshot_chain_paths(self) -> dict[str, Path]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        active_raw = str(
+            val.get(
+                "ops_degradation_calibration_rollback_active_snapshot_path",
+                "artifacts/baselines/degradation_calibration/active_snapshot.yaml",
+            )
+        ).strip()
+        history_raw = str(
+            val.get(
+                "ops_degradation_calibration_rollback_history_dir",
+                "artifacts/baselines/degradation_calibration/history",
+            )
+        ).strip()
+        return {
+            "active": self._resolve_output_path(
+                active_raw,
+                fallback_rel="artifacts/baselines/degradation_calibration/active_snapshot.yaml",
+            ),
+            "history_dir": self._resolve_output_path(
+                history_raw,
+                fallback_rel="artifacts/baselines/degradation_calibration/history",
+            ),
+        }
+
+    def _degradation_snapshot_chain_checksum(self, *, params: dict[str, Any], rollback_anchor: str) -> str:
+        payload = {
+            "params": params,
+            "rollback_anchor": str(rollback_anchor).strip(),
+        }
+        return hashlib.sha1(self._canonical_json(payload).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _resolve_snapshot_chain_path(*, raw: str, history_dir: Path) -> Path:
+        txt = str(raw or "").strip()
+        if not txt:
+            return Path()
+        path = Path(txt)
+        if path.is_absolute():
+            return path
+        return (history_dir / path).resolve()
+
+    def _degradation_snapshot_chain_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(val.get("ops_snapshot_chain_gate_enabled", True), True)
+        hard_fail = self._safe_bool(val.get("ops_snapshot_chain_gate_hard_fail", True), True)
+        require_active = self._safe_bool(val.get("ops_snapshot_chain_gate_require_active", False), False)
+        require_checksum = self._safe_bool(val.get("ops_snapshot_chain_gate_require_checksum", False), False)
+        require_history_alignment = self._safe_bool(
+            val.get("ops_snapshot_chain_gate_require_history_alignment", False),
+            False,
+        )
+        max_depth = max(
+            1,
+            int(self._safe_float(val.get("ops_snapshot_chain_gate_max_depth", 8), 8)),
+        )
+        paths = self._degradation_snapshot_chain_paths()
+        active_path = Path(paths["active"]).resolve()
+        history_dir = Path(paths["history_dir"]).resolve()
+        thresholds = {
+            "ops_snapshot_chain_gate_hard_fail": bool(hard_fail),
+            "ops_snapshot_chain_gate_require_active": bool(require_active),
+            "ops_snapshot_chain_gate_require_checksum": bool(require_checksum),
+            "ops_snapshot_chain_gate_require_history_alignment": bool(require_history_alignment),
+            "ops_snapshot_chain_gate_max_depth": int(max_depth),
+        }
+        if not enabled:
+            return {
+                "active": False,
+                "enabled": False,
+                "gate_ok": True,
+                "monitor_failed": False,
+                "window_days": 0,
+                "samples": 0,
+                "min_samples": 0,
+                "checks": {},
+                "thresholds": thresholds,
+                "metrics": {},
+                "alerts": [],
+                "chain": [],
+                "paths": {
+                    "active": str(active_path),
+                    "history_dir": str(history_dir),
+                },
+            }
+
+        def _load_node(path: Path) -> dict[str, Any]:
+            if not path.exists():
+                return {
+                    "found": False,
+                    "path": str(path),
+                    "error": "missing",
+                    "params": {},
+                    "rollback_anchor": "",
+                    "history_path": "",
+                    "snapshot_path": "",
+                    "checksum": {
+                        "params_present": False,
+                        "params_ok": False,
+                        "chain_present": False,
+                        "chain_ok": False,
+                    },
+                }
+            try:
+                payload_raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:
+                return {
+                    "found": False,
+                    "path": str(path),
+                    "error": f"{type(exc).__name__}:{exc}",
+                    "params": {},
+                    "rollback_anchor": "",
+                    "history_path": "",
+                    "snapshot_path": "",
+                    "checksum": {
+                        "params_present": False,
+                        "params_ok": False,
+                        "chain_present": False,
+                        "chain_ok": False,
+                    },
+                }
+            payload = payload_raw if isinstance(payload_raw, dict) else {}
+            raw_params = payload.get("params", {}) if isinstance(payload.get("params", {}), dict) else payload
+            params: dict[str, float] = {}
+            if isinstance(raw_params, dict):
+                for key, raw in raw_params.items():
+                    if isinstance(raw, (int, float)):
+                        params[str(key)] = float(raw)
+            rollback_anchor = str(payload.get("rollback_anchor", "")).strip()
+            params_checksum_raw = str(payload.get("params_checksum", "")).strip()
+            params_checksum_expected = hashlib.sha1(self._canonical_json(params).encode("utf-8")).hexdigest()
+            params_checksum_present = bool(params_checksum_raw)
+            params_checksum_ok = bool((not params_checksum_present) or (params_checksum_raw == params_checksum_expected))
+            chain_checksum_raw = str(payload.get("chain_checksum", "")).strip()
+            chain_checksum_expected = self._degradation_snapshot_chain_checksum(
+                params=params,
+                rollback_anchor=rollback_anchor,
+            )
+            chain_checksum_present = bool(chain_checksum_raw)
+            chain_checksum_ok = bool((not chain_checksum_present) or (chain_checksum_raw == chain_checksum_expected))
+            return {
+                "found": True,
+                "path": str(path),
+                "error": "",
+                "as_of": str(payload.get("as_of", "")),
+                "promoted_at": str(payload.get("promoted_at", "")),
+                "params": params,
+                "rollback_anchor": rollback_anchor,
+                "history_path": str(payload.get("history_path", "")),
+                "snapshot_path": str(payload.get("snapshot_path", "")),
+                "checksum": {
+                    "params_present": bool(params_checksum_present),
+                    "params_ok": bool(params_checksum_ok),
+                    "chain_present": bool(chain_checksum_present),
+                    "chain_ok": bool(chain_checksum_ok),
+                },
+            }
+
+        active_node = _load_node(active_path)
+        active_found = bool(active_node.get("found", False))
+        monitor_active = bool(active_found or require_active)
+        chain: list[dict[str, Any]] = []
+        missing_anchor_nodes = 0
+        checksum_fail_nodes = 0
+        checksum_missing_nodes = 0
+        history_mismatch_nodes = 0
+        parse_error_nodes = 0
+        loop_detected = False
+        depth_exceeded = False
+        seen: set[str] = set()
+        if active_found:
+            current_path = active_path
+            for depth in range(max_depth):
+                resolved = str(current_path.resolve())
+                if resolved in seen:
+                    loop_detected = True
+                    break
+                seen.add(resolved)
+                node = _load_node(current_path)
+                checksum = node.get("checksum", {}) if isinstance(node.get("checksum", {}), dict) else {}
+                params_present = bool(checksum.get("params_present", False))
+                chain_present = bool(checksum.get("chain_present", False))
+                params_ok = bool(checksum.get("params_ok", True))
+                chain_ok = bool(checksum.get("chain_ok", True))
+                checksum_ok = bool(params_ok and chain_ok)
+                if (params_present and (not params_ok)) or (chain_present and (not chain_ok)):
+                    checksum_fail_nodes += 1
+                if require_checksum and ((not params_present) or (not chain_present)):
+                    checksum_missing_nodes += 1
+                error = str(node.get("error", "")).strip()
+                if error:
+                    parse_error_nodes += 1
+                history_path = str(node.get("history_path", "")).strip() or str(node.get("snapshot_path", "")).strip()
+                if require_history_alignment:
+                    if not history_path:
+                        history_mismatch_nodes += 1
+                    else:
+                        expected_path = self._resolve_snapshot_chain_path(raw=history_path, history_dir=history_dir)
+                        if not expected_path.exists():
+                            history_mismatch_nodes += 1
+                        elif expected_path.resolve() != current_path.resolve():
+                            # Active snapshot is a pointer file and may reference a history snapshot.
+                            if current_path.resolve() != active_path.resolve():
+                                history_mismatch_nodes += 1
+                anchor_raw = str(node.get("rollback_anchor", "")).strip()
+                anchor_path = self._resolve_snapshot_chain_path(raw=anchor_raw, history_dir=history_dir)
+                anchor_exists = bool(anchor_raw and anchor_path.exists())
+                if anchor_raw and (not anchor_exists):
+                    missing_anchor_nodes += 1
+                chain.append(
+                    {
+                        "depth": int(depth),
+                        "path": str(current_path),
+                        "as_of": str(node.get("as_of", "")),
+                        "promoted_at": str(node.get("promoted_at", "")),
+                        "rollback_anchor": str(anchor_raw),
+                        "rollback_anchor_exists": bool(anchor_exists),
+                        "history_path": str(history_path),
+                        "checksum_present": bool(params_present and chain_present),
+                        "checksum_ok": bool(checksum_ok),
+                        "params_checksum_present": bool(params_present),
+                        "params_checksum_ok": bool(params_ok),
+                        "chain_checksum_present": bool(chain_present),
+                        "chain_checksum_ok": bool(chain_ok),
+                        "error": error,
+                    }
+                )
+                if not anchor_raw:
+                    break
+                if not anchor_exists:
+                    break
+                next_resolved = str(anchor_path.resolve())
+                if next_resolved in seen:
+                    loop_detected = True
+                    break
+                current_path = anchor_path
+            else:
+                depth_exceeded = True
+
+        checks = {
+            "active_snapshot_found_ok": bool((not require_active) or active_found),
+            "chain_anchor_resolved_ok": bool((not monitor_active) or (missing_anchor_nodes == 0)),
+            "chain_loop_free_ok": bool((not monitor_active) or (not loop_detected)),
+            "chain_depth_ok": bool((not monitor_active) or (not depth_exceeded)),
+            "chain_checksum_ok": bool(
+                (not monitor_active)
+                or (
+                    checksum_fail_nodes == 0
+                    and ((not require_checksum) or (checksum_missing_nodes == 0))
+                )
+            ),
+            "history_path_alignment_ok": bool(
+                (not monitor_active)
+                or ((not require_history_alignment) or (history_mismatch_nodes == 0))
+            ),
+            "snapshot_parse_ok": bool((not monitor_active) or (parse_error_nodes == 0)),
+        }
+        base_ok = bool(all(bool(v) for v in checks.values()))
+        monitor_failed = bool(monitor_active and (not base_ok))
+        gate_ok = bool(base_ok) if hard_fail else True
+        alerts: list[str] = []
+        if monitor_failed:
+            if not checks["active_snapshot_found_ok"]:
+                alerts.append("snapshot_chain_active_missing")
+            if not checks["chain_anchor_resolved_ok"]:
+                alerts.append("snapshot_chain_anchor_missing")
+            if not checks["chain_loop_free_ok"]:
+                alerts.append("snapshot_chain_loop_detected")
+            if not checks["chain_depth_ok"]:
+                alerts.append("snapshot_chain_depth_exceeded")
+            if not checks["chain_checksum_ok"]:
+                alerts.append("snapshot_chain_checksum_failed")
+            if not checks["history_path_alignment_ok"]:
+                alerts.append("snapshot_chain_history_mismatch")
+            if not checks["snapshot_parse_ok"]:
+                alerts.append("snapshot_chain_parse_failed")
+
+        return {
+            "active": bool(monitor_active),
+            "enabled": True,
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "window_days": 0,
+            "samples": int(len(chain)),
+            "min_samples": 0,
+            "checks": checks,
+            "thresholds": thresholds,
+            "metrics": {
+                "chain_depth": int(len(chain)),
+                "checksum_fail_nodes": int(checksum_fail_nodes),
+                "checksum_missing_nodes": int(checksum_missing_nodes),
+                "missing_anchor_nodes": int(missing_anchor_nodes),
+                "history_mismatch_nodes": int(history_mismatch_nodes),
+                "parse_error_nodes": int(parse_error_nodes),
+                "loop_detected": bool(loop_detected),
+                "depth_exceeded": bool(depth_exceeded),
+            },
+            "alerts": alerts,
+            "chain": chain,
+            "paths": {
+                "active": str(active_path),
+                "history_dir": str(history_dir),
+            },
+            "as_of": as_of.isoformat(),
+        }
+
+    def _degradation_guardrail_dashboard_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(val.get("ops_degradation_guardrail_dashboard_enabled", True), True)
+        hard_fail = self._safe_bool(val.get("ops_degradation_guardrail_dashboard_hard_fail", False), False)
+        window_days = max(
+            7,
+            int(self._safe_float(val.get("ops_degradation_guardrail_dashboard_window_days", 30), 30)),
+        )
+        min_samples = max(
+            1,
+            int(self._safe_float(val.get("ops_degradation_guardrail_dashboard_min_samples", 7), 7)),
+        )
+        dashboard_live = self._load_degradation_guardrail_dashboard_overrides()
+        dashboard_live_params = (
+            dashboard_live.get("params", {})
+            if isinstance(dashboard_live.get("params", {}), dict)
+            else {}
+        )
+        dashboard_live_applied = False
+
+        def _dashboard_value(key: str, default: Any) -> Any:
+            nonlocal dashboard_live_applied
+            if key in dashboard_live_params:
+                dashboard_live_applied = True
+                return dashboard_live_params.get(key)
+            return default
+
+        cooldown_hit_rate_max = self._clamp_float(
+            self._safe_float(
+                _dashboard_value(
+                    "ops_degradation_guardrail_cooldown_hit_rate_max",
+                    val.get("ops_degradation_guardrail_cooldown_hit_rate_max", 0.80),
+                ),
+                self._safe_float(val.get("ops_degradation_guardrail_cooldown_hit_rate_max", 0.80), 0.80),
+            ),
+            0.0,
+            1.0,
+        )
+        suppressed_density_max = self._clamp_float(
+            self._safe_float(
+                _dashboard_value(
+                    "ops_degradation_guardrail_suppressed_trigger_density_max",
+                    val.get("ops_degradation_guardrail_suppressed_trigger_density_max", 0.60),
+                ),
+                self._safe_float(val.get("ops_degradation_guardrail_suppressed_trigger_density_max", 0.60), 0.60),
+            ),
+            0.0,
+            1.0,
+        )
+        promotion_latency_days_max = max(
+            1,
+            int(
+                self._safe_float(
+                    _dashboard_value(
+                        "ops_degradation_guardrail_promotion_latency_days_max",
+                        val.get("ops_degradation_guardrail_promotion_latency_days_max", 21),
+                    ),
+                    21,
+                )
+            ),
+        )
+        thresholds = {
+            "ops_degradation_guardrail_dashboard_enabled": bool(enabled),
+            "ops_degradation_guardrail_dashboard_hard_fail": bool(hard_fail),
+            "ops_degradation_guardrail_dashboard_window_days": int(window_days),
+            "ops_degradation_guardrail_dashboard_min_samples": int(min_samples),
+            "ops_degradation_guardrail_cooldown_hit_rate_max": float(cooldown_hit_rate_max),
+            "ops_degradation_guardrail_suppressed_trigger_density_max": float(suppressed_density_max),
+            "ops_degradation_guardrail_promotion_latency_days_max": int(promotion_latency_days_max),
+            "ops_degradation_guardrail_dashboard_use_live_overrides": bool(dashboard_live.get("enabled", False)),
+            "degradation_guardrail_live_overrides_applied": bool(dashboard_live_applied),
+            "degradation_guardrail_live_overrides_path": str(dashboard_live.get("path", "")),
+        }
+        if not enabled:
+            return {
+                "active": False,
+                "enabled": False,
+                "gate_ok": True,
+                "monitor_failed": False,
+                "window_days": int(window_days),
+                "samples": 0,
+                "min_samples": int(min_samples),
+                "checks": {},
+                "thresholds": thresholds,
+                "metrics": {},
+                "alerts": [],
+                "series": [],
+            }
+
+        review_dir = self.output_dir / "review"
+        rows: list[dict[str, Any]] = []
+        for i in range(window_days):
+            day = as_of - timedelta(days=i)
+            payload = self.load_json_safely(review_dir / f"{day.isoformat()}_degradation_calibration_rollback.json")
+            if not payload:
+                continue
+            cooldown = payload.get("cooldown", {}) if isinstance(payload.get("cooldown", {}), dict) else {}
+            promotion = (
+                payload.get("snapshot_promotion", {})
+                if isinstance(payload.get("snapshot_promotion", {}), dict)
+                else {}
+            )
+            triggered_raw = bool(payload.get("triggered_raw", payload.get("triggered", False)))
+            triggered = bool(payload.get("triggered", False))
+            applied = bool(payload.get("applied", False))
+            reason = str(payload.get("reason", "")).strip()
+            suppressed = bool(triggered_raw and (not triggered))
+            cooldown_hit = bool(
+                suppressed
+                and (
+                    reason == "rollback_cooldown_active"
+                    or bool(cooldown.get("rollback_active", False))
+                )
+            )
+            rows.append(
+                {
+                    "date": day.isoformat(),
+                    "triggered_raw": bool(triggered_raw),
+                    "triggered": bool(triggered),
+                    "applied": bool(applied),
+                    "suppressed": bool(suppressed),
+                    "cooldown_hit": bool(cooldown_hit),
+                    "reason": reason,
+                    "promotion_eligible": bool(promotion.get("eligible", False)),
+                    "promotion_promoted": bool(promotion.get("promoted", False)),
+                }
+            )
+        rows.sort(key=lambda x: str(x.get("date", "")))
+
+        triggered_raw_count = sum(1 for row in rows if bool(row.get("triggered_raw", False)))
+        triggered_count = sum(1 for row in rows if bool(row.get("triggered", False)))
+        applied_count = sum(1 for row in rows if bool(row.get("applied", False)))
+        suppressed_count = sum(1 for row in rows if bool(row.get("suppressed", False)))
+        cooldown_hit_count = sum(1 for row in rows if bool(row.get("cooldown_hit", False)))
+        promotion_eligible_count = sum(1 for row in rows if bool(row.get("promotion_eligible", False)))
+        promotion_promoted_count = sum(1 for row in rows if bool(row.get("promotion_promoted", False)))
+        suppressed_trigger_density = self._ratio(suppressed_count, triggered_raw_count)
+        cooldown_hit_rate = self._ratio(cooldown_hit_count, suppressed_count)
+
+        latencies: list[int] = []
+        last_rollback_day: date | None = None
+        for row in rows:
+            dtag = str(row.get("date", "")).strip()
+            try:
+                day = date.fromisoformat(dtag)
+            except Exception:
+                continue
+            if bool(row.get("applied", False)):
+                last_rollback_day = day
+            if bool(row.get("promotion_promoted", False)) and last_rollback_day is not None:
+                delta_days = max(0, (day - last_rollback_day).days)
+                latencies.append(int(delta_days))
+                last_rollback_day = None
+
+        if latencies:
+            sorted_lat = sorted(int(x) for x in latencies)
+            p95_idx = min(len(sorted_lat) - 1, max(0, int(math.ceil(0.95 * len(sorted_lat)) - 1)))
+            promotion_latency_avg_days = float(sum(sorted_lat) / len(sorted_lat))
+            promotion_latency_p95_days = int(sorted_lat[p95_idx])
+            promotion_latency_max_days = int(sorted_lat[-1])
+        else:
+            promotion_latency_avg_days = None
+            promotion_latency_p95_days = None
+            promotion_latency_max_days = None
+
+        active = bool(len(rows) >= min_samples)
+        checks: dict[str, bool] = {}
+        alerts: list[str] = []
+        if not active:
+            alerts.append("degradation_guardrail_insufficient_samples")
+        else:
+            checks["cooldown_hit_rate_ok"] = bool(cooldown_hit_rate <= cooldown_hit_rate_max)
+            checks["suppressed_trigger_density_ok"] = bool(suppressed_trigger_density <= suppressed_density_max)
+            checks["promotion_latency_ok"] = bool(
+                promotion_latency_avg_days is None
+                or float(promotion_latency_avg_days) <= float(promotion_latency_days_max)
+            )
+            if not checks["cooldown_hit_rate_ok"]:
+                alerts.append("degradation_guardrail_cooldown_hit_rate_high")
+            if not checks["suppressed_trigger_density_ok"]:
+                alerts.append("degradation_guardrail_suppressed_density_high")
+            if not checks["promotion_latency_ok"]:
+                alerts.append("degradation_guardrail_promotion_latency_high")
+        base_ok = bool(all(bool(v) for v in checks.values())) if active else True
+        monitor_failed = bool(active and (not base_ok))
+        gate_ok = bool(base_ok) if hard_fail else True
+
+        return {
+            "active": bool(active),
+            "enabled": True,
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "window_days": int(window_days),
+            "samples": int(len(rows)),
+            "min_samples": int(min_samples),
+            "checks": checks,
+            "thresholds": thresholds,
+            "metrics": {
+                "triggered_raw_count": int(triggered_raw_count),
+                "triggered_count": int(triggered_count),
+                "applied_count": int(applied_count),
+                "suppressed_count": int(suppressed_count),
+                "cooldown_hit_count": int(cooldown_hit_count),
+                "promotion_eligible_count": int(promotion_eligible_count),
+                "promotion_promoted_count": int(promotion_promoted_count),
+                "suppressed_trigger_density": float(suppressed_trigger_density),
+                "cooldown_hit_rate": float(cooldown_hit_rate),
+                "promotion_latency_avg_days": promotion_latency_avg_days,
+                "promotion_latency_p95_days": promotion_latency_p95_days,
+                "promotion_latency_max_days": promotion_latency_max_days,
+            },
+            "alerts": alerts,
+            "series": rows[-60:],
+        }
+
+    def _degradation_guardrail_threshold_drift_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(val.get("ops_degradation_guardrail_threshold_drift_enabled", True), True)
+        hard_fail = self._safe_bool(val.get("ops_degradation_guardrail_threshold_drift_gate_hard_fail", False), False)
+        require_active = self._safe_bool(val.get("ops_degradation_guardrail_threshold_drift_require_active", False), False)
+        max_staleness_days = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get("ops_degradation_guardrail_threshold_drift_max_staleness_days", 14),
+                    14,
+                )
+            ),
+        )
+        warn_ratio = self._clamp_float(
+            self._safe_float(val.get("ops_degradation_guardrail_threshold_drift_warn_ratio", 0.25), 0.25),
+            0.0,
+            10.0,
+        )
+        critical_ratio = self._clamp_float(
+            self._safe_float(val.get("ops_degradation_guardrail_threshold_drift_critical_ratio", 0.40), 0.40),
+            0.0,
+            10.0,
+        )
+        if critical_ratio < warn_ratio:
+            critical_ratio = float(warn_ratio)
+        min_burnin_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_degradation_guardrail_threshold_drift_min_burnin_samples",
+                        val.get("ops_degradation_guardrail_dashboard_min_samples", 7),
+                    ),
+                    self._safe_float(val.get("ops_degradation_guardrail_dashboard_min_samples", 7), 7),
+                )
+            ),
+        )
+        autofix_enabled = self._safe_bool(
+            val.get("ops_degradation_guardrail_threshold_drift_autofix_enabled", True),
+            True,
+        )
+        autofix_on_missing = self._safe_bool(
+            val.get("ops_degradation_guardrail_threshold_drift_autofix_on_missing", True),
+            True,
+        )
+        autofix_on_stale = self._safe_bool(
+            val.get("ops_degradation_guardrail_threshold_drift_autofix_on_stale", True),
+            True,
+        )
+        autofix_window_days = max(
+            7,
+            int(
+                self._safe_float(
+                    val.get("ops_degradation_guardrail_threshold_drift_autofix_window_days", 56),
+                    56,
+                )
+            ),
+        )
+
+        thresholds = {
+            "ops_degradation_guardrail_threshold_drift_enabled": bool(enabled),
+            "ops_degradation_guardrail_threshold_drift_gate_hard_fail": bool(hard_fail),
+            "ops_degradation_guardrail_threshold_drift_require_active": bool(require_active),
+            "ops_degradation_guardrail_threshold_drift_max_staleness_days": int(max_staleness_days),
+            "ops_degradation_guardrail_threshold_drift_warn_ratio": float(warn_ratio),
+            "ops_degradation_guardrail_threshold_drift_critical_ratio": float(critical_ratio),
+            "ops_degradation_guardrail_threshold_drift_min_burnin_samples": int(min_burnin_samples),
+            "ops_degradation_guardrail_threshold_drift_autofix_enabled": bool(autofix_enabled),
+            "ops_degradation_guardrail_threshold_drift_autofix_on_missing": bool(autofix_on_missing),
+            "ops_degradation_guardrail_threshold_drift_autofix_on_stale": bool(autofix_on_stale),
+            "ops_degradation_guardrail_threshold_drift_autofix_window_days": int(autofix_window_days),
+        }
+        if not enabled:
+            return {
+                "active": False,
+                "enabled": False,
+                "gate_ok": True,
+                "monitor_failed": False,
+                "status": "disabled",
+                "source_date": "",
+                "source_path": "",
+                "source_age_days": None,
+                "checks": {},
+                "thresholds": thresholds,
+                "summary": {
+                    "warn_count": 0,
+                    "critical_count": 0,
+                    "burnin_samples": 0,
+                    "burnin_min_samples": int(min_burnin_samples),
+                    "burnin_samples_ok": False,
+                },
+                "alerts": [],
+                "params": {},
+            }
+
+        review_dir = self.output_dir / "review"
+        autofix_payload: dict[str, Any] = {
+            "enabled": bool(autofix_enabled),
+            "attempted": False,
+            "applied": False,
+            "reason": "",
+            "error": "",
+            "window_days": int(autofix_window_days),
+            "artifact_path": "",
+        }
+
+        def _load_latest_payload() -> tuple[dict[str, Any], Path | None, date | None]:
+            loaded_payload: dict[str, Any] = {}
+            loaded_path: Path | None = None
+            loaded_date: date | None = None
+            for i in range(max_staleness_days + 1):
+                day = as_of - timedelta(days=i)
+                candidate = review_dir / f"{day.isoformat()}_degradation_guardrail_threshold_drift.json"
+                if not candidate.exists():
+                    continue
+                loaded = self.load_json_safely(candidate)
+                if not isinstance(loaded, dict) or not loaded:
+                    continue
+                loaded_payload = loaded
+                loaded_path = candidate
+                loaded_date = day
+                break
+            return loaded_payload, loaded_path, loaded_date
+
+        payload, source_path, source_date = _load_latest_payload()
+        source_age_days = (as_of - source_date).days if source_date is not None else None
+        artifact_missing = not bool(payload)
+        artifact_stale = bool(source_age_days is not None and source_age_days > max_staleness_days)
+        should_autofix = bool(
+            enabled
+            and autofix_enabled
+            and ((artifact_missing and autofix_on_missing) or (artifact_stale and autofix_on_stale))
+        )
+        if should_autofix:
+            autofix_payload["attempted"] = True
+            autofix_payload["reason"] = "missing_artifact" if artifact_missing else "stale_artifact"
+            try:
+                audit_out = self.degradation_guardrail_threshold_drift_audit(
+                    as_of=as_of,
+                    window_days=autofix_window_days,
+                )
+                paths = audit_out.get("paths", {}) if isinstance(audit_out.get("paths", {}), dict) else {}
+                autofix_payload["artifact_path"] = str(paths.get("json", ""))
+                payload, source_path, source_date = _load_latest_payload()
+                source_age_days = (as_of - source_date).days if source_date is not None else None
+                autofix_payload["applied"] = bool(payload)
+                if not autofix_payload["applied"]:
+                    autofix_payload["error"] = "autofix_artifact_not_found"
+            except Exception as exc:
+                autofix_payload["error"] = f"{type(exc).__name__}:{exc}"
+
+        active = bool(payload)
+        status = str(payload.get("status", "unknown")).strip().lower() if active else "missing"
+        summary = payload.get("summary", {}) if isinstance(payload.get("summary", {}), dict) else {}
+        warn_count = int(self._safe_float(summary.get("warn_count", 0), 0))
+        critical_count = int(self._safe_float(summary.get("critical_count", 0), 0))
+        burnin_samples = int(self._safe_float(summary.get("burnin_samples", 0), 0))
+        burnin_min_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    summary.get(
+                        "burnin_min_samples",
+                        thresholds.get("ops_degradation_guardrail_threshold_drift_min_burnin_samples", min_burnin_samples),
+                    ),
+                    thresholds.get("ops_degradation_guardrail_threshold_drift_min_burnin_samples", min_burnin_samples),
+                )
+            ),
+        )
+        payload_alerts = payload.get("alerts", []) if isinstance(payload.get("alerts", []), list) else []
+        params = payload.get("params", {}) if isinstance(payload.get("params", {}), dict) else {}
+        burnin_samples_ok = bool(burnin_samples >= burnin_min_samples)
+
+        checks: dict[str, bool] = {}
+        alerts: list[str] = []
+        monitor_failed = False
+        if not active:
+            if require_active:
+                checks["artifact_available_ok"] = False
+                checks["artifact_recent_ok"] = False
+                checks["status_ok"] = False
+                alerts.append("degradation_guardrail_threshold_drift_missing")
+                monitor_failed = True
+            gate_ok = bool(not require_active)
+        else:
+            checks["artifact_available_ok"] = True
+            checks["artifact_recent_ok"] = bool(source_age_days is not None and source_age_days <= max_staleness_days)
+            checks["burnin_samples_ok"] = bool(burnin_samples_ok)
+            if not checks["artifact_recent_ok"]:
+                alerts.append("degradation_guardrail_threshold_drift_stale")
+            if not checks["burnin_samples_ok"]:
+                alerts.append("degradation_guardrail_threshold_drift_insufficient_burnin_samples")
+            status_ok = False
+            if status == "ok":
+                status_ok = True
+            elif status == "warn":
+                status_ok = bool(not hard_fail)
+                alerts.append("degradation_guardrail_threshold_drift_warn")
+            elif status == "critical":
+                status_ok = False
+                alerts.append("degradation_guardrail_threshold_drift_critical")
+            elif status in {"insufficient_samples", "insufficient"}:
+                status_ok = bool(not hard_fail)
+                alerts.append("degradation_guardrail_threshold_drift_insufficient_samples")
+            else:
+                status_ok = bool(not hard_fail)
+                alerts.append("degradation_guardrail_threshold_drift_unknown_status")
+            checks["status_ok"] = bool(status_ok)
+            monitor_failed = bool(
+                (status in {"warn", "critical", "insufficient_samples", "insufficient"})
+                or (not checks["artifact_recent_ok"])
+                or (not checks["burnin_samples_ok"])
+            )
+            gate_ok = bool(checks["artifact_recent_ok"] and checks["status_ok"])
+            if hard_fail:
+                gate_ok = bool(gate_ok and checks["burnin_samples_ok"])
+
+        for alert in payload_alerts:
+            txt = str(alert).strip()
+            if txt and txt not in alerts:
+                alerts.append(txt)
+
+        return {
+            "active": bool(active),
+            "enabled": True,
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "status": status,
+            "source_date": source_date.isoformat() if source_date is not None else "",
+            "source_path": str(source_path) if source_path is not None else "",
+            "source_age_days": int(source_age_days) if source_age_days is not None else None,
+            "checks": checks,
+            "thresholds": thresholds,
+            "summary": {
+                "warn_count": int(warn_count),
+                "critical_count": int(critical_count),
+                "burnin_samples": int(burnin_samples),
+                "burnin_min_samples": int(burnin_min_samples),
+                "burnin_samples_ok": bool(burnin_samples_ok),
+            },
+            "alerts": alerts,
+            "params": params,
+            "autofix": autofix_payload,
+        }
+
+    def _dependency_audit_artifact_trend_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(val.get("ops_dependency_audit_artifact_trend_enabled", True), True)
+        gate_hard_fail = self._safe_bool(
+            val.get("ops_dependency_audit_artifact_trend_gate_hard_fail", False),
+            False,
+        )
+        require_active = self._safe_bool(
+            val.get("ops_dependency_audit_artifact_trend_require_active", False),
+            False,
+        )
+        window_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_dependency_audit_artifact_trend_window_days", 14),
+                    14,
+                )
+            ),
+        )
+        min_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_dependency_audit_artifact_trend_min_samples", 5),
+                    5,
+                )
+            ),
+        )
+        max_stale_days = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get("ops_dependency_audit_artifact_trend_max_stale_days", 3),
+                    3,
+                )
+            ),
+        )
+        max_corrupt_ratio = self._clamp_float(
+            self._safe_float(
+                val.get("ops_dependency_audit_artifact_trend_max_corrupt_ratio", 0.10),
+                0.10,
+            ),
+            0.0,
+            1.0,
+        )
+        max_missing_ratio = self._clamp_float(
+            self._safe_float(
+                val.get("ops_dependency_audit_artifact_trend_max_missing_ratio", 0.40),
+                0.40,
+            ),
+            0.0,
+            1.0,
+        )
+        thresholds = {
+            "ops_dependency_audit_artifact_trend_enabled": bool(enabled),
+            "ops_dependency_audit_artifact_trend_gate_hard_fail": bool(gate_hard_fail),
+            "ops_dependency_audit_artifact_trend_require_active": bool(require_active),
+            "ops_dependency_audit_artifact_trend_window_days": int(window_days),
+            "ops_dependency_audit_artifact_trend_min_samples": int(min_samples),
+            "ops_dependency_audit_artifact_trend_max_stale_days": int(max_stale_days),
+            "ops_dependency_audit_artifact_trend_max_corrupt_ratio": float(max_corrupt_ratio),
+            "ops_dependency_audit_artifact_trend_max_missing_ratio": float(max_missing_ratio),
+        }
+        if not enabled:
+            return {
+                "active": False,
+                "enabled": False,
+                "hard_fail": bool(gate_hard_fail),
+                "gate_ok": True,
+                "monitor_failed": False,
+                "status": "disabled",
+                "window_days": int(window_days),
+                "samples": 0,
+                "min_samples": int(min_samples),
+                "checks": {},
+                "alerts": [],
+                "metrics": {
+                    "available_days": 0,
+                    "missing_days": 0,
+                    "corrupt_days": 0,
+                    "corrupt_ratio": 0.0,
+                    "missing_ratio": 0.0,
+                    "source_age_days": None,
+                    "dependency_fail_days": 0,
+                    "dashboard_adapter_violation_days": 0,
+                },
+                "thresholds": thresholds,
+                "source": {
+                    "review_dir": str(self.output_dir / "review"),
+                    "artifact_pattern": "*_dependency_audit.json",
+                },
+                "series": [],
+            }
+
+        review_dir = self.output_dir / "review"
+        sample_rows: list[dict[str, Any]] = []
+        available_days = 0
+        missing_days = 0
+        corrupt_days = 0
+        dependency_fail_days = 0
+        dashboard_adapter_violation_days = 0
+        latest_artifact_day: date | None = None
+
+        for offset in range(0, int(window_days)):
+            day = as_of - timedelta(days=int(offset))
+            artifact_path = review_dir / f"{day.isoformat()}_dependency_audit.json"
+            exists = bool(artifact_path.exists())
+            artifact_corrupt = False
+            artifact_error = ""
+            dependency_ok = True
+            dashboard_adapter_violations = 0
+
+            if exists:
+                available_days += 1
+                latest_artifact_day = day if latest_artifact_day is None else max(latest_artifact_day, day)
+                try:
+                    decoded = json.loads(artifact_path.read_text(encoding="utf-8"))
+                    if isinstance(decoded, dict):
+                        dependency_ok = bool(decoded.get("ok", True))
+                        dashboard_adapter = (
+                            decoded.get("dashboard_adapter", {})
+                            if isinstance(decoded.get("dashboard_adapter", {}), dict)
+                            else {}
+                        )
+                        dashboard_adapter_violations_raw = (
+                            dashboard_adapter.get("violations", [])
+                            if isinstance(dashboard_adapter.get("violations", []), list)
+                            else []
+                        )
+                        dashboard_adapter_violations = int(len(dashboard_adapter_violations_raw))
+                    else:
+                        artifact_corrupt = True
+                        artifact_error = "non_object_payload"
+                except Exception as exc:
+                    artifact_corrupt = True
+                    artifact_error = f"{type(exc).__name__}: {exc}"
+            else:
+                missing_days += 1
+
+            if artifact_corrupt:
+                corrupt_days += 1
+            if exists and (not artifact_corrupt) and (not dependency_ok):
+                dependency_fail_days += 1
+            if dashboard_adapter_violations > 0:
+                dashboard_adapter_violation_days += 1
+
+            sample_rows.append(
+                {
+                    "date": day.isoformat(),
+                    "artifact_exists": bool(exists),
+                    "artifact_corrupt": bool(artifact_corrupt),
+                    "artifact_error": str(artifact_error),
+                    "dependency_ok": bool(dependency_ok),
+                    "dashboard_adapter_violations": int(dashboard_adapter_violations),
+                }
+            )
+
+        sample_rows.sort(key=lambda x: str(x.get("date", "")))
+        source_age_days = (as_of - latest_artifact_day).days if latest_artifact_day is not None else None
+        missing_ratio = self._ratio(missing_days, int(window_days))
+        corrupt_ratio = self._ratio(corrupt_days, available_days) if available_days > 0 else 0.0
+        active = bool(enabled and available_days >= min_samples)
+        checks = {
+            "min_samples_ok": bool(available_days >= min_samples),
+            "artifact_recent_ok": bool(
+                latest_artifact_day is not None and source_age_days is not None and int(source_age_days) <= int(max_stale_days)
+            ),
+            "corrupt_ratio_ok": True,
+            "missing_ratio_ok": True,
+        }
+        alerts: list[str] = []
+        if active:
+            checks["corrupt_ratio_ok"] = bool(float(corrupt_ratio) <= float(max_corrupt_ratio))
+            checks["missing_ratio_ok"] = bool(float(missing_ratio) <= float(max_missing_ratio))
+            if not bool(checks["artifact_recent_ok"]):
+                alerts.append("dependency_audit_artifact_trend_stale")
+            if not bool(checks["corrupt_ratio_ok"]):
+                alerts.append("dependency_audit_artifact_trend_corrupt_ratio_high")
+            if not bool(checks["missing_ratio_ok"]):
+                alerts.append("dependency_audit_artifact_trend_missing_ratio_high")
+        elif require_active:
+            alerts.append("dependency_audit_artifact_trend_insufficient_samples")
+
+        monitor_failed = bool(
+            enabled
+            and (
+                (active and not all(bool(v) for v in checks.values()))
+                or (require_active and not active)
+            )
+        )
+        gate_ok = bool(not monitor_failed) if gate_hard_fail else True
+        status = "inactive"
+        if active:
+            if all(bool(v) for v in checks.values()):
+                status = "ok"
+            elif not bool(checks.get("artifact_recent_ok", True)):
+                status = "stale"
+            elif not bool(checks.get("corrupt_ratio_ok", True)):
+                status = "corrupt_ratio_high"
+            elif not bool(checks.get("missing_ratio_ok", True)):
+                status = "missing_ratio_high"
+            else:
+                status = "degraded"
+        elif require_active:
+            status = "insufficient_samples"
+
+        return {
+            "active": bool(active),
+            "enabled": bool(enabled),
+            "hard_fail": bool(gate_hard_fail),
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "status": str(status),
+            "window_days": int(window_days),
+            "samples": int(available_days),
+            "min_samples": int(min_samples),
+            "checks": checks,
+            "alerts": alerts,
+            "metrics": {
+                "available_days": int(available_days),
+                "missing_days": int(missing_days),
+                "corrupt_days": int(corrupt_days),
+                "corrupt_ratio": float(corrupt_ratio),
+                "missing_ratio": float(missing_ratio),
+                "source_age_days": int(source_age_days) if source_age_days is not None else None,
+                "dependency_fail_days": int(dependency_fail_days),
+                "dashboard_adapter_violation_days": int(dashboard_adapter_violation_days),
+            },
+            "thresholds": thresholds,
+            "source": {
+                "review_dir": str(review_dir),
+                "artifact_pattern": "*_dependency_audit.json",
+            },
+            "series": sample_rows[-30:],
         }
 
     def gate_report(
@@ -515,16 +3494,44 @@ class ReleaseOrchestrator:
         as_of: date,
         run_tests: bool = False,
         run_review_if_missing: bool = True,
+        run_stable_replay: bool = True,
+        trace_id: str | None = None,
+        parent_event_id: str | None = None,
     ) -> dict[str, Any]:
         d = as_of.isoformat()
+        resolved_trace_id = str(trace_id or derive_trace_id(source="release.gate_report", as_of=d))
         review_delta_path = self.output_dir / "review" / f"{d}_param_delta.yaml"
         if run_review_if_missing and not review_delta_path.exists():
             self.run_review(as_of)
 
-        quality = self.quality_snapshot(as_of)
-        backtest = self.backtest_snapshot(as_of)
-        health = self.health_check(as_of, True)
-        replay = self.stable_replay_check(as_of, None)
+        review_window = self._review_required_for_gate(as_of=as_of)
+        review_required = bool(review_window.get("required", True))
+        backtest_window = self._backtest_required_for_gate(as_of=as_of)
+        backtest_required = bool(backtest_window.get("required", True))
+
+        quality_raw = self.quality_snapshot(as_of)
+        backtest_raw = self.backtest_snapshot(as_of)
+        quality = quality_raw if isinstance(quality_raw, dict) else {}
+        backtest = backtest_raw if isinstance(backtest_raw, dict) else {}
+        quality_snapshot_ok = all(k in quality for k in ("completeness", "unresolved_conflict_ratio"))
+        backtest_snapshot_ok_raw = all(k in backtest for k in ("positive_window_ratio", "max_drawdown", "violations"))
+        backtest_snapshot_ok = bool(backtest_snapshot_ok_raw or (not backtest_required))
+        health = self.health_check(as_of, review_required)
+        if run_stable_replay and review_required:
+            replay = self._run_stable_replay_check(as_of=as_of, days=None, run_eod_replay=True)
+        else:
+            replay_reason = "disabled_by_caller"
+            if run_stable_replay and (not review_required):
+                replay_reason = "before_review_window"
+            replay = {
+                "as_of": d,
+                "replay_days": int(self.settings.validation.get("required_stable_replay_days", 3)),
+                "replay_executed": False,
+                "passed": True,
+                "skipped": True,
+                "reason": replay_reason,
+                "checks": [],
+            }
         state_stability = self._state_stability_metrics(as_of=as_of)
         state_active = bool(state_stability.get("active", False))
         state_checks = state_stability.get("checks", {}) if isinstance(state_stability.get("checks", {}), dict) else {}
@@ -551,6 +3558,18 @@ class ReleaseOrchestrator:
             else {}
         )
         stress_matrix_trend_ok = all(bool(v) for v in stress_checks.values()) if stress_active else True
+        stress_matrix_execution_friction = self._stress_matrix_execution_friction_metrics(as_of=as_of)
+        stress_exec_active = bool(stress_matrix_execution_friction.get("active", False))
+        stress_exec_checks = (
+            stress_matrix_execution_friction.get("checks", {})
+            if isinstance(stress_matrix_execution_friction.get("checks", {}), dict)
+            else {}
+        )
+        stress_matrix_execution_friction_ok = (
+            all(bool(v) for v in stress_exec_checks.values())
+            if stress_exec_active
+            else bool(stress_matrix_execution_friction.get("gate_ok", True))
+        )
         stress_autorun_history = self._stress_autorun_history_metrics(as_of=as_of)
         stress_autorun_history_active = bool(stress_autorun_history.get("active", False))
         stress_autorun_history_checks = (
@@ -587,12 +3606,39 @@ class ReleaseOrchestrator:
         reconcile_active = bool(reconcile_drift.get("active", False))
         reconcile_checks = reconcile_drift.get("checks", {}) if isinstance(reconcile_drift.get("checks", {}), dict) else {}
         reconcile_drift_ok = all(bool(v) for v in reconcile_checks.values()) if reconcile_active else True
+        snapshot_chain = self._degradation_snapshot_chain_metrics(as_of=as_of)
+        snapshot_chain_ok = bool(snapshot_chain.get("gate_ok", True))
+        degradation_guardrail_dashboard = self._degradation_guardrail_dashboard_metrics(as_of=as_of)
+        degradation_guardrail_dashboard_ok = bool(degradation_guardrail_dashboard.get("gate_ok", True))
+        degradation_guardrail_threshold_drift = self._degradation_guardrail_threshold_drift_metrics(as_of=as_of)
+        degradation_guardrail_threshold_drift_ok = bool(degradation_guardrail_threshold_drift.get("gate_ok", True))
+        dependency_audit_artifact_trend = self._dependency_audit_artifact_trend_metrics(as_of=as_of)
+        dependency_audit_artifact_trend_ok = bool(dependency_audit_artifact_trend.get("gate_ok", True))
+        compaction_restore_trend = self._compaction_restore_trend_metrics(as_of=as_of)
+        compaction_restore_trend_ok = bool(compaction_restore_trend.get("gate_ok", True))
+        guard_loop_frontend_snapshot_trend = self._guard_loop_frontend_snapshot_trend_metrics(
+            as_of=as_of
+        )
+        guard_loop_frontend_snapshot_trend_ok = bool(
+            guard_loop_frontend_snapshot_trend.get("gate_ok", True)
+        )
+        guard_loop_cadence_non_apply = self._guard_loop_cadence_non_apply_metrics(as_of=as_of)
+        guard_loop_cadence_non_apply_ok = bool(guard_loop_cadence_non_apply.get("gate_ok", True))
+        guard_loop_cadence_non_apply_lift_trend = self._guard_loop_cadence_non_apply_lift_trend_metrics(
+            as_of=as_of
+        )
+        guard_loop_cadence_non_apply_lift_trend_ok = bool(
+            guard_loop_cadence_non_apply_lift_trend.get("gate_ok", True)
+        )
+        event_stream = self._event_stream_artifact_metrics(as_of=as_of)
         artifact_governance = self._artifact_governance_metrics(
             as_of=as_of,
             temporal_audit=temporal_audit,
             stress_autorun_history=stress_autorun_history,
             stress_autorun_reason_drift=stress_autorun_reason_drift,
             reconcile_drift=reconcile_drift,
+            guard_loop_cadence_non_apply_lift_trend=guard_loop_cadence_non_apply_lift_trend,
+            event_stream=event_stream,
         )
         artifact_governance_active = bool(artifact_governance.get("active", False))
         artifact_governance_checks = (
@@ -610,28 +3656,42 @@ class ReleaseOrchestrator:
             tests_payload = self.test_all()
             tests_ok = bool(tests_payload.get("returncode", 1) == 0)
 
-        review_pass = False
+        review_pass = bool(not review_required)
         mode_health_ok = True
         if review_delta_path.exists():
             try:
                 review_delta = yaml.safe_load(review_delta_path.read_text(encoding="utf-8")) or {}
             except Exception:
                 review_delta = {}
-            review_pass = bool(review_delta.get("pass_gate", False))
+            review_pass = bool(review_delta.get("pass_gate", review_pass))
             mode_health = review_delta.get("mode_health", {}) if isinstance(review_delta.get("mode_health", {}), dict) else {}
             mode_health_ok = bool(mode_health.get("passed", True))
+        release_decision_freshness = self._release_decision_freshness_metrics(
+            as_of=as_of,
+            review_delta_path=review_delta_path,
+            require_review=bool(review_required),
+        )
+        release_decision_freshness_ok = bool(release_decision_freshness.get("gate_ok", True))
 
-        completeness = float(quality.get("completeness", 0.0))
-        unresolved = float(quality.get("unresolved_conflict_ratio", 1.0))
-        positive_ratio = float(backtest.get("positive_window_ratio", 0.0))
-        max_drawdown = float(backtest.get("max_drawdown", 1.0))
-        violations = int(backtest.get("violations", 999))
+        completeness = self._safe_float(quality.get("completeness", 0.0), 0.0)
+        unresolved = self._safe_float(quality.get("unresolved_conflict_ratio", 1.0), 1.0)
+        positive_ratio = self._safe_float(backtest.get("positive_window_ratio", 0.0), 0.0)
+        max_drawdown = self._safe_float(backtest.get("max_drawdown", 1.0), 1.0)
+        violations = int(self._safe_float(backtest.get("violations", 999), 999))
 
-        completeness_ok = completeness >= float(self.settings.validation.get("data_completeness_min", 0.99))
-        unresolved_ok = unresolved <= float(self.settings.validation.get("unresolved_conflict_max", 0.005))
-        positive_ok = positive_ratio >= float(self.settings.validation.get("positive_window_ratio_min", 0.70))
-        drawdown_ok = max_drawdown <= float(self.settings.validation.get("max_drawdown_max", 0.18))
-        violations_ok = violations == 0
+        completeness_ok = quality_snapshot_ok and (
+            completeness >= float(self.settings.validation.get("data_completeness_min", 0.99))
+        )
+        unresolved_ok = quality_snapshot_ok and (
+            unresolved <= float(self.settings.validation.get("unresolved_conflict_max", 0.005))
+        )
+        positive_ok = (not backtest_required) or (
+            backtest_snapshot_ok and (positive_ratio >= float(self.settings.validation.get("positive_window_ratio_min", 0.70)))
+        )
+        drawdown_ok = (not backtest_required) or (
+            backtest_snapshot_ok and (max_drawdown <= float(self.settings.validation.get("max_drawdown_max", 0.18)))
+        )
+        violations_ok = (not backtest_required) or (backtest_snapshot_ok and (violations == 0))
         health_ok = bool(health.get("status") == "healthy")
         replay_ok = bool(replay.get("passed", False))
 
@@ -644,14 +3704,26 @@ class ReleaseOrchestrator:
             "mode_drift_ok": mode_drift_ok,
             "style_drift_ok": style_drift_ok,
             "stress_matrix_trend_ok": stress_matrix_trend_ok,
+            "stress_matrix_execution_friction_ok": stress_matrix_execution_friction_ok,
             "stress_autorun_history_ok": stress_autorun_history_ok,
             "stress_autorun_adaptive_ok": stress_autorun_adaptive_ok,
             "stress_autorun_reason_drift_ok": stress_autorun_reason_drift_ok,
             "reconcile_drift_ok": reconcile_drift_ok,
             "artifact_governance_ok": artifact_governance_ok,
+            "snapshot_chain_ok": snapshot_chain_ok,
+            "degradation_guardrail_dashboard_ok": degradation_guardrail_dashboard_ok,
+            "degradation_guardrail_threshold_drift_ok": degradation_guardrail_threshold_drift_ok,
+            "dependency_audit_artifact_trend_ok": dependency_audit_artifact_trend_ok,
+            "compaction_restore_trend_ok": compaction_restore_trend_ok,
+            "guard_loop_frontend_snapshot_trend_ok": guard_loop_frontend_snapshot_trend_ok,
+            "guard_loop_cadence_non_apply_ok": guard_loop_cadence_non_apply_ok,
+            "guard_loop_cadence_non_apply_lift_trend_ok": guard_loop_cadence_non_apply_lift_trend_ok,
+            "release_decision_freshness_ok": release_decision_freshness_ok,
             "tests_ok": tests_ok,
             "health_ok": health_ok,
             "stable_replay_ok": replay_ok,
+            "quality_snapshot_ok": quality_snapshot_ok,
+            "backtest_snapshot_ok": backtest_snapshot_ok,
             "data_completeness_ok": completeness_ok,
             "unresolved_conflict_ok": unresolved_ok,
             "positive_window_ratio_ok": positive_ok,
@@ -667,9 +3739,47 @@ class ReleaseOrchestrator:
             mode_drift=mode_drift,
             style_drift=style_drift,
             reconcile_drift=reconcile_drift,
+            degradation_guardrail_threshold_drift=degradation_guardrail_threshold_drift,
+            compaction_restore_trend=compaction_restore_trend,
+            guard_loop_frontend_snapshot_trend=guard_loop_frontend_snapshot_trend,
+            guard_loop_cadence_non_apply=guard_loop_cadence_non_apply,
+            guard_loop_cadence_non_apply_lift_trend=guard_loop_cadence_non_apply_lift_trend,
+        )
+        guard_loop_frontend_snapshot_trend = self._finalize_frontend_snapshot_trend_controlled_apply(
+            guard_loop_frontend_snapshot_trend=guard_loop_frontend_snapshot_trend,
+            rollback_recommendation=rollback_recommendation,
+        )
+        cadence_lift_snapshot = self._cadence_non_apply_lift_snapshot(
+            rollback_recommendation=rollback_recommendation
+        )
+        guard_loop_scorecards = self._guard_loop_scorecards(
+            guard_loop_cadence_non_apply=guard_loop_cadence_non_apply,
+            guard_loop_cadence_non_apply_lift_trend=guard_loop_cadence_non_apply_lift_trend,
+            guard_loop_frontend_snapshot_trend=guard_loop_frontend_snapshot_trend,
+            cadence_lift_snapshot=cadence_lift_snapshot,
+        )
+        stress_matrix_scorecards = self._stress_matrix_scorecards(
+            stress_matrix_trend=stress_matrix_trend,
+            stress_matrix_execution_friction=stress_matrix_execution_friction,
         )
         checks["rollback_anchor_ready"] = bool(rollback_recommendation.get("anchor_ready", True))
         overall = all(checks.values())
+        decision_snapshot = self._build_release_decision_snapshot(
+            as_of=as_of,
+            checks=checks,
+            metrics={
+                "completeness": completeness,
+                "unresolved_conflict_ratio": unresolved,
+                "positive_window_ratio": positive_ratio,
+                "max_drawdown": max_drawdown,
+                "violations": violations,
+            },
+            gate_passed=overall,
+            review_delta_path=review_delta_path,
+            rollback_recommendation=rollback_recommendation,
+            freshness=release_decision_freshness,
+        )
+        decision_path = self._release_decision_snapshot_path(as_of=as_of)
         out = {
             "date": d,
             "passed": overall,
@@ -680,6 +3790,10 @@ class ReleaseOrchestrator:
                 "positive_window_ratio": positive_ratio,
                 "max_drawdown": max_drawdown,
                 "violations": violations,
+                "review_required": bool(review_required),
+                "backtest_required": bool(backtest_required),
+                "review_window_reason": str(review_window.get("reason", "")),
+                "backtest_window_reason": str(backtest_window.get("reason", "")),
             },
             "health": health,
             "stable_replay": replay,
@@ -689,13 +3803,35 @@ class ReleaseOrchestrator:
             "mode_drift": mode_drift,
             "style_drift": style_drift,
             "stress_matrix_trend": stress_matrix_trend,
+            "stress_matrix_execution_friction": stress_matrix_execution_friction,
             "stress_autorun_history": stress_autorun_history,
             "stress_autorun_adaptive": stress_autorun_adaptive,
             "stress_autorun_reason_drift": stress_autorun_reason_drift,
             "reconcile_drift": reconcile_drift,
             "artifact_governance": artifact_governance,
+            "snapshot_chain": snapshot_chain,
+            "degradation_guardrail_dashboard": degradation_guardrail_dashboard,
+            "degradation_guardrail_threshold_drift": degradation_guardrail_threshold_drift,
+            "dependency_audit_artifact_trend": dependency_audit_artifact_trend,
+            "compaction_restore_trend": compaction_restore_trend,
+            "guard_loop_frontend_snapshot_trend": guard_loop_frontend_snapshot_trend,
+            "guard_loop_cadence_non_apply": guard_loop_cadence_non_apply,
+            "guard_loop_cadence_non_apply_lift_trend": guard_loop_cadence_non_apply_lift_trend,
+            "event_stream": event_stream,
+            "scorecards": {
+                "guard_loop": guard_loop_scorecards,
+                "stress_matrix": stress_matrix_scorecards,
+            },
+            "release_decision_freshness": release_decision_freshness,
             "rollback_recommendation": rollback_recommendation,
+            "cadence_non_apply_lift_snapshot": cadence_lift_snapshot,
             "tests": tests_payload if run_tests else {"skipped": True},
+            "release_decision": {
+                "decision_id": str(decision_snapshot.get("decision_id", "")),
+                "fingerprint": str(decision_snapshot.get("fingerprint", "")),
+                "snapshot_path": str(decision_path),
+                "failed_checks": list(decision_snapshot.get("failed_checks", [])),
+            },
         }
 
         if overall:
@@ -707,7 +3843,32 @@ class ReleaseOrchestrator:
                     pass
 
         report_path = self.output_dir / "review" / f"{d}_gate_report.json"
+        gate_event_payload = {
+            "passed": bool(overall),
+            "run_tests": bool(run_tests),
+            "run_review_if_missing": bool(run_review_if_missing),
+            "run_stable_replay": bool(run_stable_replay),
+            "failed_checks_count": len([k for k, v in checks.items() if not bool(v)]),
+            "failed_checks": [str(k) for k, v in checks.items() if not bool(v)],
+            "release_decision_id": str((out.get("release_decision", {}) or {}).get("decision_id", "")),
+            "rollback_level": str((rollback_recommendation or {}).get("level", "none")),
+            "stable_replay_passed": bool((replay or {}).get("passed", False)),
+            "health_status": str((health or {}).get("status", "")),
+        }
+        gate_event_envelope, gate_event_stream = self._emit_release_event(
+            as_of=as_of,
+            source="release.gate_report",
+            event_type="release.gate_report.completed",
+            payload=gate_event_payload,
+            trace_id=resolved_trace_id,
+            parent_event_id=parent_event_id,
+        )
+        out["trace_id"] = resolved_trace_id
+        out["traceparent"] = str(gate_event_envelope.get("traceparent", ""))
+        out["event_envelope"] = gate_event_envelope
+        out["event_stream_path"] = gate_event_stream
         write_json(report_path, out)
+        write_json(decision_path, decision_snapshot)
         return out
 
     def _run_tests(
@@ -732,6 +3893,19 @@ class ReleaseOrchestrator:
         except TypeError:
             # Backward compatibility for legacy callables that don't accept kwargs.
             return self.test_all()
+
+    def _run_stable_replay_check(
+        self,
+        *,
+        as_of: date,
+        days: int | None,
+        run_eod_replay: bool,
+    ) -> dict[str, Any]:
+        try:
+            return self.stable_replay_check(as_of, days, run_eod_replay)
+        except TypeError:
+            # Backward compatibility for legacy callables that only accept (as_of, days).
+            return self.stable_replay_check(as_of, days)
 
     def _latest_test_result(self) -> dict[str, Any]:
         logs_dir = self.output_dir / "logs"
@@ -1097,6 +4271,714 @@ class ReleaseOrchestrator:
             "reason": str(governance.get("reason", "")),
         }
 
+    def _write_guard_loop_cadence_lift_trend_artifact(
+        self,
+        *,
+        as_of: date,
+        series: list[dict[str, Any]],
+        metrics: dict[str, Any],
+        retention_days: int,
+        checksum_index_enabled: bool = True,
+    ) -> dict[str, Any]:
+        policy = self._artifact_governance_profile(
+            profile_name="guard_loop_cadence_lift_trend",
+            fallback_retention_days=retention_days,
+            fallback_checksum_index_enabled=checksum_index_enabled,
+        )
+        keep_days = int(policy.get("retention_days", max(1, int(retention_days))))
+        index_enabled = bool(policy.get("checksum_index_enabled", checksum_index_enabled))
+        total_rows = len(series)
+        reason_counts: dict[str, int] = {}
+        for row in series:
+            code = str(row.get("reason_code", "")).strip() or "NONE"
+            reason_counts[code] = int(reason_counts.get(code, 0) + 1)
+        top_reason_codes = [
+            {"reason_code": str(k), "count": int(v)}
+            for k, v in sorted(reason_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[:20]
+        ]
+        payload = {
+            "date": as_of.isoformat(),
+            "metrics": metrics,
+            "top_reason_codes": top_reason_codes,
+            "series": series[-180:],
+        }
+        review_dir = self.output_dir / "review"
+        json_path = review_dir / f"{as_of.isoformat()}_cadence_lift_trend.json"
+        md_path = review_dir / f"{as_of.isoformat()}_cadence_lift_trend.md"
+
+        lines: list[str] = []
+        lines.append(f"# Cadence Lift Trend | {as_of.isoformat()}")
+        lines.append("")
+        lines.append(f"- rows_total: `{int(total_rows)}`")
+        lines.append(
+            "- requested/applied/blocked: "
+            + f"`{int(self._safe_float(metrics.get('requested_count', 0), 0))}` / "
+            + f"`{int(self._safe_float(metrics.get('applied_count', 0), 0))}` / "
+            + f"`{int(self._safe_float(metrics.get('blocked_by_cooldown_count', 0), 0))}`"
+        )
+        lines.append(
+            "- applied_rate/cooldown_block_rate: "
+            + f"`{self._safe_float(metrics.get('applied_rate', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(metrics.get('cooldown_block_rate', 0.0), 0.0):.2%}`"
+        )
+        lines.append("")
+        lines.append("## Top Reason Codes")
+        if top_reason_codes:
+            for item in top_reason_codes:
+                lines.append(f"- `{item['reason_code']}` x `{item['count']}`")
+        else:
+            lines.append("- NONE")
+        lines.append("")
+        lines.append("## Recent Snapshots")
+        for row in series[-60:]:
+            lines.append(
+                "- "
+                + f"{str(row.get('date', ''))} "
+                + f"requested={bool(row.get('requested', False))} "
+                + f"applied={bool(row.get('applied', False))} "
+                + f"blocked={bool(row.get('blocked_by_cooldown', False))} "
+                + f"requested_level={str(row.get('requested_level', 'none'))} "
+                + f"applied_level={str(row.get('applied_level', 'none'))} "
+                + f"reason={str(row.get('reason_code', '') or 'N/A')}"
+            )
+
+        try:
+            write_json(json_path, payload)
+            write_markdown(md_path, "\n".join(lines) + "\n")
+        except Exception as exc:
+            return {
+                "written": False,
+                "json": "",
+                "md": "",
+                "total_rows": int(total_rows),
+                "retention_days": int(keep_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
+                "reason": f"write_failed:{type(exc).__name__}:{exc}",
+            }
+
+        governance = self._apply_artifact_governance(
+            as_of=as_of,
+            review_dir=review_dir,
+            profile_name="guard_loop_cadence_lift_trend",
+            fallback_retention_days=keep_days,
+            fallback_checksum_index_enabled=index_enabled,
+        )
+
+        return {
+            "written": True,
+            "json": str(json_path),
+            "md": str(md_path),
+            "total_rows": int(total_rows),
+            "retention_days": int(governance.get("retention_days", keep_days)),
+            "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+            "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+            "rotation_failed": bool(governance.get("rotation_failed", False)),
+            "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+            "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+            "checksum_index_path": str(governance.get("checksum_index_path", "")),
+            "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+            "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
+            "reason": str(governance.get("reason", "")),
+        }
+
+    def _write_frontend_snapshot_antiflap_burnin_artifact(
+        self,
+        *,
+        as_of: date,
+        summary: dict[str, Any],
+        series: list[dict[str, Any]],
+        retention_days: int,
+        checksum_index_enabled: bool = True,
+    ) -> dict[str, Any]:
+        policy = self._artifact_governance_profile(
+            profile_name="guard_loop_frontend_snapshot_antiflap_burnin",
+            fallback_retention_days=retention_days,
+            fallback_checksum_index_enabled=checksum_index_enabled,
+        )
+        keep_days = int(policy.get("retention_days", max(1, int(retention_days))))
+        index_enabled = bool(policy.get("checksum_index_enabled", checksum_index_enabled))
+
+        payload = {
+            "date": as_of.isoformat(),
+            "summary": summary,
+            "series": series[-90:],
+        }
+        review_dir = self.output_dir / "review"
+        json_path = review_dir / f"{as_of.isoformat()}_frontend_snapshot_antiflap_burnin.json"
+        md_path = review_dir / f"{as_of.isoformat()}_frontend_snapshot_antiflap_burnin.md"
+
+        checks = summary.get("checks", {}) if isinstance(summary.get("checks", {}), dict) else {}
+        metrics = summary.get("metrics", {}) if isinstance(summary.get("metrics", {}), dict) else {}
+        thresholds = (
+            summary.get("thresholds", {})
+            if isinstance(summary.get("thresholds", {}), dict)
+            else {}
+        )
+        promotion = (
+            summary.get("promotion", {})
+            if isinstance(summary.get("promotion", {}), dict)
+            else {}
+        )
+        dual_window = (
+            summary.get("dual_window", {})
+            if isinstance(summary.get("dual_window", {}), dict)
+            else {}
+        )
+        dual_window_metrics = (
+            dual_window.get("metrics", {})
+            if isinstance(dual_window.get("metrics", {}), dict)
+            else {}
+        )
+        dual_window_checks = (
+            dual_window.get("checks", {})
+            if isinstance(dual_window.get("checks", {}), dict)
+            else {}
+        )
+        lines: list[str] = []
+        lines.append(f"# Frontend Snapshot Antiflap Burn-in | {as_of.isoformat()}")
+        lines.append("")
+        lines.append(
+            "- status/ok/active: "
+            + f"`{str(summary.get('status', 'unknown'))}` / "
+            + f"`{bool(summary.get('ok', False))}` / "
+            + f"`{bool(summary.get('active', False))}`"
+        )
+        lines.append(
+            "- samples/window/min: "
+            + f"`{int(self._safe_float(metrics.get('run_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(summary.get('window_days', 0), 0))}` / "
+            + f"`{int(self._safe_float(summary.get('min_samples', 0), 0))}`"
+        )
+        lines.append(
+            "- replay(expected/executed/missed): "
+            + f"`{int(self._safe_float(metrics.get('replay_expected_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(metrics.get('replay_executed_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(metrics.get('replay_missed_runs', 0), 0))}`"
+        )
+        lines.append(
+            "- suppression_ratio/max: "
+            + f"`{self._safe_float(metrics.get('suppressed_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(thresholds.get('ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_suppression_ratio', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- reason_missing/max: "
+            + f"`{int(self._safe_float(metrics.get('reason_missing_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(thresholds.get('ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_reason_missing_runs', 0), 0))}`"
+        )
+        lines.append(
+            "- dual_window(enabled/status/long_samples/min_long): "
+            + f"`{bool(dual_window.get('enabled', False))}` / "
+            + f"`{str(dual_window.get('status', 'inactive'))}` / "
+            + f"`{int(self._safe_float(dual_window.get('long_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(dual_window.get('min_long_samples', 0), 0))}`"
+        )
+        lines.append(
+            "- dual_window(delta suppression/replay/traceability): "
+            + f"`{self._safe_float(dual_window_metrics.get('suppressed_ratio_delta', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(dual_window_metrics.get('replay_missed_ratio_delta', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(dual_window_metrics.get('reason_missing_ratio_delta', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- dual_window_checks(samples/suppression/replay/traceability): "
+            + f"`{bool(dual_window_checks.get('samples_ready_ok', True))}` / "
+            + f"`{bool(dual_window_checks.get('suppression_ratio_delta_ok', True))}` / "
+            + f"`{bool(dual_window_checks.get('replay_missed_ratio_delta_ok', True))}` / "
+            + f"`{bool(dual_window_checks.get('traceability_ratio_delta_ok', True))}`"
+        )
+        lines.append(
+            "- promotion(enabled/current_hard_fail/eligible/recommendation): "
+            + f"`{bool(promotion.get('enabled', False))}` / "
+            + f"`{bool(promotion.get('current_hard_fail', False))}` / "
+            + f"`{bool(promotion.get('eligible', False))}` / "
+            + f"`{str(promotion.get('recommendation', 'none'))}`"
+        )
+        lines.append(
+            "- alerts: `"
+            + (
+                ", ".join(summary.get("alerts", []))
+                if isinstance(summary.get("alerts", []), list) and summary.get("alerts", [])
+                else "NONE"
+            )
+            + "`"
+        )
+        for key, value in checks.items():
+            lines.append(f"- `{str(key)}`: `{bool(value)}`")
+        lines.append("")
+        lines.append("## Recent Daily Rows")
+        if series:
+            for row in series[-30:]:
+                if not isinstance(row, dict):
+                    continue
+                lines.append(
+                    "- "
+                    + f"{str(row.get('date', ''))}: "
+                    + f"run_counted={bool(row.get('run_counted', False))}, "
+                    + f"due={bool(row.get('trend_due', False))}, "
+                    + f"suppressed={bool(row.get('trend_antiflap_suppressed', False))}, "
+                    + f"replay_executed={bool(row.get('replay_executed', False))}, "
+                    + f"reason_missing={bool(row.get('reason_missing', False))}"
+                )
+        else:
+            lines.append("- NONE")
+
+        try:
+            write_json(json_path, payload)
+            write_markdown(md_path, "\n".join(lines) + "\n")
+        except Exception as exc:
+            return {
+                "written": False,
+                "json": "",
+                "md": "",
+                "total_rows": int(len(series)),
+                "retention_days": int(keep_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
+                "reason": f"write_failed:{type(exc).__name__}:{exc}",
+            }
+
+        governance = self._apply_artifact_governance(
+            as_of=as_of,
+            review_dir=review_dir,
+            profile_name="guard_loop_frontend_snapshot_antiflap_burnin",
+            fallback_retention_days=keep_days,
+            fallback_checksum_index_enabled=index_enabled,
+        )
+
+        return {
+            "written": True,
+            "json": str(json_path),
+            "md": str(md_path),
+            "total_rows": int(len(series)),
+            "retention_days": int(governance.get("retention_days", keep_days)),
+            "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+            "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+            "rotation_failed": bool(governance.get("rotation_failed", False)),
+            "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+            "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+            "checksum_index_path": str(governance.get("checksum_index_path", "")),
+            "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+            "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
+            "reason": str(governance.get("reason", "")),
+        }
+
+    def _write_frontend_snapshot_trend_controlled_apply_artifact(
+        self,
+        *,
+        as_of: date,
+        payload: dict[str, Any],
+        retention_days: int,
+        checksum_index_enabled: bool = True,
+    ) -> dict[str, Any]:
+        policy = self._artifact_governance_profile(
+            profile_name="guard_loop_frontend_snapshot_trend_controlled_apply",
+            fallback_retention_days=retention_days,
+            fallback_checksum_index_enabled=checksum_index_enabled,
+        )
+        keep_days = int(policy.get("retention_days", max(1, int(retention_days))))
+        index_enabled = bool(policy.get("checksum_index_enabled", checksum_index_enabled))
+        review_dir = self.output_dir / "review"
+        json_path = review_dir / f"{as_of.isoformat()}_frontend_snapshot_trend_controlled_apply.json"
+        md_path = review_dir / f"{as_of.isoformat()}_frontend_snapshot_trend_controlled_apply.md"
+
+        proposal = payload.get("proposal", {}) if isinstance(payload.get("proposal", {}), dict) else {}
+        apply_gate = payload.get("apply_gate", {}) if isinstance(payload.get("apply_gate", {}), dict) else {}
+        approval = payload.get("approval", {}) if isinstance(payload.get("approval", {}), dict) else {}
+        decision_envelope = (
+            payload.get("decision_envelope", {})
+            if isinstance(payload.get("decision_envelope", {}), dict)
+            else {}
+        )
+        decision_runbook = (
+            [str(x).strip() for x in decision_envelope.get("runbook", []) if str(x).strip()]
+            if isinstance(decision_envelope.get("runbook", []), list)
+            else []
+        )
+        decision_approval_manifest = (
+            decision_envelope.get("approval_manifest", {})
+            if isinstance(decision_envelope.get("approval_manifest", {}), dict)
+            else {}
+        )
+        rollback_guard = (
+            payload.get("rollback_guard", {})
+            if isinstance(payload.get("rollback_guard", {}), dict)
+            else {}
+        )
+        patch = payload.get("patch", {}) if isinstance(payload.get("patch", {}), dict) else {}
+        lines: list[str] = []
+        lines.append(f"# Frontend Snapshot Trend Controlled-Apply | {as_of.isoformat()}")
+        lines.append("")
+        lines.append(
+            "- enabled/dry_run/manual_approval: "
+            + f"`{bool(payload.get('enabled', False))}` / "
+            + f"`{bool(payload.get('dry_run', True))}` / "
+            + f"`{bool(payload.get('manual_approval_required', True))}`"
+        )
+        lines.append(
+            "- recommendation/proposal_generated: "
+            + f"`{str(payload.get('promotion_recommendation', 'none'))}` / "
+            + f"`{bool(proposal.get('generated', False))}`"
+        )
+        lines.append(
+            "- proposal(id/date/age_days): "
+            + f"`{str(proposal.get('proposal_id', '') or 'N/A')}` / "
+            + f"`{str(proposal.get('proposal_date', '') or 'N/A')}` / "
+            + f"`{int(self._safe_float(proposal.get('proposal_age_days', 0), 0))}`"
+        )
+        lines.append(
+            "- approval(found/approved/match/age_days): "
+            + f"`{bool(approval.get('found', False))}` / "
+            + f"`{bool(approval.get('approved', False))}` / "
+            + f"`{bool(approval.get('matches_proposal', False))}` / "
+            + f"`{int(self._safe_float(approval.get('age_days', 0), 0))}`"
+        )
+        lines.append(
+            "- apply_gate(window/approval/rollback_guard/recommended/reason): "
+            + f"`{bool(apply_gate.get('window_ok', True))}` / "
+            + f"`{bool(apply_gate.get('approval_ok', True))}` / "
+            + f"`{bool(apply_gate.get('rollback_guard_ok', True))}` / "
+            + f"`{bool(apply_gate.get('apply_recommended', False))}` / "
+            + f"`{str(apply_gate.get('reason', 'N/A'))}`"
+        )
+        lines.append(
+            "- decision_envelope(stage/decision/route/severity): "
+            + f"`{str(decision_envelope.get('stage', 'N/A'))}` / "
+            + f"`{str(decision_envelope.get('decision', 'N/A'))}` / "
+            + f"`{str(decision_envelope.get('route', 'N/A'))}` / "
+            + f"`{str(decision_envelope.get('severity', 'N/A'))}`"
+        )
+        lines.append(
+            "- decision_envelope_approval_manifest(found/approved/match): "
+            + f"`{bool(decision_approval_manifest.get('found', False))}` / "
+            + f"`{bool(decision_approval_manifest.get('approved', False))}` / "
+            + f"`{bool(decision_approval_manifest.get('matches_proposal', False))}`"
+        )
+        lines.append(
+            "- decision_envelope_runbook: `"
+            + (" | ".join(decision_runbook) if decision_runbook else "NONE")
+            + "`"
+        )
+        lines.append(
+            "- rollback_guard(enabled/blocked/level/anchor_ready): "
+            + f"`{bool(rollback_guard.get('enabled', True))}` / "
+            + f"`{bool(rollback_guard.get('blocked', False))}` / "
+            + f"`{str(rollback_guard.get('rollback_level', 'none'))}` / "
+            + f"`{bool(rollback_guard.get('anchor_ready', True))}`"
+        )
+        lines.append(
+            "- patch(ops_guard_loop_frontend_snapshot_trend_gate_hard_fail): "
+            + f"`{patch.get('ops_guard_loop_frontend_snapshot_trend_gate_hard_fail', 'N/A')}`"
+        )
+        lines.append(
+            "- approval_manifest_path: "
+            + f"`{str(payload.get('approval_manifest_path', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- proposal_artifact(json/md): "
+            + f"`{str(proposal.get('json', '') or 'N/A')}` / "
+            + f"`{str(proposal.get('md', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- alerts: `"
+            + (
+                ", ".join(payload.get("alerts", []))
+                if isinstance(payload.get("alerts", []), list) and payload.get("alerts", [])
+                else "NONE"
+            )
+            + "`"
+        )
+
+        try:
+            write_json(json_path, payload)
+            write_markdown(md_path, "\n".join(lines) + "\n")
+        except Exception as exc:
+            return {
+                "written": False,
+                "json": "",
+                "md": "",
+                "retention_days": int(keep_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
+                "reason": f"write_failed:{type(exc).__name__}:{exc}",
+            }
+
+        governance = self._apply_artifact_governance(
+            as_of=as_of,
+            review_dir=review_dir,
+            profile_name="guard_loop_frontend_snapshot_trend_controlled_apply",
+            fallback_retention_days=keep_days,
+            fallback_checksum_index_enabled=index_enabled,
+        )
+        return {
+            "written": True,
+            "json": str(json_path),
+            "md": str(md_path),
+            "retention_days": int(governance.get("retention_days", keep_days)),
+            "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+            "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+            "rotation_failed": bool(governance.get("rotation_failed", False)),
+            "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+            "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+            "checksum_index_path": str(governance.get("checksum_index_path", "")),
+            "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+            "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
+            "reason": str(governance.get("reason", "")),
+        }
+
+    def _write_stress_exec_controlled_apply_ledger_artifact(
+        self,
+        *,
+        as_of: date,
+        source_date: date,
+        source_path: Path,
+        trendline_status: str,
+        checks: dict[str, Any],
+        thresholds: dict[str, Any],
+        controlled_apply: dict[str, Any],
+        ledger: dict[str, Any],
+        entries_preview: list[dict[str, Any]],
+        alerts: list[str],
+        retention_days: int,
+        replay_days: int,
+        checksum_index_enabled: bool = True,
+    ) -> dict[str, Any]:
+        policy = self._artifact_governance_profile(
+            profile_name="controlled_apply_ledger",
+            fallback_retention_days=retention_days,
+            fallback_checksum_index_enabled=checksum_index_enabled,
+        )
+        keep_days = int(policy.get("retention_days", max(1, int(retention_days))))
+        index_enabled = bool(policy.get("checksum_index_enabled", checksum_index_enabled))
+
+        drift = ledger.get("drift", {}) if isinstance(ledger.get("drift", {}), dict) else {}
+        stale_ratio = self._safe_float(ledger.get("window_stale_ratio", 0.0), 0.0)
+        duplicate_block_rate = self._safe_float(ledger.get("duplicate_block_rate", 0.0), 0.0)
+        stale_ratio_max = self._safe_float(
+            drift.get(
+                "window_stale_ratio_max",
+                thresholds.get(
+                    "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_window_stale_ratio_max",
+                    0.0,
+                ),
+            ),
+            0.0,
+        )
+        duplicate_block_rate_max = self._safe_float(
+            drift.get(
+                "duplicate_block_rate_max",
+                thresholds.get(
+                    "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_max",
+                    0.0,
+                ),
+            ),
+            0.0,
+        )
+
+        replay_reason_codes: list[str] = []
+        if not bool(checks.get("controlled_apply_ledger_write_ok", True)):
+            replay_reason_codes.append("ledger_write_not_ok")
+        if int(self._safe_float(ledger.get("window_stale_count", 0), 0)) > 0:
+            replay_reason_codes.append("stale_entries_detected")
+        if bool(drift.get("breached", False)):
+            replay_reason_codes.append("ledger_drift_breached")
+        if bool(controlled_apply.get("duplicate_blocked", False)):
+            replay_reason_codes.append("duplicate_apply_blocked")
+        replay_recommended = bool(replay_reason_codes)
+
+        rollback_reason_codes: list[str] = []
+        drift_gate_hard_fail = bool(drift.get("gate_hard_fail", False))
+        if bool(drift.get("breached", False)) and drift_gate_hard_fail:
+            rollback_reason_codes.append("ledger_drift_hard_fail")
+        if not bool(checks.get("controlled_apply_ledger_write_ok", True)):
+            rollback_reason_codes.append("ledger_write_not_ok")
+        if drift_gate_hard_fail and stale_ratio > stale_ratio_max + 1e-12:
+            rollback_reason_codes.append("stale_ratio_above_max")
+        if drift_gate_hard_fail and duplicate_block_rate > duplicate_block_rate_max + 1e-12:
+            rollback_reason_codes.append("duplicate_block_rate_above_max")
+        rollback_recommended = bool(rollback_reason_codes)
+
+        replay_commands = [
+            f"PYTHONPATH=src python3 -m lie_engine.cli stable-replay --date {as_of.isoformat()} --days {int(max(1, replay_days))}",
+            f"PYTHONPATH=src python3 -m lie_engine.cli gate-report --date {as_of.isoformat()}",
+        ]
+        rollback_commands = [
+            f"PYTHONPATH=src python3 -m lie_engine.cli stress-exec-approval-manifest --date {as_of.isoformat()} --reject",
+            f"PYTHONPATH=src python3 -m lie_engine.cli gate-report --date {as_of.isoformat()}",
+            f"PYTHONPATH=src python3 -m lie_engine.cli review-loop --date {as_of.isoformat()} --max-rounds 1",
+        ]
+        workflows = {
+            "replay": {
+                "recommended": bool(replay_recommended),
+                "reason_codes": list(dict.fromkeys(replay_reason_codes)),
+                "commands": replay_commands,
+            },
+            "rollback": {
+                "recommended": bool(rollback_recommended),
+                "reason_codes": list(dict.fromkeys(rollback_reason_codes)),
+                "commands": rollback_commands,
+            },
+        }
+
+        payload = {
+            "date": as_of.isoformat(),
+            "source_date": source_date.isoformat(),
+            "source_path": str(source_path),
+            "status": str(trendline_status or "unknown"),
+            "checks": dict(checks),
+            "thresholds": {
+                "window_stale_ratio_max": float(stale_ratio_max),
+                "duplicate_block_rate_max": float(duplicate_block_rate_max),
+                "gate_hard_fail": bool(drift.get("gate_hard_fail", False)),
+            },
+            "controlled_apply": {
+                "enabled": bool(controlled_apply.get("enabled", False)),
+                "applied": bool(controlled_apply.get("applied", False)),
+                "allowed": bool(controlled_apply.get("allowed", False)),
+                "reason": str(controlled_apply.get("reason", "")),
+                "proposal_id": str(controlled_apply.get("proposal_id", "")),
+                "proposal_date": str(controlled_apply.get("proposal_date", "")),
+                "duplicate_blocked": bool(controlled_apply.get("duplicate_blocked", False)),
+            },
+            "ledger": {
+                "path": str(ledger.get("path", "")),
+                "entries": int(self._safe_float(ledger.get("entries", 0), 0)),
+                "window_entries": int(self._safe_float(ledger.get("window_entries", 0), 0)),
+                "window_stale_count": int(self._safe_float(ledger.get("window_stale_count", 0), 0)),
+                "window_stale_ratio": float(stale_ratio),
+                "duplicate_block_samples": int(self._safe_float(ledger.get("duplicate_block_samples", 0), 0)),
+                "duplicate_block_events": int(self._safe_float(ledger.get("duplicate_block_events", 0), 0)),
+                "duplicate_block_rate": float(duplicate_block_rate),
+                "last_applied_date": str(ledger.get("last_applied_date", "")),
+                "last_applied_proposal_id": str(ledger.get("last_applied_proposal_id", "")),
+                "write_ok": bool(ledger.get("write_ok", True)),
+                "write_error": str(ledger.get("write_error", "")),
+                "drift": dict(drift),
+                "entries_preview": list(entries_preview[-30:]),
+            },
+            "alerts": [str(x).strip() for x in alerts if str(x).strip()],
+            "workflows": workflows,
+        }
+
+        review_dir = self.output_dir / "review"
+        json_path = review_dir / f"{as_of.isoformat()}_controlled_apply_ledger.json"
+        md_path = review_dir / f"{as_of.isoformat()}_controlled_apply_ledger.md"
+
+        lines: list[str] = []
+        lines.append(f"# Controlled Apply Ledger Drillbook | {as_of.isoformat()}")
+        lines.append("")
+        lines.append(f"- source_date: `{source_date.isoformat()}`")
+        lines.append(f"- trendline_status: `{str(trendline_status or 'unknown')}`")
+        lines.append(f"- ledger_path: `{str(ledger.get('path', '') or 'N/A')}`")
+        lines.append(
+            "- ledger(entries/window_entries/stale_ratio/duplicate_block_rate): "
+            + f"`{int(self._safe_float(ledger.get('entries', 0), 0))}` / "
+            + f"`{int(self._safe_float(ledger.get('window_entries', 0), 0))}` / "
+            + f"`{stale_ratio:.2%}` / "
+            + f"`{duplicate_block_rate:.2%}`"
+        )
+        lines.append(
+            "- thresholds(stale_ratio_max/duplicate_rate_max/gate_hard_fail): "
+            + f"`{stale_ratio_max:.2%}` / `{duplicate_block_rate_max:.2%}` / "
+            + f"`{bool(drift.get('gate_hard_fail', False))}`"
+        )
+        lines.append("")
+        lines.append("## Replay Workflow")
+        lines.append(f"- recommended: `{bool(replay_recommended)}`")
+        lines.append(
+            "- reason_codes: `"
+            + (", ".join(workflows["replay"]["reason_codes"]) if workflows["replay"]["reason_codes"] else "NONE")
+            + "`"
+        )
+        for cmd in replay_commands:
+            lines.append(f"- cmd: `{cmd}`")
+        lines.append("")
+        lines.append("## Rollback Workflow")
+        lines.append(f"- recommended: `{bool(rollback_recommended)}`")
+        lines.append(
+            "- reason_codes: `"
+            + (", ".join(workflows["rollback"]["reason_codes"]) if workflows["rollback"]["reason_codes"] else "NONE")
+            + "`"
+        )
+        for cmd in rollback_commands:
+            lines.append(f"- cmd: `{cmd}`")
+        lines.append("")
+        lines.append("## Recent Ledger Entries")
+        if entries_preview:
+            for row in entries_preview[-20:]:
+                lines.append(
+                    "- "
+                    + f"{str(row.get('date', ''))} "
+                    + f"proposal_id={str(row.get('proposal_id', '') or 'N/A')} "
+                    + f"applied={bool(row.get('applied', False))} "
+                    + f"proposal_age_days={int(self._safe_float(row.get('proposal_age_days', 0), 0))} "
+                    + f"reason={str(row.get('reason', '') or 'N/A')}"
+                )
+        else:
+            lines.append("- NONE")
+
+        try:
+            write_json(json_path, payload)
+            write_markdown(md_path, "\n".join(lines) + "\n")
+        except Exception as exc:
+            return {
+                "written": False,
+                "json": "",
+                "md": "",
+                "retention_days": int(keep_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
+                "reason": f"write_failed:{type(exc).__name__}:{exc}",
+                "workflows": workflows,
+            }
+
+        governance = self._apply_artifact_governance(
+            as_of=as_of,
+            review_dir=review_dir,
+            profile_name="controlled_apply_ledger",
+            fallback_retention_days=keep_days,
+            fallback_checksum_index_enabled=index_enabled,
+        )
+        return {
+            "written": True,
+            "json": str(json_path),
+            "md": str(md_path),
+            "retention_days": int(governance.get("retention_days", keep_days)),
+            "rotated_out_count": int(governance.get("rotated_out_count", 0)),
+            "rotated_out_dates": [str(x) for x in governance.get("rotated_out_dates", [])],
+            "rotation_failed": bool(governance.get("rotation_failed", False)),
+            "checksum_index_enabled": bool(governance.get("checksum_index_enabled", index_enabled)),
+            "checksum_index_written": bool(governance.get("checksum_index_written", False)),
+            "checksum_index_path": str(governance.get("checksum_index_path", "")),
+            "checksum_index_entries": int(governance.get("checksum_index_entries", 0)),
+            "checksum_index_failed": bool(governance.get("checksum_index_failed", False)),
+            "reason": str(governance.get("reason", "")),
+            "workflows": workflows,
+        }
+
     def _stress_autorun_history_metrics(self, *, as_of: date) -> dict[str, Any]:
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         enabled = bool(val.get("ops_stress_autorun_history_enabled", True))
@@ -1117,6 +4999,18 @@ class ReleaseOrchestrator:
 
         window_days = max(1, int(val.get("ops_stress_autorun_history_window_days", 30)))
         min_rounds = max(1, int(val.get("ops_stress_autorun_history_min_rounds", 3)))
+        no_trigger_min_payload_days = max(
+            1,
+            min(
+                int(window_days),
+                int(
+                    self._safe_float(
+                        val.get("ops_stress_autorun_history_no_trigger_min_payload_days", 14),
+                        14,
+                    )
+                ),
+            ),
+        )
         history_artifact_policy = self._artifact_governance_profile(
             profile_name="stress_autorun_history",
             fallback_retention_days=max(1, int(val.get("ops_stress_autorun_history_retention_days", 30))),
@@ -1187,7 +5081,8 @@ class ReleaseOrchestrator:
         alerts: list[str] = []
         if not active:
             alerts.append("stress_autorun_history_insufficient_rounds")
-        if active and triggered_rounds <= 0:
+        no_trigger_signal_ready = bool(len(payload_days) >= int(no_trigger_min_payload_days))
+        if active and triggered_rounds <= 0 and no_trigger_signal_ready:
             alerts.append("stress_autorun_history_no_triggers")
 
         metrics = {
@@ -1206,6 +5101,7 @@ class ReleaseOrchestrator:
             "attempt_rate_when_triggered": float(attempt_rate_when_triggered),
             "run_rate_when_triggered": float(run_rate_when_triggered),
             "cooldown_efficiency": float(cooldown_efficiency),
+            "no_trigger_signal_ready": bool(no_trigger_signal_ready),
             "skip_reason_counts": dict(sorted(skip_reason_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))),
             "trigger_reason_counts": dict(
                 sorted(trigger_reason_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
@@ -1259,6 +5155,9 @@ class ReleaseOrchestrator:
             "thresholds": {
                 "ops_stress_autorun_history_window_days": int(window_days),
                 "ops_stress_autorun_history_min_rounds": int(min_rounds),
+                "ops_stress_autorun_history_no_trigger_min_payload_days": int(
+                    no_trigger_min_payload_days
+                ),
                 "ops_stress_autorun_history_retention_days": int(retention_days),
                 "ops_stress_autorun_history_checksum_index_enabled": bool(checksum_index_enabled),
             },
@@ -1513,8 +5412,14 @@ class ReleaseOrchestrator:
 
         rounds_total = len(series)
         recent_rounds = min(recent_rounds_cfg, rounds_total)
+        baseline_rounds = max(0, int(rounds_total - recent_rounds))
         required_rounds = max(min_rounds, recent_rounds_cfg + 1)
-        active = rounds_total >= required_rounds and recent_rounds > 0 and (rounds_total - recent_rounds) > 0
+        baseline_required_rounds = max(1, int(recent_rounds))
+        active = (
+            rounds_total >= required_rounds
+            and recent_rounds > 0
+            and baseline_rounds >= baseline_required_rounds
+        )
 
         baseline_series = series[:-recent_rounds] if recent_rounds > 0 else []
         recent_series = series[-recent_rounds:] if recent_rounds > 0 else []
@@ -1554,7 +5459,10 @@ class ReleaseOrchestrator:
         checks: dict[str, bool] = {}
         alerts: list[str] = []
         if not active:
-            alerts.append("stress_autorun_reason_drift_insufficient_rounds")
+            if rounds_total >= required_rounds and baseline_rounds < baseline_required_rounds:
+                alerts.append("stress_autorun_reason_drift_insufficient_baseline")
+            else:
+                alerts.append("stress_autorun_reason_drift_insufficient_rounds")
         else:
             checks["reason_mix_gap_ok"] = bool(mix_gap <= mix_gap_max)
             checks["change_point_gap_ok"] = bool(change_point_gap <= change_point_gap_max)
@@ -1566,6 +5474,7 @@ class ReleaseOrchestrator:
         metrics = {
             "rounds_total": int(rounds_total),
             "baseline_rounds": int(len(baseline_series)),
+            "baseline_required_rounds": int(baseline_required_rounds),
             "recent_rounds": int(len(recent_series)),
             "baseline_high_ratio": float(baseline_ratio.get("high", 0.0)),
             "baseline_low_ratio": float(baseline_ratio.get("low", 0.0)),
@@ -1631,6 +5540,7 @@ class ReleaseOrchestrator:
                 "ops_stress_autorun_reason_drift_window_days": int(window_days),
                 "ops_stress_autorun_reason_drift_min_rounds": int(min_rounds),
                 "ops_stress_autorun_reason_drift_recent_rounds": int(recent_rounds_cfg),
+                "ops_stress_autorun_reason_drift_baseline_required_rounds": int(baseline_required_rounds),
                 "ops_stress_autorun_reason_drift_mix_gap_max": float(mix_gap_max),
                 "ops_stress_autorun_reason_drift_change_point_gap_max": float(change_point_gap_max),
                 "ops_stress_autorun_reason_drift_retention_days": int(retention_days),
@@ -1820,10 +5730,19 @@ class ReleaseOrchestrator:
         if not isinstance(intraday_slots, list):
             intraday_slots = ["10:30", "14:30"]
         out_slots: list[str] = []
+        seen: set[str] = set()
         for raw in intraday_slots:
             txt = str(raw).strip()
-            if txt:
-                out_slots.append(txt)
+            if not txt or txt in seen:
+                continue
+            try:
+                hh, mm = txt.split(":")
+                if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+                    continue
+            except Exception:
+                continue
+            seen.add(txt)
+            out_slots.append(txt)
         if not out_slots:
             out_slots = ["10:30", "14:30"]
         return {"intraday_slots": out_slots}
@@ -1868,6 +5787,218 @@ class ReleaseOrchestrator:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    def _load_degradation_calibration_overrides(self) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = bool(val.get("ops_degradation_calibration_use_live_overrides", True))
+        raw = str(val.get("ops_degradation_calibration_live_params_path", "artifacts/degradation_params_live.yaml")).strip()
+        path = self._resolve_output_path(
+            raw,
+            fallback_rel="artifacts/degradation_params_live.yaml",
+        )
+        if not enabled:
+            return {
+                "enabled": False,
+                "applied": False,
+                "path": str(path),
+                "params": {},
+                "reason": "disabled",
+            }
+        if not path.exists():
+            return {
+                "enabled": True,
+                "applied": False,
+                "path": str(path),
+                "params": {},
+                "reason": "missing",
+            }
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "applied": False,
+                "path": str(path),
+                "params": {},
+                "reason": "read_failed",
+                "error": f"{type(exc).__name__}:{exc}",
+            }
+        params = payload.get("params", {}) if isinstance(payload.get("params", {}), dict) else payload
+        if not isinstance(params, dict):
+            params = {}
+        return {
+            "enabled": True,
+            "applied": bool(params),
+            "path": str(path),
+            "params": params,
+            "reason": "ok" if bool(params) else "empty",
+        }
+
+    def _load_degradation_guardrail_dashboard_overrides(self) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = bool(val.get("ops_degradation_guardrail_dashboard_use_live_overrides", True))
+        raw = str(
+            val.get(
+                "ops_degradation_guardrail_dashboard_live_params_path",
+                "artifacts/degradation_guardrail_dashboard_live.yaml",
+            )
+        ).strip()
+        path = self._resolve_output_path(
+            raw,
+            fallback_rel="artifacts/degradation_guardrail_dashboard_live.yaml",
+        )
+        if not enabled:
+            return {
+                "enabled": False,
+                "applied": False,
+                "path": str(path),
+                "params": {},
+                "reason": "disabled",
+            }
+        if not path.exists():
+            return {
+                "enabled": True,
+                "applied": False,
+                "path": str(path),
+                "params": {},
+                "reason": "missing",
+            }
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "applied": False,
+                "path": str(path),
+                "params": {},
+                "reason": "read_failed",
+                "error": f"{type(exc).__name__}:{exc}",
+            }
+        params = payload.get("params", {}) if isinstance(payload.get("params", {}), dict) else payload
+        if not isinstance(params, dict):
+            params = {}
+        return {
+            "enabled": True,
+            "applied": bool(params),
+            "path": str(path),
+            "params": params,
+            "reason": "ok" if bool(params) else "empty",
+        }
+
+    @staticmethod
+    def _max_true_streak(flags: list[bool]) -> int:
+        best = 0
+        run = 0
+        for item in flags:
+            if bool(item):
+                run += 1
+                if run > best:
+                    best = run
+            else:
+                run = 0
+        return int(best)
+
+    @staticmethod
+    def _degradation_tier_upper(
+        *,
+        value: float,
+        threshold: float,
+        soft_multiplier: float,
+        hard_multiplier: float,
+    ) -> str:
+        v = float(value)
+        th = max(0.0, float(threshold))
+        if th <= 0.0:
+            return "green" if v <= 0.0 else "red"
+        soft = max(1.0, float(soft_multiplier))
+        hard = max(soft, float(hard_multiplier))
+        if v <= th:
+            return "green"
+        if v <= th * soft:
+            return "yellow"
+        if v <= th * hard:
+            return "orange"
+        return "red"
+
+    @staticmethod
+    def _degradation_tier_lower(
+        *,
+        value: float,
+        threshold: float,
+        soft_ratio: float,
+        hard_ratio: float,
+    ) -> str:
+        v = float(value)
+        th = max(0.0, float(threshold))
+        if th <= 0.0:
+            return "green"
+        soft = min(1.0, max(0.0, float(soft_ratio)))
+        hard = min(soft, max(0.0, float(hard_ratio)))
+        if v >= th:
+            return "green"
+        if v >= th * soft:
+            return "yellow"
+        if v >= th * hard:
+            return "orange"
+        return "red"
+
+    @staticmethod
+    def _tier_rank(tier: str) -> int:
+        txt = str(tier).strip().lower()
+        if txt == "green":
+            return 0
+        if txt == "yellow":
+            return 1
+        if txt == "orange":
+            return 2
+        return 3
+
+    @staticmethod
+    def _mode_switch_flags_with_min_dwell(
+        modes: list[str],
+        *,
+        min_dwell_days: int = 1,
+    ) -> tuple[list[bool], list[int], list[bool]]:
+        if len(modes) < 2:
+            return [], [], []
+        raw_flags = [bool(modes[i] != modes[i - 1]) for i in range(1, len(modes))]
+        dwell = max(1, int(min_dwell_days))
+        if dwell <= 1:
+            return raw_flags, [], raw_flags
+
+        runs: list[dict[str, Any]] = []
+        start = 0
+        for i in range(1, len(modes) + 1):
+            if i < len(modes) and str(modes[i]) == str(modes[start]):
+                continue
+            runs.append(
+                {
+                    "mode": str(modes[start]),
+                    "start": int(start),
+                    "end": int(i - 1),
+                    "len": int(i - start),
+                }
+            )
+            start = i
+
+        ignored_transition_idx: set[int] = set()
+        for idx in range(1, max(0, len(runs) - 1)):
+            run = runs[idx]
+            if int(run["len"]) >= dwell:
+                continue
+            prev_mode = str(runs[idx - 1]["mode"])
+            next_mode = str(runs[idx + 1]["mode"])
+            if prev_mode != next_mode:
+                continue
+            left_transition = int(run["start"]) - 1
+            right_transition = int(run["end"])
+            if 0 <= left_transition < len(raw_flags):
+                ignored_transition_idx.add(left_transition)
+            if 0 <= right_transition < len(raw_flags):
+                ignored_transition_idx.add(right_transition)
+
+        effective_flags = [bool(flag and (i not in ignored_transition_idx)) for i, flag in enumerate(raw_flags)]
+        return raw_flags, sorted(int(x) for x in ignored_transition_idx), effective_flags
+
     def _slot_anomaly_metrics(self, *, as_of: date) -> dict[str, Any]:
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         cfg = self._slot_config()
@@ -1910,9 +6041,112 @@ class ReleaseOrchestrator:
             val.get("ops_slot_risk_multiplier_floor", val.get("execution_min_risk_multiplier", 0.20)),
             0.20,
         )
+        raw_soft_quality_prefixes = val.get(
+            "ops_slot_soft_quality_flag_prefixes",
+            ["LOW_CONFIDENCE_SOURCE_RATIO_HIGH"],
+        )
+        soft_quality_prefixes: list[str] = []
+        if isinstance(raw_soft_quality_prefixes, list):
+            for raw in raw_soft_quality_prefixes:
+                txt = str(raw or "").strip().upper()
+                if txt:
+                    soft_quality_prefixes.append(txt)
+        elif isinstance(raw_soft_quality_prefixes, str):
+            txt = str(raw_soft_quality_prefixes).strip().upper()
+            if txt:
+                soft_quality_prefixes.append(txt)
+        soft_quality_prefixes = sorted(set(soft_quality_prefixes))
+
+        def _quality_flag_key(raw_flag: Any) -> str:
+            txt = str(raw_flag or "").strip().upper()
+            if not txt:
+                return ""
+            return txt.split(":", 1)[0]
+
+        def _is_soft_quality_flag(raw_flag: Any) -> bool:
+            key = _quality_flag_key(raw_flag)
+            if not key:
+                return False
+            return any(bool(key.startswith(prefix)) for prefix in soft_quality_prefixes)
+
+        degradation_enabled = bool(val.get("ops_slot_degradation_enabled", False))
+        hysteresis_enabled = bool(val.get("ops_slot_hysteresis_enabled", False))
+        degradation_live = self._load_degradation_calibration_overrides()
+        degradation_live_params = (
+            degradation_live.get("params", {})
+            if isinstance(degradation_live.get("params", {}), dict)
+            else {}
+        )
+        degradation_live_applied = False
+
+        def _degradation_value(key: str, default: Any) -> Any:
+            nonlocal degradation_live_applied
+            if key in degradation_live_params:
+                degradation_live_applied = True
+                return degradation_live_params.get(key)
+            return default
+
+        degrade_soft_multiplier = max(
+            1.0,
+            self._safe_float(
+                _degradation_value(
+                    "ops_slot_degradation_soft_multiplier",
+                    val.get("ops_slot_degradation_soft_multiplier", 1.15),
+                ),
+                1.15,
+            ),
+        )
+        degrade_hard_multiplier = max(
+            float(degrade_soft_multiplier),
+            self._safe_float(
+                _degradation_value(
+                    "ops_slot_degradation_hard_multiplier",
+                    val.get("ops_slot_degradation_hard_multiplier", 1.40),
+                ),
+                1.40,
+            ),
+        )
+        hysteresis_soft_streak_days = max(
+            1,
+            int(
+                self._safe_float(
+                    _degradation_value(
+                        "ops_slot_hysteresis_soft_streak_days",
+                        val.get("ops_slot_hysteresis_soft_streak_days", 2),
+                    ),
+                    self._safe_float(val.get("ops_slot_hysteresis_soft_streak_days", 2), 2.0),
+                )
+            ),
+        )
+        hysteresis_hard_streak_days = max(
+            int(hysteresis_soft_streak_days),
+            int(
+                self._safe_float(
+                    _degradation_value(
+                        "ops_slot_hysteresis_hard_streak_days",
+                        val.get("ops_slot_hysteresis_hard_streak_days", 3),
+                    ),
+                    self._safe_float(val.get("ops_slot_hysteresis_hard_streak_days", 3), 3.0),
+                )
+            ),
+        )
 
         def _slot_template() -> dict[str, Any]:
             return {"expected": 0, "observed": 0, "missing": 0, "anomalies": 0}
+
+        def _ratio_local(n: int, d: int) -> float:
+            return float(n / d) if d > 0 else 0.0
+
+        def _tier_ok(tier: str, streak: int) -> bool:
+            txt = str(tier).strip().lower()
+            if txt == "green":
+                return True
+            if txt == "red":
+                return False
+            if (not degradation_enabled) or (not hysteresis_enabled):
+                return False
+            required = hysteresis_soft_streak_days if txt == "yellow" else hysteresis_hard_streak_days
+            return int(streak) < int(required)
 
         slots = {
             "premarket": _slot_template(),
@@ -1927,6 +6161,8 @@ class ReleaseOrchestrator:
         total_anomalies = 0
         eod_quality_anomaly_slots = 0
         eod_risk_anomaly_slots = 0
+        soft_quality_flag_slots = 0
+        hard_quality_flag_slots = 0
         eod_regime_buckets = {
             "trend": {"days": 0, "quality_anomalies": 0, "risk_anomalies": 0},
             "range": {"days": 0, "quality_anomalies": 0, "risk_anomalies": 0},
@@ -1946,6 +6182,11 @@ class ReleaseOrchestrator:
                 "eod": _slot_template(),
             }
             day_alerts: list[str] = []
+            day_eod_regime_bucket = "unknown"
+            day_eod_quality_anomalies = 0
+            day_eod_risk_anomalies = 0
+            day_eod_quality_regime_breach = False
+            day_eod_risk_regime_breach = False
 
             # premarket
             local["premarket"]["expected"] += 1
@@ -1954,18 +6195,24 @@ class ReleaseOrchestrator:
                 local["premarket"]["observed"] += 1
                 quality = pre.get("quality", {}) if isinstance(pre.get("quality", {}), dict) else {}
                 q_flags = quality.get("flags", []) if isinstance(quality.get("flags", []), list) else []
+                hard_q_flags = [str(x) for x in q_flags if not _is_soft_quality_flag(x)]
+                soft_q_flags = [str(x) for x in q_flags if _is_soft_quality_flag(x)]
                 score = self._safe_float(quality.get("source_confidence_score", pre.get("source_confidence_score", 1.0)), 1.0)
                 risk_mult = self._safe_float(pre.get("risk_multiplier", 1.0), 1.0)
                 reasons: list[str] = []
                 if not bool(quality.get("passed", True)):
                     reasons.append("quality_failed")
-                if q_flags:
+                if hard_q_flags:
                     reasons.append("quality_flags")
+                if soft_q_flags:
+                    soft_quality_flag_slots += 1
                 if score < source_floor:
                     reasons.append("source_confidence_low")
                 if risk_mult < risk_floor:
                     reasons.append("risk_multiplier_low")
                 if reasons:
+                    if hard_q_flags:
+                        hard_quality_flag_slots += 1
                     local["premarket"]["anomalies"] += 1
                     day_alerts.append("premarket:" + "+".join(reasons[:2]))
             else:
@@ -1979,16 +6226,22 @@ class ReleaseOrchestrator:
                 if intraday:
                     local["intraday"]["observed"] += 1
                     q_flags = intraday.get("quality_flags", []) if isinstance(intraday.get("quality_flags", []), list) else []
+                    hard_q_flags = [str(x) for x in q_flags if not _is_soft_quality_flag(x)]
+                    soft_q_flags = [str(x) for x in q_flags if _is_soft_quality_flag(x)]
                     score = self._safe_float(intraday.get("source_confidence_score", 1.0), 1.0)
                     risk_mult = self._safe_float(intraday.get("risk_multiplier", 1.0), 1.0)
                     reasons = []
-                    if q_flags:
+                    if hard_q_flags:
                         reasons.append("quality_flags")
+                    if soft_q_flags:
+                        soft_quality_flag_slots += 1
                     if score < source_floor:
                         reasons.append("source_confidence_low")
                     if risk_mult < risk_floor:
                         reasons.append("risk_multiplier_low")
                     if reasons:
+                        if hard_q_flags:
+                            hard_quality_flag_slots += 1
                         local["intraday"]["anomalies"] += 1
                         day_alerts.append("intraday:" + "+".join(reasons[:2]))
                 else:
@@ -2003,6 +6256,7 @@ class ReleaseOrchestrator:
                 checks = eod.get("checks", {}) if isinstance(eod.get("checks", {}), dict) else {}
                 metrics = eod.get("metrics", {}) if isinstance(eod.get("metrics", {}), dict) else {}
                 regime_bucket = self._regime_bucket(metrics.get("regime", ""))
+                day_eod_regime_bucket = str(regime_bucket)
                 if regime_bucket in eod_regime_buckets:
                     eod_regime_buckets[regime_bucket]["days"] = int(eod_regime_buckets[regime_bucket]["days"]) + 1
                 else:
@@ -2010,6 +6264,7 @@ class ReleaseOrchestrator:
                 reasons = []
                 if not bool(checks.get("quality_passed", True)):
                     reasons.append("quality_failed")
+                    day_eod_quality_anomalies += 1
                     eod_quality_anomaly_slots += 1
                     if regime_bucket in eod_regime_buckets:
                         eod_regime_buckets[regime_bucket]["quality_anomalies"] = (
@@ -2018,6 +6273,7 @@ class ReleaseOrchestrator:
                 risk_mult = self._safe_float(metrics.get("risk_multiplier", 1.0), 1.0)
                 if risk_mult < risk_floor:
                     reasons.append("risk_multiplier_low")
+                    day_eod_risk_anomalies += 1
                     eod_risk_anomaly_slots += 1
                     if regime_bucket in eod_regime_buckets:
                         eod_regime_buckets[regime_bucket]["risk_anomalies"] = (
@@ -2034,6 +6290,21 @@ class ReleaseOrchestrator:
             day_observed = sum(int(local[k]["observed"]) for k in local)
             day_missing = sum(int(local[k]["missing"]) for k in local)
             day_anomalies = sum(int(local[k]["anomalies"]) for k in local)
+            day_premarket_ratio = _ratio_local(int(local["premarket"]["anomalies"]), int(local["premarket"]["expected"]))
+            day_intraday_ratio = _ratio_local(int(local["intraday"]["anomalies"]), int(local["intraday"]["expected"]))
+            day_eod_ratio = _ratio_local(int(local["eod"]["anomalies"]), int(local["eod"]["expected"]))
+            day_eod_quality_ratio = _ratio_local(int(day_eod_quality_anomalies), int(local["eod"]["expected"]))
+            day_eod_risk_ratio = _ratio_local(int(day_eod_risk_anomalies), int(local["eod"]["expected"]))
+            day_missing_ratio = _ratio_local(int(day_missing), int(day_expected))
+            if day_eod_regime_bucket in {"trend", "range", "extreme_vol"}:
+                day_eod_quality_regime_breach = bool(
+                    day_eod_quality_ratio
+                    > float(eod_quality_ratio_by_regime.get(day_eod_regime_bucket, eod_quality_ratio_max))
+                )
+                day_eod_risk_regime_breach = bool(
+                    day_eod_risk_ratio
+                    > float(eod_risk_ratio_by_regime.get(day_eod_regime_bucket, eod_risk_ratio_max))
+                )
 
             # only evaluate days that have at least one produced slot artifact
             if day_observed <= 0:
@@ -2055,6 +6326,19 @@ class ReleaseOrchestrator:
                     "missing": day_missing,
                     "anomalies": day_anomalies,
                     "alerts": day_alerts[:6],
+                    "regime_bucket": str(day_eod_regime_bucket),
+                    "ratios": {
+                        "missing": float(day_missing_ratio),
+                        "premarket": float(day_premarket_ratio),
+                        "intraday": float(day_intraday_ratio),
+                        "eod": float(day_eod_ratio),
+                        "eod_quality": float(day_eod_quality_ratio),
+                        "eod_risk": float(day_eod_risk_ratio),
+                    },
+                    "regime_breaches": {
+                        "quality": bool(day_eod_quality_regime_breach),
+                        "risk": bool(day_eod_risk_regime_breach),
+                    },
                 }
             )
 
@@ -2097,6 +6381,64 @@ class ReleaseOrchestrator:
                 "risk_ok": r_ok,
             }
 
+        series_chrono = sorted(series, key=lambda x: str(x.get("date", "")))
+        streaks = {
+            "missing": self._max_true_streak(
+                [
+                    float((x.get("ratios", {}) if isinstance(x.get("ratios", {}), dict) else {}).get("missing", 0.0))
+                    > float(missing_ratio_max)
+                    for x in series_chrono
+                ]
+            ),
+            "premarket": self._max_true_streak(
+                [
+                    float((x.get("ratios", {}) if isinstance(x.get("ratios", {}), dict) else {}).get("premarket", 0.0))
+                    > float(pre_ratio_max)
+                    for x in series_chrono
+                ]
+            ),
+            "intraday": self._max_true_streak(
+                [
+                    float((x.get("ratios", {}) if isinstance(x.get("ratios", {}), dict) else {}).get("intraday", 0.0))
+                    > float(intraday_ratio_max)
+                    for x in series_chrono
+                ]
+            ),
+            "eod": self._max_true_streak(
+                [
+                    float((x.get("ratios", {}) if isinstance(x.get("ratios", {}), dict) else {}).get("eod", 0.0))
+                    > float(eod_ratio_max)
+                    for x in series_chrono
+                ]
+            ),
+            "eod_quality": self._max_true_streak(
+                [
+                    float((x.get("ratios", {}) if isinstance(x.get("ratios", {}), dict) else {}).get("eod_quality", 0.0))
+                    > float(eod_quality_ratio_max)
+                    for x in series_chrono
+                ]
+            ),
+            "eod_risk": self._max_true_streak(
+                [
+                    float((x.get("ratios", {}) if isinstance(x.get("ratios", {}), dict) else {}).get("eod_risk", 0.0))
+                    > float(eod_risk_ratio_max)
+                    for x in series_chrono
+                ]
+            ),
+            "eod_quality_regime": self._max_true_streak(
+                [
+                    bool((x.get("regime_breaches", {}) if isinstance(x.get("regime_breaches", {}), dict) else {}).get("quality", False))
+                    for x in series_chrono
+                ]
+            ),
+            "eod_risk_regime": self._max_true_streak(
+                [
+                    bool((x.get("regime_breaches", {}) if isinstance(x.get("regime_breaches", {}), dict) else {}).get("risk", False))
+                    for x in series_chrono
+                ]
+            ),
+        }
+
         active = active_days >= min_samples
         checks = {
             "missing_ratio_ok": True,
@@ -2109,39 +6451,130 @@ class ReleaseOrchestrator:
             "eod_anomaly_ok": True,
         }
         alerts: list[str] = []
+        degradation_rows: dict[str, dict[str, Any]] = {}
+        degradation_overall_tier = "disabled"
         if active:
-            checks["missing_ratio_ok"] = bool(missing_ratio <= missing_ratio_max)
-            checks["premarket_anomaly_ok"] = bool(pre_ratio <= pre_ratio_max)
-            checks["intraday_anomaly_ok"] = bool(intraday_ratio <= intraday_ratio_max)
-            checks["eod_quality_anomaly_ok"] = bool(eod_quality_ratio <= eod_quality_ratio_max)
-            checks["eod_risk_anomaly_ok"] = bool(eod_risk_ratio <= eod_risk_ratio_max)
-            checks["eod_quality_regime_bucket_ok"] = bool(eod_quality_regime_breach_count == 0)
-            checks["eod_risk_regime_bucket_ok"] = bool(eod_risk_regime_breach_count == 0)
-            checks["eod_anomaly_ok"] = bool(
-                eod_ratio <= eod_ratio_max
-                and checks["eod_quality_anomaly_ok"]
-                and checks["eod_risk_anomaly_ok"]
-                and checks["eod_quality_regime_bucket_ok"]
-                and checks["eod_risk_regime_bucket_ok"]
-            )
-            if not checks["missing_ratio_ok"]:
-                alerts.append("slot_missing_ratio_high")
-            if not checks["premarket_anomaly_ok"]:
-                alerts.append("slot_premarket_anomaly_high")
-            if not checks["intraday_anomaly_ok"]:
-                alerts.append("slot_intraday_anomaly_high")
-            if not checks["eod_quality_anomaly_ok"]:
-                alerts.append("slot_eod_quality_anomaly_high")
-            if not checks["eod_risk_anomaly_ok"]:
-                alerts.append("slot_eod_risk_anomaly_high")
-            if not checks["eod_quality_regime_bucket_ok"]:
-                alerts.append("slot_eod_quality_regime_bucket_anomaly_high")
-            if not checks["eod_risk_regime_bucket_ok"]:
-                alerts.append("slot_eod_risk_regime_bucket_anomaly_high")
-            if not checks["eod_anomaly_ok"]:
-                alerts.append("slot_eod_anomaly_high")
+            if not degradation_enabled:
+                checks["missing_ratio_ok"] = bool(missing_ratio <= missing_ratio_max)
+                checks["premarket_anomaly_ok"] = bool(pre_ratio <= pre_ratio_max)
+                checks["intraday_anomaly_ok"] = bool(intraday_ratio <= intraday_ratio_max)
+                checks["eod_quality_anomaly_ok"] = bool(eod_quality_ratio <= eod_quality_ratio_max)
+                checks["eod_risk_anomaly_ok"] = bool(eod_risk_ratio <= eod_risk_ratio_max)
+                checks["eod_quality_regime_bucket_ok"] = bool(eod_quality_regime_breach_count == 0)
+                checks["eod_risk_regime_bucket_ok"] = bool(eod_risk_regime_breach_count == 0)
+                checks["eod_anomaly_ok"] = bool(
+                    eod_ratio <= eod_ratio_max
+                    and checks["eod_quality_anomaly_ok"]
+                    and checks["eod_risk_anomaly_ok"]
+                    and checks["eod_quality_regime_bucket_ok"]
+                    and checks["eod_risk_regime_bucket_ok"]
+                )
+                if not checks["missing_ratio_ok"]:
+                    alerts.append("slot_missing_ratio_high")
+                if not checks["premarket_anomaly_ok"]:
+                    alerts.append("slot_premarket_anomaly_high")
+                if not checks["intraday_anomaly_ok"]:
+                    alerts.append("slot_intraday_anomaly_high")
+                if not checks["eod_quality_anomaly_ok"]:
+                    alerts.append("slot_eod_quality_anomaly_high")
+                if not checks["eod_risk_anomaly_ok"]:
+                    alerts.append("slot_eod_risk_anomaly_high")
+                if not checks["eod_quality_regime_bucket_ok"]:
+                    alerts.append("slot_eod_quality_regime_bucket_anomaly_high")
+                if not checks["eod_risk_regime_bucket_ok"]:
+                    alerts.append("slot_eod_risk_regime_bucket_anomaly_high")
+                if not checks["eod_anomaly_ok"]:
+                    alerts.append("slot_eod_anomaly_high")
+                degradation_overall_tier = "green" if all(bool(v) for v in checks.values()) else "red"
+            else:
+                metric_rules: list[tuple[str, str, str, float, float, int]] = [
+                    ("missing_ratio_ok", "missing_ratio", "slot_missing_ratio_high", float(missing_ratio), float(missing_ratio_max), int(streaks.get("missing", 0))),
+                    ("premarket_anomaly_ok", "premarket_anomaly_ratio", "slot_premarket_anomaly_high", float(pre_ratio), float(pre_ratio_max), int(streaks.get("premarket", 0))),
+                    ("intraday_anomaly_ok", "intraday_anomaly_ratio", "slot_intraday_anomaly_high", float(intraday_ratio), float(intraday_ratio_max), int(streaks.get("intraday", 0))),
+                    ("eod_quality_anomaly_ok", "eod_quality_anomaly_ratio", "slot_eod_quality_anomaly_high", float(eod_quality_ratio), float(eod_quality_ratio_max), int(streaks.get("eod_quality", 0))),
+                    ("eod_risk_anomaly_ok", "eod_risk_anomaly_ratio", "slot_eod_risk_anomaly_high", float(eod_risk_ratio), float(eod_risk_ratio_max), int(streaks.get("eod_risk", 0))),
+                    ("eod_anomaly_ok", "eod_anomaly_ratio", "slot_eod_anomaly_high", float(eod_ratio), float(eod_ratio_max), int(streaks.get("eod", 0))),
+                ]
+                tier_list: list[str] = []
+                for check_key, metric_key, alert_code, value, threshold, streak in metric_rules:
+                    tier = self._degradation_tier_upper(
+                        value=float(value),
+                        threshold=float(threshold),
+                        soft_multiplier=float(degrade_soft_multiplier),
+                        hard_multiplier=float(degrade_hard_multiplier),
+                    )
+                    tier_list.append(str(tier))
+                    degradation_rows[metric_key] = {
+                        "value": float(value),
+                        "threshold": float(threshold),
+                        "soft_threshold": float(float(threshold) * float(degrade_soft_multiplier)),
+                        "hard_threshold": float(float(threshold) * float(degrade_hard_multiplier)),
+                        "tier": str(tier),
+                        "streak_days": int(streak),
+                        "ok": bool(_tier_ok(str(tier), int(streak))),
+                    }
+                    checks[check_key] = bool(degradation_rows[metric_key]["ok"])
+                    if not checks[check_key]:
+                        alerts.append(str(alert_code))
+
+                quality_regime_tier = "green"
+                if int(eod_quality_regime_breach_count) > 0:
+                    quality_regime_tier = "yellow"
+                    if int(streaks.get("eod_quality_regime", 0)) >= int(hysteresis_soft_streak_days):
+                        quality_regime_tier = "orange"
+                    if int(streaks.get("eod_quality_regime", 0)) >= int(hysteresis_hard_streak_days):
+                        quality_regime_tier = "red"
+                risk_regime_tier = "green"
+                if int(eod_risk_regime_breach_count) > 0:
+                    risk_regime_tier = "yellow"
+                    if int(streaks.get("eod_risk_regime", 0)) >= int(hysteresis_soft_streak_days):
+                        risk_regime_tier = "orange"
+                    if int(streaks.get("eod_risk_regime", 0)) >= int(hysteresis_hard_streak_days):
+                        risk_regime_tier = "red"
+                checks["eod_quality_regime_bucket_ok"] = bool(
+                    _tier_ok(str(quality_regime_tier), int(streaks.get("eod_quality_regime", 0)))
+                )
+                checks["eod_risk_regime_bucket_ok"] = bool(
+                    _tier_ok(str(risk_regime_tier), int(streaks.get("eod_risk_regime", 0)))
+                )
+                if not checks["eod_quality_regime_bucket_ok"]:
+                    alerts.append("slot_eod_quality_regime_bucket_anomaly_high")
+                if not checks["eod_risk_regime_bucket_ok"]:
+                    alerts.append("slot_eod_risk_regime_bucket_anomaly_high")
+                checks["eod_anomaly_ok"] = bool(
+                    checks["eod_anomaly_ok"]
+                    and checks["eod_quality_anomaly_ok"]
+                    and checks["eod_risk_anomaly_ok"]
+                    and checks["eod_quality_regime_bucket_ok"]
+                    and checks["eod_risk_regime_bucket_ok"]
+                )
+                if not checks["eod_anomaly_ok"] and ("slot_eod_anomaly_high" not in alerts):
+                    alerts.append("slot_eod_anomaly_high")
+                degradation_rows["eod_quality_regime_bucket"] = {
+                    "value": int(eod_quality_regime_breach_count),
+                    "threshold": 0,
+                    "tier": str(quality_regime_tier),
+                    "streak_days": int(streaks.get("eod_quality_regime", 0)),
+                    "ok": bool(checks["eod_quality_regime_bucket_ok"]),
+                }
+                degradation_rows["eod_risk_regime_bucket"] = {
+                    "value": int(eod_risk_regime_breach_count),
+                    "threshold": 0,
+                    "tier": str(risk_regime_tier),
+                    "streak_days": int(streaks.get("eod_risk_regime", 0)),
+                    "ok": bool(checks["eod_risk_regime_bucket_ok"]),
+                }
+                tier_list.extend([str(quality_regime_tier), str(risk_regime_tier)])
+                if tier_list:
+                    top = max(tier_list, key=self._tier_rank)
+                    degradation_overall_tier = str(top)
+                    if str(top) != "green":
+                        alerts.append(f"slot_degradation_tier_{top}")
+                else:
+                    degradation_overall_tier = "green"
         else:
             alerts.append("insufficient_slot_samples")
+            degradation_overall_tier = "inactive"
 
         for key in slots:
             expected = int(slots[key]["expected"])
@@ -2172,6 +6605,8 @@ class ReleaseOrchestrator:
                 "eod_anomaly_ratio": eod_ratio,
                 "eod_quality_anomaly_ratio": eod_quality_ratio,
                 "eod_risk_anomaly_ratio": eod_risk_ratio,
+                "soft_quality_flag_slots": int(soft_quality_flag_slots),
+                "hard_quality_flag_slots": int(hard_quality_flag_slots),
                 "eod_unknown_regime_days": int(eod_unknown_regime_days),
                 "eod_quality_regime_bucket_breaches": int(eod_quality_regime_breach_count),
                 "eod_risk_regime_bucket_breaches": int(eod_risk_regime_breach_count),
@@ -2187,11 +6622,32 @@ class ReleaseOrchestrator:
                 "ops_slot_eod_risk_anomaly_ratio_max_by_regime": eod_risk_ratio_by_regime,
                 "ops_slot_source_confidence_floor": source_floor,
                 "ops_slot_risk_multiplier_floor": risk_floor,
+                "ops_slot_soft_quality_flag_prefixes": soft_quality_prefixes,
                 "ops_slot_use_live_regime_thresholds": bool(use_live_regime_thresholds),
                 "live_regime_thresholds_applied": bool(live_overrides_applied),
+                "ops_slot_degradation_enabled": bool(degradation_enabled),
+                "ops_slot_hysteresis_enabled": bool(hysteresis_enabled),
+                "ops_slot_degradation_soft_multiplier": float(degrade_soft_multiplier),
+                "ops_slot_degradation_hard_multiplier": float(degrade_hard_multiplier),
+                "ops_slot_hysteresis_soft_streak_days": int(hysteresis_soft_streak_days),
+                "ops_slot_hysteresis_hard_streak_days": int(hysteresis_hard_streak_days),
+                "ops_degradation_calibration_use_live_overrides": bool(degradation_live.get("enabled", False)),
+                "degradation_live_overrides_applied": bool(degradation_live_applied),
+                "degradation_live_overrides_path": str(degradation_live.get("path", "")),
             },
             "checks": checks,
             "alerts": alerts,
+            "degradation": {
+                "enabled": bool(degradation_enabled),
+                "hysteresis_enabled": bool(hysteresis_enabled),
+                "soft_multiplier": float(degrade_soft_multiplier),
+                "hard_multiplier": float(degrade_hard_multiplier),
+                "soft_streak_days": int(hysteresis_soft_streak_days),
+                "hard_streak_days": int(hysteresis_hard_streak_days),
+                "overall_tier": str(degradation_overall_tier),
+                "streaks": {k: int(v) for k, v in streaks.items()},
+                "checks": degradation_rows,
+            },
             "slots": slots,
             "series": series[-10:],
         }
@@ -2201,6 +6657,23 @@ class ReleaseOrchestrator:
         n = float(num)
         d = float(den)
         return float(n / d) if d > 0 else 0.0
+
+    @staticmethod
+    def _quantile(values: list[float], q: float) -> float | None:
+        clean = [float(x) for x in values if x is not None]
+        if not clean:
+            return None
+        qq = max(0.0, min(1.0, float(q)))
+        arr = sorted(clean)
+        if len(arr) == 1:
+            return float(arr[0])
+        pos = (len(arr) - 1) * qq
+        lo = int(math.floor(pos))
+        hi = int(math.ceil(pos))
+        if lo == hi:
+            return float(arr[lo])
+        frac = float(pos - lo)
+        return float(arr[lo] + (arr[hi] - arr[lo]) * frac)
 
     @staticmethod
     def _sqlite_table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -2213,6 +6686,744 @@ class ReleaseOrchestrator:
                 return cur.fetchone() is not None
         except Exception:
             return False
+
+    def _executed_plans_closed_summary(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        dstr: str,
+    ) -> dict[str, Any] | None:
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute("PRAGMA table_info(executed_plans)")
+                schema_rows = cur.fetchall() or []
+        except Exception:
+            return None
+
+        cols: list[str] = []
+        for row in schema_rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 2:
+                continue
+            col = str(row[1]).strip()
+            if col:
+                cols.append(col)
+        if not cols:
+            return None
+
+        where_clauses = ["date = ?"]
+        if "status" in cols:
+            where_clauses.append("(status = 'CLOSED' OR status IS NULL)")
+        if "open_date" in cols:
+            where_clauses.append("(open_date IS NULL OR open_date = '' OR substr(open_date, 1, 10) <= date)")
+
+        select_cols = ", ".join(f'"{c}"' for c in cols)
+        query = f"SELECT {select_cols} FROM executed_plans WHERE {' AND '.join(where_clauses)}"
+        try:
+            with closing(conn.cursor()) as cur:
+                cur.execute(query, (dstr,))
+                rows = cur.fetchall() or []
+        except Exception:
+            return None
+
+        pnl_idx = cols.index("pnl") if "pnl" in cols else -1
+        deduped_rows: list[tuple[Any, ...]] = []
+        seen: set[tuple[Any, ...]] = set()
+        dedup_pruned = 0
+        for raw_row in rows:
+            if not isinstance(raw_row, (list, tuple)):
+                continue
+            key_parts: list[Any] = []
+            for cell in raw_row:
+                if isinstance(cell, float):
+                    if math.isfinite(cell):
+                        key_parts.append(round(float(cell), 10))
+                    else:
+                        key_parts.append("non_finite_float")
+                elif isinstance(cell, (dict, list, tuple, set)):
+                    key_parts.append(self._canonical_json(cell))
+                else:
+                    key_parts.append(cell)
+            key = tuple(key_parts)
+            if key in seen:
+                dedup_pruned += 1
+                continue
+            seen.add(key)
+            deduped_rows.append(tuple(raw_row))
+
+        pnl_total = 0.0
+        if pnl_idx >= 0:
+            for row in deduped_rows:
+                pnl_total += self._safe_float(row[pnl_idx], 0.0)
+
+        return {
+            "count": int(len(deduped_rows)),
+            "pnl": float(pnl_total),
+            "raw_count": int(len(rows)),
+            "dedup_pruned": int(max(0, dedup_pruned)),
+        }
+
+    def _executed_plans_compaction_root(self) -> Path:
+        return self.output_dir / "artifacts" / "maintenance" / "executed_plans_compaction"
+
+    def _resolve_executed_plans_compaction_run_dir(self, run_id: str | None = None) -> Path | None:
+        root = self._executed_plans_compaction_root()
+        if not root.exists():
+            return None
+        if isinstance(run_id, str) and str(run_id).strip():
+            candidate = root / str(run_id).strip()
+            if candidate.exists() and candidate.is_dir():
+                return candidate
+            return None
+        run_dirs = [p for p in root.iterdir() if p.is_dir()]
+        if not run_dirs:
+            return None
+        run_dirs.sort(
+            key=lambda p: (str(p.name), float(p.stat().st_mtime) if p.exists() else 0.0),
+            reverse=True,
+        )
+        return run_dirs[0]
+
+    def _latest_executed_plans_restore_verify_snapshot(self) -> dict[str, Any]:
+        root = self._executed_plans_compaction_root()
+        if not root.exists():
+            return {"found": False, "reason": "compaction_root_missing", "root": str(root)}
+        run_dirs = [p for p in root.iterdir() if p.is_dir()]
+        run_dirs.sort(
+            key=lambda p: (str(p.name), float(p.stat().st_mtime) if p.exists() else 0.0),
+            reverse=True,
+        )
+        for run_dir in run_dirs:
+            report_path = run_dir / "restore_verify_report.json"
+            if not report_path.exists():
+                continue
+            try:
+                payload = json.loads(report_path.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                continue
+            checks = payload.get("checks", {}) if isinstance(payload.get("checks", {}), dict) else {}
+            metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics", {}), dict) else {}
+            rollback = payload.get("rollback", {}) if isinstance(payload.get("rollback", {}), dict) else {}
+            return {
+                "found": True,
+                "root": str(root),
+                "run_id": str(payload.get("run_id", run_dir.name)),
+                "run_dir": str(run_dir),
+                "path": str(report_path),
+                "status": str(payload.get("status", "unknown")),
+                "reason": str(payload.get("reason", "")),
+                "checked_at": str(payload.get("checked_at", "")),
+                "checks": checks,
+                "metrics": metrics,
+                "rollback": rollback,
+                "backup_rows": int(self._safe_float(metrics.get("backup_rows", 0), 0.0)),
+                "restore_delta_match": bool(checks.get("restore_delta_match", False)),
+            }
+        return {"found": False, "reason": "restore_verify_report_missing", "root": str(root)}
+
+    def verify_executed_plans_compaction_restore(
+        self,
+        *,
+        run_id: str | None = None,
+        keep_temp_db: bool = False,
+    ) -> dict[str, Any]:
+        now = datetime.now()
+        run_dir = self._resolve_executed_plans_compaction_run_dir(run_id=run_id)
+        selected_run_id = str(run_id or "")
+        out: dict[str, Any] = {
+            "run_id": selected_run_id,
+            "status": "ok",
+            "reason": "",
+            "checked_at": now.isoformat(),
+            "keep_temp_db": bool(keep_temp_db),
+            "run_dir": str(run_dir) if run_dir is not None else "",
+            "checks": {
+                "run_dir_found": False,
+                "compact_report_found": False,
+                "rollback_files_ok": False,
+                "backup_rows_ok": False,
+                "temp_copy_ok": False,
+                "restore_sql_executed": False,
+                "restore_delta_match": False,
+            },
+            "metrics": {
+                "backup_rows": 0,
+                "pre_restore_rows": 0,
+                "post_restore_rows": 0,
+                "expected_post_restore_rows": 0,
+                "restored_rows_delta": 0,
+                "restore_sql_lines": 0,
+            },
+            "rollback": {
+                "compact_report_path": "",
+                "backup_db_path": "",
+                "rollback_sql_path": "",
+            },
+            "paths": {},
+        }
+
+        if run_dir is None:
+            out["status"] = "skipped"
+            out["reason"] = "compaction_run_missing"
+            return out
+
+        out["checks"]["run_dir_found"] = True
+        out["run_dir"] = str(run_dir)
+
+        compact_report_path = run_dir / "report.json"
+        verify_json_path = run_dir / "restore_verify_report.json"
+        verify_md_path = run_dir / "restore_verify_report.md"
+        temp_db_path = run_dir / f"restore_verify_temp_{now.strftime('%Y%m%d_%H%M%S')}.sqlite"
+        out["paths"] = {
+            "json": str(verify_json_path),
+            "md": str(verify_md_path),
+            "temp_db_path": str(temp_db_path),
+        }
+        out["rollback"]["compact_report_path"] = str(compact_report_path)
+
+        compact_payload: dict[str, Any] = {}
+        if compact_report_path.exists():
+            try:
+                compact_payload = json.loads(compact_report_path.read_text(encoding="utf-8"))
+            except Exception:
+                compact_payload = {}
+        if isinstance(compact_payload, dict) and compact_payload:
+            out["checks"]["compact_report_found"] = True
+        else:
+            out["status"] = "error"
+            out["reason"] = "compact_report_missing"
+            write_json(verify_json_path, out)
+            write_markdown(
+                verify_md_path,
+                "\n".join(
+                    [
+                        "# Executed Plans Compaction Restore Verify",
+                        "",
+                        f"- run_id: `{out.get('run_id', '')}`",
+                        "- status: `error`",
+                        "- reason: `compact_report_missing`",
+                        f"- run_dir: `{run_dir}`",
+                    ]
+                )
+                + "\n",
+            )
+            return out
+
+        out["run_id"] = str(compact_payload.get("run_id", run_dir.name))
+        rollback = compact_payload.get("rollback", {}) if isinstance(compact_payload.get("rollback", {}), dict) else {}
+        backup_db_path = Path(str(rollback.get("backup_db_path", "")).strip() or str(run_dir / "deleted_rows_backup.sqlite"))
+        rollback_sql_path = Path(str(rollback.get("rollback_sql_path", "")).strip() or str(run_dir / "rollback_restore.sql"))
+        out["rollback"]["backup_db_path"] = str(backup_db_path)
+        out["rollback"]["rollback_sql_path"] = str(rollback_sql_path)
+
+        if bool(compact_payload.get("dry_run", False)):
+            out["status"] = "skipped"
+            out["reason"] = "compact_dry_run"
+        elif not bool(rollback.get("available", False)):
+            out["status"] = "skipped"
+            out["reason"] = "rollback_unavailable"
+        elif not backup_db_path.exists() or not rollback_sql_path.exists():
+            out["status"] = "error"
+            out["reason"] = "rollback_files_missing"
+        else:
+            out["checks"]["rollback_files_ok"] = True
+
+        if str(out.get("status", "ok")) not in {"ok", "unknown"}:
+            write_json(verify_json_path, out)
+            write_markdown(
+                verify_md_path,
+                "\n".join(
+                    [
+                        "# Executed Plans Compaction Restore Verify",
+                        "",
+                        f"- run_id: `{out.get('run_id', '')}`",
+                        f"- status: `{str(out.get('status', 'unknown'))}`",
+                        f"- reason: `{str(out.get('reason', ''))}`",
+                        f"- compact_report: `{compact_report_path}`",
+                        f"- backup_db: `{backup_db_path}`",
+                        f"- rollback_sql: `{rollback_sql_path}`",
+                    ]
+                )
+                + "\n",
+            )
+            return out
+
+        rollback_sql_text = ""
+        backup_rows = 0
+        try:
+            with closing(sqlite3.connect(backup_db_path)) as backup_conn:
+                if not self._sqlite_table_exists(backup_conn, "executed_plans_deleted"):
+                    out["status"] = "error"
+                    out["reason"] = "backup_table_missing"
+                else:
+                    with closing(backup_conn.cursor()) as cur:
+                        cur.execute(
+                            "SELECT COUNT(*) FROM executed_plans_deleted WHERE run_id = ?",
+                            (str(out["run_id"]),),
+                        )
+                        row = cur.fetchone()
+                    backup_rows = int(self._safe_float((row[0] if row else 0), 0.0))
+        except Exception as exc:
+            out["status"] = "error"
+            out["reason"] = f"backup_read_failed:{type(exc).__name__}:{exc}"
+
+        out["metrics"]["backup_rows"] = int(backup_rows)
+        if backup_rows > 0:
+            out["checks"]["backup_rows_ok"] = True
+        else:
+            out["status"] = "error"
+            if not str(out.get("reason", "")).strip():
+                out["reason"] = "backup_rows_empty"
+
+        try:
+            rollback_sql_text = rollback_sql_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            out["status"] = "error"
+            out["reason"] = f"rollback_sql_read_failed:{type(exc).__name__}:{exc}"
+            rollback_sql_text = ""
+        out["metrics"]["restore_sql_lines"] = int(len([ln for ln in rollback_sql_text.splitlines() if ln.strip()]))
+
+        if str(out.get("status", "ok")) == "ok":
+            temp_conn: sqlite3.Connection | None = None
+            try:
+                shutil.copy2(self._effective_sqlite_path(), temp_db_path)
+                out["checks"]["temp_copy_ok"] = True
+                temp_conn = sqlite3.connect(temp_db_path)
+                if not self._sqlite_table_exists(temp_conn, "executed_plans"):
+                    out["status"] = "error"
+                    out["reason"] = "temp_executed_plans_missing"
+                else:
+                    with closing(temp_conn.cursor()) as cur:
+                        cur.execute("SELECT COUNT(*) FROM executed_plans")
+                        before_row = cur.fetchone()
+                    pre_rows = int(self._safe_float((before_row[0] if before_row else 0), 0.0))
+                    out["metrics"]["pre_restore_rows"] = int(pre_rows)
+
+                    temp_conn.executescript(rollback_sql_text)
+                    out["checks"]["restore_sql_executed"] = True
+
+                    with closing(temp_conn.cursor()) as cur:
+                        cur.execute("SELECT COUNT(*) FROM executed_plans")
+                        after_row = cur.fetchone()
+                    post_rows = int(self._safe_float((after_row[0] if after_row else 0), 0.0))
+                    expected_post_rows = int(pre_rows + backup_rows)
+                    restore_delta = int(post_rows - pre_rows)
+                    out["metrics"]["post_restore_rows"] = int(post_rows)
+                    out["metrics"]["expected_post_restore_rows"] = int(expected_post_rows)
+                    out["metrics"]["restored_rows_delta"] = int(restore_delta)
+                    delta_match = bool(post_rows == expected_post_rows and restore_delta == backup_rows)
+                    out["checks"]["restore_delta_match"] = bool(delta_match)
+                    if not delta_match:
+                        out["status"] = "error"
+                        out["reason"] = "restore_delta_mismatch"
+            except Exception as exc:
+                out["status"] = "error"
+                if not str(out.get("reason", "")).strip():
+                    out["reason"] = f"restore_verify_failed:{type(exc).__name__}:{exc}"
+            finally:
+                if temp_conn is not None:
+                    try:
+                        temp_conn.close()
+                    except Exception:
+                        pass
+
+        if str(out.get("status", "")).strip() == "":
+            out["status"] = "ok"
+        if str(out.get("reason", "")).strip() == "":
+            out["reason"] = "ok"
+
+        if temp_db_path.exists() and (not keep_temp_db) and str(out.get("status", "")) == "ok":
+            try:
+                temp_db_path.unlink()
+            except Exception:
+                pass
+
+        write_json(verify_json_path, out)
+        metrics = out.get("metrics", {}) if isinstance(out.get("metrics", {}), dict) else {}
+        checks = out.get("checks", {}) if isinstance(out.get("checks", {}), dict) else {}
+        lines = [
+            "# Executed Plans Compaction Restore Verify",
+            "",
+            f"- run_id: `{out.get('run_id', '')}`",
+            f"- status: `{str(out.get('status', 'unknown'))}`",
+            f"- reason: `{str(out.get('reason', ''))}`",
+            f"- checked_at: `{str(out.get('checked_at', ''))}`",
+            f"- compact_report: `{str(out.get('rollback', {}).get('compact_report_path', '') if isinstance(out.get('rollback', {}), dict) else '')}`",
+            f"- backup_db: `{str(out.get('rollback', {}).get('backup_db_path', '') if isinstance(out.get('rollback', {}), dict) else '')}`",
+            f"- rollback_sql: `{str(out.get('rollback', {}).get('rollback_sql_path', '') if isinstance(out.get('rollback', {}), dict) else '')}`",
+            (
+                "- metrics(backup/pre/post/expected/delta): "
+                + f"`{int(metrics.get('backup_rows', 0))}` / "
+                + f"`{int(metrics.get('pre_restore_rows', 0))}` / "
+                + f"`{int(metrics.get('post_restore_rows', 0))}` / "
+                + f"`{int(metrics.get('expected_post_restore_rows', 0))}` / "
+                + f"`{int(metrics.get('restored_rows_delta', 0))}`"
+            ),
+            (
+                "- checks(run_dir/report/rollback_files/backup/temp/sql/delta): "
+                + f"`{bool(checks.get('run_dir_found', False))}` / "
+                + f"`{bool(checks.get('compact_report_found', False))}` / "
+                + f"`{bool(checks.get('rollback_files_ok', False))}` / "
+                + f"`{bool(checks.get('backup_rows_ok', False))}` / "
+                + f"`{bool(checks.get('temp_copy_ok', False))}` / "
+                + f"`{bool(checks.get('restore_sql_executed', False))}` / "
+                + f"`{bool(checks.get('restore_delta_match', False))}`"
+            ),
+            f"- temp_db_path: `{str(out.get('paths', {}).get('temp_db_path', '') if isinstance(out.get('paths', {}), dict) else '')}`",
+        ]
+        write_markdown(verify_md_path, "\n".join(lines) + "\n")
+        out["paths"] = {"json": str(verify_json_path), "md": str(verify_md_path), "temp_db_path": str(temp_db_path)}
+        return out
+
+    def compact_executed_plans_duplicates(
+        self,
+        *,
+        start: date,
+        end: date,
+        chunk_days: int = 30,
+        dry_run: bool = True,
+        max_delete_rows: int | None = None,
+    ) -> dict[str, Any]:
+        start_day = min(start, end)
+        end_day = max(start, end)
+        chunk_span = max(1, int(chunk_days))
+        delete_cap = None
+        if max_delete_rows is not None:
+            delete_cap = max(1, int(max_delete_rows))
+
+        db_path = self._effective_sqlite_path()
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = self.output_dir / "artifacts" / "maintenance" / "executed_plans_compaction" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        report_json = run_dir / "report.json"
+        report_md = run_dir / "report.md"
+        backup_db_path = run_dir / "deleted_rows_backup.sqlite"
+        rollback_sql_path = run_dir / "rollback_restore.sql"
+
+        out: dict[str, Any] = {
+            "run_id": run_id,
+            "status": "ok",
+            "dry_run": bool(dry_run),
+            "db_path": str(db_path),
+            "window": {"start": start_day.isoformat(), "end": end_day.isoformat()},
+            "chunk_days": int(chunk_span),
+            "max_delete_rows": int(delete_cap) if delete_cap is not None else None,
+            "chunks": [],
+            "metrics": {
+                "scanned_rows": 0,
+                "duplicate_rows_found": 0,
+                "duplicate_rows_selected": 0,
+                "deleted_rows": 0,
+                "chunk_count": 0,
+                "cap_reached": False,
+                "delete_ratio": 0.0,
+            },
+            "rollback": {
+                "available": False,
+                "backup_db_path": str(backup_db_path),
+                "rollback_sql_path": str(rollback_sql_path),
+            },
+        }
+
+        if not db_path.exists():
+            out["status"] = "skipped"
+            out["reason"] = "sqlite_missing"
+            write_json(report_json, out)
+            write_markdown(
+                report_md,
+                "\n".join(
+                    [
+                        "# Executed Plans Compaction Report",
+                        "",
+                        f"- run_id: `{run_id}`",
+                        "- status: `skipped`",
+                        "- reason: `sqlite_missing`",
+                        f"- db_path: `{db_path}`",
+                    ]
+                )
+                + "\n",
+            )
+            out["paths"] = {"json": str(report_json), "md": str(report_md)}
+            return out
+
+        main_conn: sqlite3.Connection | None = None
+        backup_conn: sqlite3.Connection | None = None
+        deleted_rows_total = 0
+        scanned_rows_total = 0
+        dup_found_total = 0
+        dup_selected_total = 0
+        cap_reached = False
+
+        try:
+            main_conn = sqlite3.connect(db_path)
+            if not self._sqlite_table_exists(main_conn, "executed_plans"):
+                out["status"] = "skipped"
+                out["reason"] = "executed_plans_missing"
+                write_json(report_json, out)
+                write_markdown(
+                    report_md,
+                    "\n".join(
+                        [
+                            "# Executed Plans Compaction Report",
+                            "",
+                            f"- run_id: `{run_id}`",
+                            "- status: `skipped`",
+                            "- reason: `executed_plans_missing`",
+                            f"- db_path: `{db_path}`",
+                        ]
+                    )
+                    + "\n",
+                )
+                out["paths"] = {"json": str(report_json), "md": str(report_md)}
+                return out
+
+            with closing(main_conn.cursor()) as cur:
+                cur.execute("PRAGMA table_info(executed_plans)")
+                schema_rows = cur.fetchall() or []
+
+            cols: list[str] = []
+            col_defs: list[tuple[str, str]] = []
+            for row in schema_rows:
+                if not isinstance(row, (tuple, list)) or len(row) < 3:
+                    continue
+                col_name = str(row[1]).strip()
+                if not col_name:
+                    continue
+                col_type = str(row[2]).strip() or "TEXT"
+                cols.append(col_name)
+                col_defs.append((col_name, col_type))
+            if "date" not in set(cols):
+                out["status"] = "error"
+                out["reason"] = "executed_plans_date_column_missing"
+                write_json(report_json, out)
+                write_markdown(
+                    report_md,
+                    "\n".join(
+                        [
+                            "# Executed Plans Compaction Report",
+                            "",
+                            f"- run_id: `{run_id}`",
+                            "- status: `error`",
+                            "- reason: `executed_plans_date_column_missing`",
+                            f"- db_path: `{db_path}`",
+                        ]
+                    )
+                    + "\n",
+                )
+                out["paths"] = {"json": str(report_json), "md": str(report_md)}
+                return out
+
+            if not dry_run:
+                backup_conn = sqlite3.connect(backup_db_path)
+                create_cols = ", ".join([f'"{name}" {ctype}' for name, ctype in col_defs])
+                create_sql = (
+                    "CREATE TABLE IF NOT EXISTS executed_plans_deleted ("
+                    "run_id TEXT NOT NULL, "
+                    "deleted_at TEXT NOT NULL, "
+                    "original_rowid INTEGER NOT NULL, "
+                    f"{create_cols}"
+                    ")"
+                )
+                with closing(backup_conn.cursor()) as cur:
+                    cur.execute(create_sql)
+                backup_conn.commit()
+
+            select_cols = ", ".join([f'"{c}"' for c in cols])
+            query = (
+                f"SELECT rowid, {select_cols} "
+                "FROM executed_plans "
+                "WHERE substr(date, 1, 10) >= ? AND substr(date, 1, 10) <= ? "
+                "ORDER BY date, rowid"
+            )
+            delete_sql = "DELETE FROM executed_plans WHERE rowid = ?"
+            insert_cols = ", ".join(['"run_id"', '"deleted_at"', '"original_rowid"'] + [f'"{c}"' for c in cols])
+            insert_placeholders = ", ".join(["?"] * (3 + len(cols)))
+            insert_sql = f"INSERT INTO executed_plans_deleted ({insert_cols}) VALUES ({insert_placeholders})"
+
+            cursor_day = start_day
+            chunks: list[dict[str, Any]] = []
+            while cursor_day <= end_day:
+                chunk_start = cursor_day
+                chunk_end = min(end_day, chunk_start + timedelta(days=chunk_span - 1))
+                with closing(main_conn.cursor()) as cur:
+                    cur.execute(query, (chunk_start.isoformat(), chunk_end.isoformat()))
+                    rows = cur.fetchall() or []
+
+                scanned = int(len(rows))
+                scanned_rows_total += scanned
+                seen: set[tuple[Any, ...]] = set()
+                selected_duplicates: list[tuple[int, tuple[Any, ...]]] = []
+                chunk_dup_found = 0
+                for raw in rows:
+                    if not isinstance(raw, (tuple, list)) or len(raw) < (1 + len(cols)):
+                        continue
+                    rowid = int(raw[0])
+                    row_vals = tuple(raw[1:])
+                    key_parts: list[Any] = []
+                    for cell in row_vals:
+                        if isinstance(cell, float):
+                            if math.isfinite(cell):
+                                key_parts.append(round(float(cell), 10))
+                            else:
+                                key_parts.append("non_finite_float")
+                        elif isinstance(cell, (dict, list, tuple, set)):
+                            key_parts.append(self._canonical_json(cell))
+                        else:
+                            key_parts.append(cell)
+                    key = tuple(key_parts)
+                    if key in seen:
+                        chunk_dup_found += 1
+                        selected_duplicates.append((rowid, row_vals))
+                    else:
+                        seen.add(key)
+
+                dup_found_total += int(chunk_dup_found)
+                chunk_selected = list(selected_duplicates)
+                capped_in_chunk = False
+                if delete_cap is not None:
+                    remaining = int(delete_cap) - int(dup_selected_total)
+                    if remaining <= 0:
+                        chunk_selected = []
+                        cap_reached = True
+                        capped_in_chunk = True
+                    elif len(chunk_selected) > remaining:
+                        chunk_selected = chunk_selected[:remaining]
+                        cap_reached = True
+                        capped_in_chunk = True
+
+                selected_count = int(len(chunk_selected))
+                dup_selected_total += selected_count
+                deleted_count = 0
+                if (not dry_run) and selected_count > 0:
+                    deleted_at = datetime.now().isoformat()
+                    backup_rows = [
+                        (run_id, deleted_at, int(rowid), *row_vals)
+                        for rowid, row_vals in chunk_selected
+                    ]
+                    if backup_conn is not None:
+                        with closing(backup_conn.cursor()) as cur:
+                            cur.executemany(insert_sql, backup_rows)
+                        backup_conn.commit()
+                    with closing(main_conn.cursor()) as cur:
+                        cur.executemany(delete_sql, [(int(rowid),) for rowid, _ in chunk_selected])
+                    main_conn.commit()
+                    deleted_count = selected_count
+                    deleted_rows_total += int(deleted_count)
+
+                chunks.append(
+                    {
+                        "start": chunk_start.isoformat(),
+                        "end": chunk_end.isoformat(),
+                        "rows_scanned": int(scanned),
+                        "rows_unique": int(max(0, scanned - chunk_dup_found)),
+                        "duplicates_found": int(chunk_dup_found),
+                        "duplicates_selected": int(selected_count),
+                        "deleted_rows": int(deleted_count),
+                        "cap_reached": bool(capped_in_chunk),
+                    }
+                )
+
+                if cap_reached and delete_cap is not None and int(dup_selected_total) >= int(delete_cap):
+                    break
+                cursor_day = chunk_end + timedelta(days=1)
+
+            if (not dry_run) and deleted_rows_total > 0:
+                escaped_backup = str(backup_db_path).replace("'", "''")
+                escaped_run_id = str(run_id).replace("'", "''")
+                restore_cols = ", ".join([f'"{c}"' for c in cols])
+                rollback_lines = [
+                    "-- Executed plans duplicate-compaction rollback script",
+                    f"-- run_id: {run_id}",
+                    f"ATTACH DATABASE '{escaped_backup}' AS backup_db;",
+                    (
+                        "INSERT INTO main.executed_plans ("
+                        + restore_cols
+                        + ") SELECT "
+                        + restore_cols
+                        + " FROM backup_db.executed_plans_deleted "
+                        + f"WHERE run_id = '{escaped_run_id}' ORDER BY original_rowid;"
+                    ),
+                    "DETACH DATABASE backup_db;",
+                ]
+                rollback_sql_path.write_text("\n".join(rollback_lines) + "\n", encoding="utf-8")
+
+            delete_ratio = self._ratio(
+                deleted_rows_total if not dry_run else dup_selected_total,
+                scanned_rows_total,
+            )
+            out["chunks"] = chunks
+            out["metrics"] = {
+                "scanned_rows": int(scanned_rows_total),
+                "duplicate_rows_found": int(dup_found_total),
+                "duplicate_rows_selected": int(dup_selected_total),
+                "deleted_rows": int(deleted_rows_total),
+                "chunk_count": int(len(chunks)),
+                "cap_reached": bool(cap_reached),
+                "delete_ratio": float(delete_ratio),
+            }
+            out["rollback"] = {
+                "available": bool((not dry_run) and deleted_rows_total > 0),
+                "backup_db_path": str(backup_db_path),
+                "rollback_sql_path": str(rollback_sql_path),
+            }
+        except Exception as exc:
+            out["status"] = "error"
+            out["reason"] = f"{type(exc).__name__}:{exc}"
+        finally:
+            if backup_conn is not None:
+                try:
+                    backup_conn.close()
+                except Exception:
+                    pass
+            if main_conn is not None:
+                try:
+                    main_conn.close()
+                except Exception:
+                    pass
+
+        write_json(report_json, out)
+        metrics = out.get("metrics", {}) if isinstance(out.get("metrics", {}), dict) else {}
+        rollback = out.get("rollback", {}) if isinstance(out.get("rollback", {}), dict) else {}
+        lines = [
+            "# Executed Plans Compaction Report",
+            "",
+            f"- run_id: `{run_id}`",
+            f"- status: `{str(out.get('status', 'unknown'))}`",
+            f"- dry_run: `{bool(dry_run)}`",
+            f"- db_path: `{db_path}`",
+            f"- window: `{start_day.isoformat()}` ~ `{end_day.isoformat()}` (chunk_days=`{int(chunk_span)}`)",
+            (
+                "- metrics(scanned/found/selected/deleted/chunks/delete_ratio): "
+                + f"`{int(metrics.get('scanned_rows', 0))}` / "
+                + f"`{int(metrics.get('duplicate_rows_found', 0))}` / "
+                + f"`{int(metrics.get('duplicate_rows_selected', 0))}` / "
+                + f"`{int(metrics.get('deleted_rows', 0))}` / "
+                + f"`{int(metrics.get('chunk_count', 0))}` / "
+                + f"`{float(metrics.get('delete_ratio', 0.0)):.2%}`"
+            ),
+            f"- cap_reached: `{bool(metrics.get('cap_reached', False))}`",
+            f"- rollback_available: `{bool(rollback.get('available', False))}`",
+            f"- backup_db_path: `{str(rollback.get('backup_db_path', ''))}`",
+            f"- rollback_sql_path: `{str(rollback.get('rollback_sql_path', ''))}`",
+            "",
+            "## Chunk Summary",
+        ]
+        for chunk in out.get("chunks", []):
+            if not isinstance(chunk, dict):
+                continue
+            lines.append(
+                "- "
+                + f"{chunk.get('start')}~{chunk.get('end')}: "
+                + f"scanned=`{int(chunk.get('rows_scanned', 0))}` "
+                + f"dup_found=`{int(chunk.get('duplicates_found', 0))}` "
+                + f"selected=`{int(chunk.get('duplicates_selected', 0))}` "
+                + f"deleted=`{int(chunk.get('deleted_rows', 0))}` "
+                + f"cap_reached=`{bool(chunk.get('cap_reached', False))}`"
+            )
+        write_markdown(report_md, "\n".join(lines) + "\n")
+        out["paths"] = {"json": str(report_json), "md": str(report_md)}
+        return out
 
     def _csv_plan_summary(self, *, day: str) -> dict[str, Any]:
         path = self.output_dir / "daily" / f"{day}_positions.csv"
@@ -3082,6 +8293,28 @@ class ReleaseOrchestrator:
         closed_count_gap_ratio_max = self._safe_float(val.get("ops_reconcile_closed_count_gap_ratio_max", 0.10), 0.10)
         closed_pnl_gap_abs_max = abs(self._safe_float(val.get("ops_reconcile_closed_pnl_gap_abs_max", 0.001), 0.001))
         open_gap_ratio_max = self._safe_float(val.get("ops_reconcile_open_gap_ratio_max", 0.25), 0.25)
+        executed_dedup_monitor_enabled = bool(val.get("ops_reconcile_executed_dedup_monitor_enabled", True))
+        executed_dedup_gate_hard_fail = bool(val.get("ops_reconcile_executed_dedup_gate_hard_fail", False))
+        executed_dedup_pruned_ratio_max = self._safe_float(
+            val.get("ops_reconcile_executed_dedup_pruned_ratio_max", 0.35),
+            0.35,
+        )
+        executed_dedup_days_ratio_max = self._safe_float(
+            val.get("ops_reconcile_executed_dedup_days_ratio_max", 0.50),
+            0.50,
+        )
+        executed_restore_verify_enabled = bool(val.get("ops_reconcile_executed_dedup_restore_verify_enabled", True))
+        executed_restore_verify_hard_fail = bool(
+            val.get("ops_reconcile_executed_dedup_restore_verify_hard_fail", False)
+        )
+        executed_restore_verify_max_age_days = max(
+            1,
+            int(val.get("ops_reconcile_executed_dedup_restore_verify_max_age_days", 14)),
+        )
+        executed_restore_verify_min_backup_rows = max(
+            1,
+            int(val.get("ops_reconcile_executed_dedup_restore_verify_min_backup_rows", 1)),
+        )
         broker_gap_ratio_max = self._safe_float(val.get("ops_reconcile_broker_gap_ratio_max", 0.10), 0.10)
         broker_pnl_gap_abs_max = abs(
             self._safe_float(val.get("ops_reconcile_broker_pnl_gap_abs_max", closed_pnl_gap_abs_max), closed_pnl_gap_abs_max)
@@ -3197,6 +8430,9 @@ class ReleaseOrchestrator:
         total_closed_count_gap = 0.0
         total_closed_pnl_gap = 0.0
         total_open_gap = 0.0
+        executed_closed_raw_rows_total = 0
+        executed_closed_dedup_pruned_total = 0
+        executed_closed_dedup_days = 0
         broker_expected_days = 0
         broker_missing_days = 0
         broker_samples = 0
@@ -3270,6 +8506,8 @@ class ReleaseOrchestrator:
             plan_db_count: int | None = None
             closed_db_count: int | None = None
             closed_db_pnl: float | None = None
+            closed_db_raw_count: int | None = None
+            closed_db_dedup_pruned: int | None = None
             day_missing = False
             day_alerts: list[str] = []
             plan_gap_breached = False
@@ -3297,22 +8535,29 @@ class ReleaseOrchestrator:
 
             if conn is not None and has_executed_plans:
                 try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            "SELECT COUNT(*), COALESCE(SUM(pnl), 0.0) FROM executed_plans "
-                            "WHERE date = ? AND (status = 'CLOSED' OR status IS NULL)",
-                            (dstr,),
+                    closed_summary = self._executed_plans_closed_summary(conn=conn, dstr=dstr)
+                    if isinstance(closed_summary, dict):
+                        closed_db_count = int(self._safe_float(closed_summary.get("count", 0), 0.0))
+                        closed_db_pnl = self._safe_float(closed_summary.get("pnl", 0.0), 0.0)
+                        closed_db_raw_count = int(self._safe_float(closed_summary.get("raw_count", 0), 0.0))
+                        closed_db_dedup_pruned = int(
+                            self._safe_float(closed_summary.get("dedup_pruned", 0), 0.0)
                         )
-                        row = cur.fetchone()
-                        closed_db_count = int(row[0] if row else 0)
-                        closed_db_pnl = self._safe_float(row[1] if row else 0.0, 0.0)
+                        executed_closed_raw_rows_total += int(max(0, closed_db_raw_count))
+                        executed_closed_dedup_pruned_total += int(max(0, closed_db_dedup_pruned))
+                        if int(max(0, closed_db_dedup_pruned)) > 0:
+                            executed_closed_dedup_days += 1
                 except Exception:
                     closed_db_count = None
                     closed_db_pnl = None
+                    closed_db_raw_count = None
+                    closed_db_dedup_pruned = None
             if closed_db_count is None:
                 if manifest_closed_count <= 0 and abs(manifest_closed_pnl) <= 1e-12:
                     closed_db_count = 0
                     closed_db_pnl = 0.0
+                    closed_db_raw_count = 0
+                    closed_db_dedup_pruned = 0
                 else:
                     day_missing = True
                     day_alerts.append("executed_plans_missing")
@@ -3383,7 +8628,12 @@ class ReleaseOrchestrator:
                     plan_gap_breached = True
                     day_alerts.append("plan_count_gap_high")
                 if bool(csv_summary.get("found", False)):
-                    csv_count = int(self._safe_float(csv_summary.get("rows", 0), 0.0))
+                    csv_count = int(
+                        self._safe_float(
+                            csv_summary.get("active_rows", csv_summary.get("rows", 0)),
+                            0.0,
+                        )
+                    )
                     csv_db_gap = self._ratio(abs(csv_count - plan_db_count), max(1, plan_db_count))
                     if csv_db_gap > plan_gap_ratio_max:
                         plan_gap_breached = True
@@ -3673,10 +8923,15 @@ class ReleaseOrchestrator:
                     "csv": {
                         "found": bool(csv_summary.get("found", False)),
                         "rows": int(self._safe_float(csv_summary.get("rows", 0), 0.0)),
+                        "active_rows": int(self._safe_float(csv_summary.get("active_rows", 0), 0.0)),
                     },
                     "db": {
                         "latest_positions_rows": int(plan_db_count) if plan_db_count is not None else None,
                         "executed_closed_rows": int(closed_db_count) if closed_db_count is not None else None,
+                        "executed_closed_rows_raw": int(closed_db_raw_count) if closed_db_raw_count is not None else None,
+                        "executed_closed_dedup_pruned_rows": (
+                            int(closed_db_dedup_pruned) if closed_db_dedup_pruned is not None else None
+                        ),
                         "executed_closed_pnl": float(closed_db_pnl) if closed_db_pnl is not None else None,
                     },
                     "gaps": {
@@ -3767,6 +9022,8 @@ class ReleaseOrchestrator:
         avg_closed_count_gap_ratio = self._ratio(total_closed_count_gap, samples)
         avg_closed_pnl_gap_abs = self._ratio(total_closed_pnl_gap, samples)
         avg_open_gap_ratio = self._ratio(total_open_gap, open_gap_samples) if open_gap_samples > 0 else 0.0
+        executed_dedup_pruned_ratio = self._ratio(executed_closed_dedup_pruned_total, executed_closed_raw_rows_total)
+        executed_dedup_days_ratio = self._ratio(executed_closed_dedup_days, samples)
         broker_missing_ratio = self._ratio(broker_missing_days, broker_expected_days) if broker_expected_days > 0 else 0.0
         broker_count_breach_ratio = self._ratio(broker_count_breach_days, broker_samples) if broker_samples > 0 else 0.0
         broker_pnl_breach_ratio = self._ratio(broker_pnl_breach_days, broker_samples) if broker_samples > 0 else 0.0
@@ -3844,6 +9101,40 @@ class ReleaseOrchestrator:
         )
         avg_broker_count_gap_ratio = self._ratio(total_broker_count_gap, broker_samples) if broker_samples > 0 else 0.0
         avg_broker_pnl_gap_abs = self._ratio(total_broker_pnl_gap, broker_samples) if broker_samples > 0 else 0.0
+        executed_dedup_breached = bool(
+            executed_dedup_monitor_enabled
+            and (
+                executed_dedup_pruned_ratio > executed_dedup_pruned_ratio_max
+                or executed_dedup_days_ratio > executed_dedup_days_ratio_max
+            )
+        )
+        restore_verify_snapshot = self._latest_executed_plans_restore_verify_snapshot()
+        restore_verify_found = bool(restore_verify_snapshot.get("found", False))
+        restore_verify_status = str(restore_verify_snapshot.get("status", "missing"))
+        restore_verify_checked_at = self._parse_iso_datetime(restore_verify_snapshot.get("checked_at"))
+        restore_verify_age_days = None
+        if restore_verify_checked_at is not None:
+            restore_verify_age_days = max(0.0, (datetime.now() - restore_verify_checked_at).total_seconds() / 86400.0)
+        restore_verify_checks = (
+            restore_verify_snapshot.get("checks", {})
+            if isinstance(restore_verify_snapshot.get("checks", {}), dict)
+            else {}
+        )
+        restore_verify_backup_rows = int(self._safe_float(restore_verify_snapshot.get("backup_rows", 0), 0.0))
+        restore_verify_delta_match = bool(restore_verify_checks.get("restore_delta_match", False))
+        restore_verify_required = bool(executed_restore_verify_enabled and executed_dedup_breached)
+        restore_verify_ok_raw = True
+        if restore_verify_required:
+            restore_verify_ok_raw = bool(
+                restore_verify_found
+                and str(restore_verify_status).lower() == "ok"
+                and restore_verify_delta_match
+                and restore_verify_backup_rows >= executed_restore_verify_min_backup_rows
+                and (
+                    restore_verify_age_days is not None
+                    and float(restore_verify_age_days) <= float(executed_restore_verify_max_age_days)
+                )
+            )
 
         checks = {
             "missing_ratio_ok": True,
@@ -3851,6 +9142,8 @@ class ReleaseOrchestrator:
             "closed_count_gap_ok": True,
             "closed_pnl_gap_ok": True,
             "open_count_gap_ok": True,
+            "executed_dedup_drift_ok": True,
+            "executed_dedup_restore_verify_ok": True,
             "broker_missing_ratio_ok": True,
             "broker_count_gap_ok": True,
             "broker_pnl_gap_ok": True,
@@ -3871,6 +9164,13 @@ class ReleaseOrchestrator:
             checks["closed_pnl_gap_ok"] = bool(closed_pnl_gap_breach_ratio <= closed_count_gap_ratio_max)
             if open_gap_samples > 0:
                 checks["open_count_gap_ok"] = bool(open_gap_breach_ratio <= open_gap_ratio_max)
+            if executed_dedup_monitor_enabled:
+                checks["executed_dedup_drift_ok"] = bool(
+                    (not executed_dedup_breached) if executed_dedup_gate_hard_fail else True
+                )
+                checks["executed_dedup_restore_verify_ok"] = bool(
+                    restore_verify_ok_raw if executed_restore_verify_hard_fail else True
+                )
             if broker_monitor_enabled:
                 checks["broker_missing_ratio_ok"] = bool(broker_missing_ratio <= broker_missing_ratio_max)
                 if broker_samples > 0:
@@ -3922,6 +9222,11 @@ class ReleaseOrchestrator:
                 alerts.append("reconcile_closed_pnl_gap_high")
             if not checks["open_count_gap_ok"]:
                 alerts.append("reconcile_open_count_gap_high")
+            if executed_dedup_monitor_enabled:
+                if executed_dedup_breached:
+                    alerts.append("reconcile_executed_dedup_drift")
+                if restore_verify_required and (not restore_verify_ok_raw):
+                    alerts.append("reconcile_executed_dedup_restore_unverified")
             if not checks["broker_missing_ratio_ok"]:
                 alerts.append("reconcile_broker_missing_ratio_high")
             if not checks["broker_count_gap_ok"]:
@@ -3986,6 +9291,22 @@ class ReleaseOrchestrator:
                 "avg_closed_pnl_gap_abs": avg_closed_pnl_gap_abs,
                 "avg_open_gap_ratio": avg_open_gap_ratio,
                 "open_gap_samples": open_gap_samples,
+                "executed_closed_raw_rows_total": int(executed_closed_raw_rows_total),
+                "executed_closed_dedup_pruned_total": int(executed_closed_dedup_pruned_total),
+                "executed_closed_dedup_days": int(executed_closed_dedup_days),
+                "executed_closed_dedup_pruned_ratio": float(executed_dedup_pruned_ratio),
+                "executed_closed_dedup_days_ratio": float(executed_dedup_days_ratio),
+                "executed_dedup_breached": bool(executed_dedup_breached),
+                "executed_dedup_restore_verify_required": bool(restore_verify_required),
+                "executed_dedup_restore_verify_found": bool(restore_verify_found),
+                "executed_dedup_restore_verify_status": str(restore_verify_status),
+                "executed_dedup_restore_verify_reason": str(restore_verify_snapshot.get("reason", "")),
+                "executed_dedup_restore_verify_age_days": (
+                    float(restore_verify_age_days) if restore_verify_age_days is not None else None
+                ),
+                "executed_dedup_restore_verify_backup_rows": int(restore_verify_backup_rows),
+                "executed_dedup_restore_verify_delta_match": bool(restore_verify_delta_match),
+                "executed_dedup_restore_verify_passed": bool(restore_verify_ok_raw),
                 "broker_monitor_enabled": bool(broker_monitor_enabled),
                 "broker_expected_days": broker_expected_days,
                 "broker_missing_days": broker_missing_days,
@@ -4067,6 +9388,20 @@ class ReleaseOrchestrator:
                 "ops_reconcile_closed_count_gap_ratio_max": closed_count_gap_ratio_max,
                 "ops_reconcile_closed_pnl_gap_abs_max": closed_pnl_gap_abs_max,
                 "ops_reconcile_open_gap_ratio_max": open_gap_ratio_max,
+                "ops_reconcile_executed_dedup_monitor_enabled": bool(executed_dedup_monitor_enabled),
+                "ops_reconcile_executed_dedup_gate_hard_fail": bool(executed_dedup_gate_hard_fail),
+                "ops_reconcile_executed_dedup_pruned_ratio_max": float(executed_dedup_pruned_ratio_max),
+                "ops_reconcile_executed_dedup_days_ratio_max": float(executed_dedup_days_ratio_max),
+                "ops_reconcile_executed_dedup_restore_verify_enabled": bool(executed_restore_verify_enabled),
+                "ops_reconcile_executed_dedup_restore_verify_hard_fail": bool(
+                    executed_restore_verify_hard_fail
+                ),
+                "ops_reconcile_executed_dedup_restore_verify_max_age_days": int(
+                    executed_restore_verify_max_age_days
+                ),
+                "ops_reconcile_executed_dedup_restore_verify_min_backup_rows": int(
+                    executed_restore_verify_min_backup_rows
+                ),
                 "ops_reconcile_broker_gap_ratio_max": broker_gap_ratio_max,
                 "ops_reconcile_broker_pnl_gap_abs_max": broker_pnl_gap_abs_max,
                 "ops_reconcile_broker_missing_ratio_max": broker_missing_ratio_max,
@@ -4102,6 +9437,17 @@ class ReleaseOrchestrator:
             "checks": checks,
             "alerts": alerts,
             "artifacts": {
+                "executed_dedup_restore_verify": {
+                    "found": bool(restore_verify_found),
+                    "path": str(restore_verify_snapshot.get("path", "")),
+                    "run_id": str(restore_verify_snapshot.get("run_id", "")),
+                    "run_dir": str(restore_verify_snapshot.get("run_dir", "")),
+                    "status": str(restore_verify_status),
+                    "reason": str(restore_verify_snapshot.get("reason", "")),
+                    "checked_at": str(restore_verify_snapshot.get("checked_at", "")),
+                    "required": bool(restore_verify_required),
+                    "passed": bool(restore_verify_ok_raw),
+                },
                 "row_diff": {
                     "written": bool(row_diff_artifact.get("written", False)),
                     "json": str(row_diff_artifact.get("json", "")),
@@ -4172,6 +9518,236 @@ class ReleaseOrchestrator:
         out.sort(key=lambda x: str(x.get("date", "")), reverse=True)
         return out
 
+    def _latest_cadence_non_apply_lift_event(self, *, as_of: date, lookback_days: int) -> dict[str, Any]:
+        review_dir = self.output_dir / "review"
+        max_days = max(1, int(lookback_days))
+        for offset in range(1, max_days + 1):
+            day = as_of - timedelta(days=offset)
+            snapshot_path = review_dir / f"{day.isoformat()}_release_decision_snapshot.json"
+            if not snapshot_path.exists():
+                continue
+            payload = self.load_json_safely(snapshot_path)
+            if not isinstance(payload, dict):
+                continue
+            rollback_payload = (
+                payload.get("rollback_recommendation", {})
+                if isinstance(payload.get("rollback_recommendation", {}), dict)
+                else {}
+            )
+            lift_payload = (
+                rollback_payload.get("cadence_non_apply_lift", {})
+                if isinstance(rollback_payload.get("cadence_non_apply_lift", {}), dict)
+                else {}
+            )
+            applied = bool(lift_payload.get("applied", False))
+            applied_level = str(
+                lift_payload.get(
+                    "applied_level",
+                    lift_payload.get("requested_level", rollback_payload.get("level", "none")),
+                )
+            ).strip().lower()
+            if not applied:
+                reason_codes = (
+                    rollback_payload.get("reason_codes", [])
+                    if isinstance(rollback_payload.get("reason_codes", []), list)
+                    else []
+                )
+                reason_set = {str(x).strip() for x in reason_codes if str(x).strip()}
+                if "guard_loop_cadence_non_apply_lift_hard" in reason_set:
+                    applied = True
+                    applied_level = "hard"
+                elif "guard_loop_cadence_non_apply_lift_soft" in reason_set:
+                    applied = True
+                    applied_level = "soft"
+            if not applied:
+                continue
+            if applied_level not in {"soft", "hard"}:
+                applied_level = "none"
+            return {
+                "found": True,
+                "date": day.isoformat(),
+                "level": str(applied_level),
+                "path": str(snapshot_path),
+                "decision_id": str(payload.get("decision_id", "")),
+            }
+        return {"found": False, "date": "", "level": "none", "path": "", "decision_id": ""}
+
+    def _cadence_non_apply_rollback_lift_policy(
+        self,
+        *,
+        as_of: date,
+        checks: dict[str, Any],
+        guard_loop_cadence_non_apply: dict[str, Any],
+        base_level: str,
+    ) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(val.get("ops_guard_loop_cadence_non_apply_rollback_lift_enabled", True), True)
+        cooldown_days = max(
+            0,
+            int(self._safe_float(val.get("ops_guard_loop_cadence_non_apply_rollback_lift_cooldown_days", 2), 2)),
+        )
+        lookback_days = max(
+            1,
+            int(self._safe_float(val.get("ops_guard_loop_cadence_non_apply_rollback_lift_lookback_days", 30), 30)),
+        )
+        allow_upgrade_during_cooldown = self._safe_bool(
+            val.get("ops_guard_loop_cadence_non_apply_rollback_lift_allow_upgrade_during_cooldown", True),
+            True,
+        )
+        heavy_force_hard = self._safe_bool(
+            val.get("ops_guard_loop_cadence_non_apply_rollback_lift_force_heavy_hard", True),
+            True,
+        )
+        metrics = (
+            guard_loop_cadence_non_apply.get("metrics", {})
+            if isinstance(guard_loop_cadence_non_apply.get("metrics", {}), dict)
+            else {}
+        )
+        thresholds = (
+            guard_loop_cadence_non_apply.get("thresholds", {})
+            if isinstance(guard_loop_cadence_non_apply.get("thresholds", {}), dict)
+            else {}
+        )
+        cadence_alerts = (
+            guard_loop_cadence_non_apply.get("alerts", [])
+            if isinstance(guard_loop_cadence_non_apply.get("alerts", []), list)
+            else []
+        )
+        light_threshold_default = max(
+            1,
+            int(
+                self._safe_float(
+                    thresholds.get("ops_guard_loop_cadence_non_apply_light_streak_threshold", 2),
+                    2,
+                )
+            ),
+        )
+        heavy_threshold_default = max(
+            int(light_threshold_default),
+            int(
+                self._safe_float(
+                    thresholds.get("ops_guard_loop_cadence_non_apply_heavy_streak_threshold", 4),
+                    4,
+                )
+            ),
+        )
+        light_threshold = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_cadence_non_apply_rollback_lift_light_streak_min", light_threshold_default),
+                    light_threshold_default,
+                )
+            ),
+        )
+        heavy_threshold = max(
+            int(light_threshold),
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_cadence_non_apply_rollback_lift_heavy_streak_min", heavy_threshold_default),
+                    heavy_threshold_default,
+                )
+            ),
+        )
+        cadence_check_failed = not bool(checks.get("guard_loop_cadence_non_apply_ok", True))
+        non_apply = bool(metrics.get("non_apply", False))
+        due_light = bool(metrics.get("due_light", False))
+        due_heavy = bool(metrics.get("due_heavy", False))
+        streak_windows = int(self._safe_float(metrics.get("streak_windows", 0), 0))
+        active = bool(enabled and cadence_check_failed and non_apply)
+
+        requested_level = "none"
+        if due_heavy or streak_windows >= int(heavy_threshold):
+            requested_level = "hard" if heavy_force_hard else "soft"
+        elif due_light or streak_windows >= int(light_threshold):
+            requested_level = "soft"
+
+        base_level_txt = str(base_level or "").strip().lower() or "none"
+        if base_level_txt not in {"none", "soft", "hard"}:
+            base_level_txt = "none"
+        requested_rank = self._rollback_level_rank(requested_level)
+        base_rank = self._rollback_level_rank(base_level_txt)
+        applied = False
+        blocked_by_cooldown = False
+        reason = "disabled"
+        reason_code = ""
+        applied_level = str(base_level_txt)
+
+        last_lift_event = self._latest_cadence_non_apply_lift_event(as_of=as_of, lookback_days=lookback_days)
+        last_lift_date: date | None = None
+        if bool(last_lift_event.get("found", False)):
+            try:
+                last_lift_date = date.fromisoformat(str(last_lift_event.get("date", "")).strip())
+            except Exception:
+                last_lift_date = None
+        days_since_last_lift: int | None = None
+        cooldown_remaining_days = 0
+        cooldown_active = False
+        if cooldown_days > 0 and last_lift_date is not None:
+            days_since_last_lift = max(0, (as_of - last_lift_date).days)
+            cooldown_remaining_days = max(0, int(cooldown_days) - int(days_since_last_lift))
+            cooldown_active = bool(cooldown_remaining_days > 0)
+
+        if not enabled:
+            reason = "disabled"
+        elif not active:
+            reason = "cadence_not_active"
+        elif requested_rank <= 0:
+            reason = "below_lift_threshold"
+        elif requested_rank <= base_rank:
+            reason = "base_level_already_high"
+        else:
+            allow_due_to_upgrade = False
+            if cooldown_active:
+                last_rank = self._rollback_level_rank(last_lift_event.get("level", "none"))
+                allow_due_to_upgrade = bool(
+                    allow_upgrade_during_cooldown and requested_rank > int(last_rank)
+                )
+            if cooldown_active and not allow_due_to_upgrade:
+                blocked_by_cooldown = True
+                reason = "cooldown_active"
+                reason_code = "guard_loop_cadence_non_apply_lift_cooldown"
+            else:
+                applied = True
+                applied_level = str(requested_level)
+                reason = "applied"
+                if requested_level == "hard":
+                    reason_code = "guard_loop_cadence_non_apply_lift_hard"
+                elif requested_level == "soft":
+                    reason_code = "guard_loop_cadence_non_apply_lift_soft"
+
+        return {
+            "enabled": bool(enabled),
+            "active": bool(active),
+            "base_level": str(base_level_txt),
+            "requested_level": str(requested_level),
+            "applied_level": str(applied_level),
+            "applied": bool(applied),
+            "blocked_by_cooldown": bool(blocked_by_cooldown),
+            "reason": str(reason),
+            "reason_code": str(reason_code),
+            "streak_windows": int(streak_windows),
+            "due_light": bool(due_light),
+            "due_heavy": bool(due_heavy),
+            "cooldown_days": int(cooldown_days),
+            "cooldown_active": bool(cooldown_active),
+            "cooldown_remaining_days": int(cooldown_remaining_days),
+            "days_since_last_lift": int(days_since_last_lift) if days_since_last_lift is not None else None,
+            "last_lift_level": str(last_lift_event.get("level", "none")),
+            "last_lift_date": str(last_lift_event.get("date", "")),
+            "last_lift_path": str(last_lift_event.get("path", "")),
+            "last_lift_decision_id": str(last_lift_event.get("decision_id", "")),
+            "allow_upgrade_during_cooldown": bool(allow_upgrade_during_cooldown),
+            "alerts": list(cadence_alerts[:10]),
+            "thresholds": {
+                "light_streak_min": int(light_threshold),
+                "heavy_streak_min": int(heavy_threshold),
+                "lookback_days": int(lookback_days),
+                "cooldown_days": int(cooldown_days),
+                "force_heavy_hard": bool(heavy_force_hard),
+            },
+        }
+
     def _rollback_recommendation(
         self,
         *,
@@ -4183,16 +9759,38 @@ class ReleaseOrchestrator:
         mode_drift: dict[str, Any],
         style_drift: dict[str, Any],
         reconcile_drift: dict[str, Any],
+        degradation_guardrail_threshold_drift: dict[str, Any],
+        compaction_restore_trend: dict[str, Any],
+        guard_loop_frontend_snapshot_trend: dict[str, Any],
+        guard_loop_cadence_non_apply: dict[str, Any],
+        guard_loop_cadence_non_apply_lift_trend: dict[str, Any],
     ) -> dict[str, Any]:
         score = 0
         reason_codes: list[str] = []
+        backtest_snapshot_ok = bool(checks.get("backtest_snapshot_ok", True))
+        quality_snapshot_ok = bool(checks.get("quality_snapshot_ok", True))
+
+        if not quality_snapshot_ok:
+            score += 1
+            reason_codes.append("quality_snapshot_missing")
+        if not backtest_snapshot_ok:
+            score += 1
+            reason_codes.append("backtest_snapshot_missing")
 
         if not bool(checks.get("risk_violations_ok", True)):
-            score += 4
-            reason_codes.append("risk_violations")
+            if backtest_snapshot_ok:
+                score += 4
+                reason_codes.append("risk_violations")
+            else:
+                score += 1
+                reason_codes.append("risk_violations_unavailable")
         if not bool(checks.get("max_drawdown_ok", True)):
-            score += 3
-            reason_codes.append("max_drawdown")
+            if backtest_snapshot_ok:
+                score += 3
+                reason_codes.append("max_drawdown")
+            else:
+                score += 1
+                reason_codes.append("max_drawdown_unavailable")
         if not bool(checks.get("stable_replay_ok", True)):
             score += 2
             reason_codes.append("stable_replay")
@@ -4214,6 +9812,63 @@ class ReleaseOrchestrator:
         if not bool(checks.get("reconcile_drift_ok", True)):
             score += 2
             reason_codes.append("reconcile_drift")
+        if not bool(checks.get("snapshot_chain_ok", True)):
+            score += 2
+            reason_codes.append("snapshot_chain")
+        if not bool(checks.get("degradation_guardrail_dashboard_ok", True)):
+            score += 1
+            reason_codes.append("degradation_guardrail")
+        if not bool(checks.get("degradation_guardrail_threshold_drift_ok", True)):
+            score += 1
+            reason_codes.append("degradation_guardrail_threshold_drift")
+        if not bool(checks.get("dependency_audit_artifact_trend_ok", True)):
+            score += 1
+            reason_codes.append("dependency_audit_artifact_trend")
+        if not bool(checks.get("compaction_restore_trend_ok", True)):
+            score += 1
+            reason_codes.append("compaction_restore_trend")
+        if not bool(checks.get("guard_loop_frontend_snapshot_trend_ok", True)):
+            score += 1
+            reason_codes.append("guard_loop_frontend_snapshot_trend")
+        guard_loop_frontend_snapshot_metrics = (
+            guard_loop_frontend_snapshot_trend.get("metrics", {})
+            if isinstance(guard_loop_frontend_snapshot_trend.get("metrics", {}), dict)
+            else {}
+        )
+        frontend_replay_missed_runs = int(
+            self._safe_float(guard_loop_frontend_snapshot_metrics.get("replay_missed_runs", 0), 0)
+        )
+        frontend_replay_reason_missing_runs = int(
+            self._safe_float(
+                guard_loop_frontend_snapshot_metrics.get("replay_due_but_reason_missing_runs", 0),
+                0,
+            )
+        )
+        if frontend_replay_missed_runs > 0:
+            score += 1
+            reason_codes.append("guard_loop_frontend_snapshot_replay_convergence")
+        if frontend_replay_reason_missing_runs > 0:
+            score += 1
+            reason_codes.append("guard_loop_frontend_snapshot_replay_traceability")
+        guard_loop_frontend_snapshot_burnin = (
+            guard_loop_frontend_snapshot_trend.get("antiflap_burnin", {})
+            if isinstance(guard_loop_frontend_snapshot_trend.get("antiflap_burnin", {}), dict)
+            else {}
+        )
+        if bool(guard_loop_frontend_snapshot_burnin.get("active", False)) and (
+            not bool(guard_loop_frontend_snapshot_burnin.get("ok", True))
+        ):
+            score += 1
+            reason_codes.append("guard_loop_frontend_snapshot_antiflap_burnin")
+        if not bool(checks.get("guard_loop_cadence_non_apply_ok", True)):
+            score += 1
+            reason_codes.append("guard_loop_cadence_non_apply")
+        if not bool(checks.get("guard_loop_cadence_non_apply_lift_trend_ok", True)):
+            score += 1
+            reason_codes.append("guard_loop_cadence_non_apply_lift_trend")
+        if not bool(checks.get("release_decision_freshness_ok", True)):
+            score += 1
+            reason_codes.append("release_decision_stale")
         if not bool(checks.get("slot_anomaly_ok", True)):
             score += 1
             reason_codes.append("slot_anomaly")
@@ -4231,6 +9886,25 @@ class ReleaseOrchestrator:
             level = "hard"
         elif score >= 4:
             level = "soft"
+        cadence_lift = self._cadence_non_apply_rollback_lift_policy(
+            as_of=as_of,
+            checks=checks,
+            guard_loop_cadence_non_apply=guard_loop_cadence_non_apply,
+            base_level=level,
+        )
+        lift_reason_code = str(cadence_lift.get("reason_code", "")).strip()
+        if lift_reason_code and lift_reason_code not in reason_codes:
+            reason_codes.append(lift_reason_code)
+        if bool(cadence_lift.get("applied", False)):
+            lifted_level = str(cadence_lift.get("applied_level", level)).strip().lower()
+            if lifted_level in {"soft", "hard"} and (
+                self._rollback_level_rank(lifted_level) > self._rollback_level_rank(level)
+            ):
+                level = lifted_level
+                if level == "hard":
+                    score = max(score, 7)
+                elif level == "soft":
+                    score = max(score, 4)
 
         candidates = self._rollback_candidates(as_of=as_of, lookback_days=30)
         target_anchor = ""
@@ -4260,6 +9934,31 @@ class ReleaseOrchestrator:
         reconcile_alerts = (
             reconcile_drift.get("alerts", []) if isinstance(reconcile_drift.get("alerts", []), list) else []
         )
+        threshold_drift_alerts = (
+            degradation_guardrail_threshold_drift.get("alerts", [])
+            if isinstance(degradation_guardrail_threshold_drift.get("alerts", []), list)
+            else []
+        )
+        compaction_restore_alerts = (
+            compaction_restore_trend.get("alerts", [])
+            if isinstance(compaction_restore_trend.get("alerts", []), list)
+            else []
+        )
+        guard_loop_frontend_snapshot_alerts = (
+            guard_loop_frontend_snapshot_trend.get("alerts", [])
+            if isinstance(guard_loop_frontend_snapshot_trend.get("alerts", []), list)
+            else []
+        )
+        guard_loop_cadence_alerts = (
+            guard_loop_cadence_non_apply.get("alerts", [])
+            if isinstance(guard_loop_cadence_non_apply.get("alerts", []), list)
+            else []
+        )
+        guard_loop_cadence_lift_trend_alerts = (
+            guard_loop_cadence_non_apply_lift_trend.get("alerts", [])
+            if isinstance(guard_loop_cadence_non_apply_lift_trend.get("alerts", []), list)
+            else []
+        )
 
         return {
             "active": level != "none",
@@ -4270,14 +9969,243 @@ class ReleaseOrchestrator:
             "target_anchor": target_anchor,
             "anchor_ready": bool(anchor_ready),
             "cooldown_days": 3 if level == "hard" else (1 if level == "soft" else 0),
+            "cadence_non_apply_lift": cadence_lift,
             "candidates": candidates[:10],
             "alerts": list(state_alerts[:2])
             + list(temporal_alerts[:2])
             + list(slot_alerts[:2])
             + list(drift_alerts[:2])
             + list(style_alerts[:2])
-            + list(reconcile_alerts[:2]),
+            + list(reconcile_alerts[:2])
+            + list(threshold_drift_alerts[:2])
+            + list(compaction_restore_alerts[:2])
+            + list(guard_loop_frontend_snapshot_alerts[:2])
+            + list(guard_loop_cadence_alerts[:2])
+            + list(guard_loop_cadence_lift_trend_alerts[:2]),
         }
+
+    def _finalize_frontend_snapshot_trend_controlled_apply(
+        self,
+        *,
+        guard_loop_frontend_snapshot_trend: dict[str, Any],
+        rollback_recommendation: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        trend_payload = dict(guard_loop_frontend_snapshot_trend or {})
+        burnin_payload = (
+            dict(trend_payload.get("antiflap_burnin", {}))
+            if isinstance(trend_payload.get("antiflap_burnin", {}), dict)
+            else {}
+        )
+        promotion_payload = (
+            dict(burnin_payload.get("promotion", {}))
+            if isinstance(burnin_payload.get("promotion", {}), dict)
+            else {}
+        )
+        controlled_apply = (
+            dict(promotion_payload.get("controlled_apply", {}))
+            if isinstance(promotion_payload.get("controlled_apply", {}), dict)
+            else {}
+        )
+        if not controlled_apply:
+            return trend_payload
+
+        rollback_payload = rollback_recommendation if isinstance(rollback_recommendation, dict) else {}
+        rollback_level = str(rollback_payload.get("level", "none")).strip().lower() or "none"
+        rollback_active = bool(rollback_payload.get("active", False))
+        rollback_anchor_ready = bool(rollback_payload.get("anchor_ready", True))
+        rollback_reason_codes = (
+            [str(x).strip() for x in rollback_payload.get("reason_codes", []) if str(x).strip()]
+            if isinstance(rollback_payload.get("reason_codes", []), list)
+            else []
+        )
+
+        rollback_guard = (
+            dict(controlled_apply.get("rollback_guard", {}))
+            if isinstance(controlled_apply.get("rollback_guard", {}), dict)
+            else {}
+        )
+        apply_gate = (
+            dict(controlled_apply.get("apply_gate", {}))
+            if isinstance(controlled_apply.get("apply_gate", {}), dict)
+            else {}
+        )
+        approval_manifest = (
+            dict(controlled_apply.get("approval", {}))
+            if isinstance(controlled_apply.get("approval", {}), dict)
+            else {}
+        )
+        proposal_payload = (
+            dict(controlled_apply.get("proposal", {}))
+            if isinstance(controlled_apply.get("proposal", {}), dict)
+            else {}
+        )
+        decision_envelope = (
+            dict(controlled_apply.get("decision_envelope", {}))
+            if isinstance(controlled_apply.get("decision_envelope", {}), dict)
+            else {}
+        )
+        controlled_alerts = (
+            [str(x).strip() for x in controlled_apply.get("alerts", []) if str(x).strip()]
+            if isinstance(controlled_apply.get("alerts", []), list)
+            else []
+        )
+
+        rollback_guard_enabled = bool(rollback_guard.get("enabled", True))
+        rollback_guard_blocked = bool(
+            rollback_guard_enabled
+            and (
+                rollback_active
+                or rollback_level in {"soft", "hard"}
+                or (not rollback_anchor_ready)
+            )
+        )
+        rollback_guard_reason = "ok"
+        if rollback_guard_enabled and rollback_guard_blocked:
+            rollback_guard_reason = "rollback_guard_blocked"
+        elif rollback_guard_enabled:
+            rollback_guard_reason = "rollback_guard_open"
+        else:
+            rollback_guard_reason = "rollback_guard_disabled"
+
+        pre_allowed = bool(apply_gate.get("allowed_pre_rollback", False))
+        pre_reason = str(apply_gate.get("reason_pre_rollback", "")).strip()
+        final_allowed = bool(pre_allowed and (not rollback_guard_blocked))
+        final_reason = pre_reason or "controlled_apply_disabled"
+        if rollback_guard_blocked:
+            final_reason = "rollback_guard_blocked"
+            if (
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_rollback_guard_blocked"
+                not in controlled_alerts
+            ):
+                controlled_alerts.append(
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_rollback_guard_blocked"
+                )
+        elif final_allowed and bool(controlled_apply.get("dry_run", True)):
+            final_reason = "dry_run_pending_manual_apply"
+        elif final_allowed:
+            final_reason = "manual_apply_required"
+
+        apply_gate["rollback_guard_ok"] = bool((not rollback_guard_enabled) or (not rollback_guard_blocked))
+        apply_gate["allowed"] = bool(final_allowed)
+        apply_gate["apply_recommended"] = bool(final_allowed)
+        apply_gate["reason"] = str(final_reason)
+
+        pre_route = str(apply_gate.get("reason_pre_rollback", "")).strip() or str(final_reason)
+        if not decision_envelope:
+            decision_envelope = {
+                "stage": "pre_rollback",
+                "decision": "apply" if bool(pre_allowed) else "non_apply",
+                "apply_recommended": bool(pre_allowed),
+                "route": str(pre_route),
+                "severity": "warn",
+                "headline": "frontend_snapshot hard-fail controlled-apply decision",
+                "action": "review apply gate and rollback guard before applying hard-fail promotion.",
+                "reason_codes": [],
+                "runbook": [],
+                "approval_manifest": {
+                    "path": str(controlled_apply.get("approval_manifest_path", "") or ""),
+                    "found": bool(approval_manifest.get("found", False)),
+                    "approved": bool(approval_manifest.get("approved", False)),
+                    "matches_proposal": bool(approval_manifest.get("matches_proposal", False)),
+                    "proposal_id": str(approval_manifest.get("proposal_id", "") or ""),
+                    "approved_at": str(approval_manifest.get("approved_at", "") or ""),
+                    "age_days": int(self._safe_float(approval_manifest.get("age_days", 0), 0)),
+                },
+            }
+        final_severity = "info" if final_allowed else "warn"
+        final_headline = "frontend_snapshot hard-fail controlled-apply blocked"
+        final_action = "review controlled-apply guardrails and rerun gate-report."
+        if final_allowed and bool(controlled_apply.get("dry_run", True)):
+            final_headline = "frontend_snapshot hard-fail promotion ready in dry-run mode"
+            final_action = "keep dry-run and execute manual promotion only after operator confirmation."
+        elif final_allowed:
+            final_headline = "frontend_snapshot hard-fail promotion ready for manual apply"
+            final_action = "apply patch in controlled window and rerun gate/ops reports."
+        elif final_reason == "rollback_guard_blocked":
+            final_severity = "critical"
+            final_headline = "frontend_snapshot hard-fail promotion blocked by rollback guard"
+            final_action = "clear rollback pressure and ensure rollback anchor readiness before promotion."
+        elif final_reason == "dual_window_drift_red_non_apply":
+            final_severity = "critical"
+            final_headline = "frontend_snapshot dual-window drift remains red; non-apply enforced"
+            final_action = "stabilize dual-window drift metrics before hard-fail promotion."
+        decision_envelope["stage"] = "post_rollback"
+        decision_envelope["pre_rollback"] = {
+            "allowed": bool(pre_allowed),
+            "route": str(pre_route),
+        }
+        decision_envelope["decision"] = "apply" if final_allowed else "non_apply"
+        decision_envelope["apply_recommended"] = bool(final_allowed)
+        decision_envelope["route"] = str(final_reason)
+        decision_envelope["severity"] = str(final_severity)
+        decision_envelope["headline"] = str(final_headline)
+        decision_envelope["action"] = str(final_action)
+        decision_envelope["rollback_guard"] = {
+            "enabled": bool(rollback_guard_enabled),
+            "blocked": bool(rollback_guard_blocked),
+            "level": str(rollback_level),
+            "active": bool(rollback_active),
+            "anchor_ready": bool(rollback_anchor_ready),
+            "reason_codes": list(rollback_reason_codes),
+        }
+        decision_envelope["approval_manifest"] = {
+            "path": str(controlled_apply.get("approval_manifest_path", "") or ""),
+            "found": bool(approval_manifest.get("found", False)),
+            "approved": bool(approval_manifest.get("approved", False)),
+            "matches_proposal": bool(approval_manifest.get("matches_proposal", False)),
+            "proposal_id": str(approval_manifest.get("proposal_id", "") or ""),
+            "approved_at": str(approval_manifest.get("approved_at", "") or ""),
+            "age_days": int(self._safe_float(approval_manifest.get("age_days", 0), 0)),
+        }
+        decision_runbook = (
+            [str(x).strip() for x in decision_envelope.get("runbook", []) if str(x).strip()]
+            if isinstance(decision_envelope.get("runbook", []), list)
+            else []
+        )
+        runbook_date_hint = str(proposal_payload.get("proposal_date", "")).strip() or "YYYY-MM-DD"
+        if final_reason == "rollback_guard_blocked":
+            decision_runbook.append("PYTHONPATH=src python3 -m lie_engine.cli ops-report --window-days 7")
+        if final_reason in {
+            "manual_approval_missing",
+            "manual_approval_not_confirmed",
+            "manual_approval_proposal_mismatch",
+        }:
+            decision_runbook.append(
+                f"PYTHONPATH=src python3 -m lie_engine.cli frontend-hard-fail-approval-manifest --date {runbook_date_hint}"
+            )
+        if final_reason == "dual_window_drift_red_non_apply":
+            decision_runbook.append(
+                f"PYTHONPATH=src python3 -m lie_engine.cli gate-report --date {runbook_date_hint}"
+            )
+        decision_envelope["runbook"] = list(
+            dict.fromkeys([item for item in decision_runbook if item])
+        )
+
+        rollback_guard["evaluated"] = True
+        rollback_guard["blocked"] = bool(rollback_guard_blocked)
+        rollback_guard["rollback_level"] = str(rollback_level)
+        rollback_guard["rollback_active"] = bool(rollback_active)
+        rollback_guard["anchor_ready"] = bool(rollback_anchor_ready)
+        rollback_guard["reason"] = str(rollback_guard_reason)
+        rollback_guard["reason_codes"] = list(rollback_reason_codes)
+
+        controlled_apply["apply_gate"] = apply_gate
+        controlled_apply["rollback_guard"] = rollback_guard
+        controlled_apply["decision_envelope"] = decision_envelope
+        controlled_apply["alerts"] = list(dict.fromkeys(controlled_alerts))
+        promotion_payload["controlled_apply"] = controlled_apply
+        burnin_payload["promotion"] = promotion_payload
+        trend_alerts = (
+            [str(x).strip() for x in trend_payload.get("alerts", []) if str(x).strip()]
+            if isinstance(trend_payload.get("alerts", []), list)
+            else []
+        )
+        for code in controlled_apply["alerts"]:
+            if str(code).strip() and str(code) not in trend_alerts:
+                trend_alerts.append(str(code))
+        trend_payload["alerts"] = trend_alerts
+        trend_payload["antiflap_burnin"] = burnin_payload
+        return trend_payload
 
     def _live_mode_metrics(self, *, as_of: date, window_days: int) -> dict[str, dict[str, float]]:
         db_path = self._effective_sqlite_path()
@@ -4730,6 +10658,1588 @@ class ReleaseOrchestrator:
             "metrics": metrics,
             "alerts": alerts,
             "series": runs[-10:],
+        }
+
+    def _stress_matrix_execution_friction_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = bool(val.get("ops_stress_matrix_execution_friction_enabled", True))
+        require_active = bool(val.get("ops_stress_matrix_execution_friction_require_active", False))
+        trendline_enabled = bool(val.get("ops_stress_matrix_execution_friction_trendline_enabled", True))
+        trendline_require_active = bool(
+            val.get("ops_stress_matrix_execution_friction_trendline_require_active", False)
+        )
+        trendline_require_samples = bool(
+            val.get("ops_stress_matrix_execution_friction_trendline_require_samples", False)
+        )
+        trendline_recent_runs = max(
+            1,
+            int(self._safe_float(val.get("ops_stress_matrix_execution_friction_trendline_recent_runs", 3), 3)),
+        )
+        trendline_prior_runs = max(
+            1,
+            int(self._safe_float(val.get("ops_stress_matrix_execution_friction_trendline_prior_runs", 3), 3)),
+        )
+        trendline_min_runs = max(
+            2,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_stress_matrix_execution_friction_trendline_min_runs",
+                        max(2, trendline_recent_runs + trendline_prior_runs),
+                    ),
+                    max(2, trendline_recent_runs + trendline_prior_runs),
+                )
+            ),
+        )
+        trendline_max_annual_drop_rise = self._clamp_float(
+            self._safe_float(
+                val.get("ops_stress_matrix_execution_friction_trendline_max_annual_drop_rise", 0.05),
+                0.05,
+            ),
+            0.0,
+            1.0,
+        )
+        trendline_max_drawdown_rise = self._clamp_float(
+            self._safe_float(
+                val.get("ops_stress_matrix_execution_friction_trendline_max_drawdown_rise", 0.05),
+                0.05,
+            ),
+            0.0,
+            1.0,
+        )
+        trendline_max_profit_factor_ratio_drop = self._clamp_float(
+            self._safe_float(
+                val.get("ops_stress_matrix_execution_friction_trendline_max_profit_factor_ratio_drop", 0.10),
+                0.10,
+            ),
+            0.0,
+            1.0,
+        )
+        trendline_staleness_guard_enabled = self._safe_bool(
+            val.get("ops_stress_matrix_execution_friction_trendline_staleness_guard_enabled", True),
+            True,
+        )
+        trendline_max_staleness_days = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get("ops_stress_matrix_execution_friction_trendline_max_staleness_days", 7),
+                    7,
+                )
+            ),
+        )
+        trendline_autotune_enabled = self._safe_bool(
+            val.get("ops_stress_matrix_execution_friction_trendline_autotune_enabled", True),
+            True,
+        )
+        trendline_autotune_apply_enabled = self._safe_bool(
+            val.get("ops_stress_matrix_execution_friction_trendline_autotune_apply_enabled", True),
+            True,
+        )
+        trendline_autotune_lookback_runs = max(
+            3,
+            int(
+                self._safe_float(
+                    val.get("ops_stress_matrix_execution_friction_trendline_autotune_lookback_runs", 12),
+                    12,
+                )
+            ),
+        )
+        trendline_autotune_min_transitions = max(
+            2,
+            int(
+                self._safe_float(
+                    val.get("ops_stress_matrix_execution_friction_trendline_autotune_min_transitions", 6),
+                    6,
+                )
+            ),
+        )
+        trendline_autotune_quantile = self._clamp_float(
+            self._safe_float(
+                val.get("ops_stress_matrix_execution_friction_trendline_autotune_quantile", 0.80),
+                0.80,
+            ),
+            0.50,
+            0.99,
+        )
+        trendline_autotune_step_max = self._clamp_float(
+            self._safe_float(
+                val.get("ops_stress_matrix_execution_friction_trendline_autotune_step_max", 0.02),
+                0.02,
+            ),
+            0.0,
+            0.20,
+        )
+        trendline_controlled_apply_enabled = self._safe_bool(
+            val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_enabled", False),
+            False,
+        )
+        trendline_controlled_apply_manual_approval_required = self._safe_bool(
+            val.get(
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_manual_approval_required",
+                True,
+            ),
+            True,
+        )
+        trendline_controlled_apply_max_apply_window_days = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_max_apply_window_days", 7),
+                    7,
+                )
+            ),
+        )
+        trendline_controlled_apply_approval_manifest_path = self._resolve_output_path(
+            str(
+                val.get(
+                    "ops_stress_matrix_execution_friction_trendline_controlled_apply_approval_manifest_path",
+                    "artifacts/stress_matrix_execution_friction_trendline_autotune_approval.json",
+                )
+                or "artifacts/stress_matrix_execution_friction_trendline_autotune_approval.json"
+            ),
+            fallback_rel="artifacts/stress_matrix_execution_friction_trendline_autotune_approval.json",
+        )
+        trendline_controlled_apply_ledger_enabled = self._safe_bool(
+            val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_enabled", True),
+            True,
+        )
+        trendline_controlled_apply_ledger_retention_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_retention_days", 180),
+                    180,
+                )
+            ),
+        )
+        trendline_controlled_apply_ledger_staleness_window_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_staleness_window_days",
+                        30,
+                    ),
+                    30,
+                )
+            ),
+        )
+        trendline_controlled_apply_ledger_path = self._resolve_output_path(
+            str(
+                val.get(
+                    "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_path",
+                    "artifacts/stress_matrix_execution_friction_trendline_controlled_apply_ledger.json",
+                )
+                or "artifacts/stress_matrix_execution_friction_trendline_controlled_apply_ledger.json"
+            ),
+            fallback_rel="artifacts/stress_matrix_execution_friction_trendline_controlled_apply_ledger.json",
+        )
+        trendline_controlled_apply_ledger_drift_enabled = self._safe_bool(
+            val.get(
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_drift_enabled",
+                True,
+            ),
+            True,
+        )
+        trendline_controlled_apply_ledger_drift_gate_hard_fail = self._safe_bool(
+            val.get(
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_drift_gate_hard_fail",
+                False,
+            ),
+            False,
+        )
+        trendline_controlled_apply_ledger_window_stale_ratio_max = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_window_stale_ratio_max",
+                    0.20,
+                ),
+                0.20,
+            ),
+            0.0,
+            1.0,
+        )
+        trendline_controlled_apply_ledger_duplicate_block_rate_max = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_max",
+                    0.30,
+                ),
+                0.30,
+            ),
+            0.0,
+            1.0,
+        )
+        if not enabled:
+            return {
+                "active": False,
+                "enabled": False,
+                "gate_ok": True,
+                "status": "disabled",
+                "source_date": "",
+                "source_path": "",
+                "checks": {},
+                "thresholds": {},
+                "metrics": {},
+                "alerts": [],
+                "trendline": {},
+                "series": [],
+            }
+
+        review_dir = self.output_dir / "review"
+        latest_path: Path | None = None
+        latest_date: date | None = None
+        run_paths: list[tuple[date, Path]] = []
+        for path in sorted(review_dir.glob("*_mode_stress_matrix.json")):
+            dtag = path.name.replace("_mode_stress_matrix.json", "")
+            try:
+                d = date.fromisoformat(dtag)
+            except Exception:
+                continue
+            if d > as_of:
+                continue
+            run_paths.append((d, path))
+            latest_date = d
+            latest_path = path
+
+        trendline_base = {
+            "enabled": bool(trendline_enabled),
+            "active": False,
+            "status": "inactive",
+            "checks": {
+                "samples_ready_ok": True,
+                "source_staleness_ok": True,
+                "auto_tune_bounded_ok": True,
+                "controlled_apply_window_ok": True,
+                "controlled_apply_approval_ok": True,
+                "controlled_apply_duplicate_ok": True,
+                "controlled_apply_ledger_write_ok": True,
+                "controlled_apply_ledger_drift_ok": True,
+                "controlled_apply_ledger_artifact_ok": True,
+                "annual_drop_delta_ok": True,
+                "drawdown_rise_delta_ok": True,
+                "profit_factor_ratio_delta_ok": True,
+                "trendline_ok": True,
+            },
+            "alerts": [],
+            "thresholds": {
+                "ops_stress_matrix_execution_friction_trendline_recent_runs": int(trendline_recent_runs),
+                "ops_stress_matrix_execution_friction_trendline_prior_runs": int(trendline_prior_runs),
+                "ops_stress_matrix_execution_friction_trendline_min_runs": int(trendline_min_runs),
+                "ops_stress_matrix_execution_friction_trendline_max_annual_drop_rise": float(
+                    trendline_max_annual_drop_rise
+                ),
+                "ops_stress_matrix_execution_friction_trendline_max_drawdown_rise": float(
+                    trendline_max_drawdown_rise
+                ),
+                "ops_stress_matrix_execution_friction_trendline_max_profit_factor_ratio_drop": float(
+                    trendline_max_profit_factor_ratio_drop
+                ),
+                "ops_stress_matrix_execution_friction_trendline_require_samples": bool(trendline_require_samples),
+                "ops_stress_matrix_execution_friction_trendline_staleness_guard_enabled": bool(
+                    trendline_staleness_guard_enabled
+                ),
+                "ops_stress_matrix_execution_friction_trendline_max_staleness_days": int(
+                    trendline_max_staleness_days
+                ),
+                "ops_stress_matrix_execution_friction_trendline_autotune_enabled": bool(
+                    trendline_autotune_enabled
+                ),
+                "ops_stress_matrix_execution_friction_trendline_autotune_apply_enabled": bool(
+                    trendline_autotune_apply_enabled
+                ),
+                "ops_stress_matrix_execution_friction_trendline_autotune_lookback_runs": int(
+                    trendline_autotune_lookback_runs
+                ),
+                "ops_stress_matrix_execution_friction_trendline_autotune_min_transitions": int(
+                    trendline_autotune_min_transitions
+                ),
+                "ops_stress_matrix_execution_friction_trendline_autotune_quantile": float(
+                    trendline_autotune_quantile
+                ),
+                "ops_stress_matrix_execution_friction_trendline_autotune_step_max": float(
+                    trendline_autotune_step_max
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_enabled": bool(
+                    trendline_controlled_apply_enabled
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_manual_approval_required": bool(
+                    trendline_controlled_apply_manual_approval_required
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_max_apply_window_days": int(
+                    trendline_controlled_apply_max_apply_window_days
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_approval_manifest_path": str(
+                    trendline_controlled_apply_approval_manifest_path
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_enabled": bool(
+                    trendline_controlled_apply_ledger_enabled
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_retention_days": int(
+                    trendline_controlled_apply_ledger_retention_days
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_staleness_window_days": int(
+                    trendline_controlled_apply_ledger_staleness_window_days
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_path": str(
+                    trendline_controlled_apply_ledger_path
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_drift_enabled": bool(
+                    trendline_controlled_apply_ledger_drift_enabled
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_drift_gate_hard_fail": bool(
+                    trendline_controlled_apply_ledger_drift_gate_hard_fail
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_window_stale_ratio_max": float(
+                    trendline_controlled_apply_ledger_window_stale_ratio_max
+                ),
+                "ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_max": float(
+                    trendline_controlled_apply_ledger_duplicate_block_rate_max
+                ),
+            },
+            "windows": {"recent": {}, "prior": {}},
+            "deltas": {},
+            "samples": 0,
+            "required_runs": int(max(trendline_min_runs, trendline_recent_runs + trendline_prior_runs)),
+            "source_age_days": 0,
+            "auto_tune": {
+                "enabled": bool(trendline_autotune_enabled),
+                "apply_enabled": bool(trendline_autotune_apply_enabled),
+                "ready": False,
+                "applied": False,
+                "reason": "disabled" if not trendline_autotune_enabled else "pending",
+                "samples": 0,
+                "required_samples": int(trendline_autotune_min_transitions),
+                "quantile": float(trendline_autotune_quantile),
+                "step_max": float(trendline_autotune_step_max),
+                "base_thresholds": {
+                    "annual_drop_rise": float(trendline_max_annual_drop_rise),
+                    "drawdown_rise_delta": float(trendline_max_drawdown_rise),
+                    "profit_factor_ratio_drop": float(trendline_max_profit_factor_ratio_drop),
+                },
+                "recommended_thresholds": {},
+                "effective_thresholds": {
+                    "annual_drop_rise": float(trendline_max_annual_drop_rise),
+                    "drawdown_rise_delta": float(trendline_max_drawdown_rise),
+                    "profit_factor_ratio_drop": float(trendline_max_profit_factor_ratio_drop),
+                },
+                "increments": {
+                    "annual_drop_rise": 0.0,
+                    "drawdown_rise_delta": 0.0,
+                    "profit_factor_ratio_drop": 0.0,
+                },
+                "controlled_apply": {
+                    "enabled": bool(trendline_controlled_apply_enabled),
+                    "manual_approval_required": bool(trendline_controlled_apply_manual_approval_required),
+                    "approval_manifest_path": str(trendline_controlled_apply_approval_manifest_path),
+                    "max_apply_window_days": int(trendline_controlled_apply_max_apply_window_days),
+                    "proposal_generated": False,
+                    "proposal_id": "",
+                    "proposal_date": "",
+                    "proposal_age_days": 0,
+                    "window_ok": True,
+                    "applied": False,
+                    "allowed": False,
+                    "reason": (
+                        "controlled_apply_disabled"
+                        if not trendline_controlled_apply_enabled
+                        else "awaiting_approval"
+                    ),
+                    "approval": {
+                        "found": False,
+                        "approved": False,
+                        "proposal_id": "",
+                        "matches_proposal": False,
+                        "approved_at": "",
+                        "age_days": 0,
+                    },
+                    "ledger": {
+                        "enabled": bool(trendline_controlled_apply_ledger_enabled),
+                        "path": str(trendline_controlled_apply_ledger_path),
+                        "retention_days": int(trendline_controlled_apply_ledger_retention_days),
+                        "staleness_window_days": int(
+                            trendline_controlled_apply_ledger_staleness_window_days
+                        ),
+                        "found": False,
+                        "entries": 0,
+                        "window_entries": 0,
+                        "window_stale_count": 0,
+                        "window_stale_ratio": 0.0,
+                        "duplicate_blocked": False,
+                        "last_applied_date": "",
+                        "last_applied_proposal_id": "",
+                        "write_ok": True,
+                        "write_error": "",
+                        "duplicate_block_samples": 0,
+                        "duplicate_block_events": 0,
+                        "duplicate_block_rate": 0.0,
+                        "drift": {
+                            "enabled": bool(trendline_controlled_apply_ledger_drift_enabled),
+                            "gate_hard_fail": bool(
+                                trendline_controlled_apply_ledger_drift_gate_hard_fail
+                            ),
+                            "window_stale_ratio_max": float(
+                                trendline_controlled_apply_ledger_window_stale_ratio_max
+                            ),
+                            "duplicate_block_rate_max": float(
+                                trendline_controlled_apply_ledger_duplicate_block_rate_max
+                            ),
+                            "window_stale_ratio": 0.0,
+                            "duplicate_block_rate": 0.0,
+                            "duplicate_block_samples": 0,
+                            "duplicate_block_events": 0,
+                            "status": "inactive",
+                            "breached": False,
+                        },
+                    },
+                },
+            },
+            "series": [],
+        }
+        if latest_path is None or latest_date is None:
+            return {
+                "active": False,
+                "enabled": True,
+                "gate_ok": bool(not require_active),
+                "status": "missing",
+                "source_date": "",
+                "source_path": "",
+                "checks": {},
+                "thresholds": {},
+                "metrics": {},
+                "alerts": ["stress_matrix_execution_friction_missing"],
+                "trendline": trendline_base,
+                "series": [],
+            }
+
+        source_age_days = max(0, int((as_of - latest_date).days))
+        payload = self.load_json_safely(latest_path)
+        history_series: list[dict[str, Any]] = []
+        for run_day, run_path in run_paths:
+            run_payload = self.load_json_safely(run_path)
+            run_friction = (
+                run_payload.get("execution_friction", {})
+                if isinstance(run_payload.get("execution_friction", {}), dict)
+                else {}
+            )
+            run_scorecard = (
+                run_friction.get("scorecard", {})
+                if isinstance(run_friction.get("scorecard", {}), dict)
+                else {}
+            )
+            run_metrics = run_scorecard.get("metrics", {}) if isinstance(run_scorecard.get("metrics", {}), dict) else {}
+            history_series.append(
+                {
+                    "date": run_day.isoformat(),
+                    "path": str(run_path),
+                    "active": bool(run_scorecard.get("active", False)),
+                    "status": str(run_scorecard.get("status", "unknown") or "unknown"),
+                    "gate_ok": bool(run_scorecard.get("gate_ok", True)),
+                    "annual_drop": float(self._safe_float(run_metrics.get("annual_drop", 0.0), 0.0)),
+                    "drawdown_rise": float(self._safe_float(run_metrics.get("drawdown_rise", 0.0), 0.0)),
+                    "min_profit_factor_ratio": float(
+                        self._safe_float(run_metrics.get("min_profit_factor_ratio", 0.0), 0.0)
+                    ),
+                }
+            )
+        friction_payload = (
+            payload.get("execution_friction", {})
+            if isinstance(payload.get("execution_friction", {}), dict)
+            else {}
+        )
+        scorecard = (
+            friction_payload.get("scorecard", {})
+            if isinstance(friction_payload.get("scorecard", {}), dict)
+            else {}
+        )
+        checks = scorecard.get("checks", {}) if isinstance(scorecard.get("checks", {}), dict) else {}
+        thresholds = (
+            scorecard.get("thresholds", {})
+            if isinstance(scorecard.get("thresholds", {}), dict)
+            else {}
+        )
+        metrics = scorecard.get("metrics", {}) if isinstance(scorecard.get("metrics", {}), dict) else {}
+        alerts = scorecard.get("alerts", []) if isinstance(scorecard.get("alerts", []), list) else []
+        active = bool(scorecard.get("active", False))
+        gate_ok_raw = bool(scorecard.get("gate_ok", True))
+        gate_ok = gate_ok_raw if active else bool(not require_active)
+        status = str(scorecard.get("status", "inactive" if not active else "unknown")).strip().lower() or (
+            "inactive" if not active else "unknown"
+        )
+        if not checks and active:
+            status = "missing_checks"
+            gate_ok = False
+            alerts = list(alerts) + ["stress_matrix_execution_friction_missing_checks"]
+
+        trendline_payload = dict(trendline_base)
+        trendline_checks = (
+            trendline_payload.get("checks", {})
+            if isinstance(trendline_payload.get("checks", {}), dict)
+            else {}
+        )
+        trendline_alerts: list[str] = []
+        trendline_gate_ok = True
+        controlled_apply_ledger_drift_gate_failed = False
+        active_history = [row for row in history_series if bool(row.get("active", False))]
+        trendline_payload["samples"] = int(len(active_history))
+        trendline_payload["series"] = active_history[-12:]
+        trendline_payload["source_age_days"] = int(source_age_days)
+
+        base_limits = {
+            "annual_drop_rise": float(trendline_max_annual_drop_rise),
+            "drawdown_rise_delta": float(trendline_max_drawdown_rise),
+            "profit_factor_ratio_drop": float(trendline_max_profit_factor_ratio_drop),
+        }
+        effective_limits = dict(base_limits)
+        auto_tune_payload = (
+            trendline_payload.get("auto_tune", {})
+            if isinstance(trendline_payload.get("auto_tune", {}), dict)
+            else {}
+        )
+        if auto_tune_payload:
+            auto_tune_payload["base_thresholds"] = dict(base_limits)
+            auto_tune_payload["effective_thresholds"] = dict(effective_limits)
+            if trendline_autotune_enabled:
+                lookback_rows = active_history[-int(trendline_autotune_lookback_runs) :]
+                transition_rows: list[dict[str, float]] = []
+                for idx in range(1, len(lookback_rows)):
+                    prev = lookback_rows[idx - 1]
+                    curr = lookback_rows[idx]
+                    transition_rows.append(
+                        {
+                            "annual_drop_rise": max(
+                                0.0,
+                                self._safe_float(curr.get("annual_drop", 0.0), 0.0)
+                                - self._safe_float(prev.get("annual_drop", 0.0), 0.0),
+                            ),
+                            "drawdown_rise_delta": max(
+                                0.0,
+                                self._safe_float(curr.get("drawdown_rise", 0.0), 0.0)
+                                - self._safe_float(prev.get("drawdown_rise", 0.0), 0.0),
+                            ),
+                            "profit_factor_ratio_drop": max(
+                                0.0,
+                                self._safe_float(prev.get("min_profit_factor_ratio", 0.0), 0.0)
+                                - self._safe_float(curr.get("min_profit_factor_ratio", 0.0), 0.0),
+                            ),
+                        }
+                    )
+                sample_count = int(len(transition_rows))
+                ready = bool(sample_count >= int(trendline_autotune_min_transitions))
+                auto_tune_payload["samples"] = int(sample_count)
+                auto_tune_payload["required_samples"] = int(trendline_autotune_min_transitions)
+                auto_tune_payload["ready"] = bool(ready)
+                if ready:
+                    recommended_limits: dict[str, float] = {}
+                    for key in base_limits.keys():
+                        qv = self._quantile(
+                            [float(row.get(key, 0.0)) for row in transition_rows],
+                            trendline_autotune_quantile,
+                        )
+                        qv_f = float(base_limits[key]) if qv is None else float(qv)
+                        recommended_limits[key] = float(max(base_limits[key], qv_f))
+                    increments = {}
+                    for key in base_limits.keys():
+                        raw_gap = float(recommended_limits[key] - base_limits[key])
+                        inc = 0.0
+                        if trendline_autotune_apply_enabled and raw_gap > 0.0:
+                            inc = min(float(trendline_autotune_step_max), float(raw_gap))
+                        increments[key] = float(inc)
+                        effective_limits[key] = float(
+                            self._clamp_float(
+                                base_limits[key] + float(increments[key]),
+                                0.0,
+                                1.0,
+                            )
+                        )
+                    auto_tune_payload["recommended_thresholds"] = dict(recommended_limits)
+                    auto_tune_payload["increments"] = dict(increments)
+                    auto_tune_payload["effective_thresholds"] = dict(effective_limits)
+                    auto_tune_payload["applied"] = bool(
+                        trendline_autotune_apply_enabled and (not trendline_controlled_apply_enabled)
+                    )
+                    if not trendline_autotune_apply_enabled:
+                        auto_tune_payload["reason"] = "recommend_only"
+                    elif trendline_controlled_apply_enabled:
+                        auto_tune_payload["reason"] = "controlled_apply_pending"
+                    else:
+                        auto_tune_payload["reason"] = "applied"
+                else:
+                    auto_tune_payload["reason"] = "insufficient_samples"
+                    auto_tune_payload["recommended_thresholds"] = dict(base_limits)
+                    auto_tune_payload["increments"] = {
+                        "annual_drop_rise": 0.0,
+                        "drawdown_rise_delta": 0.0,
+                        "profit_factor_ratio_drop": 0.0,
+                    }
+                    auto_tune_payload["effective_thresholds"] = dict(effective_limits)
+            else:
+                auto_tune_payload["reason"] = "disabled"
+                auto_tune_payload["samples"] = 0
+                auto_tune_payload["required_samples"] = int(trendline_autotune_min_transitions)
+                auto_tune_payload["ready"] = False
+                auto_tune_payload["applied"] = False
+            increments_payload = (
+                auto_tune_payload.get("increments", {})
+                if isinstance(auto_tune_payload.get("increments", {}), dict)
+                else {}
+            )
+            trendline_checks["auto_tune_bounded_ok"] = bool(
+                all(
+                    self._safe_float(increments_payload.get(k, 0.0), 0.0)
+                    <= float(trendline_autotune_step_max) + 1e-12
+                    for k in base_limits.keys()
+                )
+            )
+            if not bool(trendline_checks.get("auto_tune_bounded_ok", True)):
+                trendline_alerts.append("stress_matrix_execution_friction_trendline_autotune_unbounded")
+            proposal_payload: dict[str, Any] = {
+                "enabled": bool(trendline_autotune_enabled),
+                "mode": "proposal_only",
+                "generated": False,
+                "reason": "disabled" if not trendline_autotune_enabled else "not_ready",
+                "proposal_id": "",
+                "source_date": latest_date.isoformat(),
+                "source_path": str(latest_path),
+                "generated_at": datetime.now().isoformat(),
+                "apply_gate": {
+                    "allowed": False,
+                    "reason": (
+                        "controlled_apply_pending"
+                        if trendline_controlled_apply_enabled
+                        else "controlled_apply_disabled"
+                    ),
+                },
+                "artifact": {
+                    "written": False,
+                    "json": "",
+                    "md": "",
+                    "reason": "not_generated",
+                },
+            }
+            recommended_thresholds = (
+                auto_tune_payload.get("recommended_thresholds", {})
+                if isinstance(auto_tune_payload.get("recommended_thresholds", {}), dict)
+                else {}
+            )
+            increments_payload = (
+                auto_tune_payload.get("increments", {})
+                if isinstance(auto_tune_payload.get("increments", {}), dict)
+                else {}
+            )
+            has_recommendation = bool(
+                bool(auto_tune_payload.get("ready", False))
+                and recommended_thresholds
+                and (
+                    any(abs(self._safe_float(increments_payload.get(k, 0.0), 0.0)) > 1e-12 for k in base_limits.keys())
+                    or any(
+                        abs(
+                            self._safe_float(recommended_thresholds.get(k, 0.0), 0.0)
+                            - self._safe_float(base_limits.get(k, 0.0), 0.0)
+                        )
+                        > 1e-12
+                        for k in base_limits.keys()
+                    )
+                )
+            )
+            if not trendline_autotune_enabled:
+                proposal_payload["reason"] = "disabled"
+            elif not bool(auto_tune_payload.get("ready", False)):
+                proposal_payload["reason"] = "insufficient_samples"
+            elif not has_recommendation:
+                proposal_payload["reason"] = "no_threshold_uplift"
+            else:
+                proposal_basis = {
+                    "source_date": latest_date.isoformat(),
+                    "source_path": str(latest_path),
+                    "base_thresholds": dict(base_limits),
+                    "recommended_thresholds": dict(recommended_thresholds),
+                    "increments": dict(increments_payload),
+                }
+                proposal_id = hashlib.sha256(
+                    json.dumps(
+                        proposal_basis,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()[:16]
+                proposal_payload["generated"] = True
+                proposal_payload["reason"] = "proposal_generated"
+                proposal_payload["proposal_id"] = str(proposal_id)
+                proposal_payload["proposal"] = {
+                    "base_thresholds": dict(base_limits),
+                    "recommended_thresholds": dict(recommended_thresholds),
+                    "effective_thresholds": (
+                        auto_tune_payload.get("effective_thresholds", {})
+                        if isinstance(auto_tune_payload.get("effective_thresholds", {}), dict)
+                        else {}
+                    ),
+                    "increments": dict(increments_payload),
+                    "auto_tune_reason": str(auto_tune_payload.get("reason", "") or ""),
+                    "auto_tune_applied": bool(auto_tune_payload.get("applied", False)),
+                }
+                proposal_json = (
+                    self.output_dir
+                    / "review"
+                    / f"{as_of.isoformat()}_stress_matrix_execution_friction_trendline_autotune_proposal.json"
+                )
+                proposal_md = (
+                    self.output_dir
+                    / "review"
+                    / f"{as_of.isoformat()}_stress_matrix_execution_friction_trendline_autotune_proposal.md"
+                )
+                proposal_doc = {
+                    "date": as_of.isoformat(),
+                    "generated_at": str(proposal_payload.get("generated_at", "")),
+                    "source_date": latest_date.isoformat(),
+                    "source_path": str(latest_path),
+                    "mode": "proposal_only",
+                    "proposal_id": str(proposal_id),
+                    "reason": str(proposal_payload.get("reason", "")),
+                    "apply_gate": proposal_payload.get("apply_gate", {}),
+                    "proposal": proposal_payload.get("proposal", {}),
+                }
+                try:
+                    write_json(proposal_json, proposal_doc)
+                    write_markdown(
+                        proposal_md,
+                        "\n".join(
+                            [
+                                f"# Stress Matrix 执行摩擦 Trendline 调参提案 | {as_of.isoformat()}",
+                                "",
+                                f"- proposal_id: `{proposal_id}`",
+                                f"- mode: `proposal_only`",
+                                f"- source_date: `{latest_date.isoformat()}`",
+                                f"- auto_tune_reason: `{str(auto_tune_payload.get('reason', '') or 'N/A')}`",
+                                f"- apply_gate: `{str((proposal_payload.get('apply_gate', {}) or {}).get('reason', ''))}`",
+                                "",
+                                "## Thresholds",
+                                f"- base: `{json.dumps(base_limits, ensure_ascii=False, sort_keys=True)}`",
+                                f"- recommended: `{json.dumps(recommended_thresholds, ensure_ascii=False, sort_keys=True)}`",
+                                f"- effective: `{json.dumps((auto_tune_payload.get('effective_thresholds', {}) if isinstance(auto_tune_payload.get('effective_thresholds', {}), dict) else {}), ensure_ascii=False, sort_keys=True)}`",
+                                "",
+                                "## Increments",
+                                f"- `{json.dumps(increments_payload, ensure_ascii=False, sort_keys=True)}`",
+                            ]
+                        ),
+                    )
+                    proposal_payload["artifact"] = {
+                        "written": True,
+                        "json": str(proposal_json),
+                        "md": str(proposal_md),
+                        "reason": "ok",
+                    }
+                except Exception as exc:
+                    proposal_payload["artifact"] = {
+                        "written": False,
+                        "json": str(proposal_json),
+                        "md": str(proposal_md),
+                        "reason": f"write_failed:{type(exc).__name__}:{exc}",
+                    }
+                    trendline_alerts.append("stress_matrix_execution_friction_trendline_autotune_proposal_write_failed")
+            controlled_apply_payload = (
+                auto_tune_payload.get("controlled_apply", {})
+                if isinstance(auto_tune_payload.get("controlled_apply", {}), dict)
+                else {}
+            )
+            proposal_generated = bool(proposal_payload.get("generated", False))
+            proposal_id = str(proposal_payload.get("proposal_id", "")).strip()
+            proposal_date = latest_date.isoformat()
+            proposal_age_days = int(source_age_days)
+            window_ok = bool(proposal_age_days <= int(trendline_controlled_apply_max_apply_window_days))
+            approval_payload = (
+                controlled_apply_payload.get("approval", {})
+                if isinstance(controlled_apply_payload.get("approval", {}), dict)
+                else {}
+            )
+            approval_doc: dict[str, Any] = {}
+            if trendline_controlled_apply_approval_manifest_path.exists():
+                try:
+                    loaded = self.load_json_safely(trendline_controlled_apply_approval_manifest_path)
+                    if isinstance(loaded, dict):
+                        approval_doc = loaded
+                except Exception:
+                    approval_doc = {}
+            approval_found = bool(approval_doc)
+            approval_confirmed = bool(approval_doc.get("approved", False))
+            approval_proposal_id = str(approval_doc.get("proposal_id", "")).strip()
+            approval_matches = bool(proposal_id and approval_proposal_id and proposal_id == approval_proposal_id)
+            approved_at_txt = str(approval_doc.get("approved_at", "")).strip()
+            approval_age_days = 0
+            approved_at_dt = self._parse_iso_datetime(approved_at_txt)
+            if approved_at_dt is not None:
+                approval_age_days = max(0, int((as_of - approved_at_dt.date()).days))
+
+            ledger_payload = (
+                controlled_apply_payload.get("ledger", {})
+                if isinstance(controlled_apply_payload.get("ledger", {}), dict)
+                else {}
+            )
+            ledger_entries: list[dict[str, Any]] = []
+            ledger_found = bool(trendline_controlled_apply_ledger_path.exists())
+            ledger_read_error = ""
+            ledger_write_error = ""
+            ledger_write_ok = True
+            ledger_entry_written = False
+            duplicate_already_applied = False
+            duplicate_blocked = False
+
+            if trendline_controlled_apply_ledger_enabled:
+                loaded_ledger: dict[str, Any] | None = None
+                if trendline_controlled_apply_ledger_path.exists():
+                    try:
+                        maybe_ledger = self.load_json_safely(trendline_controlled_apply_ledger_path)
+                        if isinstance(maybe_ledger, dict):
+                            loaded_ledger = maybe_ledger
+                        elif isinstance(maybe_ledger, list):
+                            loaded_ledger = {"entries": maybe_ledger}
+                        else:
+                            loaded_ledger = {"entries": []}
+                    except Exception as exc:
+                        ledger_read_error = f"read_failed:{type(exc).__name__}:{exc}"
+                if loaded_ledger is not None:
+                    raw_entries = (
+                        loaded_ledger.get("entries", [])
+                        if isinstance(loaded_ledger.get("entries", []), list)
+                        else []
+                    )
+                    for raw_item in raw_entries:
+                        if not isinstance(raw_item, dict):
+                            continue
+                        entry_date = self._parse_iso_date(raw_item.get("date"))
+                        if entry_date is None:
+                            entry_date = self._parse_iso_date(raw_item.get("applied_at"))
+                        if entry_date is None:
+                            continue
+                        entry_proposal_id = str(raw_item.get("proposal_id", "")).strip()
+                        if not entry_proposal_id:
+                            continue
+                        entry_reason = str(raw_item.get("reason", "")).strip()
+                        entry_proposal_date = self._parse_iso_date(raw_item.get("proposal_date"))
+                        entry_approved_at = str(raw_item.get("approved_at", "")).strip()
+                        entry_source_date = str(raw_item.get("source_date", "")).strip()
+                        entry_source_path = str(raw_item.get("source_path", "")).strip()
+                        entry_applied_at = str(raw_item.get("applied_at", "")).strip() or entry_date.isoformat()
+                        ledger_entries.append(
+                            {
+                                "date": entry_date.isoformat(),
+                                "applied": bool(raw_item.get("applied", True)),
+                                "proposal_id": entry_proposal_id,
+                                "proposal_date": (
+                                    entry_proposal_date.isoformat()
+                                    if entry_proposal_date is not None
+                                    else str(raw_item.get("proposal_date", "")).strip()
+                                ),
+                                "proposal_age_days": max(
+                                    0,
+                                    int(self._safe_float(raw_item.get("proposal_age_days", 0), 0)),
+                                ),
+                                "reason": entry_reason,
+                                "approved": bool(raw_item.get("approved", False)),
+                                "approved_at": entry_approved_at,
+                                "applied_at": entry_applied_at,
+                                "source_date": entry_source_date,
+                                "source_path": entry_source_path,
+                            }
+                        )
+                    ledger_entries.sort(
+                        key=lambda row: (
+                            str(row.get("date", "")),
+                            str(row.get("applied_at", "")),
+                            str(row.get("proposal_id", "")),
+                        )
+                    )
+            if trendline_controlled_apply_ledger_enabled and proposal_generated and proposal_id:
+                duplicate_already_applied = bool(
+                    any(
+                        bool(row.get("applied", False))
+                        and str(row.get("proposal_id", "")).strip() == proposal_id
+                        for row in ledger_entries
+                    )
+                )
+
+            if trendline_controlled_apply_enabled:
+                if not trendline_autotune_apply_enabled:
+                    controlled_apply_reason = "autotune_apply_disabled"
+                    controlled_apply_allowed = False
+                elif not proposal_generated:
+                    controlled_apply_reason = "proposal_not_generated"
+                    controlled_apply_allowed = False
+                elif not window_ok:
+                    controlled_apply_reason = "proposal_outside_apply_window"
+                    controlled_apply_allowed = False
+                elif trendline_controlled_apply_manual_approval_required and not approval_found:
+                    controlled_apply_reason = "manual_approval_missing"
+                    controlled_apply_allowed = False
+                elif trendline_controlled_apply_manual_approval_required and not approval_confirmed:
+                    controlled_apply_reason = "manual_approval_not_confirmed"
+                    controlled_apply_allowed = False
+                elif trendline_controlled_apply_manual_approval_required and not approval_matches:
+                    controlled_apply_reason = "manual_approval_proposal_mismatch"
+                    controlled_apply_allowed = False
+                elif trendline_controlled_apply_ledger_enabled and bool(ledger_read_error):
+                    controlled_apply_reason = "ledger_read_failed"
+                    controlled_apply_allowed = False
+                elif trendline_controlled_apply_ledger_enabled and duplicate_already_applied:
+                    controlled_apply_reason = "proposal_already_applied"
+                    controlled_apply_allowed = False
+                else:
+                    controlled_apply_reason = "apply_gate_open"
+                    controlled_apply_allowed = True
+            else:
+                controlled_apply_reason = "controlled_apply_disabled"
+                controlled_apply_allowed = bool(auto_tune_payload.get("applied", False))
+
+            trendline_checks["controlled_apply_window_ok"] = bool(
+                (not trendline_controlled_apply_enabled) or (not proposal_generated) or window_ok
+            )
+            trendline_checks["controlled_apply_approval_ok"] = bool(
+                (not trendline_controlled_apply_enabled)
+                or (not proposal_generated)
+                or (not trendline_controlled_apply_manual_approval_required)
+                or (approval_found and approval_confirmed and approval_matches)
+            )
+            trendline_checks["controlled_apply_duplicate_ok"] = bool(
+                (not trendline_controlled_apply_enabled)
+                or (not proposal_generated)
+                or (not trendline_controlled_apply_ledger_enabled)
+                or (not duplicate_already_applied)
+            )
+            trendline_checks["controlled_apply_ledger_write_ok"] = bool(
+                (not trendline_controlled_apply_enabled)
+                or (not trendline_controlled_apply_ledger_enabled)
+                or (not bool(ledger_read_error))
+            )
+
+            if (
+                trendline_controlled_apply_enabled
+                and controlled_apply_allowed
+                and trendline_controlled_apply_ledger_enabled
+            ):
+                now_tz_name = str(getattr(self.settings, "timezone", "") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+                applied_at = datetime.now(ZoneInfo(now_tz_name)).isoformat()
+                new_entry = {
+                    "date": as_of.isoformat(),
+                    "applied": True,
+                    "proposal_id": str(proposal_id),
+                    "proposal_date": str(proposal_date),
+                    "proposal_age_days": int(proposal_age_days),
+                    "reason": "controlled_apply_applied",
+                    "approved": bool(approval_confirmed),
+                    "approved_at": str(approved_at_txt),
+                    "applied_at": str(applied_at),
+                    "source_date": latest_date.isoformat(),
+                    "source_path": str(latest_path),
+                }
+                keep_start = as_of - timedelta(
+                    days=max(1, int(trendline_controlled_apply_ledger_retention_days)) - 1
+                )
+                candidate_entries = list(ledger_entries)
+                candidate_entries.append(new_entry)
+                retained_entries: list[dict[str, Any]] = []
+                for row in candidate_entries:
+                    row_date = self._parse_iso_date(row.get("date"))
+                    if row_date is None:
+                        row_date = self._parse_iso_date(row.get("applied_at"))
+                    if row_date is None or row_date < keep_start:
+                        continue
+                    retained_entries.append(dict(row))
+                ledger_doc = {
+                    "updated_at": str(applied_at),
+                    "as_of": as_of.isoformat(),
+                    "retention_days": int(trendline_controlled_apply_ledger_retention_days),
+                    "staleness_window_days": int(
+                        trendline_controlled_apply_ledger_staleness_window_days
+                    ),
+                    "entries": retained_entries,
+                }
+                try:
+                    write_json(trendline_controlled_apply_ledger_path, ledger_doc)
+                    ledger_entries = retained_entries
+                    ledger_found = True
+                    ledger_entry_written = True
+                except Exception as exc:
+                    ledger_write_ok = False
+                    ledger_write_error = f"write_failed:{type(exc).__name__}:{exc}"
+                    trendline_checks["controlled_apply_ledger_write_ok"] = False
+                    controlled_apply_allowed = False
+                    controlled_apply_reason = "ledger_write_failed"
+
+            if trendline_controlled_apply_enabled:
+                if controlled_apply_allowed:
+                    auto_tune_payload["applied"] = bool(trendline_autotune_apply_enabled)
+                    auto_tune_payload["reason"] = "controlled_apply_applied"
+                else:
+                    effective_limits = dict(base_limits)
+                    auto_tune_payload["effective_thresholds"] = dict(effective_limits)
+                    auto_tune_payload["applied"] = False
+                    auto_tune_payload["reason"] = f"controlled_apply_blocked:{controlled_apply_reason}"
+                    if controlled_apply_reason == "proposal_outside_apply_window":
+                        trendline_alerts.append(
+                            "stress_matrix_execution_friction_trendline_controlled_apply_stale"
+                        )
+                    elif controlled_apply_reason == "manual_approval_missing":
+                        trendline_alerts.append(
+                            "stress_matrix_execution_friction_trendline_controlled_apply_approval_missing"
+                        )
+                    elif controlled_apply_reason == "manual_approval_proposal_mismatch":
+                        trendline_alerts.append(
+                            "stress_matrix_execution_friction_trendline_controlled_apply_approval_mismatch"
+                        )
+                    elif controlled_apply_reason == "proposal_already_applied":
+                        trendline_alerts.append(
+                            "stress_matrix_execution_friction_trendline_controlled_apply_duplicate"
+                        )
+                        duplicate_blocked = True
+                    elif controlled_apply_reason == "ledger_read_failed":
+                        trendline_alerts.append(
+                            "stress_matrix_execution_friction_trendline_controlled_apply_ledger_read_failed"
+                        )
+                    elif controlled_apply_reason == "ledger_write_failed":
+                        trendline_alerts.append(
+                            "stress_matrix_execution_friction_trendline_controlled_apply_ledger_write_failed"
+                        )
+
+            window_start = as_of - timedelta(
+                days=max(1, int(trendline_controlled_apply_ledger_staleness_window_days)) - 1
+            )
+            window_rows: list[dict[str, Any]] = []
+            for row in ledger_entries:
+                row_date = self._parse_iso_date(row.get("date"))
+                if row_date is None:
+                    row_date = self._parse_iso_date(row.get("applied_at"))
+                if row_date is None:
+                    continue
+                if row_date < window_start or row_date > as_of:
+                    continue
+                window_rows.append(row)
+            window_stale_count = int(
+                sum(
+                    1
+                    for row in window_rows
+                    if int(self._safe_float(row.get("proposal_age_days", 0), 0))
+                    > int(trendline_controlled_apply_max_apply_window_days)
+                )
+            )
+            window_stale_ratio = float(
+                float(window_stale_count) / float(len(window_rows))
+                if window_rows
+                else 0.0
+            )
+            duplicate_block_samples = 1 if trendline_controlled_apply_enabled else 0
+            duplicate_block_events = 1 if (trendline_controlled_apply_enabled and duplicate_blocked) else 0
+            for gate_path in sorted(review_dir.glob("*_gate_report.json")):
+                dtag = gate_path.name.replace("_gate_report.json", "")
+                try:
+                    gate_day = date.fromisoformat(dtag)
+                except Exception:
+                    continue
+                if gate_day == as_of:
+                    continue
+                if gate_day < window_start or gate_day > as_of:
+                    continue
+                gate_payload = self.load_json_safely(gate_path)
+                if not isinstance(gate_payload, dict):
+                    continue
+                gate_stress_exec = (
+                    gate_payload.get("stress_matrix_execution_friction", {})
+                    if isinstance(gate_payload.get("stress_matrix_execution_friction", {}), dict)
+                    else {}
+                )
+                gate_trendline = (
+                    gate_stress_exec.get("trendline", {})
+                    if isinstance(gate_stress_exec.get("trendline", {}), dict)
+                    else {}
+                )
+                gate_auto_tune = (
+                    gate_trendline.get("auto_tune", {})
+                    if isinstance(gate_trendline.get("auto_tune", {}), dict)
+                    else {}
+                )
+                gate_controlled_apply = (
+                    gate_auto_tune.get("controlled_apply", {})
+                    if isinstance(gate_auto_tune.get("controlled_apply", {}), dict)
+                    else {}
+                )
+                if not bool(gate_controlled_apply.get("enabled", False)):
+                    continue
+                duplicate_block_samples += 1
+                if bool(gate_controlled_apply.get("duplicate_blocked", False)):
+                    duplicate_block_events += 1
+            duplicate_block_rate = float(
+                float(duplicate_block_events) / float(duplicate_block_samples)
+                if duplicate_block_samples > 0
+                else 0.0
+            )
+            controlled_apply_ledger_drift_active = bool(
+                trendline_controlled_apply_enabled
+                and trendline_controlled_apply_ledger_enabled
+                and trendline_controlled_apply_ledger_drift_enabled
+            )
+            stale_ratio_high = bool(
+                controlled_apply_ledger_drift_active
+                and window_stale_ratio > float(trendline_controlled_apply_ledger_window_stale_ratio_max)
+            )
+            duplicate_block_rate_high = bool(
+                controlled_apply_ledger_drift_active
+                and duplicate_block_rate > float(trendline_controlled_apply_ledger_duplicate_block_rate_max)
+            )
+            controlled_apply_ledger_drift_breached = bool(stale_ratio_high or duplicate_block_rate_high)
+            controlled_apply_ledger_drift_gate_failed = bool(
+                controlled_apply_ledger_drift_breached
+                and trendline_controlled_apply_ledger_drift_gate_hard_fail
+            )
+            trendline_checks["controlled_apply_ledger_drift_ok"] = bool(
+                (not controlled_apply_ledger_drift_active)
+                or (not trendline_controlled_apply_ledger_drift_gate_hard_fail)
+                or (not controlled_apply_ledger_drift_breached)
+            )
+            applied_rows = [row for row in ledger_entries if bool(row.get("applied", False))]
+            applied_rows.sort(
+                key=lambda row: (
+                    str(row.get("date", "")),
+                    str(row.get("applied_at", "")),
+                    str(row.get("proposal_id", "")),
+                )
+            )
+            last_applied_date = str(applied_rows[-1].get("date", "")) if applied_rows else ""
+            last_applied_proposal_id = (
+                str(applied_rows[-1].get("proposal_id", "")) if applied_rows else ""
+            )
+            if trendline_controlled_apply_ledger_enabled and window_stale_count > 0:
+                trendline_alerts.append(
+                    "stress_matrix_execution_friction_trendline_controlled_apply_ledger_stale_detected"
+                )
+            if stale_ratio_high:
+                trendline_alerts.append(
+                    "stress_matrix_execution_friction_trendline_controlled_apply_ledger_stale_ratio_high"
+                )
+            if duplicate_block_rate_high:
+                trendline_alerts.append(
+                    "stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_high"
+                )
+            if trendline_controlled_apply_ledger_enabled and (not ledger_write_ok):
+                trendline_checks["controlled_apply_ledger_write_ok"] = False
+
+            controlled_apply_payload.update(
+                {
+                    "enabled": bool(trendline_controlled_apply_enabled),
+                    "manual_approval_required": bool(
+                        trendline_controlled_apply_manual_approval_required
+                    ),
+                    "approval_manifest_path": str(trendline_controlled_apply_approval_manifest_path),
+                    "max_apply_window_days": int(trendline_controlled_apply_max_apply_window_days),
+                    "proposal_generated": bool(proposal_generated),
+                    "proposal_id": str(proposal_id),
+                    "proposal_date": str(proposal_date),
+                    "proposal_age_days": int(proposal_age_days),
+                    "window_ok": bool(window_ok),
+                    "applied": bool(auto_tune_payload.get("applied", False)),
+                    "allowed": bool(controlled_apply_allowed),
+                    "reason": str(controlled_apply_reason),
+                    "duplicate_already_applied": bool(duplicate_already_applied),
+                    "duplicate_blocked": bool(duplicate_blocked),
+                }
+            )
+            approval_payload.update(
+                {
+                    "found": bool(approval_found),
+                    "approved": bool(approval_confirmed),
+                    "proposal_id": str(approval_proposal_id),
+                    "matches_proposal": bool(approval_matches),
+                    "approved_at": str(approved_at_txt),
+                    "age_days": int(approval_age_days),
+                }
+            )
+            controlled_apply_payload["approval"] = approval_payload
+            ledger_payload.update(
+                {
+                    "enabled": bool(trendline_controlled_apply_ledger_enabled),
+                    "path": str(trendline_controlled_apply_ledger_path),
+                    "retention_days": int(trendline_controlled_apply_ledger_retention_days),
+                    "staleness_window_days": int(
+                        trendline_controlled_apply_ledger_staleness_window_days
+                    ),
+                    "found": bool(ledger_found),
+                    "entries": int(len(ledger_entries)),
+                    "window_entries": int(len(window_rows)),
+                    "window_stale_count": int(window_stale_count),
+                    "window_stale_ratio": float(window_stale_ratio),
+                    "duplicate_blocked": bool(duplicate_blocked),
+                    "duplicate_block_samples": int(duplicate_block_samples),
+                    "duplicate_block_events": int(duplicate_block_events),
+                    "duplicate_block_rate": float(duplicate_block_rate),
+                    "last_applied_date": str(last_applied_date),
+                    "last_applied_proposal_id": str(last_applied_proposal_id),
+                    "write_ok": bool(
+                        (not trendline_controlled_apply_ledger_enabled)
+                        or bool(trendline_checks.get("controlled_apply_ledger_write_ok", True))
+                    ),
+                    "write_error": str(ledger_write_error or ledger_read_error),
+                    "entry_written": bool(ledger_entry_written),
+                    "read_error": str(ledger_read_error),
+                    "drift": {
+                        "enabled": bool(trendline_controlled_apply_ledger_drift_enabled),
+                        "gate_hard_fail": bool(
+                            trendline_controlled_apply_ledger_drift_gate_hard_fail
+                        ),
+                        "window_stale_ratio_max": float(
+                            trendline_controlled_apply_ledger_window_stale_ratio_max
+                        ),
+                        "duplicate_block_rate_max": float(
+                            trendline_controlled_apply_ledger_duplicate_block_rate_max
+                        ),
+                        "window_stale_ratio": float(window_stale_ratio),
+                        "duplicate_block_rate": float(duplicate_block_rate),
+                        "duplicate_block_samples": int(duplicate_block_samples),
+                        "duplicate_block_events": int(duplicate_block_events),
+                        "status": (
+                            "critical"
+                            if controlled_apply_ledger_drift_gate_failed
+                            else (
+                                "warn"
+                                if controlled_apply_ledger_drift_breached
+                                else ("ok" if controlled_apply_ledger_drift_active else "inactive")
+                            )
+                        ),
+                        "breached": bool(controlled_apply_ledger_drift_breached),
+                    },
+                }
+            )
+            ledger_entries_preview = [
+                {
+                    "date": str(row.get("date", "")),
+                    "proposal_id": str(row.get("proposal_id", "")),
+                    "applied": bool(row.get("applied", False)),
+                    "proposal_age_days": int(self._safe_float(row.get("proposal_age_days", 0), 0)),
+                    "reason": str(row.get("reason", "")),
+                }
+                for row in ledger_entries[-30:]
+            ]
+            ledger_drillbook = self._write_stress_exec_controlled_apply_ledger_artifact(
+                as_of=as_of,
+                source_date=latest_date,
+                source_path=latest_path,
+                trendline_status=str(trendline_payload.get("status", "unknown") or "unknown"),
+                checks=trendline_checks,
+                thresholds=(
+                    trendline_payload.get("thresholds", {})
+                    if isinstance(trendline_payload.get("thresholds", {}), dict)
+                    else {}
+                ),
+                controlled_apply=controlled_apply_payload,
+                ledger=ledger_payload,
+                entries_preview=ledger_entries_preview,
+                alerts=trendline_alerts,
+                retention_days=int(trendline_controlled_apply_ledger_retention_days),
+                replay_days=int(
+                    self._safe_float(val.get("required_stable_replay_days", 3), 3)
+                ),
+                checksum_index_enabled=True,
+            )
+            artifact_failed = bool(
+                trendline_controlled_apply_ledger_enabled
+                and (not bool(ledger_drillbook.get("written", False)))
+            )
+            artifact_rotation_failed = bool(ledger_drillbook.get("rotation_failed", False))
+            artifact_checksum_failed = bool(ledger_drillbook.get("checksum_index_failed", False))
+            trendline_checks["controlled_apply_ledger_artifact_ok"] = bool(
+                (not trendline_controlled_apply_ledger_enabled)
+                or (
+                    (not artifact_failed)
+                    and (not artifact_rotation_failed)
+                    and (
+                        (not bool(ledger_drillbook.get("checksum_index_enabled", False)))
+                        or (not artifact_checksum_failed)
+                    )
+                )
+            )
+            if artifact_failed:
+                trendline_alerts.append(
+                    "stress_matrix_execution_friction_trendline_controlled_apply_ledger_artifact_failed"
+                )
+            if artifact_rotation_failed:
+                trendline_alerts.append(
+                    "stress_matrix_execution_friction_trendline_controlled_apply_ledger_artifact_rotation_failed"
+                )
+            if artifact_checksum_failed:
+                trendline_alerts.append(
+                    "stress_matrix_execution_friction_trendline_controlled_apply_ledger_artifact_checksum_index_failed"
+                )
+            ledger_payload["drillbook"] = {
+                "written": bool(ledger_drillbook.get("written", False)),
+                "json": str(ledger_drillbook.get("json", "")),
+                "md": str(ledger_drillbook.get("md", "")),
+                "retention_days": int(
+                    self._safe_float(
+                        ledger_drillbook.get(
+                            "retention_days",
+                            trendline_controlled_apply_ledger_retention_days,
+                        ),
+                        trendline_controlled_apply_ledger_retention_days,
+                    )
+                ),
+                "rotated_out_count": int(
+                    self._safe_float(ledger_drillbook.get("rotated_out_count", 0), 0)
+                ),
+                "rotated_out_dates": [
+                    str(x) for x in ledger_drillbook.get("rotated_out_dates", [])
+                ],
+                "rotation_failed": bool(artifact_rotation_failed),
+                "checksum_index_enabled": bool(
+                    ledger_drillbook.get("checksum_index_enabled", True)
+                ),
+                "checksum_index_written": bool(
+                    ledger_drillbook.get("checksum_index_written", False)
+                ),
+                "checksum_index_path": str(
+                    ledger_drillbook.get("checksum_index_path", "")
+                ),
+                "checksum_index_entries": int(
+                    self._safe_float(ledger_drillbook.get("checksum_index_entries", 0), 0)
+                ),
+                "checksum_index_failed": bool(artifact_checksum_failed),
+                "reason": str(ledger_drillbook.get("reason", "")),
+                "workflows": (
+                    ledger_drillbook.get("workflows", {})
+                    if isinstance(ledger_drillbook.get("workflows", {}), dict)
+                    else {}
+                ),
+            }
+            controlled_apply_payload["ledger"] = ledger_payload
+            auto_tune_payload["controlled_apply"] = controlled_apply_payload
+            ledger_drillbook_payload = (
+                ledger_payload.get("drillbook", {})
+                if isinstance(ledger_payload.get("drillbook", {}), dict)
+                else {}
+            )
+            ledger_drillbook_workflows = (
+                ledger_drillbook_payload.get("workflows", {})
+                if isinstance(ledger_drillbook_payload.get("workflows", {}), dict)
+                else {}
+            )
+            ledger_replay_workflow = (
+                ledger_drillbook_workflows.get("replay", {})
+                if isinstance(ledger_drillbook_workflows.get("replay", {}), dict)
+                else {}
+            )
+            ledger_rollback_workflow = (
+                ledger_drillbook_workflows.get("rollback", {})
+                if isinstance(ledger_drillbook_workflows.get("rollback", {}), dict)
+                else {}
+            )
+            proposal_payload["apply_gate"] = {
+                "allowed": bool(controlled_apply_allowed),
+                "reason": str(controlled_apply_reason),
+                "manual_approval_required": bool(trendline_controlled_apply_manual_approval_required),
+                "window_ok": bool(window_ok),
+                "max_apply_window_days": int(trendline_controlled_apply_max_apply_window_days),
+                "approval_manifest_path": str(trendline_controlled_apply_approval_manifest_path),
+                "duplicate_ok": bool(trendline_checks.get("controlled_apply_duplicate_ok", True)),
+                "ledger_write_ok": bool(
+                    trendline_checks.get("controlled_apply_ledger_write_ok", True)
+                ),
+                "ledger_drift_ok": bool(
+                    trendline_checks.get("controlled_apply_ledger_drift_ok", True)
+                ),
+                "ledger_drift_gate_hard_fail": bool(
+                    trendline_controlled_apply_ledger_drift_gate_hard_fail
+                ),
+                "ledger_path": str(trendline_controlled_apply_ledger_path),
+                "ledger_artifact_ok": bool(
+                    trendline_checks.get("controlled_apply_ledger_artifact_ok", True)
+                ),
+                "ledger_drillbook_path": str(ledger_drillbook_payload.get("json", "")),
+                "ledger_replay_recommended": bool(
+                    ledger_replay_workflow.get("recommended", False)
+                ),
+                "ledger_rollback_recommended": bool(
+                    ledger_rollback_workflow.get("recommended", False)
+                ),
+            }
+            auto_tune_payload["proposal"] = proposal_payload
+            trendline_payload["auto_tune"] = auto_tune_payload
+
+        trendline_thresholds_payload = (
+            trendline_payload.get("thresholds", {})
+            if isinstance(trendline_payload.get("thresholds", {}), dict)
+            else {}
+        )
+        if trendline_thresholds_payload:
+            trendline_thresholds_payload[
+                "ops_stress_matrix_execution_friction_trendline_max_annual_drop_rise_base"
+            ] = float(base_limits["annual_drop_rise"])
+            trendline_thresholds_payload[
+                "ops_stress_matrix_execution_friction_trendline_max_drawdown_rise_base"
+            ] = float(base_limits["drawdown_rise_delta"])
+            trendline_thresholds_payload[
+                "ops_stress_matrix_execution_friction_trendline_max_profit_factor_ratio_drop_base"
+            ] = float(base_limits["profit_factor_ratio_drop"])
+            trendline_thresholds_payload[
+                "ops_stress_matrix_execution_friction_trendline_max_annual_drop_rise"
+            ] = float(effective_limits["annual_drop_rise"])
+            trendline_thresholds_payload[
+                "ops_stress_matrix_execution_friction_trendline_max_drawdown_rise"
+            ] = float(effective_limits["drawdown_rise_delta"])
+            trendline_thresholds_payload[
+                "ops_stress_matrix_execution_friction_trendline_max_profit_factor_ratio_drop"
+            ] = float(effective_limits["profit_factor_ratio_drop"])
+            trendline_payload["thresholds"] = trendline_thresholds_payload
+
+        trendline_effective = bool(trendline_enabled and (active or trendline_require_active))
+        if trendline_effective:
+            stale = bool(
+                trendline_staleness_guard_enabled
+                and source_age_days > int(trendline_max_staleness_days)
+            )
+            trendline_checks["source_staleness_ok"] = bool(not stale)
+            if stale:
+                trendline_gate_ok = False
+                trendline_checks["samples_ready_ok"] = False
+                trendline_payload["status"] = "stale"
+                trendline_payload["active"] = False
+                trendline_alerts.append("stress_matrix_execution_friction_trendline_stale")
+            else:
+                required_runs = int(max(trendline_min_runs, trendline_recent_runs + trendline_prior_runs))
+                trendline_payload["required_runs"] = int(required_runs)
+                samples_ready = bool(len(active_history) >= required_runs)
+                trendline_checks["samples_ready_ok"] = bool(samples_ready)
+                if samples_ready:
+                    recent_rows = active_history[-int(trendline_recent_runs) :]
+                    prior_end = max(0, len(active_history) - int(trendline_recent_runs))
+                    prior_start = max(0, prior_end - int(trendline_prior_runs))
+                    prior_rows = active_history[prior_start:prior_end]
+
+                    def _avg(rows: list[dict[str, Any]], key: str) -> float:
+                        if not rows:
+                            return 0.0
+                        return float(sum(self._safe_float(r.get(key, 0.0), 0.0) for r in rows) / float(len(rows)))
+
+                    recent_window = {
+                        "samples": int(len(recent_rows)),
+                        "annual_drop": float(_avg(recent_rows, "annual_drop")),
+                        "drawdown_rise": float(_avg(recent_rows, "drawdown_rise")),
+                        "min_profit_factor_ratio": float(_avg(recent_rows, "min_profit_factor_ratio")),
+                    }
+                    prior_window = {
+                        "samples": int(len(prior_rows)),
+                        "annual_drop": float(_avg(prior_rows, "annual_drop")),
+                        "drawdown_rise": float(_avg(prior_rows, "drawdown_rise")),
+                        "min_profit_factor_ratio": float(_avg(prior_rows, "min_profit_factor_ratio")),
+                    }
+                    deltas = {
+                        "annual_drop_rise": float(
+                            self._safe_float(recent_window.get("annual_drop", 0.0), 0.0)
+                            - self._safe_float(prior_window.get("annual_drop", 0.0), 0.0)
+                        ),
+                        "drawdown_rise_delta": float(
+                            self._safe_float(recent_window.get("drawdown_rise", 0.0), 0.0)
+                            - self._safe_float(prior_window.get("drawdown_rise", 0.0), 0.0)
+                        ),
+                        "profit_factor_ratio_drop": float(
+                            self._safe_float(prior_window.get("min_profit_factor_ratio", 0.0), 0.0)
+                            - self._safe_float(recent_window.get("min_profit_factor_ratio", 0.0), 0.0)
+                        ),
+                    }
+                    trendline_payload["windows"] = {"recent": recent_window, "prior": prior_window}
+                    trendline_payload["deltas"] = deltas
+                    trendline_checks["annual_drop_delta_ok"] = bool(
+                        self._safe_float(deltas.get("annual_drop_rise", 0.0), 0.0)
+                        <= float(effective_limits["annual_drop_rise"])
+                    )
+                    trendline_checks["drawdown_rise_delta_ok"] = bool(
+                        self._safe_float(deltas.get("drawdown_rise_delta", 0.0), 0.0)
+                        <= float(effective_limits["drawdown_rise_delta"])
+                    )
+                    trendline_checks["profit_factor_ratio_delta_ok"] = bool(
+                        self._safe_float(deltas.get("profit_factor_ratio_drop", 0.0), 0.0)
+                        <= float(effective_limits["profit_factor_ratio_drop"])
+                    )
+                    trendline_gate_ok = bool(
+                        trendline_checks["annual_drop_delta_ok"]
+                        and trendline_checks["drawdown_rise_delta_ok"]
+                        and trendline_checks["profit_factor_ratio_delta_ok"]
+                    )
+                    fail_count = int(
+                        sum(
+                            1
+                            for k in (
+                                "annual_drop_delta_ok",
+                                "drawdown_rise_delta_ok",
+                                "profit_factor_ratio_delta_ok",
+                            )
+                            if not bool(trendline_checks.get(k, True))
+                        )
+                    )
+                    if not bool(trendline_checks["annual_drop_delta_ok"]):
+                        trendline_alerts.append("stress_matrix_execution_friction_trendline_annual_drop_rise")
+                    if not bool(trendline_checks["drawdown_rise_delta_ok"]):
+                        trendline_alerts.append("stress_matrix_execution_friction_trendline_drawdown_rise")
+                    if not bool(trendline_checks["profit_factor_ratio_delta_ok"]):
+                        trendline_alerts.append("stress_matrix_execution_friction_trendline_profit_factor_ratio")
+                    if fail_count <= 0:
+                        trendline_payload["status"] = "ok"
+                    elif fail_count == 1:
+                        trendline_payload["status"] = "warn"
+                    else:
+                        trendline_payload["status"] = "critical"
+                else:
+                    trendline_gate_ok = bool(not trendline_require_samples)
+                    trendline_payload["status"] = "insufficient_samples"
+                    trendline_alerts.append("stress_matrix_execution_friction_trendline_insufficient_samples")
+                    trendline_checks["annual_drop_delta_ok"] = True
+                    trendline_checks["drawdown_rise_delta_ok"] = True
+                    trendline_checks["profit_factor_ratio_delta_ok"] = True
+                trendline_payload["active"] = bool(samples_ready)
+        else:
+            trendline_payload["status"] = "inactive"
+
+        if controlled_apply_ledger_drift_gate_failed:
+            trendline_gate_ok = False
+            trend_status = str(trendline_payload.get("status", "warn")).strip().lower() or "warn"
+            if trend_status != "critical":
+                trendline_payload["status"] = "warn"
+
+        trendline_checks["trendline_ok"] = bool(trendline_gate_ok)
+        trendline_payload["checks"] = trendline_checks
+        trendline_payload["alerts"] = trendline_alerts
+
+        checks = dict(checks)
+        checks["trendline_ok"] = bool(trendline_gate_ok)
+        checks["trendline_source_staleness_ok"] = bool(trendline_checks.get("source_staleness_ok", True))
+        checks["trendline_auto_tune_bounded_ok"] = bool(
+            trendline_checks.get("auto_tune_bounded_ok", True)
+        )
+        checks["trendline_controlled_apply_ledger_drift_ok"] = bool(
+            trendline_checks.get("controlled_apply_ledger_drift_ok", True)
+        )
+        checks["trendline_controlled_apply_ledger_artifact_ok"] = bool(
+            trendline_checks.get("controlled_apply_ledger_artifact_ok", True)
+        )
+        if trendline_effective and (not trendline_gate_ok):
+            gate_ok = False
+            trend_status = str(trendline_payload.get("status", "warn")).strip().lower() or "warn"
+            if trend_status == "critical":
+                status = "critical"
+            elif status not in {"critical"}:
+                status = "warn"
+        merged_alerts = list(alerts) + list(trendline_alerts)
+        alerts = list(dict.fromkeys([str(x).strip() for x in merged_alerts if str(x).strip()]))
+        return {
+            "active": bool(active),
+            "enabled": True,
+            "gate_ok": bool(gate_ok),
+            "status": status,
+            "source_date": latest_date.isoformat(),
+            "source_path": str(latest_path),
+            "checks": checks,
+            "thresholds": thresholds,
+            "metrics": metrics,
+            "alerts": alerts,
+            "trendline": trendline_payload,
+            "series": history_series[-12:],
         }
 
     def _temporal_audit_metrics(self, *, as_of: date) -> dict[str, Any]:
@@ -5204,6 +12714,7 @@ class ReleaseOrchestrator:
         window_days = max(3, int(val.get("mode_switch_window_days", 20)))
         min_samples = max(1, int(val.get("ops_state_min_samples", 5)))
         switch_rate_max = self._safe_float(val.get("mode_switch_max_rate", 0.45), 0.45)
+        switch_min_dwell_days = max(1, int(val.get("ops_state_mode_switch_min_dwell_days", 1)))
         risk_floor = self._safe_float(
             val.get("ops_risk_multiplier_floor", val.get("execution_min_risk_multiplier", 0.20)),
             0.20,
@@ -5214,6 +12725,118 @@ class ReleaseOrchestrator:
             0.75,
         )
         mode_health_fail_days_max = max(0, int(val.get("ops_mode_health_fail_days_max", 2)))
+        degradation_enabled = bool(val.get("ops_state_degradation_enabled", False))
+        hysteresis_enabled = bool(val.get("ops_state_hysteresis_enabled", False))
+        degradation_live = self._load_degradation_calibration_overrides()
+        degradation_live_params = (
+            degradation_live.get("params", {})
+            if isinstance(degradation_live.get("params", {}), dict)
+            else {}
+        )
+        degradation_live_applied = False
+
+        def _degradation_value(key: str, default: Any) -> Any:
+            nonlocal degradation_live_applied
+            if key in degradation_live_params:
+                degradation_live_applied = True
+                return degradation_live_params.get(key)
+            return default
+
+        degrade_soft_multiplier = max(
+            1.0,
+            self._safe_float(
+                _degradation_value(
+                    "ops_state_degradation_soft_multiplier",
+                    val.get("ops_state_degradation_soft_multiplier", 1.10),
+                ),
+                1.10,
+            ),
+        )
+        degrade_hard_multiplier = max(
+            float(degrade_soft_multiplier),
+            self._safe_float(
+                _degradation_value(
+                    "ops_state_degradation_hard_multiplier",
+                    val.get("ops_state_degradation_hard_multiplier", 1.35),
+                ),
+                1.35,
+            ),
+        )
+        degrade_floor_soft_ratio = min(
+            1.0,
+            max(
+                0.0,
+                self._safe_float(
+                    _degradation_value(
+                        "ops_state_degradation_floor_soft_ratio",
+                        val.get("ops_state_degradation_floor_soft_ratio", 0.96),
+                    ),
+                    0.96,
+                ),
+            ),
+        )
+        degrade_floor_hard_ratio = min(
+            float(degrade_floor_soft_ratio),
+            max(
+                0.0,
+                self._safe_float(
+                    _degradation_value(
+                        "ops_state_degradation_floor_hard_ratio",
+                        val.get("ops_state_degradation_floor_hard_ratio", 0.90),
+                    ),
+                    0.90,
+                ),
+            ),
+        )
+        hysteresis_soft_streak_days = max(
+            1,
+            int(
+                self._safe_float(
+                    _degradation_value(
+                        "ops_state_hysteresis_soft_streak_days",
+                        val.get("ops_state_hysteresis_soft_streak_days", 2),
+                    ),
+                    self._safe_float(val.get("ops_state_hysteresis_soft_streak_days", 2), 2.0),
+                )
+            ),
+        )
+        hysteresis_hard_streak_days = max(
+            int(hysteresis_soft_streak_days),
+            int(
+                self._safe_float(
+                    _degradation_value(
+                        "ops_state_hysteresis_hard_streak_days",
+                        val.get("ops_state_hysteresis_hard_streak_days", 3),
+                    ),
+                    self._safe_float(val.get("ops_state_hysteresis_hard_streak_days", 3), 3.0),
+                )
+            ),
+        )
+        switch_rate_max_by_mode = {
+            "ultra_short": 1.20,
+            "swing": 1.00,
+            "long": 0.90,
+        }
+        raw_switch_map = val.get("ops_state_switch_rate_max_by_mode", {})
+        if isinstance(raw_switch_map, dict):
+            for key, raw_value in raw_switch_map.items():
+                mode_key = str(key or "").strip().lower()
+                if not mode_key:
+                    continue
+                candidate = self._safe_float(raw_value, switch_rate_max_by_mode.get(mode_key, 1.0))
+                if candidate > 0.0:
+                    switch_rate_max_by_mode[mode_key] = float(candidate)
+
+        def _tier_ok(tier: str, streak: int) -> bool:
+            txt = str(tier).strip().lower()
+            if txt == "green":
+                return True
+            if txt == "red":
+                return False
+            if (not degradation_enabled) or (not hysteresis_enabled):
+                return False
+            required = hysteresis_soft_streak_days if txt == "yellow" else hysteresis_hard_streak_days
+            return int(streak) < int(required)
 
         rows = self._load_mode_feedback_series(as_of=as_of, window_days=window_days)
         samples = len(rows)
@@ -5221,10 +12844,23 @@ class ReleaseOrchestrator:
         risk_values = [self._safe_float(x.get("risk_multiplier", 1.0), 1.0) for x in rows]
         source_values = [self._safe_float(x.get("source_confidence_score", 1.0), 1.0) for x in rows]
         mode_health_fail_days = sum(1 for x in rows if not bool(x.get("mode_health_passed", True)))
+        mode_health_flags = [not bool(x.get("mode_health_passed", True)) for x in rows]
+        risk_floor_flags = [self._safe_float(x.get("risk_multiplier", 1.0), 1.0) < risk_floor for x in rows]
+        source_floor_flags = [
+            self._safe_float(x.get("source_confidence_score", 1.0), 1.0) < source_floor for x in rows
+        ]
 
-        switch_count = 0
+        switch_flags_raw: list[bool] = []
+        ignored_switch_transition_indices: list[int] = []
+        switch_flags_effective: list[bool] = []
         if len(modes) >= 2:
-            switch_count = sum(1 for i in range(1, len(modes)) if modes[i] != modes[i - 1])
+            switch_flags_raw, ignored_switch_transition_indices, switch_flags_effective = self._mode_switch_flags_with_min_dwell(
+                modes=modes,
+                min_dwell_days=switch_min_dwell_days,
+            )
+        switch_count_raw = sum(1 for x in switch_flags_raw if bool(x))
+        switch_count = sum(1 for x in switch_flags_effective if bool(x))
+        switch_rate_raw = float(switch_count_raw / max(1, len(modes) - 1)) if len(modes) >= 2 else 0.0
         switch_rate = float(switch_count / max(1, len(modes) - 1)) if len(modes) >= 2 else 0.0
 
         risk_min = min(risk_values) if risk_values else 1.0
@@ -5237,6 +12873,33 @@ class ReleaseOrchestrator:
             risk_drift = (sum(risk_values[-3:]) / 3.0) - (sum(risk_values[-6:-3]) / 3.0)
         elif len(risk_values) >= 4:
             risk_drift = (sum(risk_values[-2:]) / 2.0) - (sum(risk_values[-4:-2]) / 2.0)
+        risk_drift_streak = 1 if abs(float(risk_drift)) > float(risk_drift_max) else 0
+
+        mode_counts: dict[str, int] = {}
+        for mode in modes:
+            key = str(mode).strip()
+            if not key:
+                continue
+            mode_counts[key] = int(mode_counts.get(key, 0)) + 1
+        dominant_mode = ""
+        if mode_counts:
+            latest_mode = str(modes[-1]).strip() if modes else ""
+            dominant_mode = max(
+                mode_counts.items(),
+                key=lambda kv: (int(kv[1]), int(str(kv[0]).strip() == latest_mode)),
+            )[0]
+        switch_rate_mode_multiplier = float(
+            switch_rate_max_by_mode.get(str(dominant_mode).strip().lower(), 1.0)
+        )
+        effective_switch_rate_max = float(switch_rate_max * switch_rate_mode_multiplier)
+
+        streaks = {
+            "switch": int(self._max_true_streak(switch_flags_effective)),
+            "risk_floor": int(self._max_true_streak(risk_floor_flags)),
+            "source_floor": int(self._max_true_streak(source_floor_flags)),
+            "mode_health_fail": int(self._max_true_streak(mode_health_flags)),
+            "risk_drift": int(risk_drift_streak),
+        }
 
         active = samples >= min_samples
         checks = {
@@ -5247,24 +12910,118 @@ class ReleaseOrchestrator:
             "mode_health_fail_days_ok": True,
         }
         alerts: list[str] = []
+        degradation_rows: dict[str, dict[str, Any]] = {}
+        degradation_overall_tier = "disabled"
         if active:
-            checks["switch_rate_ok"] = bool(switch_rate <= switch_rate_max)
-            checks["risk_multiplier_floor_ok"] = bool(risk_min >= risk_floor)
-            checks["risk_multiplier_drift_ok"] = bool(abs(risk_drift) <= risk_drift_max)
-            checks["source_confidence_floor_ok"] = bool(source_min >= source_floor)
-            checks["mode_health_fail_days_ok"] = bool(mode_health_fail_days <= mode_health_fail_days_max)
-            if not checks["switch_rate_ok"]:
-                alerts.append("mode_switch_rate_high")
-            if not checks["risk_multiplier_floor_ok"]:
-                alerts.append("risk_multiplier_too_low")
-            if not checks["risk_multiplier_drift_ok"]:
-                alerts.append("risk_multiplier_drift_high")
-            if not checks["source_confidence_floor_ok"]:
-                alerts.append("source_confidence_too_low")
-            if not checks["mode_health_fail_days_ok"]:
-                alerts.append("mode_health_fail_days_high")
+            if not degradation_enabled:
+                checks["switch_rate_ok"] = bool(switch_rate <= effective_switch_rate_max)
+                checks["risk_multiplier_floor_ok"] = bool(risk_min >= risk_floor)
+                checks["risk_multiplier_drift_ok"] = bool(abs(risk_drift) <= risk_drift_max)
+                checks["source_confidence_floor_ok"] = bool(source_min >= source_floor)
+                checks["mode_health_fail_days_ok"] = bool(mode_health_fail_days <= mode_health_fail_days_max)
+                if not checks["switch_rate_ok"]:
+                    alerts.append("mode_switch_rate_high")
+                if not checks["risk_multiplier_floor_ok"]:
+                    alerts.append("risk_multiplier_too_low")
+                if not checks["risk_multiplier_drift_ok"]:
+                    alerts.append("risk_multiplier_drift_high")
+                if not checks["source_confidence_floor_ok"]:
+                    alerts.append("source_confidence_too_low")
+                if not checks["mode_health_fail_days_ok"]:
+                    alerts.append("mode_health_fail_days_high")
+                degradation_overall_tier = "green" if all(bool(v) for v in checks.values()) else "red"
+            else:
+                metric_rules = [
+                    {
+                        "check": "switch_rate_ok",
+                        "metric": "switch_rate",
+                        "kind": "upper",
+                        "value": float(switch_rate),
+                        "threshold": float(effective_switch_rate_max),
+                        "streak": int(streaks.get("switch", 0)),
+                        "alert": "mode_switch_rate_high",
+                    },
+                    {
+                        "check": "risk_multiplier_floor_ok",
+                        "metric": "risk_multiplier_floor",
+                        "kind": "lower",
+                        "value": float(risk_min),
+                        "threshold": float(risk_floor),
+                        "streak": int(streaks.get("risk_floor", 0)),
+                        "alert": "risk_multiplier_too_low",
+                    },
+                    {
+                        "check": "risk_multiplier_drift_ok",
+                        "metric": "risk_multiplier_drift",
+                        "kind": "upper",
+                        "value": float(abs(risk_drift)),
+                        "threshold": float(risk_drift_max),
+                        "streak": int(streaks.get("risk_drift", 0)),
+                        "alert": "risk_multiplier_drift_high",
+                    },
+                    {
+                        "check": "source_confidence_floor_ok",
+                        "metric": "source_confidence_floor",
+                        "kind": "lower",
+                        "value": float(source_min),
+                        "threshold": float(source_floor),
+                        "streak": int(streaks.get("source_floor", 0)),
+                        "alert": "source_confidence_too_low",
+                    },
+                    {
+                        "check": "mode_health_fail_days_ok",
+                        "metric": "mode_health_fail_days",
+                        "kind": "upper",
+                        "value": float(mode_health_fail_days),
+                        "threshold": float(mode_health_fail_days_max),
+                        "streak": int(streaks.get("mode_health_fail", 0)),
+                        "alert": "mode_health_fail_days_high",
+                    },
+                ]
+                tiers: list[str] = []
+                for rule in metric_rules:
+                    if str(rule["kind"]) == "lower":
+                        tier = self._degradation_tier_lower(
+                            value=float(rule["value"]),
+                            threshold=float(rule["threshold"]),
+                            soft_ratio=float(degrade_floor_soft_ratio),
+                            hard_ratio=float(degrade_floor_hard_ratio),
+                        )
+                        soft_threshold = float(float(rule["threshold"]) * float(degrade_floor_soft_ratio))
+                        hard_threshold = float(float(rule["threshold"]) * float(degrade_floor_hard_ratio))
+                    else:
+                        tier = self._degradation_tier_upper(
+                            value=float(rule["value"]),
+                            threshold=float(rule["threshold"]),
+                            soft_multiplier=float(degrade_soft_multiplier),
+                            hard_multiplier=float(degrade_hard_multiplier),
+                        )
+                        soft_threshold = float(float(rule["threshold"]) * float(degrade_soft_multiplier))
+                        hard_threshold = float(float(rule["threshold"]) * float(degrade_hard_multiplier))
+                    tiers.append(str(tier))
+                    ok = bool(_tier_ok(str(tier), int(rule["streak"])))
+                    degradation_rows[str(rule["metric"])] = {
+                        "value": float(rule["value"]),
+                        "threshold": float(rule["threshold"]),
+                        "soft_threshold": float(soft_threshold),
+                        "hard_threshold": float(hard_threshold),
+                        "tier": str(tier),
+                        "streak_days": int(rule["streak"]),
+                        "ok": bool(ok),
+                    }
+                    checks[str(rule["check"])] = bool(ok)
+                    if not checks[str(rule["check"])]:
+                        alerts.append(str(rule["alert"]))
+                if tiers:
+                    top = max(tiers, key=self._tier_rank)
+                    degradation_overall_tier = str(top)
+                    if str(top) != "green":
+                        alerts.append(f"state_degradation_tier_{top}")
+                else:
+                    degradation_overall_tier = "green"
         else:
             alerts.append("insufficient_mode_feedback_samples")
+            degradation_overall_tier = "inactive"
 
         return {
             "active": active,
@@ -5274,23 +13031,3587 @@ class ReleaseOrchestrator:
             "metrics": {
                 "switch_count": switch_count,
                 "switch_rate": switch_rate,
+                "switch_streak": int(streaks.get("switch", 0)),
+                "switch_count_raw": int(switch_count_raw),
+                "switch_rate_raw": float(switch_rate_raw),
+                "switch_count_effective": int(switch_count),
+                "switch_rate_effective": float(switch_rate),
+                "switch_transient_ignored": int(len(ignored_switch_transition_indices)),
+                "dominant_mode": str(dominant_mode),
                 "risk_multiplier_min": risk_min,
                 "risk_multiplier_avg": risk_avg,
                 "risk_multiplier_drift": risk_drift,
+                "risk_floor_streak": int(streaks.get("risk_floor", 0)),
+                "risk_drift_streak": int(streaks.get("risk_drift", 0)),
                 "source_confidence_min": source_min,
                 "source_confidence_avg": source_avg,
+                "source_floor_streak": int(streaks.get("source_floor", 0)),
                 "mode_health_fail_days": mode_health_fail_days,
+                "mode_health_fail_streak": int(streaks.get("mode_health_fail", 0)),
             },
             "thresholds": {
                 "mode_switch_max_rate": switch_rate_max,
+                "mode_switch_max_rate_effective": float(effective_switch_rate_max),
+                "ops_state_mode_switch_min_dwell_days": int(switch_min_dwell_days),
+                "ops_state_switch_rate_max_by_mode": switch_rate_max_by_mode,
                 "ops_risk_multiplier_floor": risk_floor,
                 "ops_risk_multiplier_drift_max": risk_drift_max,
                 "ops_source_confidence_floor": source_floor,
                 "ops_mode_health_fail_days_max": mode_health_fail_days_max,
+                "ops_state_degradation_enabled": bool(degradation_enabled),
+                "ops_state_hysteresis_enabled": bool(hysteresis_enabled),
+                "ops_state_degradation_soft_multiplier": float(degrade_soft_multiplier),
+                "ops_state_degradation_hard_multiplier": float(degrade_hard_multiplier),
+                "ops_state_degradation_floor_soft_ratio": float(degrade_floor_soft_ratio),
+                "ops_state_degradation_floor_hard_ratio": float(degrade_floor_hard_ratio),
+                "ops_state_hysteresis_soft_streak_days": int(hysteresis_soft_streak_days),
+                "ops_state_hysteresis_hard_streak_days": int(hysteresis_hard_streak_days),
+                "ops_degradation_calibration_use_live_overrides": bool(degradation_live.get("enabled", False)),
+                "degradation_live_overrides_applied": bool(degradation_live_applied),
+                "degradation_live_overrides_path": str(degradation_live.get("path", "")),
             },
             "checks": checks,
             "alerts": alerts,
+            "degradation": {
+                "enabled": bool(degradation_enabled),
+                "hysteresis_enabled": bool(hysteresis_enabled),
+                "soft_multiplier": float(degrade_soft_multiplier),
+                "hard_multiplier": float(degrade_hard_multiplier),
+                "floor_soft_ratio": float(degrade_floor_soft_ratio),
+                "floor_hard_ratio": float(degrade_floor_hard_ratio),
+                "soft_streak_days": int(hysteresis_soft_streak_days),
+                "hard_streak_days": int(hysteresis_hard_streak_days),
+                "overall_tier": str(degradation_overall_tier),
+                "checks": degradation_rows,
+            },
             "series": rows[-10:],
+        }
+
+    def _compaction_restore_trend_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(val.get("ops_compaction_restore_trend_enabled", True), True)
+        gate_hard_fail = self._safe_bool(val.get("ops_compaction_restore_trend_gate_hard_fail", False), False)
+        require_active = self._safe_bool(val.get("ops_compaction_restore_trend_require_active", False), False)
+        window_weeks = max(1, int(self._safe_float(val.get("ops_compaction_restore_trend_window_weeks", 8), 8)))
+        min_samples = max(1, int(self._safe_float(val.get("ops_compaction_restore_trend_min_samples", 2), 2)))
+        max_compact_age_days = max(
+            1,
+            int(self._safe_float(val.get("ops_compaction_restore_trend_max_compact_age_days", 21), 21)),
+        )
+        max_restore_age_days = max(
+            1,
+            int(self._safe_float(val.get("ops_compaction_restore_trend_max_restore_age_days", 21), 21)),
+        )
+        max_compact_error_ratio = self._clamp_float(
+            self._safe_float(val.get("ops_compaction_restore_trend_max_compact_error_ratio", 0.20), 0.20),
+            0.0,
+            1.0,
+        )
+        min_restore_pass_ratio = self._clamp_float(
+            self._safe_float(val.get("ops_compaction_restore_trend_min_restore_pass_ratio", 1.00), 1.00),
+            0.0,
+            1.0,
+        )
+        min_restore_delta_match_ratio = self._clamp_float(
+            self._safe_float(
+                val.get("ops_compaction_restore_trend_min_restore_delta_match_ratio", 1.00),
+                1.00,
+            ),
+            0.0,
+            1.0,
+        )
+        min_restore_required_runs = max(
+            1,
+            int(self._safe_float(val.get("ops_compaction_restore_trend_min_restore_required_runs", 2), 2)),
+        )
+
+        def _parse_day(raw: Any) -> date | None:
+            txt = str(raw or "").strip()
+            if not txt:
+                return None
+            try:
+                return date.fromisoformat(txt)
+            except Exception:
+                pass
+            try:
+                return datetime.fromisoformat(txt).date()
+            except Exception:
+                pass
+            if len(txt) >= 10:
+                try:
+                    return date.fromisoformat(txt[:10])
+                except Exception:
+                    return None
+            return None
+
+        state_path = self.output_dir / "logs" / "weekly_guardrail_state.json"
+        state = self.load_json_safely(state_path)
+        history_raw = state.get("history", []) if isinstance(state.get("history", []), list) else []
+
+        horizon_days = int(max(7, int(window_weeks) * 7 + 6))
+        start_day = as_of - timedelta(days=horizon_days)
+
+        sample_rows: list[dict[str, Any]] = []
+        compact_error_runs = 0
+        restore_required_runs = 0
+        restore_passed_runs = 0
+        restore_delta_match_runs = 0
+        restore_ok_status_runs = 0
+        latest_compact_day: date | None = None
+        latest_restore_day: date | None = None
+        latest_restore_status = ""
+        latest_restore_delta_match = False
+
+        for entry in history_raw:
+            if not isinstance(entry, dict):
+                continue
+            row_day = _parse_day(entry.get("date"))
+            if row_day is None:
+                row_day = _parse_day(entry.get("ts"))
+            if row_day is None:
+                continue
+            if row_day < start_day or row_day > as_of:
+                continue
+
+            maintenance = (
+                entry.get("maintenance", {})
+                if isinstance(entry.get("maintenance", {}), dict)
+                else {}
+            )
+            compact = (
+                maintenance.get("compact", {})
+                if isinstance(maintenance.get("compact", {}), dict)
+                else {}
+            )
+            if not bool(compact.get("ran", False)):
+                continue
+
+            compact_status = str(compact.get("status", "")).strip().lower()
+            compact_dry_run = bool(compact.get("dry_run", True))
+            compact_error = compact_status == "error"
+            if compact_error:
+                compact_error_runs += 1
+            latest_compact_day = row_day if latest_compact_day is None else max(latest_compact_day, row_day)
+
+            restore = (
+                maintenance.get("restore_verify", {})
+                if isinstance(maintenance.get("restore_verify", {}), dict)
+                else {}
+            )
+            restore_enabled = bool(restore.get("enabled", False))
+            restore_required = bool(restore_enabled and (not compact_dry_run) and compact_status != "error")
+            restore_status = str(restore.get("status", "")).strip().lower()
+            restore_checks = (
+                restore.get("checks", {})
+                if isinstance(restore.get("checks", {}), dict)
+                else {}
+            )
+            restore_delta_match = bool(restore_checks.get("restore_delta_match", False))
+            restore_passed = bool(restore_status == "ok" and restore_delta_match)
+            if restore_required:
+                restore_required_runs += 1
+                if restore_passed:
+                    restore_passed_runs += 1
+                if restore_delta_match:
+                    restore_delta_match_runs += 1
+                if restore_status == "ok":
+                    restore_ok_status_runs += 1
+                latest_restore_day = row_day if latest_restore_day is None else max(latest_restore_day, row_day)
+                if latest_restore_day == row_day:
+                    latest_restore_status = restore_status
+                    latest_restore_delta_match = bool(restore_delta_match)
+
+            sample_rows.append(
+                {
+                    "date": row_day.isoformat(),
+                    "week_tag": str(entry.get("week_tag", "")),
+                    "weekly_status": str(entry.get("status", "")),
+                    "compact_status": compact_status,
+                    "compact_dry_run": bool(compact_dry_run),
+                    "restore_required": bool(restore_required),
+                    "restore_status": restore_status,
+                    "restore_delta_match": bool(restore_delta_match),
+                    "policy_mode": str(
+                        (
+                            compact.get("policy", {})
+                            if isinstance(compact.get("policy", {}), dict)
+                            else {}
+                        ).get("mode", "")
+                    ),
+                }
+            )
+
+        samples = int(len(sample_rows))
+        compact_error_ratio = self._ratio(compact_error_runs, samples)
+        restore_pass_ratio = self._ratio(restore_passed_runs, restore_required_runs) if restore_required_runs > 0 else 1.0
+        restore_delta_match_ratio = (
+            self._ratio(restore_delta_match_runs, restore_required_runs)
+            if restore_required_runs > 0
+            else 1.0
+        )
+        restore_samples_ready = bool(
+            (restore_required_runs <= 0)
+            or (restore_required_runs >= int(min_restore_required_runs))
+        )
+        compact_age_days = (as_of - latest_compact_day).days if latest_compact_day is not None else None
+        restore_age_days = (as_of - latest_restore_day).days if latest_restore_day is not None else None
+
+        active = bool(enabled and samples >= min_samples)
+        checks = {
+            "min_samples_ok": True,
+            "compact_age_ok": True,
+            "compact_error_ratio_ok": True,
+            "restore_age_ok": True,
+            "restore_pass_ratio_ok": True,
+            "restore_delta_match_ratio_ok": True,
+            "latest_restore_delta_match_ok": True,
+        }
+        alerts: list[str] = []
+        if active:
+            checks["min_samples_ok"] = bool(samples >= min_samples)
+            checks["compact_age_ok"] = bool(compact_age_days is not None and int(compact_age_days) <= int(max_compact_age_days))
+            checks["compact_error_ratio_ok"] = bool(compact_error_ratio <= float(max_compact_error_ratio))
+            if restore_required_runs > 0:
+                checks["restore_age_ok"] = bool(
+                    restore_age_days is not None and int(restore_age_days) <= int(max_restore_age_days)
+                )
+                if restore_samples_ready:
+                    checks["restore_pass_ratio_ok"] = bool(restore_pass_ratio >= float(min_restore_pass_ratio))
+                    checks["restore_delta_match_ratio_ok"] = bool(
+                        restore_delta_match_ratio >= float(min_restore_delta_match_ratio)
+                    )
+                    checks["latest_restore_delta_match_ok"] = bool(latest_restore_delta_match)
+            if not bool(checks["compact_age_ok"]):
+                alerts.append("compaction_trend_compact_stale")
+            if not bool(checks["compact_error_ratio_ok"]):
+                alerts.append("compaction_trend_compact_error_ratio_high")
+            if not bool(checks["restore_age_ok"]):
+                alerts.append("compaction_trend_restore_verify_stale")
+            if not bool(checks["restore_pass_ratio_ok"]):
+                alerts.append("compaction_trend_restore_verify_pass_ratio_low")
+            if not bool(checks["restore_delta_match_ratio_ok"]):
+                alerts.append("compaction_trend_restore_verify_delta_ratio_low")
+            if not bool(checks["latest_restore_delta_match_ok"]):
+                alerts.append("compaction_trend_latest_restore_delta_mismatch")
+        else:
+            if enabled and require_active:
+                alerts.append("compaction_trend_insufficient_samples")
+
+        monitor_failed = bool(
+            enabled and ((active and not all(bool(v) for v in checks.values())) or (require_active and not active))
+        )
+        gate_ok = bool(not monitor_failed) if gate_hard_fail else True
+
+        return {
+            "active": bool(active),
+            "enabled": bool(enabled),
+            "hard_fail": bool(gate_hard_fail),
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "window_weeks": int(window_weeks),
+            "samples": int(samples),
+            "min_samples": int(min_samples),
+            "checks": checks,
+            "alerts": alerts,
+            "metrics": {
+                "compact_runs": int(samples),
+                "compact_error_runs": int(compact_error_runs),
+                "compact_error_ratio": float(compact_error_ratio),
+                "compact_age_days": int(compact_age_days) if compact_age_days is not None else None,
+                "restore_required_runs": int(restore_required_runs),
+                "restore_ok_status_runs": int(restore_ok_status_runs),
+                "restore_passed_runs": int(restore_passed_runs),
+                "restore_delta_match_runs": int(restore_delta_match_runs),
+                "restore_pass_ratio": float(restore_pass_ratio),
+                "restore_delta_match_ratio": float(restore_delta_match_ratio),
+                "restore_samples_ready": bool(restore_samples_ready),
+                "min_restore_required_runs": int(min_restore_required_runs),
+                "restore_age_days": int(restore_age_days) if restore_age_days is not None else None,
+                "latest_restore_status": str(latest_restore_status),
+                "latest_restore_delta_match": bool(latest_restore_delta_match),
+            },
+            "thresholds": {
+                "ops_compaction_restore_trend_enabled": bool(enabled),
+                "ops_compaction_restore_trend_gate_hard_fail": bool(gate_hard_fail),
+                "ops_compaction_restore_trend_require_active": bool(require_active),
+                "ops_compaction_restore_trend_window_weeks": int(window_weeks),
+                "ops_compaction_restore_trend_min_samples": int(min_samples),
+                "ops_compaction_restore_trend_max_compact_age_days": int(max_compact_age_days),
+                "ops_compaction_restore_trend_max_restore_age_days": int(max_restore_age_days),
+                "ops_compaction_restore_trend_max_compact_error_ratio": float(max_compact_error_ratio),
+                "ops_compaction_restore_trend_min_restore_required_runs": int(
+                    min_restore_required_runs
+                ),
+                "ops_compaction_restore_trend_min_restore_pass_ratio": float(min_restore_pass_ratio),
+                "ops_compaction_restore_trend_min_restore_delta_match_ratio": float(
+                    min_restore_delta_match_ratio
+                ),
+            },
+            "source": {
+                "state_path": str(state_path),
+            },
+            "series": sample_rows[-10:],
+        }
+
+    def _guard_loop_frontend_snapshot_trend_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(
+            val.get("ops_guard_loop_frontend_snapshot_trend_enabled", True),
+            True,
+        )
+        gate_hard_fail = self._safe_bool(
+            val.get("ops_guard_loop_frontend_snapshot_trend_gate_hard_fail", False),
+            False,
+        )
+        require_active = self._safe_bool(
+            val.get("ops_guard_loop_frontend_snapshot_trend_require_active", False),
+            False,
+        )
+        window_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_frontend_snapshot_trend_window_days", 14),
+                    14,
+                )
+            ),
+        )
+        min_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_frontend_snapshot_trend_min_samples", 4),
+                    4,
+                )
+            ),
+        )
+        max_failure_ratio = self._clamp_float(
+            self._safe_float(
+                val.get("ops_guard_loop_frontend_snapshot_trend_max_failure_ratio", 0.35),
+                0.35,
+            ),
+            0.0,
+            1.0,
+        )
+        max_timeout_ratio = self._clamp_float(
+            self._safe_float(
+                val.get("ops_guard_loop_frontend_snapshot_trend_max_timeout_ratio", 0.20),
+                0.20,
+            ),
+            0.0,
+            1.0,
+        )
+        max_governance_failure_ratio = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_trend_max_governance_failure_ratio",
+                    0.20,
+                ),
+                0.20,
+            ),
+            0.0,
+            1.0,
+        )
+        max_failure_streak = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_frontend_snapshot_trend_max_failure_streak", 2),
+                    2,
+                )
+            ),
+        )
+        max_timeout_streak = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_frontend_snapshot_trend_max_timeout_streak", 2),
+                    2,
+                )
+            ),
+        )
+        antiflap_burnin_enabled = self._safe_bool(
+            val.get("ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_enabled", True),
+            True,
+        )
+        antiflap_burnin_window_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_window_days",
+                        3,
+                    ),
+                    3,
+                )
+            ),
+        )
+        antiflap_burnin_min_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_min_samples",
+                        3,
+                    ),
+                    3,
+                )
+            ),
+        )
+        antiflap_burnin_max_suppression_ratio = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_suppression_ratio",
+                    0.50,
+                ),
+                0.50,
+            ),
+            0.0,
+            1.0,
+        )
+        antiflap_burnin_require_zero_missed_runs = self._safe_bool(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_require_zero_missed_runs",
+                True,
+            ),
+            True,
+        )
+        antiflap_burnin_max_reason_missing_runs = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_reason_missing_runs",
+                        0,
+                    ),
+                    0,
+                )
+            ),
+        )
+        antiflap_burnin_retention_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_retention_days",
+                        30,
+                    ),
+                    30,
+                )
+            ),
+        )
+        antiflap_burnin_checksum_index_enabled = self._safe_bool(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_checksum_index_enabled",
+                True,
+            ),
+            True,
+        )
+        antiflap_burnin_dual_window_enabled = self._safe_bool(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_enabled",
+                True,
+            ),
+            True,
+        )
+        antiflap_burnin_dual_window_long_days = max(
+            int(antiflap_burnin_window_days),
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_long_days",
+                        max(14, int(antiflap_burnin_window_days)),
+                    ),
+                    max(14, int(antiflap_burnin_window_days)),
+                )
+            ),
+        )
+        antiflap_burnin_dual_window_min_long_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_min_long_samples",
+                        int(antiflap_burnin_min_samples),
+                    ),
+                    int(antiflap_burnin_min_samples),
+                )
+            ),
+        )
+        antiflap_burnin_dual_window_max_suppression_ratio_delta = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_suppression_ratio_delta",
+                    0.35,
+                ),
+                0.35,
+            ),
+            0.0,
+            1.0,
+        )
+        antiflap_burnin_dual_window_max_replay_missed_ratio_delta = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_replay_missed_ratio_delta",
+                    0.10,
+                ),
+                0.10,
+            ),
+            0.0,
+            1.0,
+        )
+        antiflap_burnin_dual_window_max_reason_missing_ratio_delta = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_reason_missing_ratio_delta",
+                    0.10,
+                ),
+                0.10,
+            ),
+            0.0,
+            1.0,
+        )
+        antiflap_burnin_promotion_enabled = self._safe_bool(
+            val.get("ops_guard_loop_frontend_snapshot_trend_gate_promote_on_burnin", False),
+            False,
+        )
+        controlled_apply_enabled = self._safe_bool(
+            val.get("ops_guard_loop_frontend_snapshot_trend_controlled_apply_enabled", True),
+            True,
+        )
+        controlled_apply_manual_approval_required = self._safe_bool(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_manual_approval_required",
+                True,
+            ),
+            True,
+        )
+        controlled_apply_max_apply_window_days = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_max_apply_window_days",
+                        7,
+                    ),
+                    7,
+                )
+            ),
+        )
+        controlled_apply_approval_manifest_path = self._resolve_output_path(
+            str(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_trend_controlled_apply_approval_manifest_path",
+                    "artifacts/frontend_snapshot_trend_hard_fail_approval.json",
+                )
+                or "artifacts/frontend_snapshot_trend_hard_fail_approval.json"
+            ),
+            fallback_rel="artifacts/frontend_snapshot_trend_hard_fail_approval.json",
+        )
+        controlled_apply_dry_run = self._safe_bool(
+            val.get("ops_guard_loop_frontend_snapshot_trend_controlled_apply_dry_run", True),
+            True,
+        )
+        controlled_apply_rollback_guard_enabled = self._safe_bool(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_rollback_guard_enabled",
+                True,
+            ),
+            True,
+        )
+        controlled_apply_retention_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_retention_days",
+                        60,
+                    ),
+                    60,
+                )
+            ),
+        )
+        controlled_apply_checksum_index_enabled = self._safe_bool(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_checksum_index_enabled",
+                True,
+            ),
+            True,
+        )
+        controlled_apply_route_audit_enabled = self._safe_bool(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_enabled",
+                True,
+            ),
+            True,
+        )
+        controlled_apply_route_audit_gate_hard_fail = self._safe_bool(
+            val.get(
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_gate_hard_fail",
+                False,
+            ),
+            False,
+        )
+        controlled_apply_route_audit_window_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_window_days",
+                        28,
+                    ),
+                    28,
+                )
+            ),
+        )
+        controlled_apply_route_audit_min_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_samples",
+                        7,
+                    ),
+                    7,
+                )
+            ),
+        )
+        controlled_apply_route_audit_max_non_apply_ratio = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_non_apply_ratio",
+                    0.85,
+                ),
+                0.85,
+            ),
+            0.0,
+            1.0,
+        )
+        controlled_apply_route_audit_max_rollback_guard_ratio = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_rollback_guard_ratio",
+                    0.35,
+                ),
+                0.35,
+            ),
+            0.0,
+            1.0,
+        )
+        controlled_apply_route_audit_min_apply_ratio = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_apply_ratio",
+                    0.05,
+                ),
+                0.05,
+            ),
+            0.0,
+            1.0,
+        )
+        controlled_apply_route_audit_trendline_recent_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_recent_days",
+                        7,
+                    ),
+                    7,
+                )
+            ),
+        )
+        controlled_apply_route_audit_trendline_prior_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_prior_days",
+                        7,
+                    ),
+                    7,
+                )
+            ),
+        )
+        controlled_apply_route_audit_trendline_min_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_min_samples",
+                        3,
+                    ),
+                    3,
+                )
+            ),
+        )
+        controlled_apply_route_audit_trendline_max_non_apply_ratio_rise = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_non_apply_ratio_rise",
+                    0.25,
+                ),
+                0.25,
+            ),
+            0.0,
+            1.0,
+        )
+        controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise",
+                    0.15,
+                ),
+                0.15,
+            ),
+            0.0,
+            1.0,
+        )
+        controlled_apply_route_audit_trendline_max_apply_ratio_drop = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_apply_ratio_drop",
+                    0.20,
+                ),
+                0.20,
+            ),
+            0.0,
+            1.0,
+        )
+
+        history_payload = self._load_guard_loop_frontend_snapshot_rows(
+            as_of=as_of,
+            window_days=window_days,
+        )
+        sample_rows = (
+            history_payload.get("rows", [])
+            if isinstance(history_payload.get("rows", []), list)
+            else []
+        )
+        run_rows = [row for row in sample_rows if isinstance(row, dict) and bool(row.get("frontend_snapshot_run_counted", False))]
+        governance_rows = [
+            row
+            for row in sample_rows
+            if isinstance(row, dict)
+            and (
+                bool(row.get("frontend_snapshot_governance_checksum_index_enabled", False))
+                or bool(row.get("frontend_snapshot_governance_failed", False))
+            )
+        ]
+        run_samples = int(len(run_rows))
+        governance_samples = int(len(governance_rows))
+        status_ok_runs = sum(1 for row in run_rows if bool(row.get("frontend_snapshot_status_ok", False)))
+        status_error_runs = sum(1 for row in run_rows if bool(row.get("frontend_snapshot_status_error", False)))
+        timeout_runs = sum(1 for row in run_rows if bool(row.get("frontend_snapshot_status_timeout", False)))
+        failure_runs = sum(1 for row in run_rows if bool(row.get("frontend_snapshot_status_failure", False)))
+        governance_failures = sum(
+            1 for row in governance_rows if bool(row.get("frontend_snapshot_governance_failed", False))
+        )
+
+        failure_ratio = self._ratio(failure_runs, run_samples) if run_samples > 0 else 0.0
+        timeout_ratio = self._ratio(timeout_runs, run_samples) if run_samples > 0 else 0.0
+        governance_failure_ratio = (
+            self._ratio(governance_failures, governance_samples) if governance_samples > 0 else 0.0
+        )
+        replay_expected_light_runs = 0
+        replay_expected_heavy_runs = 0
+        replay_executed_light_runs = 0
+        replay_executed_heavy_runs = 0
+        replay_missed_light_runs = 0
+        replay_missed_heavy_runs = 0
+        replay_executed_total_runs = 0
+        replay_unexpected_execution_runs = 0
+        replay_antiflap_suppressed_runs = 0
+        replay_due_but_reason_missing_runs = 0
+        for row in sample_rows:
+            if not isinstance(row, dict):
+                continue
+            trend_due_light = bool(row.get("frontend_snapshot_trend_due_light", False))
+            trend_due_heavy = bool(row.get("frontend_snapshot_trend_due_heavy", False))
+            trend_expected = bool(trend_due_light or trend_due_heavy)
+            replay_executed_light = bool(row.get("frontend_snapshot_replay_executed_light", False))
+            replay_executed_heavy = bool(row.get("frontend_snapshot_replay_executed_heavy", False))
+            replay_executed = bool(replay_executed_light or replay_executed_heavy)
+            if bool(row.get("frontend_snapshot_trend_antiflap_suppressed", False)):
+                replay_antiflap_suppressed_runs += 1
+            recovery_reason_codes_raw = row.get("frontend_snapshot_recovery_reason_codes", [])
+            recovery_reason_codes_present = bool(
+                isinstance(recovery_reason_codes_raw, list)
+                and any(str(x).strip() for x in recovery_reason_codes_raw)
+            )
+            if trend_expected:
+                if trend_due_heavy:
+                    replay_expected_heavy_runs += 1
+                    if replay_executed_heavy:
+                        replay_executed_heavy_runs += 1
+                    else:
+                        replay_missed_heavy_runs += 1
+                else:
+                    replay_expected_light_runs += 1
+                    if replay_executed_light or replay_executed_heavy:
+                        replay_executed_light_runs += 1
+                    else:
+                        replay_missed_light_runs += 1
+                if not recovery_reason_codes_present:
+                    replay_due_but_reason_missing_runs += 1
+            if replay_executed:
+                replay_executed_total_runs += 1
+                if not trend_expected:
+                    replay_unexpected_execution_runs += 1
+
+        replay_expected_runs = int(replay_expected_light_runs + replay_expected_heavy_runs)
+        replay_executed_runs = int(replay_executed_light_runs + replay_executed_heavy_runs)
+        replay_missed_runs = int(replay_missed_light_runs + replay_missed_heavy_runs)
+        replay_convergence_rate = (
+            self._ratio(replay_executed_runs, replay_expected_runs) if replay_expected_runs > 0 else 1.0
+        )
+        replay_convergence_light_rate = (
+            self._ratio(replay_executed_light_runs, replay_expected_light_runs)
+            if replay_expected_light_runs > 0
+            else 1.0
+        )
+        replay_convergence_heavy_rate = (
+            self._ratio(replay_executed_heavy_runs, replay_expected_heavy_runs)
+            if replay_expected_heavy_runs > 0
+            else 1.0
+        )
+        replay_unexpected_execution_ratio = (
+            self._ratio(replay_unexpected_execution_runs, replay_executed_total_runs)
+            if replay_executed_total_runs > 0
+            else 0.0
+        )
+        def _burnin_window_rollup(*, window_days_input: int, series_limit: int = 0) -> dict[str, Any]:
+            start_day = as_of - timedelta(days=max(1, int(window_days_input)) - 1)
+            rows_raw = [
+                row
+                for row in sample_rows
+                if isinstance(row, dict) and self._parse_iso_date(row.get("date")) is not None
+            ]
+            rows_by_day: dict[str, dict[str, Any]] = {}
+            for row in rows_raw:
+                row_day = self._parse_iso_date(row.get("date"))
+                if row_day is None or row_day < start_day or row_day > as_of:
+                    continue
+                dtag = row_day.isoformat()
+                prev = rows_by_day.get(dtag)
+                if prev is None:
+                    rows_by_day[dtag] = row
+                    continue
+                prev_ts = str(prev.get("ts", ""))
+                row_ts = str(row.get("ts", ""))
+                if row_ts >= prev_ts:
+                    rows_by_day[dtag] = row
+            rows = [rows_by_day[k] for k in sorted(rows_by_day.keys())]
+            run_samples_local = sum(
+                1 for row in rows if bool(row.get("frontend_snapshot_run_counted", False))
+            )
+            replay_expected_runs_local = 0
+            replay_executed_runs_local = 0
+            replay_missed_runs_local = 0
+            reason_missing_runs_local = 0
+            suppressed_runs_local = 0
+            series_local: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                trend_due = bool(
+                    row.get("frontend_snapshot_trend_due_light", False)
+                    or row.get("frontend_snapshot_trend_due_heavy", False)
+                )
+                replay_executed = bool(
+                    row.get("frontend_snapshot_replay_executed_light", False)
+                    or row.get("frontend_snapshot_replay_executed_heavy", False)
+                )
+                recovery_reason_codes_raw = row.get("frontend_snapshot_recovery_reason_codes", [])
+                reason_missing = bool(
+                    trend_due
+                    and (
+                        (not isinstance(recovery_reason_codes_raw, list))
+                        or (not any(str(x).strip() for x in recovery_reason_codes_raw))
+                    )
+                )
+                suppressed = bool(row.get("frontend_snapshot_trend_antiflap_suppressed", False))
+                if trend_due:
+                    replay_expected_runs_local += 1
+                    if replay_executed:
+                        replay_executed_runs_local += 1
+                    else:
+                        replay_missed_runs_local += 1
+                if reason_missing:
+                    reason_missing_runs_local += 1
+                if suppressed:
+                    suppressed_runs_local += 1
+                series_local.append(
+                    {
+                        "date": str(row.get("date", "")),
+                        "ts": str(row.get("ts", "")),
+                        "run_counted": bool(row.get("frontend_snapshot_run_counted", False)),
+                        "trend_due": bool(trend_due),
+                        "trend_antiflap_suppressed": bool(suppressed),
+                        "replay_executed": bool(replay_executed),
+                        "reason_missing": bool(reason_missing),
+                    }
+                )
+            suppressed_ratio_local = (
+                self._ratio(suppressed_runs_local, run_samples_local)
+                if run_samples_local > 0
+                else 0.0
+            )
+            replay_missed_ratio_local = (
+                self._ratio(replay_missed_runs_local, replay_expected_runs_local)
+                if replay_expected_runs_local > 0
+                else 0.0
+            )
+            reason_missing_ratio_local = (
+                self._ratio(reason_missing_runs_local, replay_expected_runs_local)
+                if replay_expected_runs_local > 0
+                else 0.0
+            )
+            if series_limit > 0:
+                series_local = series_local[-int(series_limit):]
+            return {
+                "window_days": int(window_days_input),
+                "rows": rows,
+                "run_samples": int(run_samples_local),
+                "replay_expected_runs": int(replay_expected_runs_local),
+                "replay_executed_runs": int(replay_executed_runs_local),
+                "replay_missed_runs": int(replay_missed_runs_local),
+                "reason_missing_runs": int(reason_missing_runs_local),
+                "suppressed_runs": int(suppressed_runs_local),
+                "suppressed_ratio": float(suppressed_ratio_local),
+                "replay_missed_ratio": float(replay_missed_ratio_local),
+                "reason_missing_ratio": float(reason_missing_ratio_local),
+                "series": series_local,
+            }
+
+        burnin_rollup = _burnin_window_rollup(
+            window_days_input=antiflap_burnin_window_days,
+            series_limit=90,
+        )
+        burnin_rows = (
+            burnin_rollup.get("rows", [])
+            if isinstance(burnin_rollup.get("rows", []), list)
+            else []
+        )
+        burnin_run_samples = int(self._safe_float(burnin_rollup.get("run_samples", 0), 0))
+        burnin_replay_expected_runs = int(
+            self._safe_float(burnin_rollup.get("replay_expected_runs", 0), 0)
+        )
+        burnin_replay_executed_runs = int(
+            self._safe_float(burnin_rollup.get("replay_executed_runs", 0), 0)
+        )
+        burnin_replay_missed_runs = int(
+            self._safe_float(burnin_rollup.get("replay_missed_runs", 0), 0)
+        )
+        burnin_reason_missing_runs = int(
+            self._safe_float(burnin_rollup.get("reason_missing_runs", 0), 0)
+        )
+        burnin_suppressed_runs = int(
+            self._safe_float(burnin_rollup.get("suppressed_runs", 0), 0)
+        )
+        burnin_series = (
+            burnin_rollup.get("series", [])
+            if isinstance(burnin_rollup.get("series", []), list)
+            else []
+        )
+        burnin_suppressed_ratio = (
+            float(self._safe_float(burnin_rollup.get("suppressed_ratio", 0.0), 0.0))
+        )
+        burnin_replay_missed_ratio = float(
+            self._safe_float(burnin_rollup.get("replay_missed_ratio", 0.0), 0.0)
+        )
+        burnin_reason_missing_ratio = float(
+            self._safe_float(burnin_rollup.get("reason_missing_ratio", 0.0), 0.0)
+        )
+        dual_window_rollup = _burnin_window_rollup(
+            window_days_input=antiflap_burnin_dual_window_long_days,
+            series_limit=120,
+        )
+        dual_window_long_samples = int(
+            self._safe_float(dual_window_rollup.get("run_samples", 0), 0)
+        )
+        dual_window_replay_expected_runs = int(
+            self._safe_float(dual_window_rollup.get("replay_expected_runs", 0), 0)
+        )
+        dual_window_replay_missed_runs = int(
+            self._safe_float(dual_window_rollup.get("replay_missed_runs", 0), 0)
+        )
+        dual_window_reason_missing_runs = int(
+            self._safe_float(dual_window_rollup.get("reason_missing_runs", 0), 0)
+        )
+        dual_window_suppressed_ratio = float(
+            self._safe_float(dual_window_rollup.get("suppressed_ratio", 0.0), 0.0)
+        )
+        dual_window_replay_missed_ratio = float(
+            self._safe_float(dual_window_rollup.get("replay_missed_ratio", 0.0), 0.0)
+        )
+        dual_window_reason_missing_ratio = float(
+            self._safe_float(dual_window_rollup.get("reason_missing_ratio", 0.0), 0.0)
+        )
+        dual_window_active = bool(antiflap_burnin_dual_window_enabled and burnin_run_samples > 0)
+        dual_window_samples_ready_ok = bool(
+            dual_window_long_samples >= int(antiflap_burnin_dual_window_min_long_samples)
+        )
+        dual_window_suppressed_ratio_delta = float(
+            burnin_suppressed_ratio - dual_window_suppressed_ratio
+        )
+        dual_window_replay_missed_ratio_delta = float(
+            burnin_replay_missed_ratio - dual_window_replay_missed_ratio
+        )
+        dual_window_reason_missing_ratio_delta = float(
+            burnin_reason_missing_ratio - dual_window_reason_missing_ratio
+        )
+        dual_window_suppressed_ratio_delta_ok = bool(
+            (not antiflap_burnin_dual_window_enabled)
+            or (not dual_window_samples_ready_ok)
+            or (
+                float(dual_window_suppressed_ratio_delta)
+                <= float(antiflap_burnin_dual_window_max_suppression_ratio_delta)
+            )
+        )
+        dual_window_replay_missed_ratio_delta_ok = bool(
+            (not antiflap_burnin_dual_window_enabled)
+            or (not dual_window_samples_ready_ok)
+            or (
+                float(dual_window_replay_missed_ratio_delta)
+                <= float(antiflap_burnin_dual_window_max_replay_missed_ratio_delta)
+            )
+        )
+        dual_window_reason_missing_ratio_delta_ok = bool(
+            (not antiflap_burnin_dual_window_enabled)
+            or (not dual_window_samples_ready_ok)
+            or (
+                float(dual_window_reason_missing_ratio_delta)
+                <= float(antiflap_burnin_dual_window_max_reason_missing_ratio_delta)
+            )
+        )
+        dual_window_ok = bool(
+            (not antiflap_burnin_dual_window_enabled)
+            or (
+                dual_window_samples_ready_ok
+                and dual_window_suppressed_ratio_delta_ok
+                and dual_window_replay_missed_ratio_delta_ok
+                and dual_window_reason_missing_ratio_delta_ok
+            )
+        )
+        burnin_samples_ready_ok = bool(burnin_run_samples >= int(antiflap_burnin_min_samples))
+        burnin_suppressed_ratio_ok = bool(
+            float(burnin_suppressed_ratio) <= float(antiflap_burnin_max_suppression_ratio)
+        )
+        burnin_replay_missed_ok = (
+            bool(burnin_replay_missed_runs <= 0)
+            if antiflap_burnin_require_zero_missed_runs
+            else True
+        )
+        burnin_reason_missing_ok = bool(
+            int(burnin_reason_missing_runs) <= int(antiflap_burnin_max_reason_missing_runs)
+        )
+        burnin_active = bool(antiflap_burnin_enabled and burnin_run_samples > 0)
+        burnin_ok = bool(
+            burnin_samples_ready_ok
+            and burnin_suppressed_ratio_ok
+            and burnin_replay_missed_ok
+            and burnin_reason_missing_ok
+            and dual_window_ok
+        )
+        burnin_status = "inactive"
+        if burnin_active and (
+            (not burnin_samples_ready_ok)
+            or (antiflap_burnin_dual_window_enabled and (not dual_window_samples_ready_ok))
+        ):
+            burnin_status = "yellow"
+        elif burnin_active:
+            burnin_status = "green" if burnin_ok else "red"
+        burnin_alerts: list[str] = []
+        dual_window_alerts: list[str] = []
+        if burnin_active and (not burnin_samples_ready_ok):
+            burnin_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_insufficient_samples"
+            )
+        if (
+            burnin_active
+            and burnin_samples_ready_ok
+            and antiflap_burnin_dual_window_enabled
+            and (not dual_window_samples_ready_ok)
+        ):
+            dual_window_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_dual_window_insufficient_samples"
+            )
+        if burnin_active and burnin_samples_ready_ok and (not burnin_suppressed_ratio_ok):
+            burnin_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_oversuppressed"
+            )
+        if burnin_active and burnin_samples_ready_ok and (not burnin_replay_missed_ok):
+            burnin_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_replay_missed"
+            )
+        if burnin_active and burnin_samples_ready_ok and (not burnin_reason_missing_ok):
+            burnin_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_traceability_missing"
+            )
+        if (
+            burnin_active
+            and burnin_samples_ready_ok
+            and antiflap_burnin_dual_window_enabled
+            and dual_window_samples_ready_ok
+            and (not dual_window_suppressed_ratio_delta_ok)
+        ):
+            dual_window_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_dual_window_suppression_delta_high"
+            )
+        if (
+            burnin_active
+            and burnin_samples_ready_ok
+            and antiflap_burnin_dual_window_enabled
+            and dual_window_samples_ready_ok
+            and (not dual_window_replay_missed_ratio_delta_ok)
+        ):
+            dual_window_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_dual_window_replay_delta_high"
+            )
+        if (
+            burnin_active
+            and burnin_samples_ready_ok
+            and antiflap_burnin_dual_window_enabled
+            and dual_window_samples_ready_ok
+            and (not dual_window_reason_missing_ratio_delta_ok)
+        ):
+            dual_window_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_dual_window_traceability_delta_high"
+            )
+        for code in dual_window_alerts:
+            if code not in burnin_alerts:
+                burnin_alerts.append(code)
+        dual_window_status = "inactive"
+        if dual_window_active and (not dual_window_samples_ready_ok):
+            dual_window_status = "yellow"
+        elif dual_window_active:
+            dual_window_status = "green" if dual_window_ok else "red"
+        burnin_promotion_eligible = bool(burnin_samples_ready_ok and burnin_ok)
+        burnin_recommendation = "keep_monitor"
+        if antiflap_burnin_promotion_enabled and (not gate_hard_fail) and burnin_promotion_eligible:
+            burnin_recommendation = "enable_hard_fail"
+        elif antiflap_burnin_promotion_enabled and gate_hard_fail and (not burnin_promotion_eligible):
+            burnin_recommendation = "keep_hard_fail_with_watch"
+        burnin_summary = {
+            "active": bool(burnin_active),
+            "enabled": bool(antiflap_burnin_enabled),
+            "status": str(burnin_status),
+            "ok": bool(burnin_ok),
+            "window_days": int(antiflap_burnin_window_days),
+            "samples": int(burnin_run_samples),
+            "min_samples": int(antiflap_burnin_min_samples),
+            "checks": {
+                "samples_ready_ok": bool(burnin_samples_ready_ok),
+                "suppressed_ratio_ok": bool(burnin_suppressed_ratio_ok),
+                "replay_missed_ok": bool(burnin_replay_missed_ok),
+                "traceability_ok": bool(burnin_reason_missing_ok),
+                "dual_window_ready_ok": bool(
+                    (not antiflap_burnin_dual_window_enabled) or dual_window_samples_ready_ok
+                ),
+                "dual_window_suppression_ratio_delta_ok": bool(
+                    dual_window_suppressed_ratio_delta_ok
+                ),
+                "dual_window_replay_missed_ratio_delta_ok": bool(
+                    dual_window_replay_missed_ratio_delta_ok
+                ),
+                "dual_window_traceability_ratio_delta_ok": bool(
+                    dual_window_reason_missing_ratio_delta_ok
+                ),
+            },
+            "alerts": list(burnin_alerts),
+            "metrics": {
+                "run_samples": int(burnin_run_samples),
+                "replay_expected_runs": int(burnin_replay_expected_runs),
+                "replay_executed_runs": int(burnin_replay_executed_runs),
+                "replay_missed_runs": int(burnin_replay_missed_runs),
+                "replay_missed_ratio": float(burnin_replay_missed_ratio),
+                "reason_missing_runs": int(burnin_reason_missing_runs),
+                "reason_missing_ratio": float(burnin_reason_missing_ratio),
+                "suppressed_runs": int(burnin_suppressed_runs),
+                "suppressed_ratio": float(burnin_suppressed_ratio),
+                "dual_window_long_samples": int(dual_window_long_samples),
+                "dual_window_long_window_days": int(antiflap_burnin_dual_window_long_days),
+                "dual_window_replay_expected_runs": int(dual_window_replay_expected_runs),
+                "dual_window_replay_missed_runs": int(dual_window_replay_missed_runs),
+                "dual_window_reason_missing_runs": int(dual_window_reason_missing_runs),
+                "dual_window_suppressed_ratio": float(dual_window_suppressed_ratio),
+                "dual_window_replay_missed_ratio": float(dual_window_replay_missed_ratio),
+                "dual_window_reason_missing_ratio": float(dual_window_reason_missing_ratio),
+                "dual_window_suppressed_ratio_delta": float(
+                    dual_window_suppressed_ratio_delta
+                ),
+                "dual_window_replay_missed_ratio_delta": float(
+                    dual_window_replay_missed_ratio_delta
+                ),
+                "dual_window_reason_missing_ratio_delta": float(
+                    dual_window_reason_missing_ratio_delta
+                ),
+            },
+            "thresholds": {
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_enabled": bool(
+                    antiflap_burnin_enabled
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_window_days": int(
+                    antiflap_burnin_window_days
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_min_samples": int(
+                    antiflap_burnin_min_samples
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_suppression_ratio": float(
+                    antiflap_burnin_max_suppression_ratio
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_require_zero_missed_runs": bool(
+                    antiflap_burnin_require_zero_missed_runs
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_reason_missing_runs": int(
+                    antiflap_burnin_max_reason_missing_runs
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_enabled": bool(
+                    antiflap_burnin_dual_window_enabled
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_long_days": int(
+                    antiflap_burnin_dual_window_long_days
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_min_long_samples": int(
+                    antiflap_burnin_dual_window_min_long_samples
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_suppression_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_suppression_ratio_delta
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_replay_missed_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_replay_missed_ratio_delta
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_reason_missing_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_reason_missing_ratio_delta
+                ),
+            },
+            "dual_window": {
+                "enabled": bool(antiflap_burnin_dual_window_enabled),
+                "active": bool(dual_window_active),
+                "status": str(dual_window_status),
+                "ok": bool(dual_window_ok),
+                "short_window_days": int(antiflap_burnin_window_days),
+                "long_window_days": int(antiflap_burnin_dual_window_long_days),
+                "long_samples": int(dual_window_long_samples),
+                "min_long_samples": int(antiflap_burnin_dual_window_min_long_samples),
+                "checks": {
+                    "samples_ready_ok": bool(dual_window_samples_ready_ok),
+                    "suppression_ratio_delta_ok": bool(
+                        dual_window_suppressed_ratio_delta_ok
+                    ),
+                    "replay_missed_ratio_delta_ok": bool(
+                        dual_window_replay_missed_ratio_delta_ok
+                    ),
+                    "traceability_ratio_delta_ok": bool(
+                        dual_window_reason_missing_ratio_delta_ok
+                    ),
+                },
+                "metrics": {
+                    "short_suppressed_ratio": float(burnin_suppressed_ratio),
+                    "long_suppressed_ratio": float(dual_window_suppressed_ratio),
+                    "suppressed_ratio_delta": float(dual_window_suppressed_ratio_delta),
+                    "short_replay_missed_ratio": float(burnin_replay_missed_ratio),
+                    "long_replay_missed_ratio": float(dual_window_replay_missed_ratio),
+                    "replay_missed_ratio_delta": float(
+                        dual_window_replay_missed_ratio_delta
+                    ),
+                    "short_reason_missing_ratio": float(burnin_reason_missing_ratio),
+                    "long_reason_missing_ratio": float(dual_window_reason_missing_ratio),
+                    "reason_missing_ratio_delta": float(
+                        dual_window_reason_missing_ratio_delta
+                    ),
+                },
+                "thresholds": {
+                    "max_suppression_ratio_delta": float(
+                        antiflap_burnin_dual_window_max_suppression_ratio_delta
+                    ),
+                    "max_replay_missed_ratio_delta": float(
+                        antiflap_burnin_dual_window_max_replay_missed_ratio_delta
+                    ),
+                    "max_reason_missing_ratio_delta": float(
+                        antiflap_burnin_dual_window_max_reason_missing_ratio_delta
+                    ),
+                },
+                "alerts": list(dual_window_alerts),
+            },
+            "promotion": {
+                "enabled": bool(antiflap_burnin_promotion_enabled),
+                "current_hard_fail": bool(gate_hard_fail),
+                "eligible": bool(burnin_promotion_eligible),
+                "recommendation": str(burnin_recommendation),
+            },
+        }
+        now_tz_name = str(getattr(self.settings, "timezone", "") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+        now_local = datetime.now(ZoneInfo(now_tz_name))
+        promotion_patch = {
+            "ops_guard_loop_frontend_snapshot_trend_gate_hard_fail": True,
+        }
+        promotion_controlled_alerts: list[str] = []
+        promotion_proposal_generated = bool(
+            controlled_apply_enabled
+            and antiflap_burnin_promotion_enabled
+            and (not gate_hard_fail)
+            and bool(burnin_promotion_eligible)
+            and str(burnin_recommendation) == "enable_hard_fail"
+        )
+        promotion_proposal_id = ""
+        promotion_proposal_json_path = ""
+        promotion_proposal_md_path = ""
+        promotion_proposal_write_ok = False
+        promotion_proposal_write_error = ""
+        promotion_proposal_payload = {
+            "schema_version": 1,
+            "type": "frontend_snapshot_trend_hard_fail_promotion_proposal",
+            "generated": bool(promotion_proposal_generated),
+            "date": as_of.isoformat(),
+            "timezone": str(now_tz_name),
+            "promotion_recommendation": str(burnin_recommendation),
+            "burnin": {
+                "active": bool(burnin_active),
+                "ok": bool(burnin_ok),
+                "samples": int(burnin_run_samples),
+                "min_samples": int(antiflap_burnin_min_samples),
+                "window_days": int(antiflap_burnin_window_days),
+                "suppressed_ratio": float(burnin_suppressed_ratio),
+                "replay_missed_runs": int(burnin_replay_missed_runs),
+                "reason_missing_runs": int(burnin_reason_missing_runs),
+                "dual_window": {
+                    "enabled": bool(antiflap_burnin_dual_window_enabled),
+                    "long_window_days": int(antiflap_burnin_dual_window_long_days),
+                    "long_samples": int(dual_window_long_samples),
+                    "min_long_samples": int(antiflap_burnin_dual_window_min_long_samples),
+                    "suppressed_ratio_delta": float(dual_window_suppressed_ratio_delta),
+                    "replay_missed_ratio_delta": float(dual_window_replay_missed_ratio_delta),
+                    "reason_missing_ratio_delta": float(dual_window_reason_missing_ratio_delta),
+                },
+            },
+            "patch": dict(promotion_patch),
+            "approval_manifest_path": str(controlled_apply_approval_manifest_path),
+            "max_apply_window_days": int(controlled_apply_max_apply_window_days),
+            "dry_run": bool(controlled_apply_dry_run),
+        }
+        if promotion_proposal_generated:
+            proposal_basis = {
+                "date": as_of.isoformat(),
+                "patch": dict(promotion_patch),
+                "burnin_window_days": int(antiflap_burnin_window_days),
+                "burnin_min_samples": int(antiflap_burnin_min_samples),
+                "burnin_max_suppression_ratio": float(antiflap_burnin_max_suppression_ratio),
+                "burnin_dual_window_long_days": int(antiflap_burnin_dual_window_long_days),
+                "burnin_dual_window_min_long_samples": int(
+                    antiflap_burnin_dual_window_min_long_samples
+                ),
+                "burnin_dual_window_max_suppression_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_suppression_ratio_delta
+                ),
+                "burnin_dual_window_max_replay_missed_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_replay_missed_ratio_delta
+                ),
+                "burnin_dual_window_max_reason_missing_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_reason_missing_ratio_delta
+                ),
+                "max_apply_window_days": int(controlled_apply_max_apply_window_days),
+            }
+            promotion_proposal_id = hashlib.sha256(
+                self._canonical_json(proposal_basis).encode("utf-8")
+            ).hexdigest()[:16]
+            promotion_proposal_payload["proposal_id"] = str(promotion_proposal_id)
+            promotion_proposal_payload["generated_at"] = now_local.isoformat()
+            review_dir = self.output_dir / "review"
+            proposal_json_path = (
+                review_dir / f"{as_of.isoformat()}_frontend_snapshot_trend_hard_fail_proposal.json"
+            )
+            proposal_md_path = (
+                review_dir / f"{as_of.isoformat()}_frontend_snapshot_trend_hard_fail_proposal.md"
+            )
+            approval_template = {
+                "schema_version": 1,
+                "type": "frontend_snapshot_trend_hard_fail_approval",
+                "approved": True,
+                "proposal_id": str(promotion_proposal_id),
+                "approved_at": now_local.isoformat(),
+                "as_of": as_of.isoformat(),
+                "timezone": str(now_tz_name),
+                "source": "lie gate-report",
+            }
+            promotion_proposal_payload["approval_template"] = approval_template
+            try:
+                write_json(proposal_json_path, promotion_proposal_payload)
+                write_markdown(
+                    proposal_md_path,
+                    "\n".join(
+                        [
+                            f"# Frontend Snapshot Trend Hard-Fail Proposal | {as_of.isoformat()}",
+                            "",
+                            f"- proposal_id: `{promotion_proposal_id}`",
+                            f"- dry_run: `{bool(controlled_apply_dry_run)}`",
+                            "- patch: `ops_guard_loop_frontend_snapshot_trend_gate_hard_fail=true`",
+                            f"- approval_manifest_path: `{str(controlled_apply_approval_manifest_path)}`",
+                            f"- max_apply_window_days: `{int(controlled_apply_max_apply_window_days)}`",
+                            f"- burnin(status/samples/min/window): `{burnin_status}` / `{int(burnin_run_samples)}` / `{int(antiflap_burnin_min_samples)}` / `{int(antiflap_burnin_window_days)}`",
+                            f"- burnin(suppressed/missed/reason_missing): `{float(burnin_suppressed_ratio):.2%}` / `{int(burnin_replay_missed_runs)}` / `{int(burnin_reason_missing_runs)}`",
+                            "- burnin_dual_window(long_samples/min_long/delta suppression|replay|traceability): "
+                            + f"`{int(dual_window_long_samples)}` / `{int(antiflap_burnin_dual_window_min_long_samples)}` / "
+                            + f"`{float(dual_window_suppressed_ratio_delta):.2%}` | "
+                            + f"`{float(dual_window_replay_missed_ratio_delta):.2%}` | "
+                            + f"`{float(dual_window_reason_missing_ratio_delta):.2%}`",
+                        ]
+                    )
+                    + "\n",
+                )
+                promotion_proposal_json_path = str(proposal_json_path)
+                promotion_proposal_md_path = str(proposal_md_path)
+                promotion_proposal_write_ok = True
+            except Exception as exc:
+                promotion_proposal_write_ok = False
+                promotion_proposal_write_error = f"write_failed:{type(exc).__name__}:{exc}"
+                promotion_controlled_alerts.append(
+                    "guard_loop_frontend_snapshot_trend_hard_fail_promotion_proposal_write_failed"
+                )
+        approval_doc = self.load_json_safely(controlled_apply_approval_manifest_path)
+        approval_payload = approval_doc if isinstance(approval_doc, dict) else {}
+        approval_found = bool(approval_payload)
+        approval_confirmed = bool(approval_payload.get("approved", False))
+        approval_proposal_id = str(approval_payload.get("proposal_id", "")).strip()
+        approval_matches = bool(
+            promotion_proposal_id
+            and approval_proposal_id
+            and approval_proposal_id == str(promotion_proposal_id)
+        )
+        approval_at_txt = str(approval_payload.get("approved_at", "")).strip()
+        approval_at = self._parse_iso_datetime(approval_at_txt)
+        approval_age_days = max(0, (as_of - approval_at.date()).days) if approval_at is not None else 0
+        proposal_age_days = 0 if promotion_proposal_generated else 0
+        proposal_window_ok = bool(
+            (not promotion_proposal_generated)
+            or int(proposal_age_days) <= int(controlled_apply_max_apply_window_days)
+        )
+        approval_ok = bool(
+            (not promotion_proposal_generated)
+            or (not controlled_apply_manual_approval_required)
+            or (approval_found and approval_confirmed and approval_matches)
+        )
+        dual_window_red_non_apply = bool(
+            controlled_apply_enabled
+            and antiflap_burnin_dual_window_enabled
+            and dual_window_active
+            and str(dual_window_status) == "red"
+        )
+        dual_window_guardrail_reason_codes = list(dict.fromkeys([str(x) for x in dual_window_alerts if str(x)]))
+        if not controlled_apply_enabled:
+            controlled_apply_reason = "controlled_apply_disabled"
+            controlled_apply_allowed_pre_rollback = False
+        elif dual_window_red_non_apply:
+            controlled_apply_reason = "dual_window_drift_red_non_apply"
+            controlled_apply_allowed_pre_rollback = False
+            promotion_controlled_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_dual_window_red_non_apply"
+            )
+        elif not promotion_proposal_generated:
+            controlled_apply_reason = "proposal_not_generated"
+            controlled_apply_allowed_pre_rollback = False
+        elif not proposal_window_ok:
+            controlled_apply_reason = "proposal_outside_apply_window"
+            controlled_apply_allowed_pre_rollback = False
+        elif controlled_apply_manual_approval_required and not approval_found:
+            controlled_apply_reason = "manual_approval_missing"
+            controlled_apply_allowed_pre_rollback = False
+        elif controlled_apply_manual_approval_required and not approval_confirmed:
+            controlled_apply_reason = "manual_approval_not_confirmed"
+            controlled_apply_allowed_pre_rollback = False
+        elif controlled_apply_manual_approval_required and not approval_matches:
+            controlled_apply_reason = "manual_approval_proposal_mismatch"
+            controlled_apply_allowed_pre_rollback = False
+        else:
+            controlled_apply_reason = "apply_gate_ready"
+            controlled_apply_allowed_pre_rollback = True
+        decision_severity = "warn"
+        decision_headline = "frontend_snapshot hard-fail controlled-apply not ready"
+        decision_action = "保持 monitor 模式并修复 readiness 阻断项后重跑 gate-report。"
+        decision_reason_codes: list[str] = []
+        decision_runbook: list[str] = []
+        if controlled_apply_reason == "apply_gate_ready":
+            decision_severity = "info"
+            decision_headline = "frontend_snapshot hard-fail controlled-apply ready"
+            decision_action = (
+                "审批链路已满足，按低峰窗口执行受控晋升；dry_run=true 时保持人工确认后再切换。"
+            )
+            decision_runbook = [
+                f"PYTHONPATH=src python3 -m lie_engine.cli frontend-hard-fail-approval-manifest --date {as_of.isoformat()} --validate-only",
+                f"PYTHONPATH=src python3 -m lie_engine.cli gate-report --date {as_of.isoformat()}",
+            ]
+        elif controlled_apply_reason == "dual_window_drift_red_non_apply":
+            decision_severity = "critical"
+            decision_headline = "frontend_snapshot dual-window drift is red; non-apply routed"
+            decision_action = (
+                "保持 non-apply，优先收敛 antiflap dual-window 漂移（suppression/replay/traceability）后再评估晋升。"
+            )
+            decision_reason_codes = (
+                list(dual_window_guardrail_reason_codes)
+                if dual_window_guardrail_reason_codes
+                else ["frontend_antiflap_dual_window_red"]
+            )
+            decision_runbook = [
+                f"PYTHONPATH=src python3 -m lie_engine.cli ops-report --date {as_of.isoformat()} --window-days 7",
+                f"PYTHONPATH=src python3 -m lie_engine.cli gate-report --date {as_of.isoformat()}",
+            ]
+        elif controlled_apply_reason in {
+            "manual_approval_missing",
+            "manual_approval_not_confirmed",
+            "manual_approval_proposal_mismatch",
+        }:
+            decision_headline = "frontend_snapshot hard-fail promotion awaiting approval manifest"
+            decision_action = (
+                "补齐审批清单（approved/proposal_id/approved_at）并重新执行 gate-report 校验。"
+            )
+            decision_reason_codes = ["frontend_hard_fail_manual_approval"]
+            decision_runbook = [
+                f"PYTHONPATH=src python3 -m lie_engine.cli frontend-hard-fail-approval-manifest --date {as_of.isoformat()}",
+                f"PYTHONPATH=src python3 -m lie_engine.cli gate-report --date {as_of.isoformat()}",
+            ]
+        elif controlled_apply_reason == "proposal_outside_apply_window":
+            decision_headline = "frontend_snapshot hard-fail proposal is stale"
+            decision_action = "在当前 as_of 重新生成 proposal 并重新审批，避免窗口外应用。"
+            decision_reason_codes = ["frontend_hard_fail_proposal_stale"]
+            decision_runbook = [
+                f"PYTHONPATH=src python3 -m lie_engine.cli gate-report --date {as_of.isoformat()}",
+            ]
+        if not decision_runbook:
+            decision_runbook = [
+                f"PYTHONPATH=src python3 -m lie_engine.cli gate-report --date {as_of.isoformat()}",
+            ]
+        decision_envelope = {
+            "stage": "pre_rollback",
+            "decision": "apply" if controlled_apply_allowed_pre_rollback else "non_apply",
+            "apply_recommended": bool(controlled_apply_allowed_pre_rollback),
+            "route": str(controlled_apply_reason),
+            "severity": str(decision_severity),
+            "headline": str(decision_headline),
+            "action": str(decision_action),
+            "reason_codes": list(dict.fromkeys([str(x).strip() for x in decision_reason_codes if str(x).strip()])),
+            "runbook": list(dict.fromkeys([str(x).strip() for x in decision_runbook if str(x).strip()])),
+            "approval_manifest": {
+                "path": str(controlled_apply_approval_manifest_path),
+                "found": bool(approval_found),
+                "approved": bool(approval_confirmed),
+                "matches_proposal": bool(approval_matches),
+                "proposal_id": str(approval_proposal_id),
+                "approved_at": str(approval_at_txt),
+                "age_days": int(approval_age_days),
+            },
+        }
+        promotion_controlled_apply_payload: dict[str, Any] = {
+            "enabled": bool(controlled_apply_enabled),
+            "dry_run": bool(controlled_apply_dry_run),
+            "manual_approval_required": bool(controlled_apply_manual_approval_required),
+            "max_apply_window_days": int(controlled_apply_max_apply_window_days),
+            "approval_manifest_path": str(controlled_apply_approval_manifest_path),
+            "promotion_recommendation": str(burnin_recommendation),
+            "proposal": {
+                "generated": bool(promotion_proposal_generated),
+                "proposal_id": str(promotion_proposal_id),
+                "proposal_date": as_of.isoformat() if promotion_proposal_generated else "",
+                "proposal_age_days": int(proposal_age_days),
+                "json": str(promotion_proposal_json_path),
+                "md": str(promotion_proposal_md_path),
+                "write_ok": bool(promotion_proposal_write_ok),
+                "write_error": str(promotion_proposal_write_error),
+                "approval_template": (
+                    promotion_proposal_payload.get("approval_template", {})
+                    if isinstance(promotion_proposal_payload.get("approval_template", {}), dict)
+                    else {}
+                ),
+            },
+            "approval": {
+                "found": bool(approval_found),
+                "approved": bool(approval_confirmed),
+                "proposal_id": str(approval_proposal_id),
+                "matches_proposal": bool(approval_matches),
+                "approved_at": str(approval_at_txt),
+                "age_days": int(approval_age_days),
+            },
+            "patch": dict(promotion_patch),
+            "rollback_guard": {
+                "enabled": bool(controlled_apply_rollback_guard_enabled),
+                "evaluated": False,
+                "blocked": False,
+                "rollback_level": "none",
+                "rollback_active": False,
+                "anchor_ready": True,
+                "reason": "pending",
+                "reason_codes": [],
+            },
+            "apply_gate": {
+                "window_ok": bool(proposal_window_ok),
+                "approval_ok": bool(approval_ok),
+                "rollback_guard_ok": not bool(controlled_apply_rollback_guard_enabled),
+                "allowed_pre_rollback": bool(controlled_apply_allowed_pre_rollback),
+                "allowed": False,
+                "apply_recommended": False,
+                "reason_pre_rollback": str(controlled_apply_reason),
+                "reason": "rollback_guard_pending",
+            },
+            "decision_envelope": dict(decision_envelope),
+            "alerts": list(promotion_controlled_alerts),
+        }
+        promotion_controlled_artifact = self._write_frontend_snapshot_trend_controlled_apply_artifact(
+            as_of=as_of,
+            payload=promotion_controlled_apply_payload,
+            retention_days=controlled_apply_retention_days,
+            checksum_index_enabled=controlled_apply_checksum_index_enabled,
+        )
+        if not bool(promotion_controlled_artifact.get("written", False)) and str(
+            promotion_controlled_artifact.get("reason", "")
+        ).startswith("write_failed"):
+            promotion_controlled_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_artifact_failed"
+            )
+        if bool(promotion_controlled_artifact.get("rotation_failed", False)):
+            promotion_controlled_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_artifact_rotation_failed"
+            )
+        if bool(promotion_controlled_artifact.get("checksum_index_failed", False)):
+            promotion_controlled_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_artifact_checksum_index_failed"
+            )
+        promotion_controlled_apply_payload["alerts"] = list(promotion_controlled_alerts)
+        promotion_controlled_apply_payload["artifacts"] = {
+            "controlled_apply": {
+                "written": bool(promotion_controlled_artifact.get("written", False)),
+                "json": str(promotion_controlled_artifact.get("json", "")),
+                "md": str(promotion_controlled_artifact.get("md", "")),
+                "retention_days": int(
+                    promotion_controlled_artifact.get(
+                        "retention_days",
+                        controlled_apply_retention_days,
+                    )
+                ),
+                "rotated_out_count": int(
+                    promotion_controlled_artifact.get("rotated_out_count", 0)
+                ),
+                "rotated_out_dates": [
+                    str(x)
+                    for x in promotion_controlled_artifact.get("rotated_out_dates", [])
+                ],
+                "rotation_failed": bool(
+                    promotion_controlled_artifact.get("rotation_failed", False)
+                ),
+                "checksum_index_enabled": bool(
+                    promotion_controlled_artifact.get(
+                        "checksum_index_enabled",
+                        controlled_apply_checksum_index_enabled,
+                    )
+                ),
+                "checksum_index_written": bool(
+                    promotion_controlled_artifact.get("checksum_index_written", False)
+                ),
+                "checksum_index_path": str(
+                    promotion_controlled_artifact.get("checksum_index_path", "")
+                ),
+                "checksum_index_entries": int(
+                    promotion_controlled_artifact.get("checksum_index_entries", 0)
+                ),
+                "checksum_index_failed": bool(
+                    promotion_controlled_artifact.get("checksum_index_failed", False)
+                ),
+                "reason": str(promotion_controlled_artifact.get("reason", "")),
+            }
+        }
+        burnin_summary["promotion"]["controlled_apply"] = promotion_controlled_apply_payload
+        if antiflap_burnin_enabled:
+            burnin_artifact = self._write_frontend_snapshot_antiflap_burnin_artifact(
+                as_of=as_of,
+                summary=burnin_summary,
+                series=burnin_series,
+                retention_days=antiflap_burnin_retention_days,
+                checksum_index_enabled=antiflap_burnin_checksum_index_enabled,
+            )
+        else:
+            burnin_artifact = {
+                "written": False,
+                "json": "",
+                "md": "",
+                "total_rows": int(len(burnin_series)),
+                "retention_days": int(antiflap_burnin_retention_days),
+                "rotated_out_count": 0,
+                "rotated_out_dates": [],
+                "rotation_failed": False,
+                "checksum_index_enabled": bool(antiflap_burnin_checksum_index_enabled),
+                "checksum_index_written": False,
+                "checksum_index_path": "",
+                "checksum_index_entries": 0,
+                "checksum_index_failed": False,
+                "reason": "disabled",
+            }
+        burnin_artifact_failed = (
+            burnin_run_samples > 0
+            and (not bool(burnin_artifact.get("written", False)))
+            and str(burnin_artifact.get("reason", "")).startswith("write_failed")
+        )
+        burnin_rotation_failed = bool(burnin_artifact.get("rotation_failed", False))
+        burnin_checksum_failed = bool(burnin_artifact.get("checksum_index_failed", False))
+        if burnin_artifact_failed:
+            burnin_alerts.append("guard_loop_frontend_snapshot_antiflap_burnin_artifact_failed")
+        if burnin_rotation_failed:
+            burnin_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_artifact_rotation_failed"
+            )
+        if burnin_checksum_failed:
+            burnin_alerts.append(
+                "guard_loop_frontend_snapshot_antiflap_burnin_artifact_checksum_index_failed"
+            )
+        burnin_summary["alerts"] = list(burnin_alerts)
+        burnin_summary["artifacts"] = {
+            "burnin": {
+                "written": bool(burnin_artifact.get("written", False)),
+                "json": str(burnin_artifact.get("json", "")),
+                "md": str(burnin_artifact.get("md", "")),
+                "total_rows": int(burnin_artifact.get("total_rows", 0)),
+                "retention_days": int(
+                    burnin_artifact.get("retention_days", antiflap_burnin_retention_days)
+                ),
+                "rotated_out_count": int(burnin_artifact.get("rotated_out_count", 0)),
+                "rotated_out_dates": [
+                    str(x) for x in burnin_artifact.get("rotated_out_dates", [])
+                ],
+                "rotation_failed": bool(burnin_rotation_failed),
+                "checksum_index_enabled": bool(
+                    burnin_artifact.get(
+                        "checksum_index_enabled",
+                        antiflap_burnin_checksum_index_enabled,
+                    )
+                ),
+                "checksum_index_written": bool(
+                    burnin_artifact.get("checksum_index_written", False)
+                ),
+                "checksum_index_path": str(burnin_artifact.get("checksum_index_path", "")),
+                "checksum_index_entries": int(
+                    burnin_artifact.get("checksum_index_entries", 0)
+                ),
+                "checksum_index_failed": bool(burnin_checksum_failed),
+                "reason": str(burnin_artifact.get("reason", "")),
+            }
+        }
+
+        def _classify_controlled_apply_route(
+            payload: dict[str, Any] | None,
+        ) -> tuple[str, bool]:
+            controlled_apply_payload = payload if isinstance(payload, dict) else {}
+            if not bool(controlled_apply_payload.get("enabled", False)):
+                return "unknown", False
+            decision_envelope_payload = (
+                controlled_apply_payload.get("decision_envelope", {})
+                if isinstance(controlled_apply_payload.get("decision_envelope", {}), dict)
+                else {}
+            )
+            apply_gate_payload = (
+                controlled_apply_payload.get("apply_gate", {})
+                if isinstance(controlled_apply_payload.get("apply_gate", {}), dict)
+                else {}
+            )
+            route = str(decision_envelope_payload.get("route", "")).strip().lower()
+            decision = str(decision_envelope_payload.get("decision", "")).strip().lower()
+            reason = str(apply_gate_payload.get("reason", "")).strip().lower()
+            if route == "rollback_guard_blocked" or reason == "rollback_guard_blocked":
+                return "rollback_guard_blocked", True
+            if (
+                decision == "apply"
+                or bool(decision_envelope_payload.get("apply_recommended", False))
+                or bool(apply_gate_payload.get("apply_recommended", False))
+            ):
+                return "apply", True
+            if decision == "non_apply" or route:
+                return "non_apply", True
+            return "unknown", True
+
+        route_audit_window_start = as_of - timedelta(days=max(1, int(controlled_apply_route_audit_window_days)) - 1)
+        route_audit_rows_by_date: dict[str, dict[str, Any]] = {}
+        review_dir = self.output_dir / "review"
+        for gate_path in sorted(review_dir.glob("*_gate_report.json")):
+            dtag = gate_path.name.replace("_gate_report.json", "")
+            try:
+                gate_day = date.fromisoformat(dtag)
+            except Exception:
+                continue
+            if gate_day < route_audit_window_start or gate_day > as_of:
+                continue
+            gate_payload = self.load_json_safely(gate_path)
+            if not isinstance(gate_payload, dict):
+                continue
+            gate_trend = (
+                gate_payload.get("guard_loop_frontend_snapshot_trend", {})
+                if isinstance(gate_payload.get("guard_loop_frontend_snapshot_trend", {}), dict)
+                else {}
+            )
+            gate_burnin = (
+                gate_trend.get("antiflap_burnin", {})
+                if isinstance(gate_trend.get("antiflap_burnin", {}), dict)
+                else {}
+            )
+            gate_promotion = (
+                gate_burnin.get("promotion", {})
+                if isinstance(gate_burnin.get("promotion", {}), dict)
+                else {}
+            )
+            gate_controlled_apply = (
+                gate_promotion.get("controlled_apply", {})
+                if isinstance(gate_promotion.get("controlled_apply", {}), dict)
+                else {}
+            )
+            route_bucket, sampled = _classify_controlled_apply_route(gate_controlled_apply)
+            if not sampled:
+                continue
+            route_audit_rows_by_date[gate_day.isoformat()] = {
+                "date": gate_day.isoformat(),
+                "route": str(route_bucket),
+                "source": str(gate_path),
+            }
+        current_route_bucket, current_route_sampled = _classify_controlled_apply_route(
+            promotion_controlled_apply_payload
+        )
+        if current_route_sampled:
+            route_audit_rows_by_date[as_of.isoformat()] = {
+                "date": as_of.isoformat(),
+                "route": str(current_route_bucket),
+                "source": "current_gate_snapshot",
+            }
+        route_audit_rows = [route_audit_rows_by_date[k] for k in sorted(route_audit_rows_by_date.keys())]
+        route_audit_samples = int(len(route_audit_rows))
+        route_audit_apply_runs = int(sum(1 for row in route_audit_rows if str(row.get("route", "")) == "apply"))
+        route_audit_non_apply_runs = int(
+            sum(1 for row in route_audit_rows if str(row.get("route", "")) == "non_apply")
+        )
+        route_audit_rollback_guard_blocked_runs = int(
+            sum(1 for row in route_audit_rows if str(row.get("route", "")) == "rollback_guard_blocked")
+        )
+        route_audit_unknown_runs = int(
+            route_audit_samples
+            - route_audit_apply_runs
+            - route_audit_non_apply_runs
+            - route_audit_rollback_guard_blocked_runs
+        )
+        route_audit_apply_ratio = self._ratio(route_audit_apply_runs, route_audit_samples)
+        route_audit_non_apply_ratio = self._ratio(route_audit_non_apply_runs, route_audit_samples)
+        route_audit_rollback_guard_blocked_ratio = self._ratio(
+            route_audit_rollback_guard_blocked_runs,
+            route_audit_samples,
+        )
+        route_audit_unknown_ratio = self._ratio(route_audit_unknown_runs, route_audit_samples)
+
+        trendline_recent_start = as_of - timedelta(
+            days=max(1, int(controlled_apply_route_audit_trendline_recent_days)) - 1
+        )
+        trendline_prior_end = trendline_recent_start - timedelta(days=1)
+        trendline_prior_start = trendline_prior_end - timedelta(
+            days=max(1, int(controlled_apply_route_audit_trendline_prior_days)) - 1
+        )
+
+        def _route_rows_in_window(*, start_day: date, end_day: date) -> list[dict[str, Any]]:
+            rows: list[dict[str, Any]] = []
+            for row in route_audit_rows:
+                row_day = self._parse_iso_date(row.get("date"))
+                if row_day is None:
+                    continue
+                if row_day < start_day or row_day > end_day:
+                    continue
+                rows.append(row)
+            return rows
+
+        def _route_ratio(rows: list[dict[str, Any]], bucket: str) -> float:
+            if not rows:
+                return 0.0
+            matched = int(sum(1 for row in rows if str(row.get("route", "")) == str(bucket)))
+            return float(self._ratio(matched, len(rows)))
+
+        trendline_recent_rows = _route_rows_in_window(start_day=trendline_recent_start, end_day=as_of)
+        trendline_prior_rows: list[dict[str, Any]] = []
+        if trendline_prior_end >= route_audit_window_start:
+            trendline_prior_rows = _route_rows_in_window(
+                start_day=max(route_audit_window_start, trendline_prior_start),
+                end_day=trendline_prior_end,
+            )
+        trendline_recent_samples = int(len(trendline_recent_rows))
+        trendline_prior_samples = int(len(trendline_prior_rows))
+        trendline_recent_non_apply_ratio = _route_ratio(trendline_recent_rows, "non_apply")
+        trendline_recent_rollback_guard_blocked_ratio = _route_ratio(
+            trendline_recent_rows,
+            "rollback_guard_blocked",
+        )
+        trendline_recent_apply_ratio = _route_ratio(trendline_recent_rows, "apply")
+        trendline_prior_non_apply_ratio = _route_ratio(trendline_prior_rows, "non_apply")
+        trendline_prior_rollback_guard_blocked_ratio = _route_ratio(
+            trendline_prior_rows,
+            "rollback_guard_blocked",
+        )
+        trendline_prior_apply_ratio = _route_ratio(trendline_prior_rows, "apply")
+        trendline_samples_ready = bool(
+            trendline_recent_samples >= int(controlled_apply_route_audit_trendline_min_samples)
+            and trendline_prior_samples >= int(controlled_apply_route_audit_trendline_min_samples)
+        )
+        trendline_non_apply_ratio_rise = float(
+            trendline_recent_non_apply_ratio - trendline_prior_non_apply_ratio
+        )
+        trendline_rollback_guard_blocked_ratio_rise = float(
+            trendline_recent_rollback_guard_blocked_ratio - trendline_prior_rollback_guard_blocked_ratio
+        )
+        trendline_apply_ratio_drop = float(trendline_prior_apply_ratio - trendline_recent_apply_ratio)
+
+        route_audit_active = bool(controlled_apply_route_audit_enabled and route_audit_samples > 0)
+        route_audit_samples_ready_ok = bool(
+            route_audit_samples >= int(controlled_apply_route_audit_min_samples)
+        )
+        route_audit_non_apply_ratio_ok = bool(
+            float(route_audit_non_apply_ratio) <= float(controlled_apply_route_audit_max_non_apply_ratio)
+        )
+        route_audit_rollback_guard_ratio_ok = bool(
+            float(route_audit_rollback_guard_blocked_ratio)
+            <= float(controlled_apply_route_audit_max_rollback_guard_ratio)
+        )
+        route_audit_apply_ratio_ok = bool(
+            float(route_audit_apply_ratio) >= float(controlled_apply_route_audit_min_apply_ratio)
+        )
+        route_audit_trendline_samples_ok = bool(
+            (not route_audit_samples_ready_ok) or bool(trendline_samples_ready)
+        )
+        route_audit_trendline_non_apply_rise_ok = bool(
+            (not route_audit_samples_ready_ok)
+            or (not trendline_samples_ready)
+            or (
+                float(trendline_non_apply_ratio_rise)
+                <= float(controlled_apply_route_audit_trendline_max_non_apply_ratio_rise)
+            )
+        )
+        route_audit_trendline_rollback_guard_rise_ok = bool(
+            (not route_audit_samples_ready_ok)
+            or (not trendline_samples_ready)
+            or (
+                float(trendline_rollback_guard_blocked_ratio_rise)
+                <= float(controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise)
+            )
+        )
+        route_audit_trendline_apply_drop_ok = bool(
+            (not route_audit_samples_ready_ok)
+            or (not trendline_samples_ready)
+            or (
+                float(trendline_apply_ratio_drop)
+                <= float(controlled_apply_route_audit_trendline_max_apply_ratio_drop)
+            )
+        )
+        route_audit_ok = bool(
+            route_audit_samples_ready_ok
+            and route_audit_non_apply_ratio_ok
+            and route_audit_rollback_guard_ratio_ok
+            and route_audit_apply_ratio_ok
+            and route_audit_trendline_samples_ok
+            and route_audit_trendline_non_apply_rise_ok
+            and route_audit_trendline_rollback_guard_rise_ok
+            and route_audit_trendline_apply_drop_ok
+        )
+        route_audit_status = "inactive"
+        if route_audit_active and not route_audit_samples_ready_ok:
+            route_audit_status = "yellow"
+        elif route_audit_active and route_audit_samples_ready_ok and not route_audit_trendline_samples_ok:
+            route_audit_status = "yellow"
+        elif route_audit_active:
+            route_audit_status = "green" if route_audit_ok else "red"
+        route_audit_alerts: list[str] = []
+        if route_audit_active and (not route_audit_samples_ready_ok):
+            route_audit_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_insufficient_samples"
+            )
+        if route_audit_active and route_audit_samples_ready_ok and (not route_audit_non_apply_ratio_ok):
+            route_audit_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_non_apply_ratio_high"
+            )
+        if route_audit_active and route_audit_samples_ready_ok and (not route_audit_rollback_guard_ratio_ok):
+            route_audit_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_rollback_guard_ratio_high"
+            )
+        if route_audit_active and route_audit_samples_ready_ok and (not route_audit_apply_ratio_ok):
+            route_audit_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_apply_ratio_low"
+            )
+        if route_audit_active and route_audit_samples_ready_ok and (not route_audit_trendline_samples_ok):
+            route_audit_alerts.append(
+                "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_trendline_insufficient_samples"
+            )
+        if route_audit_active and route_audit_samples_ready_ok and trendline_samples_ready:
+            if not route_audit_trendline_non_apply_rise_ok:
+                route_audit_alerts.append(
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_trendline_non_apply_rise"
+                )
+            if not route_audit_trendline_rollback_guard_rise_ok:
+                route_audit_alerts.append(
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_trendline_rollback_guard_rise"
+                )
+            if not route_audit_trendline_apply_drop_ok:
+                route_audit_alerts.append(
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_trendline_apply_drop"
+                )
+        route_audit_payload = {
+            "active": bool(route_audit_active),
+            "enabled": bool(controlled_apply_route_audit_enabled),
+            "gate_hard_fail": bool(controlled_apply_route_audit_gate_hard_fail),
+            "status": str(route_audit_status),
+            "ok": bool(route_audit_ok),
+            "window_days": int(controlled_apply_route_audit_window_days),
+            "samples": int(route_audit_samples),
+            "min_samples": int(controlled_apply_route_audit_min_samples),
+            "checks": {
+                "samples_ready_ok": bool(route_audit_samples_ready_ok),
+                "non_apply_ratio_ok": bool(route_audit_non_apply_ratio_ok),
+                "rollback_guard_ratio_ok": bool(route_audit_rollback_guard_ratio_ok),
+                "apply_ratio_ok": bool(route_audit_apply_ratio_ok),
+                "trendline_samples_ok": bool(route_audit_trendline_samples_ok),
+                "trendline_non_apply_ratio_rise_ok": bool(route_audit_trendline_non_apply_rise_ok),
+                "trendline_rollback_guard_blocked_ratio_rise_ok": bool(
+                    route_audit_trendline_rollback_guard_rise_ok
+                ),
+                "trendline_apply_ratio_drop_ok": bool(route_audit_trendline_apply_drop_ok),
+            },
+            "alerts": list(route_audit_alerts),
+            "metrics": {
+                "apply_runs": int(route_audit_apply_runs),
+                "non_apply_runs": int(route_audit_non_apply_runs),
+                "rollback_guard_blocked_runs": int(route_audit_rollback_guard_blocked_runs),
+                "unknown_runs": int(route_audit_unknown_runs),
+                "apply_ratio": float(route_audit_apply_ratio),
+                "non_apply_ratio": float(route_audit_non_apply_ratio),
+                "rollback_guard_blocked_ratio": float(route_audit_rollback_guard_blocked_ratio),
+                "unknown_ratio": float(route_audit_unknown_ratio),
+                "trendline_recent_samples": int(trendline_recent_samples),
+                "trendline_prior_samples": int(trendline_prior_samples),
+                "trendline_recent_non_apply_ratio": float(trendline_recent_non_apply_ratio),
+                "trendline_prior_non_apply_ratio": float(trendline_prior_non_apply_ratio),
+                "trendline_non_apply_ratio_rise": float(trendline_non_apply_ratio_rise),
+                "trendline_recent_rollback_guard_blocked_ratio": float(
+                    trendline_recent_rollback_guard_blocked_ratio
+                ),
+                "trendline_prior_rollback_guard_blocked_ratio": float(
+                    trendline_prior_rollback_guard_blocked_ratio
+                ),
+                "trendline_rollback_guard_blocked_ratio_rise": float(
+                    trendline_rollback_guard_blocked_ratio_rise
+                ),
+                "trendline_recent_apply_ratio": float(trendline_recent_apply_ratio),
+                "trendline_prior_apply_ratio": float(trendline_prior_apply_ratio),
+                "trendline_apply_ratio_drop": float(trendline_apply_ratio_drop),
+            },
+            "thresholds": {
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_enabled": bool(
+                    controlled_apply_route_audit_enabled
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_gate_hard_fail": bool(
+                    controlled_apply_route_audit_gate_hard_fail
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_window_days": int(
+                    controlled_apply_route_audit_window_days
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_samples": int(
+                    controlled_apply_route_audit_min_samples
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_non_apply_ratio": float(
+                    controlled_apply_route_audit_max_non_apply_ratio
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_rollback_guard_ratio": float(
+                    controlled_apply_route_audit_max_rollback_guard_ratio
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_apply_ratio": float(
+                    controlled_apply_route_audit_min_apply_ratio
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_recent_days": int(
+                    controlled_apply_route_audit_trendline_recent_days
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_prior_days": int(
+                    controlled_apply_route_audit_trendline_prior_days
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_min_samples": int(
+                    controlled_apply_route_audit_trendline_min_samples
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_non_apply_ratio_rise": float(
+                    controlled_apply_route_audit_trendline_max_non_apply_ratio_rise
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise": float(
+                    controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_apply_ratio_drop": float(
+                    controlled_apply_route_audit_trendline_max_apply_ratio_drop
+                ),
+            },
+            "windows": {
+                "recent": {
+                    "start": trendline_recent_start.isoformat(),
+                    "end": as_of.isoformat(),
+                    "samples": int(trendline_recent_samples),
+                },
+                "prior": {
+                    "start": (
+                        max(route_audit_window_start, trendline_prior_start).isoformat()
+                        if trendline_prior_end >= route_audit_window_start
+                        else ""
+                    ),
+                    "end": trendline_prior_end.isoformat() if trendline_prior_end >= route_audit_window_start else "",
+                    "samples": int(trendline_prior_samples),
+                },
+            },
+            "series": route_audit_rows[-int(max(20, controlled_apply_route_audit_window_days)) :],
+        }
+
+        failure_streak_current = 0
+        timeout_streak_current = 0
+        for row in reversed(run_rows):
+            if bool(row.get("frontend_snapshot_status_error", False)):
+                failure_streak_current += 1
+            else:
+                break
+        for row in reversed(run_rows):
+            if bool(row.get("frontend_snapshot_status_timeout", False)):
+                timeout_streak_current += 1
+            else:
+                break
+
+        active = bool(enabled and run_samples >= int(min_samples))
+        checks = {
+            "min_samples_ok": bool(run_samples >= int(min_samples)),
+            "failure_ratio_ok": True,
+            "timeout_ratio_ok": True,
+            "governance_failure_ratio_ok": True,
+            "failure_streak_ok": True,
+            "timeout_streak_ok": True,
+            "controlled_apply_route_audit_ok": True,
+        }
+        alerts: list[str] = []
+        if active:
+            checks["failure_ratio_ok"] = bool(float(failure_ratio) <= float(max_failure_ratio))
+            checks["timeout_ratio_ok"] = bool(float(timeout_ratio) <= float(max_timeout_ratio))
+            checks["governance_failure_ratio_ok"] = bool(
+                float(governance_failure_ratio) <= float(max_governance_failure_ratio)
+            )
+            checks["failure_streak_ok"] = bool(int(failure_streak_current) <= int(max_failure_streak))
+            checks["timeout_streak_ok"] = bool(int(timeout_streak_current) <= int(max_timeout_streak))
+            if not bool(checks["failure_ratio_ok"]):
+                alerts.append("guard_loop_frontend_snapshot_trend_failure_ratio_high")
+            if not bool(checks["timeout_ratio_ok"]):
+                alerts.append("guard_loop_frontend_snapshot_trend_timeout_ratio_high")
+            if not bool(checks["governance_failure_ratio_ok"]):
+                alerts.append("guard_loop_frontend_snapshot_trend_governance_failure_ratio_high")
+            if not bool(checks["failure_streak_ok"]):
+                alerts.append("guard_loop_frontend_snapshot_trend_failure_streak_high")
+            if not bool(checks["timeout_streak_ok"]):
+                alerts.append("guard_loop_frontend_snapshot_trend_timeout_streak_high")
+        elif enabled and require_active:
+            alerts.append("guard_loop_frontend_snapshot_trend_insufficient_samples")
+        route_audit_hard_fail_blocked = bool(
+            controlled_apply_route_audit_enabled
+            and controlled_apply_route_audit_gate_hard_fail
+            and route_audit_active
+            and (not route_audit_ok)
+        )
+        checks["controlled_apply_route_audit_ok"] = bool(not route_audit_hard_fail_blocked)
+        for code in route_audit_alerts:
+            if str(code) and str(code) not in alerts:
+                alerts.append(str(code))
+
+        monitor_failed = bool(
+            enabled
+            and (
+                (active and not all(bool(v) for v in checks.values()))
+                or (require_active and not active)
+            )
+        )
+        gate_ok = bool(not monitor_failed) if gate_hard_fail else True
+
+        series: list[dict[str, Any]] = []
+        for row in sample_rows[-20:]:
+            if not isinstance(row, dict):
+                continue
+            series.append(
+                {
+                    "ts": str(row.get("ts", "")),
+                    "date": str(row.get("date", "")),
+                    "due": bool(row.get("frontend_snapshot_due", False)),
+                    "status": str(row.get("frontend_snapshot_status", "unknown")),
+                    "reason": str(row.get("frontend_snapshot_reason", "")),
+                    "timed_out": bool(row.get("frontend_snapshot_timed_out", False)),
+                    "governance_failed": bool(row.get("frontend_snapshot_governance_failed", False)),
+                    "trend_due_light": bool(row.get("frontend_snapshot_trend_due_light", False)),
+                    "trend_due_heavy": bool(row.get("frontend_snapshot_trend_due_heavy", False)),
+                    "trend_antiflap_suppressed": bool(
+                        row.get("frontend_snapshot_trend_antiflap_suppressed", False)
+                    ),
+                    "replay_executed_light": bool(
+                        row.get("frontend_snapshot_replay_executed_light", False)
+                    ),
+                    "replay_executed_heavy": bool(
+                        row.get("frontend_snapshot_replay_executed_heavy", False)
+                    ),
+                    "recovery_mode": str(row.get("frontend_snapshot_recovery_mode", "")),
+                }
+            )
+
+        latest_row = sample_rows[-1] if sample_rows else {}
+        latest_governance_checksum_path = str(
+            latest_row.get("frontend_snapshot_governance_checksum_index_path", "")
+        ).strip() if isinstance(latest_row, dict) else ""
+        latest_artifact_json = str(
+            latest_row.get("frontend_snapshot_artifact_json", "")
+        ).strip() if isinstance(latest_row, dict) else ""
+        burnin_promotion_payload = (
+            burnin_summary.get("promotion", {})
+            if isinstance(burnin_summary.get("promotion", {}), dict)
+            else {}
+        )
+        burnin_promotion_controlled_apply = (
+            burnin_promotion_payload.get("controlled_apply", {})
+            if isinstance(burnin_promotion_payload.get("controlled_apply", {}), dict)
+            else {}
+        )
+        burnin_promotion_controlled_apply_artifacts = (
+            burnin_promotion_controlled_apply.get("artifacts", {})
+            if isinstance(burnin_promotion_controlled_apply.get("artifacts", {}), dict)
+            else {}
+        )
+        hard_fail_controlled_apply_artifact = (
+            burnin_promotion_controlled_apply_artifacts.get("controlled_apply", {})
+            if isinstance(burnin_promotion_controlled_apply_artifacts.get("controlled_apply", {}), dict)
+            else {}
+        )
+
+        return {
+            "active": bool(active),
+            "enabled": bool(enabled),
+            "hard_fail": bool(gate_hard_fail),
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "window_days": int(window_days),
+            "samples": int(run_samples),
+            "min_samples": int(min_samples),
+            "checks": checks,
+            "alerts": alerts,
+            "metrics": {
+                "run_samples": int(run_samples),
+                "governance_samples": int(governance_samples),
+                "status_ok_runs": int(status_ok_runs),
+                "status_error_runs": int(status_error_runs),
+                "status_failure_runs": int(failure_runs),
+                "status_timeout_runs": int(timeout_runs),
+                "failure_ratio": float(failure_ratio),
+                "timeout_ratio": float(timeout_ratio),
+                "governance_failures": int(governance_failures),
+                "governance_failure_ratio": float(governance_failure_ratio),
+                "failure_streak_current": int(failure_streak_current),
+                "timeout_streak_current": int(timeout_streak_current),
+                "replay_expected_runs": int(replay_expected_runs),
+                "replay_expected_light_runs": int(replay_expected_light_runs),
+                "replay_expected_heavy_runs": int(replay_expected_heavy_runs),
+                "replay_executed_runs": int(replay_executed_runs),
+                "replay_executed_light_runs": int(replay_executed_light_runs),
+                "replay_executed_heavy_runs": int(replay_executed_heavy_runs),
+                "replay_missed_runs": int(replay_missed_runs),
+                "replay_missed_light_runs": int(replay_missed_light_runs),
+                "replay_missed_heavy_runs": int(replay_missed_heavy_runs),
+                "replay_convergence_rate": float(replay_convergence_rate),
+                "replay_convergence_light_rate": float(replay_convergence_light_rate),
+                "replay_convergence_heavy_rate": float(replay_convergence_heavy_rate),
+                "replay_executed_total_runs": int(replay_executed_total_runs),
+                "replay_unexpected_execution_runs": int(replay_unexpected_execution_runs),
+                "replay_unexpected_execution_ratio": float(replay_unexpected_execution_ratio),
+                "replay_antiflap_suppressed_runs": int(replay_antiflap_suppressed_runs),
+                "replay_due_but_reason_missing_runs": int(replay_due_but_reason_missing_runs),
+                "burnin_replay_missed_ratio": float(burnin_replay_missed_ratio),
+                "burnin_reason_missing_ratio": float(burnin_reason_missing_ratio),
+                "burnin_dual_window_enabled": bool(antiflap_burnin_dual_window_enabled),
+                "burnin_dual_window_long_days": int(antiflap_burnin_dual_window_long_days),
+                "burnin_dual_window_long_samples": int(dual_window_long_samples),
+                "burnin_dual_window_suppressed_ratio_delta": float(
+                    dual_window_suppressed_ratio_delta
+                ),
+                "burnin_dual_window_replay_missed_ratio_delta": float(
+                    dual_window_replay_missed_ratio_delta
+                ),
+                "burnin_dual_window_reason_missing_ratio_delta": float(
+                    dual_window_reason_missing_ratio_delta
+                ),
+                "hard_fail_apply_route_audit_samples": int(route_audit_samples),
+                "hard_fail_apply_route_audit_apply_ratio": float(route_audit_apply_ratio),
+                "hard_fail_apply_route_audit_non_apply_ratio": float(route_audit_non_apply_ratio),
+                "hard_fail_apply_route_audit_rollback_guard_blocked_ratio": float(
+                    route_audit_rollback_guard_blocked_ratio
+                ),
+                "hard_fail_apply_route_audit_trendline_non_apply_ratio_rise": float(
+                    trendline_non_apply_ratio_rise
+                ),
+                "hard_fail_apply_route_audit_trendline_rollback_guard_blocked_ratio_rise": float(
+                    trendline_rollback_guard_blocked_ratio_rise
+                ),
+                "hard_fail_apply_route_audit_trendline_apply_ratio_drop": float(
+                    trendline_apply_ratio_drop
+                ),
+            },
+            "thresholds": {
+                "ops_guard_loop_frontend_snapshot_trend_enabled": bool(enabled),
+                "ops_guard_loop_frontend_snapshot_trend_gate_hard_fail": bool(gate_hard_fail),
+                "ops_guard_loop_frontend_snapshot_trend_require_active": bool(require_active),
+                "ops_guard_loop_frontend_snapshot_trend_window_days": int(window_days),
+                "ops_guard_loop_frontend_snapshot_trend_min_samples": int(min_samples),
+                "ops_guard_loop_frontend_snapshot_trend_max_failure_ratio": float(max_failure_ratio),
+                "ops_guard_loop_frontend_snapshot_trend_max_timeout_ratio": float(max_timeout_ratio),
+                "ops_guard_loop_frontend_snapshot_trend_max_governance_failure_ratio": float(
+                    max_governance_failure_ratio
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_max_failure_streak": int(max_failure_streak),
+                "ops_guard_loop_frontend_snapshot_trend_max_timeout_streak": int(max_timeout_streak),
+                "ops_guard_loop_frontend_snapshot_trend_gate_promote_on_burnin": bool(
+                    antiflap_burnin_promotion_enabled
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_enabled": bool(
+                    controlled_apply_enabled
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_manual_approval_required": bool(
+                    controlled_apply_manual_approval_required
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_max_apply_window_days": int(
+                    controlled_apply_max_apply_window_days
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_approval_manifest_path": str(
+                    controlled_apply_approval_manifest_path
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_dry_run": bool(
+                    controlled_apply_dry_run
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_rollback_guard_enabled": bool(
+                    controlled_apply_rollback_guard_enabled
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_enabled": bool(
+                    controlled_apply_route_audit_enabled
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_gate_hard_fail": bool(
+                    controlled_apply_route_audit_gate_hard_fail
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_window_days": int(
+                    controlled_apply_route_audit_window_days
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_samples": int(
+                    controlled_apply_route_audit_min_samples
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_non_apply_ratio": float(
+                    controlled_apply_route_audit_max_non_apply_ratio
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_rollback_guard_ratio": float(
+                    controlled_apply_route_audit_max_rollback_guard_ratio
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_apply_ratio": float(
+                    controlled_apply_route_audit_min_apply_ratio
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_recent_days": int(
+                    controlled_apply_route_audit_trendline_recent_days
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_prior_days": int(
+                    controlled_apply_route_audit_trendline_prior_days
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_min_samples": int(
+                    controlled_apply_route_audit_trendline_min_samples
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_non_apply_ratio_rise": float(
+                    controlled_apply_route_audit_trendline_max_non_apply_ratio_rise
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise": float(
+                    controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise
+                ),
+                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_apply_ratio_drop": float(
+                    controlled_apply_route_audit_trendline_max_apply_ratio_drop
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_enabled": bool(
+                    antiflap_burnin_dual_window_enabled
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_long_days": int(
+                    antiflap_burnin_dual_window_long_days
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_min_long_samples": int(
+                    antiflap_burnin_dual_window_min_long_samples
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_suppression_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_suppression_ratio_delta
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_replay_missed_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_replay_missed_ratio_delta
+                ),
+                "ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_reason_missing_ratio_delta": float(
+                    antiflap_burnin_dual_window_max_reason_missing_ratio_delta
+                ),
+            },
+            "source": {
+                "history_path": str(history_payload.get("path", "")),
+                "history_found": bool(history_payload.get("found", False)),
+            },
+            "artifacts": {
+                "snapshot": {
+                    "json": str(latest_artifact_json),
+                    "checksum_index_path": str(latest_governance_checksum_path),
+                },
+                "antiflap_burnin": (
+                    burnin_summary.get("artifacts", {}).get("burnin", {})
+                    if isinstance(burnin_summary.get("artifacts", {}), dict)
+                    else {}
+                ),
+                "hard_fail_controlled_apply": dict(hard_fail_controlled_apply_artifact),
+            },
+            "hard_fail_apply_route_audit": route_audit_payload,
+            "antiflap_burnin": burnin_summary,
+            "series": series,
+        }
+
+    def _guard_loop_cadence_non_apply_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(val.get("ops_guard_loop_cadence_non_apply_enabled", True), True)
+        gate_hard_fail = self._safe_bool(val.get("ops_guard_loop_cadence_non_apply_gate_hard_fail", False), False)
+        require_active = self._safe_bool(val.get("ops_guard_loop_cadence_non_apply_require_active", False), False)
+        require_reason_codes = self._safe_bool(
+            val.get("ops_guard_loop_cadence_non_apply_require_reason_codes", True),
+            True,
+        )
+        require_recovery_escalation = self._safe_bool(
+            val.get("ops_guard_loop_cadence_non_apply_require_recovery_escalation", True),
+            True,
+        )
+        max_staleness_hours = max(
+            1,
+            int(self._safe_float(val.get("ops_guard_loop_cadence_non_apply_max_staleness_hours", 8), 8)),
+        )
+        light_streak_threshold = max(
+            1,
+            int(self._safe_float(val.get("ops_guard_loop_cadence_non_apply_light_streak_threshold", 2), 2)),
+        )
+        heavy_streak_threshold = max(
+            int(light_streak_threshold),
+            int(self._safe_float(val.get("ops_guard_loop_cadence_non_apply_heavy_streak_threshold", 4), 4)),
+        )
+        state_streak_delta_max = max(
+            0,
+            int(self._safe_float(val.get("ops_guard_loop_cadence_non_apply_state_streak_delta_max", 1), 1)),
+        )
+        semantic_drift_window_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_cadence_non_apply_semantic_drift_window_days", 14),
+                    14,
+                )
+            ),
+        )
+        semantic_drift_min_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_cadence_non_apply_semantic_drift_min_samples", 6),
+                    6,
+                )
+            ),
+        )
+        semantic_drift_max_pulse_fail_ratio = self._clamp_float(
+            self._safe_float(
+                val.get("ops_guard_loop_cadence_non_apply_semantic_drift_max_pulse_fail_ratio", 0.20),
+                0.20,
+            ),
+            0.0,
+            1.0,
+        )
+        semantic_drift_max_gap_backfill_fail_ratio = self._clamp_float(
+            self._safe_float(
+                val.get("ops_guard_loop_cadence_non_apply_semantic_drift_max_gap_backfill_fail_ratio", 0.35),
+                0.35,
+            ),
+            0.0,
+            1.0,
+        )
+
+        guard_last_path = self.output_dir / "logs" / "guard_loop_last.json"
+        guard_state_path = self.output_dir / "logs" / "guard_state.json"
+        guard_last = self.load_json_safely(guard_last_path)
+        guard_state = self.load_json_safely(guard_state_path)
+
+        cadence_payload = (
+            guard_last.get("cadence_non_apply", {})
+            if isinstance(guard_last.get("cadence_non_apply", {}), dict)
+            else {}
+        )
+        recovery_payload = (
+            guard_last.get("recovery", {})
+            if isinstance(guard_last.get("recovery", {}), dict)
+            else {}
+        )
+        cadence_recovery = (
+            cadence_payload.get("recovery_escalation", {})
+            if isinstance(cadence_payload.get("recovery_escalation", {}), dict)
+            else {}
+        )
+        apply_probe = (
+            cadence_payload.get("apply_probe", {})
+            if isinstance(cadence_payload.get("apply_probe", {}), dict)
+            else {}
+        )
+        trend_preset_payload = (
+            cadence_payload.get("trend_preset", {})
+            if isinstance(cadence_payload.get("trend_preset", {}), dict)
+            else {}
+        )
+        trend_preset_metrics = (
+            trend_preset_payload.get("metrics", {})
+            if isinstance(trend_preset_payload.get("metrics", {}), dict)
+            else {}
+        )
+        trend_retro_payload = (
+            cadence_payload.get("trend_retro", {})
+            if isinstance(cadence_payload.get("trend_retro", {}), dict)
+            else {}
+        )
+        trend_preset_drift_payload = (
+            cadence_payload.get("trend_preset_drift_audit", {})
+            if isinstance(cadence_payload.get("trend_preset_drift_audit", {}), dict)
+            else {}
+        )
+        trend_preset_drift_artifact = (
+            trend_preset_drift_payload.get("artifact", {})
+            if isinstance(trend_preset_drift_payload.get("artifact", {}), dict)
+            else {}
+        )
+        trend_preset_drift_checks = (
+            trend_preset_drift_payload.get("checks", {})
+            if isinstance(trend_preset_drift_payload.get("checks", {}), dict)
+            else {}
+        )
+        trend_preset_drift_alerts = (
+            trend_preset_drift_payload.get("alerts", [])
+            if isinstance(trend_preset_drift_payload.get("alerts", []), list)
+            else []
+        )
+        trend_preset_drift_trendline = (
+            trend_preset_drift_payload.get("trendline", {})
+            if isinstance(trend_preset_drift_payload.get("trendline", {}), dict)
+            else {}
+        )
+        trend_preset_drift_trendline_checks = (
+            trend_preset_drift_trendline.get("checks", {})
+            if isinstance(trend_preset_drift_trendline.get("checks", {}), dict)
+            else {}
+        )
+        trend_preset_drift_trendline_alerts = (
+            trend_preset_drift_trendline.get("alerts", [])
+            if isinstance(trend_preset_drift_trendline.get("alerts", []), list)
+            else []
+        )
+        trend_preset_drift_trendline_windows = (
+            trend_preset_drift_trendline.get("windows", {})
+            if isinstance(trend_preset_drift_trendline.get("windows", {}), dict)
+            else {}
+        )
+        trend_preset_drift_trendline_recent = (
+            trend_preset_drift_trendline_windows.get("recent", {})
+            if isinstance(trend_preset_drift_trendline_windows.get("recent", {}), dict)
+            else {}
+        )
+        trend_preset_drift_trendline_prior = (
+            trend_preset_drift_trendline_windows.get("prior", {})
+            if isinstance(trend_preset_drift_trendline_windows.get("prior", {}), dict)
+            else {}
+        )
+        trend_preset_drift_trendline_deltas = (
+            trend_preset_drift_trendline.get("deltas", {})
+            if isinstance(trend_preset_drift_trendline.get("deltas", {}), dict)
+            else {}
+        )
+        trend_preset_drift_auto_tune = (
+            trend_preset_drift_payload.get("auto_tune", {})
+            if isinstance(trend_preset_drift_payload.get("auto_tune", {}), dict)
+            else {}
+        )
+        trend_preset_drift_auto_tune_policy = (
+            trend_preset_drift_auto_tune.get("policy", {})
+            if isinstance(trend_preset_drift_auto_tune.get("policy", {}), dict)
+            else {}
+        )
+        trend_preset_drift_auto_tune_bounds = (
+            trend_preset_drift_auto_tune.get("bounds", {})
+            if isinstance(trend_preset_drift_auto_tune.get("bounds", {}), dict)
+            else {}
+        )
+        trend_preset_drift_auto_tune_suggested = (
+            trend_preset_drift_auto_tune.get("suggested_thresholds", {})
+            if isinstance(trend_preset_drift_auto_tune.get("suggested_thresholds", {}), dict)
+            else {}
+        )
+        trend_preset_drift_auto_tune_handoff = (
+            trend_preset_drift_auto_tune.get("handoff", {})
+            if isinstance(trend_preset_drift_auto_tune.get("handoff", {}), dict)
+            else {}
+        )
+        trend_preset_drift_auto_tune_handoff_gate = (
+            trend_preset_drift_auto_tune_handoff.get("apply_gate", {})
+            if isinstance(trend_preset_drift_auto_tune_handoff.get("apply_gate", {}), dict)
+            else {}
+        )
+        semantic_snapshot = self._extract_guard_loop_semantic_payload(
+            guard_last if isinstance(guard_last, dict) else {}
+        )
+        semantic_history = self._load_guard_loop_semantic_rows(
+            as_of=as_of,
+            window_days=semantic_drift_window_days,
+        )
+        semantic_rows = (
+            semantic_history.get("rows", [])
+            if isinstance(semantic_history.get("rows", []), list)
+            else []
+        )
+        pulse_semantic_samples = 0
+        pulse_semantic_failures = 0
+        gap_backfill_semantic_samples = 0
+        gap_backfill_semantic_failures = 0
+        semantic_series: list[dict[str, Any]] = []
+        for row in semantic_rows:
+            if not isinstance(row, dict):
+                continue
+            pulse_counted_row = bool(row.get("pulse_counted", False))
+            pulse_semantic_ok_row = bool(row.get("pulse_semantic_ok", True))
+            gap_backfill_executed_row = bool(row.get("gap_backfill_executed", False))
+            gap_backfill_semantic_ok_row = bool(row.get("gap_backfill_semantic_ok", True))
+            if pulse_counted_row:
+                pulse_semantic_samples += 1
+                if not pulse_semantic_ok_row:
+                    pulse_semantic_failures += 1
+            if gap_backfill_executed_row:
+                gap_backfill_semantic_samples += 1
+                if not gap_backfill_semantic_ok_row:
+                    gap_backfill_semantic_failures += 1
+            semantic_series.append(
+                {
+                    "ts": str(row.get("ts", "")),
+                    "date": str(row.get("date", "")),
+                    "pulse_status": str(row.get("pulse_status", "unknown")),
+                    "pulse_semantic_ok": bool(pulse_semantic_ok_row),
+                    "gap_backfill_status": str(row.get("gap_backfill_status", "unknown")),
+                    "gap_backfill_due": bool(row.get("gap_backfill_due", False)),
+                    "gap_backfill_executed": bool(gap_backfill_executed_row),
+                    "gap_backfill_semantic_ok": bool(gap_backfill_semantic_ok_row),
+                }
+            )
+        pulse_semantic_fail_ratio = (
+            float(pulse_semantic_failures) / float(pulse_semantic_samples)
+            if pulse_semantic_samples > 0
+            else 0.0
+        )
+        gap_backfill_semantic_fail_ratio = (
+            float(gap_backfill_semantic_failures) / float(gap_backfill_semantic_samples)
+            if gap_backfill_semantic_samples > 0
+            else 0.0
+        )
+        pulse_semantic_drift_samples_ready = bool(pulse_semantic_samples >= int(semantic_drift_min_samples))
+        gap_backfill_semantic_drift_samples_ready = bool(
+            gap_backfill_semantic_samples >= int(semantic_drift_min_samples)
+        )
+        pulse_semantic_drift_ok = True
+        if pulse_semantic_drift_samples_ready:
+            pulse_semantic_drift_ok = bool(
+                float(pulse_semantic_fail_ratio) <= float(semantic_drift_max_pulse_fail_ratio)
+            )
+        gap_backfill_semantic_drift_ok = True
+        if gap_backfill_semantic_drift_samples_ready:
+            gap_backfill_semantic_drift_ok = bool(
+                float(gap_backfill_semantic_fail_ratio)
+                <= float(semantic_drift_max_gap_backfill_fail_ratio)
+            )
+        semantic_drift_insufficient_samples = bool(
+            (pulse_semantic_samples > 0 and not pulse_semantic_drift_samples_ready)
+            or (gap_backfill_semantic_samples > 0 and not gap_backfill_semantic_drift_samples_ready)
+        )
+        if (pulse_semantic_drift_samples_ready and not pulse_semantic_drift_ok) or (
+            gap_backfill_semantic_drift_samples_ready and not gap_backfill_semantic_drift_ok
+        ):
+            semantic_drift_status = "warn"
+        elif semantic_drift_insufficient_samples:
+            semantic_drift_status = "insufficient_samples"
+        elif pulse_semantic_samples <= 0 and gap_backfill_semantic_samples <= 0:
+            semantic_drift_status = "no_samples"
+        else:
+            semantic_drift_status = "ok"
+
+        cadence_reason_codes = [
+            str(x).strip()
+            for x in cadence_payload.get("reason_codes", [])
+            if str(x).strip()
+        ] if isinstance(cadence_payload.get("reason_codes", []), list) else []
+        recovery_reason_codes = [
+            str(x).strip()
+            for x in recovery_payload.get("reason_codes", [])
+            if str(x).strip()
+        ] if isinstance(recovery_payload.get("reason_codes", []), list) else []
+        trend_preset_reason_codes = [
+            str(x).strip()
+            for x in trend_preset_payload.get("reason_codes", [])
+            if str(x).strip()
+        ] if isinstance(trend_preset_payload.get("reason_codes", []), list) else []
+
+        source_found = bool(guard_last_path.exists() and isinstance(cadence_payload, dict) and cadence_payload)
+        source_ts = self._parse_iso_datetime(guard_last.get("ts"))
+        if source_ts is None and guard_last_path.exists():
+            try:
+                source_ts = datetime.fromtimestamp(guard_last_path.stat().st_mtime)
+            except Exception:
+                source_ts = None
+        source_age_hours = None
+        if source_ts is not None:
+            now_ts = datetime.now(source_ts.tzinfo) if source_ts.tzinfo is not None else datetime.now()
+            source_age_hours = max(0.0, (now_ts - source_ts).total_seconds() / 3600.0)
+
+        cadence_due = bool(cadence_payload.get("cadence_due", False))
+        apply_seen = bool(cadence_payload.get("apply_seen", False))
+        non_apply = bool(cadence_payload.get("non_apply", cadence_due and (not apply_seen)))
+        streak_payload = int(self._safe_float(cadence_payload.get("streak_windows", 0), 0))
+        streak_state = int(self._safe_float(guard_state.get("cadence_non_apply_streak", streak_payload), streak_payload))
+        streak_windows = max(0, max(streak_payload, streak_state))
+        due_light = bool(cadence_payload.get("due_light", non_apply and streak_windows >= int(light_streak_threshold)))
+        due_heavy = bool(cadence_payload.get("due_heavy", non_apply and streak_windows >= int(heavy_streak_threshold)))
+        replay_allowed = bool(cadence_payload.get("replay_allowed", True))
+        recovery_mode = str(recovery_payload.get("mode", "")).strip().lower()
+        recovery_mode_reason = str(recovery_payload.get("status", "")).strip().lower()
+        trend_preset_active = bool(trend_preset_payload.get("active", False))
+        trend_preset_suggested_level = str(trend_preset_payload.get("suggested_level", "none")).strip().lower() or "none"
+        trend_preset_due_light = bool(trend_preset_payload.get("due_light", False))
+        trend_preset_due_heavy = bool(trend_preset_payload.get("due_heavy", False))
+        trend_preset_replay_allowed = bool(trend_preset_payload.get("replay_allowed", replay_allowed))
+        trend_preset_busy_marker_active = bool(trend_preset_payload.get("busy_marker_active", False))
+        trend_preset_sample_ready = bool(trend_preset_payload.get("sample_ready", False))
+        trend_preset_retro_found = bool(trend_retro_payload.get("found", False))
+        trend_preset_drift_status = (
+            str(trend_preset_drift_payload.get("status", "unknown")).strip().lower() or "unknown"
+        )
+        trend_preset_drift_samples = int(
+            self._safe_float(trend_preset_drift_payload.get("samples", 0), 0)
+        )
+        trend_preset_drift_min_samples = int(
+            self._safe_float(trend_preset_drift_payload.get("min_samples", 0), 0)
+        )
+        trend_preset_drift_artifact_written = bool(trend_preset_drift_artifact.get("written", False))
+        trend_preset_applied_rate_delta = self._safe_float(
+            trend_preset_metrics.get("applied_rate_delta", 0.0),
+            0.0,
+        )
+        trend_preset_cooldown_block_rate_delta = self._safe_float(
+            trend_preset_metrics.get("cooldown_block_rate_delta", 0.0),
+            0.0,
+        )
+        trend_preset_reason_set = {str(x).strip() for x in trend_preset_reason_codes if str(x).strip()}
+        trend_preset_engaged = bool(
+            (trend_preset_suggested_level in {"light", "heavy"})
+            or trend_preset_due_light
+            or trend_preset_due_heavy
+            or any(code.startswith("CADENCE_LIFT_TREND_PRESET_") for code in trend_preset_reason_set)
+        )
+
+        active = bool(enabled and source_found)
+        checks = {
+            "artifact_present_ok": bool(source_found),
+            "artifact_recent_ok": True,
+            "payload_available_ok": bool(source_found),
+            "non_apply_light_ok": True,
+            "non_apply_heavy_ok": True,
+            "replay_allowed_ok": True,
+            "reason_traceable_ok": True,
+            "recovery_escalation_ok": True,
+            "state_streak_sync_ok": True,
+            "trend_preset_traceable_ok": True,
+            "trend_preset_recovery_link_ok": True,
+            "trend_preset_retro_source_ok": True,
+            "trend_preset_drift_artifact_ok": True,
+            "trend_preset_drift_status_ok": True,
+            "trend_preset_drift_trendline_ok": True,
+            "trend_preset_drift_auto_tune_bounded_ok": True,
+            "trend_preset_drift_auto_tune_handoff_ok": True,
+            "pulse_semantic_ok": True,
+            "gap_backfill_semantic_ok": True,
+            "pulse_semantic_drift_ok": True,
+            "gap_backfill_semantic_drift_ok": True,
+        }
+        alerts: list[str] = []
+        if source_age_hours is None:
+            checks["artifact_recent_ok"] = False
+        else:
+            checks["artifact_recent_ok"] = bool(float(source_age_hours) <= float(max_staleness_hours))
+
+        if active:
+            expected_light = bool(non_apply and streak_windows >= int(light_streak_threshold))
+            expected_heavy = bool(non_apply and streak_windows >= int(heavy_streak_threshold))
+            checks["non_apply_light_ok"] = not expected_light
+            checks["non_apply_heavy_ok"] = not expected_heavy
+            checks["replay_allowed_ok"] = (not (expected_light or expected_heavy)) or bool(replay_allowed)
+
+            if require_reason_codes and (expected_light or expected_heavy):
+                streak_code_ok = "CADENCE_DUE_NON_APPLY_STREAK" in set(cadence_reason_codes)
+                heavy_code_ok = (not expected_heavy) or ("CADENCE_DUE_NON_APPLY_HEAVY" in set(cadence_reason_codes))
+                checks["reason_traceable_ok"] = bool(streak_code_ok and heavy_code_ok)
+            if require_reason_codes and trend_preset_engaged:
+                trend_traceable_ok = True
+                if trend_preset_due_heavy or trend_preset_suggested_level == "heavy":
+                    trend_traceable_ok = "CADENCE_LIFT_TREND_PRESET_HEAVY" in trend_preset_reason_set
+                elif trend_preset_due_light or trend_preset_suggested_level == "light":
+                    trend_traceable_ok = bool(
+                        ("CADENCE_LIFT_TREND_PRESET_LIGHT" in trend_preset_reason_set)
+                        or ("CADENCE_LIFT_TREND_PRESET_HEAVY" in trend_preset_reason_set)
+                    )
+                checks["trend_preset_traceable_ok"] = bool(trend_traceable_ok)
+
+            recovery_escalation_ok = True
+            if require_recovery_escalation and replay_allowed and (expected_light or expected_heavy):
+                if expected_heavy:
+                    recovery_escalation_ok = bool(
+                        ("CADENCE_DUE_NON_APPLY_REPLAY_HEAVY" in set(recovery_reason_codes))
+                        or bool(cadence_recovery.get("heavy_due", False))
+                        or (recovery_mode == "heavy")
+                        or (
+                            ("CADENCE_DUE_NON_APPLY_BUSY_MARKER_DOWNGRADE" in set(recovery_reason_codes))
+                            and (recovery_mode in {"light", "heavy"})
+                        )
+                    )
+                else:
+                    recovery_escalation_ok = bool(
+                        ("CADENCE_DUE_NON_APPLY_REPLAY_LIGHT" in set(recovery_reason_codes))
+                        or bool(cadence_recovery.get("light_due", False))
+                        or (recovery_mode in {"light", "heavy"})
+                    )
+            checks["recovery_escalation_ok"] = bool(recovery_escalation_ok)
+            trend_preset_recovery_link_ok = True
+            if require_recovery_escalation and trend_preset_engaged:
+                if trend_preset_due_heavy:
+                    trend_preset_recovery_link_ok = bool(
+                        ("CADENCE_LIFT_TREND_REPLAY_HEAVY" in set(recovery_reason_codes))
+                        or bool(cadence_recovery.get("heavy_due", False))
+                        or (recovery_mode == "heavy")
+                    )
+                elif trend_preset_due_light:
+                    trend_preset_recovery_link_ok = bool(
+                        ("CADENCE_LIFT_TREND_REPLAY_LIGHT" in set(recovery_reason_codes))
+                        or bool(cadence_recovery.get("light_due", False))
+                        or (recovery_mode in {"light", "heavy"})
+                    )
+                elif not trend_preset_replay_allowed:
+                    trend_preset_recovery_link_ok = bool(
+                        "CADENCE_LIFT_TREND_PRESET_REPLAY_DISABLED" in trend_preset_reason_set
+                    )
+            checks["trend_preset_recovery_link_ok"] = bool(trend_preset_recovery_link_ok)
+            checks["trend_preset_retro_source_ok"] = bool((not trend_preset_engaged) or trend_preset_retro_found)
+            checks["trend_preset_drift_artifact_ok"] = bool(
+                (not trend_preset_engaged) or trend_preset_drift_artifact_written
+            )
+            trend_preset_drift_status_ok = True
+            if trend_preset_engaged:
+                if trend_preset_drift_status in {"warn", "critical", "error"}:
+                    trend_preset_drift_status_ok = False
+                elif trend_preset_drift_status == "unknown":
+                    trend_preset_drift_status_ok = False
+                if trend_preset_drift_checks:
+                    drift_checks_ok = all(bool(v) for v in trend_preset_drift_checks.values())
+                    trend_preset_drift_status_ok = bool(trend_preset_drift_status_ok and drift_checks_ok)
+            checks["trend_preset_drift_status_ok"] = bool(trend_preset_drift_status_ok)
+            trend_preset_drift_trendline_ok = True
+            trend_preset_drift_trendline_status = (
+                str(trend_preset_drift_trendline.get("status", "unknown")).strip().lower() or "unknown"
+            )
+            trendline_samples_ready = bool(trend_preset_drift_trendline_checks.get("samples_ready_ok", False))
+            if trend_preset_engaged and trendline_samples_ready:
+                if trend_preset_drift_trendline_status in {"warn", "critical", "error", "unknown"}:
+                    trend_preset_drift_trendline_ok = False
+                trendline_guard_checks = [
+                    bool(v)
+                    for k, v in trend_preset_drift_trendline_checks.items()
+                    if str(k) != "samples_ready_ok"
+                ]
+                if trendline_guard_checks and (not all(trendline_guard_checks)):
+                    trend_preset_drift_trendline_ok = False
+            checks["trend_preset_drift_trendline_ok"] = bool(trend_preset_drift_trendline_ok)
+            trend_preset_drift_auto_tune_bounded_ok = True
+            if trend_preset_engaged and bool(trend_preset_drift_auto_tune.get("apply_recommended", False)):
+                auto_tune_bounds_ok = True
+                for key in (
+                    "light_applied_delta_max",
+                    "heavy_applied_delta_max",
+                    "light_cooldown_delta_min",
+                    "heavy_cooldown_delta_min",
+                ):
+                    suggested_v = trend_preset_drift_auto_tune_suggested.get(key)
+                    bound_payload = (
+                        trend_preset_drift_auto_tune_bounds.get(key, {})
+                        if isinstance(trend_preset_drift_auto_tune_bounds.get(key, {}), dict)
+                        else {}
+                    )
+                    if suggested_v is None:
+                        auto_tune_bounds_ok = False
+                        continue
+                    bound_min = self._safe_float(bound_payload.get("min", -1.0), -1.0)
+                    bound_max = self._safe_float(bound_payload.get("max", 1.0), 1.0)
+                    vv = self._safe_float(suggested_v, 0.0)
+                    if vv < (bound_min - 1e-12) or vv > (bound_max + 1e-12):
+                        auto_tune_bounds_ok = False
+                applied_gap_min = max(
+                    0.0,
+                    self._safe_float(trend_preset_drift_auto_tune_policy.get("applied_gap_min", 0.0), 0.0),
+                )
+                cooldown_gap_min = max(
+                    0.0,
+                    self._safe_float(trend_preset_drift_auto_tune_policy.get("cooldown_gap_min", 0.0), 0.0),
+                )
+                light_applied_s = self._safe_float(
+                    trend_preset_drift_auto_tune_suggested.get("light_applied_delta_max", 0.0),
+                    0.0,
+                )
+                heavy_applied_s = self._safe_float(
+                    trend_preset_drift_auto_tune_suggested.get("heavy_applied_delta_max", 0.0),
+                    0.0,
+                )
+                light_cooldown_s = self._safe_float(
+                    trend_preset_drift_auto_tune_suggested.get("light_cooldown_delta_min", 0.0),
+                    0.0,
+                )
+                heavy_cooldown_s = self._safe_float(
+                    trend_preset_drift_auto_tune_suggested.get("heavy_cooldown_delta_min", 0.0),
+                    0.0,
+                )
+                relation_ok = bool(
+                    (heavy_applied_s <= (light_applied_s - applied_gap_min + 1e-12))
+                    and (heavy_cooldown_s >= (light_cooldown_s + cooldown_gap_min - 1e-12))
+                )
+                trend_preset_drift_auto_tune_bounded_ok = bool(auto_tune_bounds_ok and relation_ok)
+            checks["trend_preset_drift_auto_tune_bounded_ok"] = bool(trend_preset_drift_auto_tune_bounded_ok)
+            trend_preset_drift_auto_tune_handoff_ok = True
+            if trend_preset_engaged and bool(trend_preset_drift_auto_tune.get("apply_recommended", False)):
+                handoff_mode = (
+                    str(trend_preset_drift_auto_tune_handoff.get("mode", "")).strip().lower()
+                    or "unknown"
+                )
+                handoff_proposal_id = str(
+                    trend_preset_drift_auto_tune_handoff.get("proposal_id", "")
+                ).strip()
+                handoff_gate_allowed_present = isinstance(
+                    trend_preset_drift_auto_tune_handoff_gate.get("allowed", None),
+                    bool,
+                )
+                handoff_gate_reason = str(
+                    trend_preset_drift_auto_tune_handoff_gate.get("reason", "")
+                ).strip()
+                trend_preset_drift_auto_tune_handoff_ok = bool(
+                    handoff_mode == "proposal_only"
+                    and bool(handoff_proposal_id)
+                    and handoff_gate_allowed_present
+                    and bool(handoff_gate_reason)
+                )
+            checks["trend_preset_drift_auto_tune_handoff_ok"] = bool(
+                trend_preset_drift_auto_tune_handoff_ok
+            )
+            pulse_semantic_active = bool(semantic_snapshot.get("pulse_counted", False))
+            pulse_semantic_ok = bool(semantic_snapshot.get("pulse_semantic_ok", True))
+            if not pulse_semantic_active:
+                pulse_semantic_ok = True
+            checks["pulse_semantic_ok"] = bool(pulse_semantic_ok)
+
+            gap_backfill_semantic_active = bool(semantic_snapshot.get("gap_backfill_executed", False))
+            gap_backfill_semantic_ok = bool(semantic_snapshot.get("gap_backfill_semantic_ok", True))
+            if not gap_backfill_semantic_active:
+                gap_backfill_semantic_ok = True
+            checks["gap_backfill_semantic_ok"] = bool(gap_backfill_semantic_ok)
+            checks["pulse_semantic_drift_ok"] = bool(pulse_semantic_drift_ok)
+            checks["gap_backfill_semantic_drift_ok"] = bool(gap_backfill_semantic_drift_ok)
+
+            checks["state_streak_sync_ok"] = bool(
+                abs(int(streak_payload) - int(streak_state)) <= int(state_streak_delta_max)
+            )
+
+            if expected_light:
+                alerts.append("guard_loop_cadence_non_apply_light")
+            if expected_heavy:
+                alerts.append("guard_loop_cadence_non_apply_heavy")
+            if (expected_light or expected_heavy) and (not replay_allowed):
+                alerts.append("guard_loop_cadence_replay_disabled")
+            if not bool(checks["reason_traceable_ok"]):
+                alerts.append("guard_loop_cadence_reason_codes_untraceable")
+            if not bool(checks["recovery_escalation_ok"]):
+                alerts.append("guard_loop_cadence_recovery_escalation_missing")
+            if not bool(checks["state_streak_sync_ok"]):
+                alerts.append("guard_loop_cadence_state_streak_mismatch")
+            if not bool(checks["trend_preset_traceable_ok"]):
+                alerts.append("guard_loop_cadence_trend_preset_untraceable")
+            if not bool(checks["trend_preset_recovery_link_ok"]):
+                alerts.append("guard_loop_cadence_trend_preset_recovery_link_missing")
+            if not bool(checks["trend_preset_retro_source_ok"]):
+                alerts.append("guard_loop_cadence_trend_preset_retro_source_missing")
+            if not bool(checks["trend_preset_drift_artifact_ok"]):
+                alerts.append("guard_loop_cadence_trend_preset_drift_artifact_missing")
+            if not bool(checks["trend_preset_drift_status_ok"]):
+                alerts.append("guard_loop_cadence_trend_preset_drift_status_bad")
+            if not bool(checks["trend_preset_drift_trendline_ok"]):
+                alerts.append("guard_loop_cadence_trend_preset_drift_trendline_bad")
+            if not bool(checks["trend_preset_drift_auto_tune_bounded_ok"]):
+                alerts.append("guard_loop_cadence_trend_preset_drift_auto_tune_unbounded")
+            if not bool(checks["trend_preset_drift_auto_tune_handoff_ok"]):
+                alerts.append("guard_loop_cadence_trend_preset_drift_auto_tune_handoff_invalid")
+            if not bool(checks["pulse_semantic_ok"]):
+                alerts.append("guard_loop_cadence_pulse_semantic_failed")
+            if not bool(checks["gap_backfill_semantic_ok"]):
+                alerts.append("guard_loop_cadence_gap_backfill_semantic_failed")
+            if pulse_semantic_drift_samples_ready and (not bool(checks["pulse_semantic_drift_ok"])):
+                alerts.append("guard_loop_cadence_pulse_semantic_drift")
+            if gap_backfill_semantic_drift_samples_ready and (not bool(checks["gap_backfill_semantic_drift_ok"])):
+                alerts.append("guard_loop_cadence_gap_backfill_semantic_drift")
+            if semantic_drift_insufficient_samples:
+                alerts.append("guard_loop_cadence_semantic_drift_insufficient_samples")
+        else:
+            if enabled and require_active:
+                alerts.append("guard_loop_cadence_inactive")
+
+        if not bool(checks["artifact_present_ok"]):
+            alerts.append("guard_loop_cadence_artifact_missing")
+        if not bool(checks["artifact_recent_ok"]):
+            alerts.append("guard_loop_cadence_artifact_stale")
+
+        monitor_failed = bool(
+            enabled
+            and (
+                (active and not all(bool(v) for v in checks.values()))
+                or (require_active and not active)
+            )
+        )
+        gate_ok = bool(not monitor_failed) if gate_hard_fail else True
+
+        history_rows = guard_state.get("history", []) if isinstance(guard_state.get("history", []), list) else []
+        series: list[dict[str, Any]] = []
+        for row in history_rows[-10:]:
+            if not isinstance(row, dict):
+                continue
+            series.append(
+                {
+                    "ts": str(row.get("ts", "")),
+                    "date": str(row.get("date", "")),
+                    "cadence_due": bool(row.get("cadence_due", False)),
+                    "streak": int(self._safe_float(row.get("cadence_non_apply_streak", row.get("cadence_non_apply_streak_windows", 0)), 0)),
+                    "apply_seen": bool(row.get("cadence_non_apply_apply_seen", False)),
+                    "reason_codes": [str(x) for x in row.get("cadence_non_apply_reason_codes", [])]
+                    if isinstance(row.get("cadence_non_apply_reason_codes", []), list)
+                    else [],
+                    "recovery_mode": str(row.get("recovery_mode", "")),
+                    "trend_preset_level": str(row.get("cadence_lift_trend_preset_level", "none") or "none"),
+                    "trend_preset_due_light": bool(row.get("cadence_lift_trend_due_light", False)),
+                    "trend_preset_due_heavy": bool(row.get("cadence_lift_trend_due_heavy", False)),
+                    "trend_preset_reason_codes": [str(x) for x in row.get("cadence_lift_trend_reason_codes", [])]
+                    if isinstance(row.get("cadence_lift_trend_reason_codes", []), list)
+                    else [],
+                }
+            )
+
+        return {
+            "active": bool(active),
+            "enabled": bool(enabled),
+            "hard_fail": bool(gate_hard_fail),
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "samples": int(1 if source_found else 0),
+            "min_samples": 1,
+            "checks": checks,
+            "alerts": alerts,
+            "metrics": {
+                "cadence_due": bool(cadence_due),
+                "apply_seen": bool(apply_seen),
+                "non_apply": bool(non_apply),
+                "streak_windows": int(streak_windows),
+                "streak_windows_payload": int(streak_payload),
+                "streak_windows_state": int(streak_state),
+                "due_light": bool(due_light),
+                "due_heavy": bool(due_heavy),
+                "replay_allowed": bool(replay_allowed),
+                "recovery_mode": str(recovery_mode),
+                "recovery_status": str(recovery_mode_reason),
+                "cadence_reason_codes": cadence_reason_codes,
+                "recovery_reason_codes": recovery_reason_codes,
+                "source_age_hours": (float(source_age_hours) if source_age_hours is not None else None),
+                "window_key": str(cadence_payload.get("window_key", "")),
+                "state_window_key": str(guard_state.get("cadence_non_apply_last_window_key", "")),
+                "weekly_guardrail_source": str(cadence_payload.get("weekly_guardrail_source", "")),
+                "pulse_status": str(semantic_snapshot.get("pulse_status", "unknown")),
+                "pulse_reason": str(semantic_snapshot.get("pulse_reason", "")),
+                "pulse_ran": bool(semantic_snapshot.get("pulse_ran", False)),
+                "pulse_counted": bool(semantic_snapshot.get("pulse_counted", False)),
+                "pulse_semantic_ok": bool(semantic_snapshot.get("pulse_semantic_ok", True)),
+                "gap_backfill_due": bool(semantic_snapshot.get("gap_backfill_due", False)),
+                "gap_backfill_status": str(semantic_snapshot.get("gap_backfill_status", "unknown")),
+                "gap_backfill_executed": bool(semantic_snapshot.get("gap_backfill_executed", False)),
+                "gap_backfill_semantic_pulse_ok": bool(
+                    semantic_snapshot.get("gap_backfill_pulse_ok", False)
+                ),
+                "gap_backfill_semantic_autorun_retro_ok": bool(
+                    semantic_snapshot.get("gap_backfill_autorun_retro_ok", False)
+                ),
+                "gap_backfill_semantic_ok": bool(
+                    semantic_snapshot.get("gap_backfill_semantic_ok", True)
+                ),
+                "semantic_drift_status": str(semantic_drift_status),
+                "semantic_drift_window_days": int(semantic_drift_window_days),
+                "semantic_drift_min_samples": int(semantic_drift_min_samples),
+                "pulse_semantic_drift_samples": int(pulse_semantic_samples),
+                "pulse_semantic_drift_failures": int(pulse_semantic_failures),
+                "pulse_semantic_drift_fail_ratio": float(pulse_semantic_fail_ratio),
+                "pulse_semantic_drift_samples_ready": bool(pulse_semantic_drift_samples_ready),
+                "gap_backfill_semantic_drift_samples": int(gap_backfill_semantic_samples),
+                "gap_backfill_semantic_drift_failures": int(gap_backfill_semantic_failures),
+                "gap_backfill_semantic_drift_fail_ratio": float(gap_backfill_semantic_fail_ratio),
+                "gap_backfill_semantic_drift_samples_ready": bool(
+                    gap_backfill_semantic_drift_samples_ready
+                ),
+                "semantic_drift_insufficient_samples": bool(semantic_drift_insufficient_samples),
+                "semantic_history_path": str(semantic_history.get("path", "")),
+                "semantic_history_found": bool(semantic_history.get("found", False)),
+                "apply_probe": apply_probe,
+                "recovery_escalation": cadence_recovery,
+                "trend_preset_active": bool(trend_preset_active),
+                "trend_preset_engaged": bool(trend_preset_engaged),
+                "trend_preset_suggested_level": str(trend_preset_suggested_level),
+                "trend_preset_due_light": bool(trend_preset_due_light),
+                "trend_preset_due_heavy": bool(trend_preset_due_heavy),
+                "trend_preset_replay_allowed": bool(trend_preset_replay_allowed),
+                "trend_preset_busy_marker_active": bool(trend_preset_busy_marker_active),
+                "trend_preset_sample_ready": bool(trend_preset_sample_ready),
+                "trend_preset_retro_found": bool(trend_preset_retro_found),
+                "trend_preset_reason_codes": trend_preset_reason_codes,
+                "trend_preset_applied_rate_delta": float(trend_preset_applied_rate_delta),
+                "trend_preset_cooldown_block_rate_delta": float(trend_preset_cooldown_block_rate_delta),
+                "trend_preset_retro_path": str(trend_retro_payload.get("path", "")),
+                "trend_preset_retro_date": str(trend_retro_payload.get("date", "")),
+                "trend_preset_drift_status": str(trend_preset_drift_status),
+                "trend_preset_drift_samples": int(trend_preset_drift_samples),
+                "trend_preset_drift_min_samples": int(trend_preset_drift_min_samples),
+                "trend_preset_drift_alerts": list(trend_preset_drift_alerts),
+                "trend_preset_drift_artifact_written": bool(trend_preset_drift_artifact_written),
+                "trend_preset_drift_artifact_json": str(trend_preset_drift_artifact.get("json", "")),
+                "trend_preset_drift_artifact_md": str(trend_preset_drift_artifact.get("md", "")),
+                "trend_preset_drift_trendline_status": str(
+                    trend_preset_drift_trendline.get("status", "unknown") or "unknown"
+                ),
+                "trend_preset_drift_trendline_alerts": list(trend_preset_drift_trendline_alerts),
+                "trend_preset_drift_trendline_recent_samples": int(
+                    self._safe_float(trend_preset_drift_trendline_recent.get("samples", 0), 0)
+                ),
+                "trend_preset_drift_trendline_prior_samples": int(
+                    self._safe_float(trend_preset_drift_trendline_prior.get("samples", 0), 0)
+                ),
+                "trend_preset_drift_trendline_delta_link_light": float(
+                    self._safe_float(
+                        trend_preset_drift_trendline_deltas.get("recovery_link_light_rate", 0.0),
+                        0.0,
+                    )
+                ),
+                "trend_preset_drift_trendline_delta_link_heavy": float(
+                    self._safe_float(
+                        trend_preset_drift_trendline_deltas.get("recovery_link_heavy_rate", 0.0),
+                        0.0,
+                    )
+                ),
+                "trend_preset_drift_trendline_delta_retro": float(
+                    self._safe_float(
+                        trend_preset_drift_trendline_deltas.get("retro_found_rate", 0.0),
+                        0.0,
+                    )
+                ),
+                "trend_preset_drift_auto_tune_enabled": bool(
+                    trend_preset_drift_auto_tune.get("enabled", False)
+                ),
+                "trend_preset_drift_auto_tune_ready": bool(
+                    trend_preset_drift_auto_tune.get("ready", False)
+                ),
+                "trend_preset_drift_auto_tune_apply_recommended": bool(
+                    trend_preset_drift_auto_tune.get("apply_recommended", False)
+                ),
+                "trend_preset_drift_auto_tune_reason": str(
+                    trend_preset_drift_auto_tune.get("reason", "")
+                ),
+                "trend_preset_drift_auto_tune_bounded_ok": bool(
+                    checks.get("trend_preset_drift_auto_tune_bounded_ok", True)
+                ),
+                "trend_preset_drift_auto_tune_handoff_ok": bool(
+                    checks.get("trend_preset_drift_auto_tune_handoff_ok", True)
+                ),
+                "trend_preset_drift_auto_tune_step_max": float(
+                    self._safe_float(
+                        trend_preset_drift_auto_tune_policy.get("step_max", 0.0),
+                        0.0,
+                    )
+                ),
+                "trend_preset_drift_auto_tune_hit_rate_low": float(
+                    self._safe_float(
+                        trend_preset_drift_auto_tune_policy.get("hit_rate_low", 0.0),
+                        0.0,
+                    )
+                ),
+                "trend_preset_drift_auto_tune_hit_rate_high": float(
+                    self._safe_float(
+                        trend_preset_drift_auto_tune_policy.get("hit_rate_high", 0.0),
+                        0.0,
+                    )
+                ),
+                "trend_preset_drift_auto_tune_current_thresholds": (
+                    trend_preset_drift_auto_tune.get("current_thresholds", {})
+                    if isinstance(trend_preset_drift_auto_tune.get("current_thresholds", {}), dict)
+                    else {}
+                ),
+                "trend_preset_drift_auto_tune_suggested_thresholds": (
+                    trend_preset_drift_auto_tune_suggested
+                    if isinstance(trend_preset_drift_auto_tune_suggested, dict)
+                    else {}
+                ),
+                "trend_preset_drift_auto_tune_handoff_enabled": bool(
+                    trend_preset_drift_auto_tune_handoff.get("enabled", False)
+                ),
+                "trend_preset_drift_auto_tune_handoff_mode": str(
+                    trend_preset_drift_auto_tune_handoff.get("mode", "")
+                ),
+                "trend_preset_drift_auto_tune_handoff_proposal_generated": bool(
+                    trend_preset_drift_auto_tune_handoff.get("proposal_generated", False)
+                ),
+                "trend_preset_drift_auto_tune_handoff_proposal_id": str(
+                    trend_preset_drift_auto_tune_handoff.get("proposal_id", "")
+                ),
+                "trend_preset_drift_auto_tune_handoff_apply_allowed": bool(
+                    trend_preset_drift_auto_tune_handoff_gate.get("allowed", False)
+                ),
+                "trend_preset_drift_auto_tune_handoff_apply_reason": str(
+                    trend_preset_drift_auto_tune_handoff_gate.get("reason", "")
+                ),
+                "trend_preset_drift_auto_tune_handoff_cooldown_active": bool(
+                    trend_preset_drift_auto_tune_handoff_gate.get("cooldown_active", False)
+                ),
+                "trend_preset_drift_auto_tune_handoff_cooldown_remaining_days": int(
+                    self._safe_float(
+                        trend_preset_drift_auto_tune_handoff_gate.get("cooldown_remaining_days", 0),
+                        0,
+                    )
+                ),
+                "trend_preset_drift_auto_tune_handoff_anti_flap_blocked": bool(
+                    trend_preset_drift_auto_tune_handoff_gate.get("anti_flap_blocked", False)
+                ),
+                "trend_preset_drift_auto_tune_handoff_duplicate_proposal": bool(
+                    trend_preset_drift_auto_tune_handoff_gate.get("duplicate_proposal", False)
+                ),
+            },
+            "thresholds": {
+                "ops_guard_loop_cadence_non_apply_enabled": bool(enabled),
+                "ops_guard_loop_cadence_non_apply_gate_hard_fail": bool(gate_hard_fail),
+                "ops_guard_loop_cadence_non_apply_require_active": bool(require_active),
+                "ops_guard_loop_cadence_non_apply_require_reason_codes": bool(require_reason_codes),
+                "ops_guard_loop_cadence_non_apply_require_recovery_escalation": bool(
+                    require_recovery_escalation
+                ),
+                "ops_guard_loop_cadence_non_apply_max_staleness_hours": int(max_staleness_hours),
+                "ops_guard_loop_cadence_non_apply_light_streak_threshold": int(light_streak_threshold),
+                "ops_guard_loop_cadence_non_apply_heavy_streak_threshold": int(heavy_streak_threshold),
+                "ops_guard_loop_cadence_non_apply_state_streak_delta_max": int(state_streak_delta_max),
+                "ops_guard_loop_cadence_non_apply_semantic_drift_window_days": int(
+                    semantic_drift_window_days
+                ),
+                "ops_guard_loop_cadence_non_apply_semantic_drift_min_samples": int(
+                    semantic_drift_min_samples
+                ),
+                "ops_guard_loop_cadence_non_apply_semantic_drift_max_pulse_fail_ratio": float(
+                    semantic_drift_max_pulse_fail_ratio
+                ),
+                "ops_guard_loop_cadence_non_apply_semantic_drift_max_gap_backfill_fail_ratio": float(
+                    semantic_drift_max_gap_backfill_fail_ratio
+                ),
+            },
+            "source": {
+                "guard_loop_last_path": str(guard_last_path),
+                "guard_state_path": str(guard_state_path),
+                "guard_loop_history_path": str(semantic_history.get("path", "")),
+                "guard_loop_last_found": bool(guard_last_path.exists()),
+                "guard_state_found": bool(guard_state_path.exists()),
+                "guard_loop_history_found": bool(semantic_history.get("found", False)),
+                "source_ts": source_ts.isoformat() if source_ts is not None else "",
+            },
+            "series": series,
+            "semantic_series": semantic_series[-20:],
+        }
+
+    def _guard_loop_cadence_non_apply_lift_trend_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = self._safe_bool(
+            val.get("ops_guard_loop_cadence_non_apply_lift_trend_enabled", True),
+            True,
+        )
+        gate_hard_fail = self._safe_bool(
+            val.get("ops_guard_loop_cadence_non_apply_lift_trend_gate_hard_fail", False),
+            False,
+        )
+        require_active = self._safe_bool(
+            val.get("ops_guard_loop_cadence_non_apply_lift_trend_require_active", False),
+            False,
+        )
+        window_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_cadence_non_apply_lift_trend_window_days", 30),
+                    30,
+                )
+            ),
+        )
+        min_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_guard_loop_cadence_non_apply_lift_trend_min_samples", 7),
+                    7,
+                )
+            ),
+        )
+        applied_rate_min = self._clamp_float(
+            self._safe_float(
+                val.get("ops_guard_loop_cadence_non_apply_lift_trend_applied_rate_min", 0.05),
+                0.05,
+            ),
+            0.0,
+            1.0,
+        )
+        cooldown_block_rate_max = self._clamp_float(
+            self._safe_float(
+                val.get("ops_guard_loop_cadence_non_apply_lift_trend_cooldown_block_rate_max", 0.80),
+                0.80,
+            ),
+            0.0,
+            1.0,
+        )
+        trend_artifact_policy = self._artifact_governance_profile(
+            profile_name="guard_loop_cadence_lift_trend",
+            fallback_retention_days=max(
+                1,
+                int(
+                    self._safe_float(
+                        val.get("ops_guard_loop_cadence_non_apply_lift_trend_retention_days", 30),
+                        30,
+                    )
+                ),
+            ),
+            fallback_checksum_index_enabled=self._safe_bool(
+                val.get("ops_guard_loop_cadence_non_apply_lift_trend_checksum_index_enabled", True),
+                True,
+            ),
+        )
+        retention_days = int(trend_artifact_policy.get("retention_days", 30))
+        checksum_index_enabled = bool(trend_artifact_policy.get("checksum_index_enabled", True))
+
+        review_dir = self.output_dir / "review"
+        series: list[dict[str, Any]] = []
+        sample_rows: list[dict[str, Any]] = []
+        for offset in range(0, int(window_days)):
+            day = as_of - timedelta(days=int(offset))
+            snapshot_path = review_dir / f"{day.isoformat()}_release_decision_snapshot.json"
+            if not snapshot_path.exists():
+                continue
+            payload = self.load_json_safely(snapshot_path)
+            if not isinstance(payload, dict):
+                continue
+            rollback_payload = (
+                payload.get("rollback_recommendation", {})
+                if isinstance(payload.get("rollback_recommendation", {}), dict)
+                else {}
+            )
+            lift_snapshot = self._cadence_non_apply_lift_snapshot(
+                rollback_recommendation=rollback_payload
+            )
+            reason_codes = (
+                rollback_payload.get("reason_codes", [])
+                if isinstance(rollback_payload.get("reason_codes", []), list)
+                else []
+            )
+            reason_set = {str(x).strip() for x in reason_codes if str(x).strip()}
+            applied = bool(lift_snapshot.get("applied", False))
+            blocked = bool(lift_snapshot.get("blocked_by_cooldown", False))
+            requested_level = str(lift_snapshot.get("requested_level", "none")).strip().lower()
+            if "guard_loop_cadence_non_apply_lift_hard" in reason_set:
+                applied = True
+                if requested_level not in {"soft", "hard"}:
+                    requested_level = "hard"
+            elif "guard_loop_cadence_non_apply_lift_soft" in reason_set:
+                applied = True
+                if requested_level not in {"soft", "hard"}:
+                    requested_level = "soft"
+            if "guard_loop_cadence_non_apply_lift_cooldown" in reason_set:
+                blocked = True
+
+            requested = bool(requested_level in {"soft", "hard"} or applied or blocked)
+            row = {
+                "date": day.isoformat(),
+                "decision_id": str(payload.get("decision_id", "")),
+                "path": str(snapshot_path),
+                "requested": bool(requested),
+                "applied": bool(applied),
+                "blocked_by_cooldown": bool(blocked),
+                "cooldown_remaining_days": int(
+                    self._safe_float(lift_snapshot.get("cooldown_remaining_days", 0), 0)
+                ),
+                "requested_level": str(requested_level if requested_level else "none"),
+                "applied_level": str(lift_snapshot.get("applied_level", "none") or "none"),
+                "reason": str(lift_snapshot.get("reason", "")),
+                "reason_code": str(lift_snapshot.get("reason_code", "")),
+            }
+            sample_rows.append(row)
+
+        sample_rows.sort(key=lambda x: str(x.get("date", "")))
+        samples = len(sample_rows)
+        requested_count = sum(1 for row in sample_rows if bool(row.get("requested", False)))
+        applied_count = sum(1 for row in sample_rows if bool(row.get("applied", False)))
+        blocked_count = sum(1 for row in sample_rows if bool(row.get("blocked_by_cooldown", False)))
+        # applied_rate should measure "requested -> applied" conversion; when no request exists,
+        # treat it as neutral (no opportunity) instead of penalizing as failure.
+        applied_rate = (float(applied_count) / float(requested_count)) if requested_count > 0 else 1.0
+        applied_rate_sample_basis = (float(applied_count) / float(samples)) if samples > 0 else 0.0
+        cooldown_block_rate = (float(blocked_count) / float(requested_count)) if requested_count > 0 else 0.0
+
+        metrics = {
+            "requested_count": int(requested_count),
+            "applied_count": int(applied_count),
+            "blocked_by_cooldown_count": int(blocked_count),
+            "applied_rate": float(applied_rate),
+            "applied_rate_sample_basis": float(applied_rate_sample_basis),
+            "cooldown_block_rate": float(cooldown_block_rate),
+        }
+        artifact = self._write_guard_loop_cadence_lift_trend_artifact(
+            as_of=as_of,
+            series=sample_rows,
+            metrics=metrics,
+            retention_days=retention_days,
+            checksum_index_enabled=checksum_index_enabled,
+        )
+        artifact_failed = (
+            samples > 0
+            and (not bool(artifact.get("written", False)))
+            and str(artifact.get("reason", "")).startswith("write_failed")
+        )
+        artifact_rotation_failed = bool(artifact.get("rotation_failed", False))
+        artifact_checksum_index_failed = bool(artifact.get("checksum_index_failed", False))
+
+        active = bool(enabled and samples >= int(min_samples))
+        checks = {
+            "min_samples_ok": bool(samples >= int(min_samples)),
+            "applied_rate_ok": True,
+            "cooldown_block_rate_ok": True,
+            "artifact_rotation_ok": True,
+            "artifact_checksum_index_ok": True,
+        }
+        alerts: list[str] = []
+        if active:
+            checks["applied_rate_ok"] = bool(float(applied_rate) >= float(applied_rate_min))
+            checks["cooldown_block_rate_ok"] = bool(
+                (requested_count <= 0) or (float(cooldown_block_rate) <= float(cooldown_block_rate_max))
+            )
+            checks["artifact_rotation_ok"] = bool(not artifact_rotation_failed)
+            checks["artifact_checksum_index_ok"] = bool(
+                (not checksum_index_enabled) or (not artifact_checksum_index_failed)
+            )
+            if not bool(checks["applied_rate_ok"]):
+                alerts.append("guard_loop_cadence_lift_trend_applied_rate_low")
+            if not bool(checks["cooldown_block_rate_ok"]):
+                alerts.append("guard_loop_cadence_lift_trend_cooldown_block_rate_high")
+        elif enabled and require_active:
+            alerts.append("guard_loop_cadence_lift_trend_insufficient_samples")
+        if artifact_failed:
+            alerts.append("guard_loop_cadence_lift_trend_artifact_failed")
+        if artifact_rotation_failed:
+            alerts.append("guard_loop_cadence_lift_trend_artifact_rotation_failed")
+        if artifact_checksum_index_failed:
+            alerts.append("guard_loop_cadence_lift_trend_artifact_checksum_index_failed")
+
+        monitor_failed = bool(
+            enabled
+            and (
+                (active and not all(bool(v) for v in checks.values()))
+                or (require_active and not active)
+            )
+        )
+        gate_ok = bool(not monitor_failed) if gate_hard_fail else True
+
+        for row in sample_rows[-20:]:
+            series.append(
+                {
+                    "date": str(row.get("date", "")),
+                    "requested": bool(row.get("requested", False)),
+                    "applied": bool(row.get("applied", False)),
+                    "blocked_by_cooldown": bool(row.get("blocked_by_cooldown", False)),
+                    "requested_level": str(row.get("requested_level", "none")),
+                    "applied_level": str(row.get("applied_level", "none")),
+                    "reason_code": str(row.get("reason_code", "")),
+                }
+            )
+        metrics["artifact_written"] = bool(artifact.get("written", False))
+        metrics["artifact_failed"] = bool(artifact_failed)
+        metrics["artifact_total_rows"] = int(artifact.get("total_rows", 0))
+        metrics["artifact_retention_days"] = int(artifact.get("retention_days", retention_days))
+        metrics["artifact_rotated_out_count"] = int(artifact.get("rotated_out_count", 0))
+        metrics["artifact_rotation_failed"] = bool(artifact_rotation_failed)
+        metrics["artifact_checksum_index_enabled"] = bool(
+            artifact.get("checksum_index_enabled", checksum_index_enabled)
+        )
+        metrics["artifact_checksum_index_written"] = bool(artifact.get("checksum_index_written", False))
+        metrics["artifact_checksum_index_entries"] = int(artifact.get("checksum_index_entries", 0))
+        metrics["artifact_checksum_index_failed"] = bool(artifact_checksum_index_failed)
+
+        return {
+            "active": bool(active),
+            "enabled": bool(enabled),
+            "hard_fail": bool(gate_hard_fail),
+            "gate_ok": bool(gate_ok),
+            "monitor_failed": bool(monitor_failed),
+            "window_days": int(window_days),
+            "samples": int(samples),
+            "min_samples": int(min_samples),
+            "checks": checks,
+            "alerts": alerts,
+            "metrics": {
+                **metrics,
+            },
+            "thresholds": {
+                "ops_guard_loop_cadence_non_apply_lift_trend_enabled": bool(enabled),
+                "ops_guard_loop_cadence_non_apply_lift_trend_gate_hard_fail": bool(gate_hard_fail),
+                "ops_guard_loop_cadence_non_apply_lift_trend_require_active": bool(require_active),
+                "ops_guard_loop_cadence_non_apply_lift_trend_window_days": int(window_days),
+                "ops_guard_loop_cadence_non_apply_lift_trend_min_samples": int(min_samples),
+                "ops_guard_loop_cadence_non_apply_lift_trend_applied_rate_min": float(applied_rate_min),
+                "ops_guard_loop_cadence_non_apply_lift_trend_cooldown_block_rate_max": float(
+                    cooldown_block_rate_max
+                ),
+                "ops_guard_loop_cadence_non_apply_lift_trend_retention_days": int(retention_days),
+                "ops_guard_loop_cadence_non_apply_lift_trend_checksum_index_enabled": bool(
+                    checksum_index_enabled
+                ),
+            },
+            "source": {
+                "review_dir": str(review_dir),
+                "snapshot_pattern": "*_release_decision_snapshot.json",
+            },
+            "artifacts": {
+                "trend": {
+                    "written": bool(artifact.get("written", False)),
+                    "json": str(artifact.get("json", "")),
+                    "md": str(artifact.get("md", "")),
+                    "total_rows": int(artifact.get("total_rows", 0)),
+                    "retention_days": int(artifact.get("retention_days", retention_days)),
+                    "rotated_out_count": int(artifact.get("rotated_out_count", 0)),
+                    "rotated_out_dates": [str(x) for x in artifact.get("rotated_out_dates", [])],
+                    "rotation_failed": bool(artifact.get("rotation_failed", False)),
+                    "checksum_index_enabled": bool(
+                        artifact.get("checksum_index_enabled", checksum_index_enabled)
+                    ),
+                    "checksum_index_written": bool(artifact.get("checksum_index_written", False)),
+                    "checksum_index_path": str(artifact.get("checksum_index_path", "")),
+                    "checksum_index_entries": int(artifact.get("checksum_index_entries", 0)),
+                    "checksum_index_failed": bool(artifact.get("checksum_index_failed", False)),
+                    "reason": str(artifact.get("reason", "")),
+                }
+            },
+            "series": series,
         }
 
     def ops_report(self, as_of: date, window_days: int = 7) -> dict[str, Any]:
@@ -5298,8 +16619,165 @@ class ReleaseOrchestrator:
         wd = max(1, int(window_days))
 
         scheduler_state = self.load_json_safely(self.output_dir / "logs" / "scheduler_state.json")
+        halfhour_pulse_state = self.load_json_safely(self.output_dir / "logs" / "halfhour_pulse_state.json")
+        halfhour_daemon_state = self.load_json_safely(self.output_dir / "logs" / "halfhour_daemon_state.json")
         latest_tests = self._latest_test_result()
-        gate = self.gate_report(as_of=as_of, run_tests=False, run_review_if_missing=False)
+        gate = self.gate_report(
+            as_of=as_of,
+            run_tests=False,
+            run_review_if_missing=False,
+            run_stable_replay=False,
+        )
+        dependency_audit_path = self.output_dir / "review" / f"{d}_dependency_audit.json"
+        dependency_audit_raw_loaded = self.load_json_safely(dependency_audit_path)
+        dependency_audit_raw = (
+            dict(dependency_audit_raw_loaded) if isinstance(dependency_audit_raw_loaded, dict) else {}
+        )
+        dependency_artifact_corrupt = False
+        dependency_artifact_error = ""
+        if dependency_audit_path.exists():
+            try:
+                dependency_audit_decoded = json.loads(dependency_audit_path.read_text(encoding="utf-8"))
+                if isinstance(dependency_audit_decoded, dict):
+                    dependency_audit_raw = dependency_audit_decoded
+                else:
+                    dependency_artifact_corrupt = True
+                    dependency_artifact_error = "non_object_payload"
+                    dependency_audit_raw = {}
+            except Exception as exc:
+                dependency_artifact_corrupt = True
+                dependency_artifact_error = f"{exc.__class__.__name__}: {exc}"
+                dependency_audit_raw = {}
+        dependency_dashboard = (
+            dependency_audit_raw.get("dashboard_adapter", {})
+            if isinstance(dependency_audit_raw.get("dashboard_adapter", {}), dict)
+            else {}
+        )
+        dependency_violations = (
+            dependency_audit_raw.get("violations", [])
+            if isinstance(dependency_audit_raw.get("violations", []), list)
+            else []
+        )
+        dependency_core_violations = (
+            dependency_audit_raw.get("core_violations", [])
+            if isinstance(dependency_audit_raw.get("core_violations", []), list)
+            else []
+        )
+        dependency_dashboard_violations = (
+            dependency_dashboard.get("violations", [])
+            if isinstance(dependency_dashboard.get("violations", []), list)
+            else []
+        )
+        dependency_active = bool(dependency_audit_raw) or dependency_artifact_corrupt
+        dependency_all_ok = (
+            (not dependency_artifact_corrupt)
+            and (bool(dependency_audit_raw.get("ok", True)) if dependency_active else True)
+        )
+        dependency_alerts: list[str] = []
+        if dependency_artifact_corrupt:
+            dependency_alerts.append("dependency_audit_artifact_corrupt")
+        if dependency_active and not dependency_all_ok:
+            dependency_alerts.append("dependency_layer_violation")
+        if dependency_active and dependency_dashboard_violations:
+            dependency_alerts.append("dashboard_adapter_dependency_violation")
+        dependency_audit_summary: dict[str, Any] = {
+            "active": dependency_active,
+            "gate_ok": dependency_all_ok,
+            "hard_fail": True,
+            "source_path": str(dependency_audit_path),
+            "source_exists": bool(dependency_audit_path.exists()),
+            "artifact_corrupt": bool(dependency_artifact_corrupt),
+            "artifact_error": str(dependency_artifact_error),
+            "total_files_checked": int(
+                dependency_audit_raw.get(
+                    "total_files_checked",
+                    dependency_audit_raw.get("files_checked", 0),
+                )
+                or 0
+            ),
+            "violations": int(len(dependency_violations)),
+            "core_violations": int(len(dependency_core_violations)),
+            "dashboard_adapter_enabled": bool(dependency_dashboard.get("enabled", False)),
+            "dashboard_adapter_files_checked": int(dependency_dashboard.get("files_checked", 0) or 0),
+            "dashboard_adapter_violations": int(len(dependency_dashboard_violations)),
+            "alerts": dependency_alerts,
+            "checks": {
+                "dependency_ok": bool(dependency_all_ok),
+                "dashboard_adapter_ok": bool(len(dependency_dashboard_violations) == 0),
+                "artifact_ok": bool(not dependency_artifact_corrupt),
+            },
+        }
+        dependency_audit_artifact_trend = (
+            gate.get("dependency_audit_artifact_trend", {})
+            if isinstance(gate.get("dependency_audit_artifact_trend", {}), dict)
+            else {}
+        )
+        dependency_audit_artifact_trend_active = bool(dependency_audit_artifact_trend.get("active", False))
+        dependency_audit_artifact_trend_hard_fail = bool(
+            dependency_audit_artifact_trend.get("hard_fail", False)
+        )
+        dependency_audit_artifact_trend_gate_ok = bool(
+            dependency_audit_artifact_trend.get("gate_ok", True)
+        )
+        dependency_audit_artifact_trend_checks = (
+            dependency_audit_artifact_trend.get("checks", {})
+            if isinstance(dependency_audit_artifact_trend.get("checks", {}), dict)
+            else {}
+        )
+        dependency_audit_artifact_trend_all_ok = (
+            (
+                all(bool(v) for v in dependency_audit_artifact_trend_checks.values())
+            if dependency_audit_artifact_trend_hard_fail
+                else bool(dependency_audit_artifact_trend_gate_ok)
+            )
+            if dependency_audit_artifact_trend_active
+            else bool(dependency_audit_artifact_trend_gate_ok)
+        )
+        dependency_audit_summary_checks = (
+            dependency_audit_summary.get("checks", {})
+            if isinstance(dependency_audit_summary.get("checks", {}), dict)
+            else {}
+        )
+        dependency_audit_summary_checks["artifact_trend_ok"] = bool(
+            dependency_audit_artifact_trend_gate_ok
+        )
+        dependency_audit_summary["checks"] = dependency_audit_summary_checks
+        if (not bool(dependency_audit_artifact_trend_gate_ok)) and (
+            "dependency_audit_artifact_trend_degraded" not in dependency_alerts
+        ):
+            dependency_alerts.append("dependency_audit_artifact_trend_degraded")
+        dependency_audit_summary["alerts"] = list(dependency_alerts)
+
+        scheduler_slots: list[str] = []
+        for raw in (
+            scheduler_state.get("executed", []),
+            scheduler_state.get("executed_slots", []),
+            halfhour_pulse_state.get("executed_slots", []),
+        ):
+            if not isinstance(raw, list):
+                continue
+            for slot in raw:
+                txt = str(slot).strip()
+                if txt and txt not in scheduler_slots:
+                    scheduler_slots.append(txt)
+
+        scheduler_history_count = 0
+        for raw in (
+            scheduler_state.get("history", []),
+            halfhour_pulse_state.get("history", []),
+            halfhour_daemon_state.get("history", []),
+        ):
+            if isinstance(raw, list):
+                scheduler_history_count += len(raw)
+
+        scheduler_dates = [
+            str(scheduler_state.get("date", "")).strip(),
+            str(halfhour_pulse_state.get("date", "")).strip(),
+            str(halfhour_daemon_state.get("date", "")).strip(),
+        ]
+        scheduler_date = next((x for x in scheduler_dates if x), None)
+        if scheduler_date is None:
+            scheduler_date = ""
         state_stability = self._state_stability_metrics(as_of=as_of)
         state_checks = state_stability.get("checks", {}) if isinstance(state_stability.get("checks", {}), dict) else {}
         state_all_ok = all(bool(v) for v in state_checks.values())
@@ -5329,6 +16807,22 @@ class ReleaseOrchestrator:
             stress_matrix_trend.get("checks", {}) if isinstance(stress_matrix_trend.get("checks", {}), dict) else {}
         )
         stress_all_ok = all(bool(v) for v in stress_checks.values()) if stress_active else True
+        stress_matrix_execution_friction = (
+            gate.get("stress_matrix_execution_friction", {})
+            if isinstance(gate.get("stress_matrix_execution_friction", {}), dict)
+            else {}
+        )
+        stress_exec_active = bool(stress_matrix_execution_friction.get("active", False))
+        stress_exec_checks = (
+            stress_matrix_execution_friction.get("checks", {})
+            if isinstance(stress_matrix_execution_friction.get("checks", {}), dict)
+            else {}
+        )
+        stress_exec_all_ok = (
+            all(bool(v) for v in stress_exec_checks.values())
+            if stress_exec_active
+            else bool(stress_matrix_execution_friction.get("gate_ok", True))
+        )
         stress_autorun_history = (
             gate.get("stress_autorun_history", {})
             if isinstance(gate.get("stress_autorun_history", {}), dict)
@@ -5380,10 +16874,147 @@ class ReleaseOrchestrator:
         artifact_governance_all_ok = (
             all(bool(v) for v in artifact_governance_checks.values()) if artifact_governance_active else True
         )
+        degradation_guardrail_dashboard = (
+            gate.get("degradation_guardrail_dashboard", {})
+            if isinstance(gate.get("degradation_guardrail_dashboard", {}), dict)
+            else {}
+        )
+        degradation_guardrail_active = bool(degradation_guardrail_dashboard.get("active", False))
+        degradation_guardrail_checks = (
+            degradation_guardrail_dashboard.get("checks", {})
+            if isinstance(degradation_guardrail_dashboard.get("checks", {}), dict)
+            else {}
+        )
+        degradation_guardrail_all_ok = (
+            all(bool(v) for v in degradation_guardrail_checks.values()) if degradation_guardrail_active else True
+        )
+        degradation_guardrail_threshold_drift = (
+            gate.get("degradation_guardrail_threshold_drift", {})
+            if isinstance(gate.get("degradation_guardrail_threshold_drift", {}), dict)
+            else {}
+        )
+        degradation_guardrail_threshold_drift_active = bool(degradation_guardrail_threshold_drift.get("active", False))
+        degradation_guardrail_threshold_drift_checks = (
+            degradation_guardrail_threshold_drift.get("checks", {})
+            if isinstance(degradation_guardrail_threshold_drift.get("checks", {}), dict)
+            else {}
+        )
+        degradation_guardrail_threshold_drift_all_ok = (
+            all(bool(v) for v in degradation_guardrail_threshold_drift_checks.values())
+            if degradation_guardrail_threshold_drift_active
+            else True
+        )
+        compaction_restore_trend = self._compaction_restore_trend_metrics(as_of=as_of)
+        compaction_restore_trend_active = bool(compaction_restore_trend.get("active", False))
+        compaction_restore_trend_hard_fail = bool(compaction_restore_trend.get("hard_fail", False))
+        compaction_restore_trend_gate_ok = bool(compaction_restore_trend.get("gate_ok", True))
+        compaction_restore_trend_checks = (
+            compaction_restore_trend.get("checks", {})
+            if isinstance(compaction_restore_trend.get("checks", {}), dict)
+            else {}
+        )
+        compaction_restore_trend_all_ok = (
+            (
+                all(bool(v) for v in compaction_restore_trend_checks.values())
+                if compaction_restore_trend_hard_fail
+                else bool(compaction_restore_trend_gate_ok)
+            )
+            if compaction_restore_trend_active
+            else bool(compaction_restore_trend_gate_ok)
+        )
+        guard_loop_frontend_snapshot_trend = (
+            gate.get("guard_loop_frontend_snapshot_trend", {})
+            if isinstance(gate.get("guard_loop_frontend_snapshot_trend", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_snapshot_trend_active = bool(
+            guard_loop_frontend_snapshot_trend.get("active", False)
+        )
+        guard_loop_frontend_snapshot_trend_hard_fail = bool(
+            guard_loop_frontend_snapshot_trend.get("hard_fail", False)
+        )
+        guard_loop_frontend_snapshot_trend_gate_ok = bool(
+            guard_loop_frontend_snapshot_trend.get("gate_ok", True)
+        )
+        guard_loop_frontend_snapshot_trend_checks = (
+            guard_loop_frontend_snapshot_trend.get("checks", {})
+            if isinstance(guard_loop_frontend_snapshot_trend.get("checks", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_snapshot_trend_all_ok = (
+            (
+                all(bool(v) for v in guard_loop_frontend_snapshot_trend_checks.values())
+                if guard_loop_frontend_snapshot_trend_hard_fail
+                else bool(guard_loop_frontend_snapshot_trend_gate_ok)
+            )
+            if guard_loop_frontend_snapshot_trend_active
+            else bool(guard_loop_frontend_snapshot_trend_gate_ok)
+        )
+        guard_loop_cadence_non_apply = (
+            gate.get("guard_loop_cadence_non_apply", {})
+            if isinstance(gate.get("guard_loop_cadence_non_apply", {}), dict)
+            else {}
+        )
+        guard_loop_cadence_active = bool(guard_loop_cadence_non_apply.get("active", False))
+        guard_loop_cadence_hard_fail = bool(guard_loop_cadence_non_apply.get("hard_fail", False))
+        guard_loop_cadence_gate_ok = bool(guard_loop_cadence_non_apply.get("gate_ok", True))
+        guard_loop_cadence_checks = (
+            guard_loop_cadence_non_apply.get("checks", {})
+            if isinstance(guard_loop_cadence_non_apply.get("checks", {}), dict)
+            else {}
+        )
+        guard_loop_cadence_all_ok = (
+            (
+                all(bool(v) for v in guard_loop_cadence_checks.values())
+                if guard_loop_cadence_hard_fail
+                else bool(guard_loop_cadence_gate_ok)
+            )
+            if guard_loop_cadence_active
+            else bool(guard_loop_cadence_gate_ok)
+        )
+        guard_loop_cadence_lift_trend = (
+            gate.get("guard_loop_cadence_non_apply_lift_trend", {})
+            if isinstance(gate.get("guard_loop_cadence_non_apply_lift_trend", {}), dict)
+            else {}
+        )
+        guard_loop_cadence_lift_trend_active = bool(guard_loop_cadence_lift_trend.get("active", False))
+        guard_loop_cadence_lift_trend_hard_fail = bool(
+            guard_loop_cadence_lift_trend.get("hard_fail", False)
+        )
+        guard_loop_cadence_lift_trend_gate_ok = bool(
+            guard_loop_cadence_lift_trend.get("gate_ok", True)
+        )
+        guard_loop_cadence_lift_trend_checks = (
+            guard_loop_cadence_lift_trend.get("checks", {})
+            if isinstance(guard_loop_cadence_lift_trend.get("checks", {}), dict)
+            else {}
+        )
+        guard_loop_cadence_lift_trend_all_ok = (
+            (
+                all(bool(v) for v in guard_loop_cadence_lift_trend_checks.values())
+                if guard_loop_cadence_lift_trend_hard_fail
+                else bool(guard_loop_cadence_lift_trend_gate_ok)
+            )
+            if guard_loop_cadence_lift_trend_active
+            else bool(guard_loop_cadence_lift_trend_gate_ok)
+        )
         rollback_rec = (
             gate.get("rollback_recommendation", {})
             if isinstance(gate.get("rollback_recommendation", {}), dict)
             else {}
+        )
+        cadence_lift_snapshot = self._cadence_non_apply_lift_snapshot(
+            rollback_recommendation=rollback_rec
+        )
+        guard_loop_scorecards = self._guard_loop_scorecards(
+            guard_loop_cadence_non_apply=guard_loop_cadence_non_apply,
+            guard_loop_cadence_non_apply_lift_trend=guard_loop_cadence_lift_trend,
+            guard_loop_frontend_snapshot_trend=guard_loop_frontend_snapshot_trend,
+            cadence_lift_snapshot=cadence_lift_snapshot,
+        )
+        stress_matrix_scorecards = self._stress_matrix_scorecards(
+            stress_matrix_trend=stress_matrix_trend,
+            stress_matrix_execution_friction=stress_matrix_execution_friction,
         )
         rollback_level = str(rollback_rec.get("level", "none")).strip().lower() or "none"
         rollback_active = bool(rollback_rec.get("active", False))
@@ -5417,10 +17048,31 @@ class ReleaseOrchestrator:
             or (drift_active and not drift_all_ok)
             or (style_drift_active and not style_drift_all_ok)
             or (stress_active and not stress_all_ok)
+            or (stress_exec_active and not stress_exec_all_ok)
             or (stress_auto_adaptive_active and not stress_auto_adaptive_all_ok)
             or (stress_reason_drift_active and not stress_reason_drift_all_ok)
             or (reconcile_active and not reconcile_all_ok)
             or (artifact_governance_active and not artifact_governance_all_ok)
+            or (degradation_guardrail_active and not degradation_guardrail_all_ok)
+            or (
+                degradation_guardrail_threshold_drift_active
+                and not degradation_guardrail_threshold_drift_all_ok
+            )
+            or (
+                dependency_audit_artifact_trend_active
+                and not dependency_audit_artifact_trend_all_ok
+            )
+            or (compaction_restore_trend_active and not compaction_restore_trend_all_ok)
+            or (
+                guard_loop_frontend_snapshot_trend_active
+                and not guard_loop_frontend_snapshot_trend_all_ok
+            )
+            or (guard_loop_cadence_active and not guard_loop_cadence_all_ok)
+            or (
+                guard_loop_cadence_lift_trend_active
+                and not guard_loop_cadence_lift_trend_all_ok
+            )
+            or (dependency_active and not dependency_all_ok)
             or rollback_level == "hard"
             or (rollback_active and not rollback_anchor_ready)
         ):
@@ -5433,38 +17085,143 @@ class ReleaseOrchestrator:
             or (not drift_active)
             or (not style_drift_active)
             or (not stress_active)
+            or (not stress_exec_active)
             or (not stress_auto_adaptive_active)
             or (not stress_reason_drift_active)
             or (not reconcile_active)
             or (not artifact_governance_active)
+            or (not degradation_guardrail_active)
+            or (not degradation_guardrail_threshold_drift_active)
+            or (not compaction_restore_trend_active)
+            or (not guard_loop_cadence_active)
+            or (not guard_loop_cadence_lift_trend_active)
             or rollback_level == "soft"
         ):
             status = "yellow"
 
-        summary = {
-            "date": d,
-            "status": status,
-            "window_days": wd,
-            "health_ratio": health_ratio,
-            "gate_passed": gate["passed"],
-            "latest_tests": latest_tests,
-            "scheduler": {
-                "date": scheduler_state.get("date"),
-                "executed_slots": scheduler_state.get("executed", []),
-                "history_count": len(scheduler_state.get("history", [])),
-            },
+        section_payloads: dict[str, dict[str, Any]] = {
             "state_stability": state_stability,
             "temporal_audit": temporal_audit,
             "slot_anomaly": slot_anomaly,
             "mode_drift": mode_drift,
             "style_drift": style_drift,
             "stress_matrix_trend": stress_matrix_trend,
+            "stress_matrix_execution_friction": stress_matrix_execution_friction,
             "stress_autorun_history": stress_autorun_history,
             "stress_autorun_adaptive": stress_autorun_adaptive,
             "stress_autorun_reason_drift": stress_autorun_reason_drift,
             "reconcile_drift": reconcile_drift,
             "artifact_governance": artifact_governance,
+            "degradation_guardrail_dashboard": degradation_guardrail_dashboard,
+            "degradation_guardrail_threshold_drift": degradation_guardrail_threshold_drift,
+            "dependency_audit_artifact_trend": dependency_audit_artifact_trend,
+            "compaction_restore_trend": compaction_restore_trend,
+            "guard_loop_frontend_snapshot_trend": guard_loop_frontend_snapshot_trend,
+            "guard_loop_cadence_non_apply": guard_loop_cadence_non_apply,
+            "guard_loop_cadence_non_apply_lift_trend": guard_loop_cadence_lift_trend,
+            "dependency_audit": dependency_audit_summary,
+        }
+        top_alerts: list[str] = []
+        for payload in section_payloads.values():
+            if not isinstance(payload, dict):
+                continue
+            payload_alerts = payload.get("alerts", []) if isinstance(payload.get("alerts", []), list) else []
+            payload_checks = payload.get("checks", {}) if isinstance(payload.get("checks", {}), dict) else {}
+            payload_active = bool(payload.get("active", False))
+            payload_hard_fail = bool(payload.get("hard_fail", False))
+            payload_gate_ok = bool(payload.get("gate_ok", True))
+            payload_monitor_failed = False
+            if payload_active:
+                if payload_checks:
+                    payload_monitor_failed = (
+                        (not all(bool(v) for v in payload_checks.values()))
+                        if payload_hard_fail
+                        else (not payload_gate_ok)
+                    )
+                else:
+                    payload_monitor_failed = bool(not payload_gate_ok)
+            section_status = "red" if payload_monitor_failed else str(status)
+            payload["alert_details"] = self._ops_alert_details(payload_alerts, status=section_status)
+            include_payload_alerts = bool(payload_active or (not payload_gate_ok))
+            for item in payload_alerts:
+                txt = str(item).strip().lower()
+                if include_payload_alerts and txt and txt not in top_alerts:
+                    top_alerts.append(txt)
+
+        # Keep status explainable: if scorecards are active and non-green but do not
+        # contribute section-level alerts, emit synthetic top-level alert codes.
+        scorecard_alerts: list[str] = []
+        scorecard_groups = {
+            "guard_loop": guard_loop_scorecards if isinstance(guard_loop_scorecards, dict) else {},
+            "stress_matrix": stress_matrix_scorecards if isinstance(stress_matrix_scorecards, dict) else {},
+        }
+        for group_name, cards in scorecard_groups.items():
+            if not isinstance(cards, dict):
+                continue
+            for card_name, card in cards.items():
+                if not isinstance(card, dict):
+                    continue
+                card_status = str(card.get("status", "")).strip().lower()
+                card_active = bool(card.get("active", False))
+                if (not card_active) or card_status not in {"red", "yellow"}:
+                    continue
+                code = f"scorecard_{str(group_name).strip()}_{str(card_name).strip()}_{card_status}".lower()
+                if code and code not in top_alerts:
+                    top_alerts.append(code)
+                    scorecard_alerts.append(code)
+
+        summary = {
+            "date": d,
+            "status": status,
+            "alerts": top_alerts,
+            "alert_details": self._ops_alert_details(top_alerts, status=status),
+            "scorecard_alerts": scorecard_alerts,
+            "window_days": wd,
+            "health_ratio": health_ratio,
+            "gate_passed": gate["passed"],
+            "release_decision": gate.get("release_decision", {}) if isinstance(gate.get("release_decision", {}), dict) else {},
+            "release_decision_freshness": (
+                gate.get("release_decision_freshness", {})
+                if isinstance(gate.get("release_decision_freshness", {}), dict)
+                else {}
+            ),
+            "latest_tests": latest_tests,
+            "scheduler": {
+                "date": scheduler_date,
+                "executed_slots": scheduler_slots,
+                "history_count": scheduler_history_count,
+                "state_sources": {
+                    "scheduler": bool(scheduler_state),
+                    "halfhour_pulse": bool(halfhour_pulse_state),
+                    "halfhour_daemon": bool(halfhour_daemon_state),
+                },
+            },
+            "dependency_audit": dependency_audit_summary,
+            "state_stability": state_stability,
+            "temporal_audit": temporal_audit,
+            "slot_anomaly": slot_anomaly,
+            "mode_drift": mode_drift,
+            "style_drift": style_drift,
+            "stress_matrix_trend": stress_matrix_trend,
+            "stress_matrix_execution_friction": stress_matrix_execution_friction,
+            "stress_autorun_history": stress_autorun_history,
+            "stress_autorun_adaptive": stress_autorun_adaptive,
+            "stress_autorun_reason_drift": stress_autorun_reason_drift,
+            "reconcile_drift": reconcile_drift,
+            "artifact_governance": artifact_governance,
+            "degradation_guardrail_dashboard": degradation_guardrail_dashboard,
+            "degradation_guardrail_threshold_drift": degradation_guardrail_threshold_drift,
+            "dependency_audit_artifact_trend": dependency_audit_artifact_trend,
+            "compaction_restore_trend": compaction_restore_trend,
+            "guard_loop_frontend_snapshot_trend": guard_loop_frontend_snapshot_trend,
+            "guard_loop_cadence_non_apply": guard_loop_cadence_non_apply,
+            "guard_loop_cadence_non_apply_lift_trend": guard_loop_cadence_lift_trend,
+            "scorecards": {
+                "guard_loop": guard_loop_scorecards,
+                "stress_matrix": stress_matrix_scorecards,
+            },
             "rollback_recommendation": rollback_rec,
+            "cadence_non_apply_lift_snapshot": cadence_lift_snapshot,
             "history": history,
         }
 
@@ -5479,8 +17236,244 @@ class ReleaseOrchestrator:
         lines.append(f"- 健康天数占比({wd}日): `{health_ratio:.2%}`")
         lines.append(f"- 最近测试: `{latest_tests.get('returncode', 'N/A')}`")
         lines.append(f"- 调度已执行槽位: `{', '.join(summary['scheduler']['executed_slots']) if summary['scheduler']['executed_slots'] else 'NONE'}`")
+        lines.append(f"- alerts: `{', '.join(summary.get('alerts', [])) if summary.get('alerts') else 'NONE'}`")
+        top_alert_details = (
+            summary.get("alert_details", [])
+            if isinstance(summary.get("alert_details", []), list)
+            else []
+        )
+        top_alert_details_txt = ", ".join(
+            f"{str(item.get('code', '')).strip()}({str(item.get('severity', '')).strip()})"
+            for item in top_alert_details
+            if isinstance(item, dict) and str(item.get("code", "")).strip()
+        )
+        lines.append(f"- alert_details: `{top_alert_details_txt if top_alert_details_txt else 'NONE'}`")
+        dependency_checks = (
+            dependency_audit_summary.get("checks", {})
+            if isinstance(dependency_audit_summary.get("checks", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- dependency_audit(active/gate_ok/dashboard_adapter_ok/artifact_trend_ok): "
+            + f"`{bool(dependency_audit_summary.get('active', False))}` / "
+            + f"`{bool(dependency_audit_summary.get('gate_ok', True))}` / "
+            + f"`{bool(dependency_checks.get('dashboard_adapter_ok', True))}` / "
+            + f"`{bool(dependency_audit_artifact_trend_gate_ok)}`"
+        )
+        guard_loop_cards = guard_loop_scorecards if isinstance(guard_loop_scorecards, dict) else {}
+        guard_loop_preset_card = (
+            guard_loop_cards.get("cadence_lift_preset", {})
+            if isinstance(guard_loop_cards.get("cadence_lift_preset", {}), dict)
+            else {}
+        )
+        guard_loop_semantic_card = (
+            guard_loop_cards.get("pulse_backfill_semantic", {})
+            if isinstance(guard_loop_cards.get("pulse_backfill_semantic", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_replay_card = (
+            guard_loop_cards.get("frontend_snapshot_replay_convergence", {})
+            if isinstance(guard_loop_cards.get("frontend_snapshot_replay_convergence", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_burnin_card = (
+            guard_loop_cards.get("frontend_snapshot_antiflap_burnin", {})
+            if isinstance(guard_loop_cards.get("frontend_snapshot_antiflap_burnin", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_controlled_apply_card = (
+            guard_loop_cards.get("frontend_snapshot_hard_fail_controlled_apply", {})
+            if isinstance(guard_loop_cards.get("frontend_snapshot_hard_fail_controlled_apply", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- GuardLoop Scorecard(cadence/lift/preset/semantic/frontend_replay): "
+            + f"`{str((guard_loop_cards.get('cadence_non_apply', {}) or {}).get('status', 'N/A'))}` / "
+            + f"`{str((guard_loop_cards.get('cadence_lift_trend', {}) or {}).get('status', 'N/A'))}` / "
+            + f"`{str(guard_loop_preset_card.get('status', 'N/A'))}` / "
+            + f"`{str(guard_loop_semantic_card.get('status', 'N/A'))}` / "
+            + f"`{str(guard_loop_frontend_replay_card.get('status', 'N/A'))}`"
+        )
+        lines.append(
+            "- GuardLoop Scorecard(frontend_antiflap_burnin): "
+            + f"`{str(guard_loop_frontend_burnin_card.get('status', 'N/A'))}` "
+            + f"(samples={int(self._safe_float(guard_loop_frontend_burnin_card.get('samples', 0), 0))}, "
+            + f"missed={int(self._safe_float(guard_loop_frontend_burnin_card.get('replay_missed_runs', 0), 0))})"
+        )
+        lines.append(
+            "- GuardLoop Scorecard(frontend_antiflap_dual_window): "
+            + f"`{str(guard_loop_frontend_burnin_card.get('dual_window_status', 'N/A'))}` "
+            + f"(long_samples={int(self._safe_float(guard_loop_frontend_burnin_card.get('dual_window_long_samples', 0), 0))}, "
+            + f"delta_suppression={self._safe_float(guard_loop_frontend_burnin_card.get('dual_window_suppression_ratio_delta', 0.0), 0.0):.2%})"
+        )
+        lines.append(
+            "- GuardLoop Scorecard(frontend_hard_fail_apply): "
+            + f"`{str(guard_loop_frontend_controlled_apply_card.get('status', 'N/A'))}` "
+            + f"(recommended={bool(guard_loop_frontend_controlled_apply_card.get('apply_recommended', False))}, "
+            + f"reason={str(guard_loop_frontend_controlled_apply_card.get('reason', 'N/A'))}, "
+            + f"route={str(guard_loop_frontend_controlled_apply_card.get('route', 'N/A'))}, "
+            + f"route_audit={str(guard_loop_frontend_controlled_apply_card.get('route_audit_status', 'N/A'))}/"
+            + f"{self._safe_float(guard_loop_frontend_controlled_apply_card.get('route_audit_non_apply_ratio', 0.0), 0.0):.2%}, "
+            + "approval="
+            + f"{bool(guard_loop_frontend_controlled_apply_card.get('approval_manifest_found', False))}/"
+            + f"{bool(guard_loop_frontend_controlled_apply_card.get('approval_manifest_approved', False))}/"
+            + f"{bool(guard_loop_frontend_controlled_apply_card.get('approval_manifest_matches_proposal', False))})"
+        )
+        frontend_apply_runbook = (
+            guard_loop_frontend_controlled_apply_card.get("runbook", [])
+            if isinstance(guard_loop_frontend_controlled_apply_card.get("runbook", []), list)
+            else []
+        )
+        lines.append(
+            "- frontend_hard_fail_apply_envelope(runbook): `"
+            + (
+                " | ".join(str(x).strip() for x in frontend_apply_runbook if str(x).strip())
+                if frontend_apply_runbook
+                else "NONE"
+            )
+            + "`"
+        )
+        stress_cards = stress_matrix_scorecards if isinstance(stress_matrix_scorecards, dict) else {}
+        lines.append(
+            "- Stress Scorecard(trend/execution_friction): "
+            + f"`{str((stress_cards.get('trend', {}) or {}).get('status', 'N/A'))}` / "
+            + f"`{str((stress_cards.get('execution_friction', {}) or {}).get('status', 'N/A'))}`"
+        )
+        lines.append("")
+        lines.append("## 依赖分层审计")
+        lines.append(f"- active: `{bool(dependency_audit_summary.get('active', False))}`")
+        lines.append(
+            "- gate_ok / violations(core/dashboard): "
+            + f"`{bool(dependency_audit_summary.get('gate_ok', True))}` / "
+            + f"`{int(dependency_audit_summary.get('core_violations', 0))}` / "
+            + f"`{int(dependency_audit_summary.get('dashboard_adapter_violations', 0))}`"
+        )
+        lines.append(
+            "- files(total/dashboard_adapter): "
+            + f"`{int(dependency_audit_summary.get('total_files_checked', 0))}` / "
+            + f"`{int(dependency_audit_summary.get('dashboard_adapter_files_checked', 0))}`"
+        )
+        lines.append(
+            "- source_exists/path: "
+            + f"`{bool(dependency_audit_summary.get('source_exists', False))}` / "
+            + f"`{str(dependency_audit_summary.get('source_path', ''))}`"
+        )
+        lines.append(
+            "- artifact_ok/corrupt/error: "
+            + f"`{bool(dependency_checks.get('artifact_ok', True))}` / "
+            + f"`{bool(dependency_audit_summary.get('artifact_corrupt', False))}` / "
+            + f"`{str(dependency_audit_summary.get('artifact_error', '')) or 'NONE'}`"
+        )
+        lines.append("")
+        lines.append("## 依赖审计工件趋势")
+        lines.append(f"- active: `{bool(dependency_audit_artifact_trend.get('active', False))}`")
+        lines.append(
+            "- gate_ok/status/samples: "
+            + f"`{bool(dependency_audit_artifact_trend.get('gate_ok', True))}` / "
+            + f"`{str(dependency_audit_artifact_trend.get('status', 'inactive'))}` / "
+            + f"`{int(self._safe_float(dependency_audit_artifact_trend.get('samples', 0), 0))}`"
+        )
+        dependency_trend_metrics = (
+            dependency_audit_artifact_trend.get("metrics", {})
+            if isinstance(dependency_audit_artifact_trend.get("metrics", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- corrupt_ratio/missing_ratio/source_age_days: "
+            + f"`{self._safe_float(dependency_trend_metrics.get('corrupt_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(dependency_trend_metrics.get('missing_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{dependency_trend_metrics.get('source_age_days', 'N/A')}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(dependency_audit_artifact_trend.get('alerts', [])) if dependency_audit_artifact_trend.get('alerts') else 'NONE'}`"
+        )
+        for k, v in dependency_audit_artifact_trend_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
         lines.append("")
         lines.append("## 状态稳定性")
+        release_decision = summary.get("release_decision", {}) if isinstance(summary.get("release_decision", {}), dict) else {}
+        release_freshness = (
+            summary.get("release_decision_freshness", {})
+            if isinstance(summary.get("release_decision_freshness", {}), dict)
+            else {}
+        )
+        release_freshness_metrics = (
+            release_freshness.get("metrics", {})
+            if isinstance(release_freshness.get("metrics", {}), dict)
+            else {}
+        )
+        lines.append(f"- release_decision_id: `{str(release_decision.get('decision_id', '') or 'N/A')}`")
+        lines.append(
+            "- release_decision_fresh(active/gate_ok): "
+            + f"`{bool(release_freshness.get('active', False))}` / "
+            + f"`{bool(release_freshness.get('gate_ok', True))}`"
+        )
+        lines.append(
+            "- release_decision_review_age_hours: "
+            + f"`{self._safe_float(release_freshness_metrics.get('review_age_hours', -1), -1.0):.2f}`"
+        )
+        lines.append("")
+        lines.append("## 降级护栏仪表板")
+        lines.append(f"- active: `{degradation_guardrail_dashboard.get('active', False)}`")
+        lines.append(
+            "- samples/window/min: "
+            + f"`{int(degradation_guardrail_dashboard.get('samples', 0))}` / "
+            + f"`{int(degradation_guardrail_dashboard.get('window_days', 0))}` / "
+            + f"`{int(degradation_guardrail_dashboard.get('min_samples', 0))}`"
+        )
+        lines.append(
+            "- gate_ok/monitor_failed: "
+            + f"`{bool(degradation_guardrail_dashboard.get('gate_ok', True))}` / "
+            + f"`{bool(degradation_guardrail_dashboard.get('monitor_failed', False))}`"
+        )
+        degradation_guardrail_metrics = (
+            degradation_guardrail_dashboard.get("metrics", {})
+            if isinstance(degradation_guardrail_dashboard.get("metrics", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- cooldown_hit_rate/suppressed_density: "
+            + f"`{self._safe_float(degradation_guardrail_metrics.get('cooldown_hit_rate', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(degradation_guardrail_metrics.get('suppressed_trigger_density', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- promotion_latency(avg/p95/max days): "
+            + f"`{self._safe_float(degradation_guardrail_metrics.get('promotion_latency_avg_days', 0.0), 0.0):.2f}` / "
+            + f"`{int(self._safe_float(degradation_guardrail_metrics.get('promotion_latency_p95_days', 0), 0))}` / "
+            + f"`{int(self._safe_float(degradation_guardrail_metrics.get('promotion_latency_max_days', 0), 0))}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(degradation_guardrail_dashboard.get('alerts', [])) if degradation_guardrail_dashboard.get('alerts') else 'NONE'}`"
+        )
+        for k, v in degradation_guardrail_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## 降级护栏阈值漂移")
+        lines.append(f"- active: `{degradation_guardrail_threshold_drift.get('active', False)}`")
+        lines.append(f"- status: `{str(degradation_guardrail_threshold_drift.get('status', 'unknown'))}`")
+        lines.append(
+            "- source_date/age_days: "
+            + f"`{str(degradation_guardrail_threshold_drift.get('source_date', '') or 'N/A')}` / "
+            + f"`{degradation_guardrail_threshold_drift.get('source_age_days', 'N/A')}`"
+        )
+        drift_summary = (
+            degradation_guardrail_threshold_drift.get("summary", {})
+            if isinstance(degradation_guardrail_threshold_drift.get("summary", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- warn/critical/burnin_samples: "
+            + f"`{int(self._safe_float(drift_summary.get('warn_count', 0), 0))}` / "
+            + f"`{int(self._safe_float(drift_summary.get('critical_count', 0), 0))}` / "
+            + f"`{int(self._safe_float(drift_summary.get('burnin_samples', 0), 0))}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(degradation_guardrail_threshold_drift.get('alerts', [])) if degradation_guardrail_threshold_drift.get('alerts') else 'NONE'}`"
+        )
+        for k, v in degradation_guardrail_threshold_drift_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## 状态稳定性核心")
         lines.append(f"- active: `{state_stability.get('active', False)}`")
         lines.append(f"- samples: `{state_stability.get('samples', 0)}` / min=`{state_stability.get('min_samples', 0)}`")
         metrics = state_stability.get("metrics", {}) if isinstance(state_stability.get("metrics", {}), dict) else {}
@@ -5727,6 +17720,145 @@ class ReleaseOrchestrator:
         for k, v in stress_checks.items():
             lines.append(f"- `{k}`: `{v}`")
         lines.append("")
+        lines.append("## Stress Matrix 执行摩擦")
+        lines.append(f"- active: `{stress_matrix_execution_friction.get('active', False)}`")
+        lines.append(f"- status: `{str(stress_matrix_execution_friction.get('status', 'inactive'))}`")
+        lines.append(f"- gate_ok: `{bool(stress_matrix_execution_friction.get('gate_ok', True))}`")
+        stress_exec_metrics = (
+            stress_matrix_execution_friction.get("metrics", {})
+            if isinstance(stress_matrix_execution_friction.get("metrics", {}), dict)
+            else {}
+        )
+        stress_exec_trendline = (
+            stress_matrix_execution_friction.get("trendline", {})
+            if isinstance(stress_matrix_execution_friction.get("trendline", {}), dict)
+            else {}
+        )
+        stress_exec_trendline_checks = (
+            stress_exec_trendline.get("checks", {})
+            if isinstance(stress_exec_trendline.get("checks", {}), dict)
+            else {}
+        )
+        stress_exec_trendline_deltas = (
+            stress_exec_trendline.get("deltas", {})
+            if isinstance(stress_exec_trendline.get("deltas", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune = (
+            stress_exec_trendline.get("auto_tune", {})
+            if isinstance(stress_exec_trendline.get("auto_tune", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune_proposal = (
+            stress_exec_auto_tune.get("proposal", {})
+            if isinstance(stress_exec_auto_tune.get("proposal", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune_proposal_artifact = (
+            stress_exec_auto_tune_proposal.get("artifact", {})
+            if isinstance(stress_exec_auto_tune_proposal.get("artifact", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune_controlled_apply = (
+            stress_exec_auto_tune.get("controlled_apply", {})
+            if isinstance(stress_exec_auto_tune.get("controlled_apply", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune_controlled_apply_ledger = (
+            stress_exec_auto_tune_controlled_apply.get("ledger", {})
+            if isinstance(stress_exec_auto_tune_controlled_apply.get("ledger", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune_controlled_apply_ledger_drillbook = (
+            stress_exec_auto_tune_controlled_apply_ledger.get("drillbook", {})
+            if isinstance(stress_exec_auto_tune_controlled_apply_ledger.get("drillbook", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune_controlled_apply_ledger_workflows = (
+            stress_exec_auto_tune_controlled_apply_ledger_drillbook.get("workflows", {})
+            if isinstance(stress_exec_auto_tune_controlled_apply_ledger_drillbook.get("workflows", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune_controlled_apply_ledger_replay = (
+            stress_exec_auto_tune_controlled_apply_ledger_workflows.get("replay", {})
+            if isinstance(stress_exec_auto_tune_controlled_apply_ledger_workflows.get("replay", {}), dict)
+            else {}
+        )
+        stress_exec_auto_tune_controlled_apply_ledger_rollback = (
+            stress_exec_auto_tune_controlled_apply_ledger_workflows.get("rollback", {})
+            if isinstance(stress_exec_auto_tune_controlled_apply_ledger_workflows.get("rollback", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- annual_drop/drawdown_rise/min_pf_ratio/max_fail_ratio: "
+            + f"`{self._safe_float(stress_exec_metrics.get('annual_drop', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(stress_exec_metrics.get('drawdown_rise', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(stress_exec_metrics.get('min_profit_factor_ratio', 0.0), 0.0):.3f}` / "
+            + f"`{self._safe_float(stress_exec_metrics.get('max_fail_ratio', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- trendline(status/samples/required): "
+            + f"`{str(stress_exec_trendline.get('status', 'inactive'))}` / "
+            + f"`{int(self._safe_float(stress_exec_trendline.get('samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(stress_exec_trendline.get('required_runs', 0), 0))}`"
+        )
+        lines.append(
+            "- trendline_deltas(annual_rise/drawdown_delta/pf_drop): "
+            + f"`{self._safe_float(stress_exec_trendline_deltas.get('annual_drop_rise', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(stress_exec_trendline_deltas.get('drawdown_rise_delta', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(stress_exec_trendline_deltas.get('profit_factor_ratio_drop', 0.0), 0.0):.3f}`"
+        )
+        lines.append(
+            "- trendline_auto_tune(proposal_generated/proposal_written/reason): "
+            + f"`{bool(stress_exec_auto_tune_proposal.get('generated', False))}` / "
+            + f"`{bool(stress_exec_auto_tune_proposal_artifact.get('written', False))}` / "
+            + f"`{str(stress_exec_auto_tune_proposal.get('reason', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- trendline_auto_tune(proposal_id/proposal_artifact): "
+            + f"`{str(stress_exec_auto_tune_proposal.get('proposal_id', '') or 'N/A')}` / "
+            + f"`{str(stress_exec_auto_tune_proposal_artifact.get('json', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- trendline_auto_tune(controlled_apply_enabled/applied/reason): "
+            + f"`{bool(stress_exec_auto_tune_controlled_apply.get('enabled', False))}` / "
+            + f"`{bool(stress_exec_auto_tune_controlled_apply.get('applied', False))}` / "
+            + f"`{str(stress_exec_auto_tune_controlled_apply.get('reason', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- trendline_auto_tune(controlled_apply_duplicate_ok/ledger_write_ok): "
+            + f"`{bool(stress_exec_trendline_checks.get('controlled_apply_duplicate_ok', True))}` / "
+            + f"`{bool(stress_exec_trendline_checks.get('controlled_apply_ledger_write_ok', True))}`"
+        )
+        lines.append(
+            "- trendline_auto_tune(controlled_apply_ledger_drift_ok/duplicate_block_rate): "
+            + f"`{bool(stress_exec_trendline_checks.get('controlled_apply_ledger_drift_ok', True))}` / "
+            + f"`{self._safe_float(stress_exec_auto_tune_controlled_apply_ledger.get('duplicate_block_rate', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- trendline_auto_tune(controlled_apply_ledger_artifact_ok/drillbook_written): "
+            + f"`{bool(stress_exec_trendline_checks.get('controlled_apply_ledger_artifact_ok', True))}` / "
+            + f"`{bool(stress_exec_auto_tune_controlled_apply_ledger_drillbook.get('written', False))}`"
+        )
+        lines.append(
+            "- trendline_auto_tune(drillbook_replay/rollback): "
+            + f"`{bool(stress_exec_auto_tune_controlled_apply_ledger_replay.get('recommended', False))}` / "
+            + f"`{bool(stress_exec_auto_tune_controlled_apply_ledger_rollback.get('recommended', False))}`"
+        )
+        lines.append(
+            "- trendline_auto_tune(ledger_entries/window_stale_ratio/last_applied): "
+            + f"`{int(self._safe_float(stress_exec_auto_tune_controlled_apply_ledger.get('entries', 0), 0))}` / "
+            + f"`{self._safe_float(stress_exec_auto_tune_controlled_apply_ledger.get('window_stale_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{str(stress_exec_auto_tune_controlled_apply_ledger.get('last_applied_date', '') or 'N/A')}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(stress_matrix_execution_friction.get('alerts', [])) if stress_matrix_execution_friction.get('alerts') else 'NONE'}`"
+        )
+        for k, v in stress_exec_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        for k, v in stress_exec_trendline_checks.items():
+            lines.append(f"- `trendline.{k}`: `{v}`")
+        lines.append("")
         lines.append("## Stress Autorun 历史")
         lines.append(f"- active: `{stress_autorun_history.get('active', False)}`")
         lines.append(
@@ -5901,6 +18033,14 @@ class ReleaseOrchestrator:
         artifact_metrics = (
             artifact_governance.get("metrics", {}) if isinstance(artifact_governance.get("metrics", {}), dict) else {}
         )
+        artifact_baseline = (
+            artifact_governance.get("baseline", {}) if isinstance(artifact_governance.get("baseline", {}), dict) else {}
+        )
+        artifact_baseline_snapshot = (
+            artifact_baseline.get("snapshot", {})
+            if isinstance(artifact_baseline.get("snapshot", {}), dict)
+            else {}
+        )
         lines.append(
             "- profiles(total/active/override): "
             + f"`{int(self._safe_float(artifact_metrics.get('profiles_total', 0), 0))}` / "
@@ -5918,6 +18058,16 @@ class ReleaseOrchestrator:
             "- strict_mode(enabled/blocked): "
             + f"`{bool(artifact_metrics.get('strict_mode_enabled', False))}` / "
             + f"`{bool(artifact_metrics.get('strict_mode_blocked', False))}`"
+        )
+        lines.append(
+            "- baseline(source/snapshot_found): "
+            + f"`{str(artifact_baseline.get('source', 'none') or 'none')}` / "
+            + f"`{bool(artifact_baseline_snapshot.get('found', False))}`"
+        )
+        lines.append(
+            "- baseline(snapshot_path/rollback_anchor): "
+            + f"`{str(artifact_baseline_snapshot.get('path', '') or 'N/A')}` / "
+            + f"`{str(artifact_baseline_snapshot.get('rollback_anchor', '') or 'N/A')}`"
         )
         lines.append(
             f"- alerts: `{', '.join(artifact_governance.get('alerts', [])) if artifact_governance.get('alerts') else 'NONE'}`"
@@ -6031,6 +18181,507 @@ class ReleaseOrchestrator:
         for k, v in reconcile_checks.items():
             lines.append(f"- `{k}`: `{v}`")
         lines.append("")
+        lines.append("## Compaction/Restore 趋势")
+        lines.append(f"- active: `{compaction_restore_trend.get('active', False)}`")
+        lines.append(
+            f"- samples: `{int(compaction_restore_trend.get('samples', 0))}` / min=`{int(compaction_restore_trend.get('min_samples', 0))}`"
+        )
+        compaction_metrics = (
+            compaction_restore_trend.get("metrics", {})
+            if isinstance(compaction_restore_trend.get("metrics", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- compact(runs/error_runs/error_ratio/age_days): "
+            + f"`{int(self._safe_float(compaction_metrics.get('compact_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(compaction_metrics.get('compact_error_runs', 0), 0))}` / "
+            + f"`{self._safe_float(compaction_metrics.get('compact_error_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{compaction_metrics.get('compact_age_days', 'N/A')}`"
+        )
+        lines.append(
+            "- restore(required/ok_status/passed/delta_match): "
+            + f"`{int(self._safe_float(compaction_metrics.get('restore_required_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(compaction_metrics.get('restore_ok_status_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(compaction_metrics.get('restore_passed_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(compaction_metrics.get('restore_delta_match_runs', 0), 0))}`"
+        )
+        lines.append(
+            "- restore(pass_ratio/delta_ratio/age_days/latest_status/latest_delta_match): "
+            + f"`{self._safe_float(compaction_metrics.get('restore_pass_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(compaction_metrics.get('restore_delta_match_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{compaction_metrics.get('restore_age_days', 'N/A')}` / "
+            + f"`{str(compaction_metrics.get('latest_restore_status', '') or 'N/A')}` / "
+            + f"`{bool(compaction_metrics.get('latest_restore_delta_match', False))}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(compaction_restore_trend.get('alerts', [])) if compaction_restore_trend.get('alerts') else 'NONE'}`"
+        )
+        for k, v in compaction_restore_trend_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## Guard-Loop Frontend Snapshot Trend")
+        lines.append(f"- active: `{guard_loop_frontend_snapshot_trend.get('active', False)}`")
+        lines.append(
+            "- gate_ok/monitor_failed: "
+            + f"`{bool(guard_loop_frontend_snapshot_trend.get('gate_ok', True))}` / "
+            + f"`{bool(guard_loop_frontend_snapshot_trend.get('monitor_failed', False))}`"
+        )
+        guard_loop_frontend_snapshot_metrics = (
+            guard_loop_frontend_snapshot_trend.get("metrics", {})
+            if isinstance(guard_loop_frontend_snapshot_trend.get("metrics", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- samples(run/governance/min/window): "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('run_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('governance_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_trend.get('min_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_trend.get('window_days', 0), 0))}`"
+        )
+        lines.append(
+            "- ratio(failure/timeout/governance_failure): "
+            + f"`{self._safe_float(guard_loop_frontend_snapshot_metrics.get('failure_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(guard_loop_frontend_snapshot_metrics.get('timeout_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(guard_loop_frontend_snapshot_metrics.get('governance_failure_ratio', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- streak(failure/timeout): "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('failure_streak_current', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('timeout_streak_current', 0), 0))}`"
+        )
+        lines.append(
+            "- replay_convergence(expected/executed/missed/convergence): "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_expected_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_executed_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_missed_runs', 0), 0))}` / "
+            + f"`{self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_convergence_rate', 1.0), 1.0):.2%}`"
+        )
+        lines.append(
+            "- replay_convergence(light/heavy/unexpected_ratio): "
+            + f"`{self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_convergence_light_rate', 1.0), 1.0):.2%}` / "
+            + f"`{self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_convergence_heavy_rate', 1.0), 1.0):.2%}` / "
+            + f"`{self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_unexpected_execution_ratio', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- replay_traceability(reason_missing/antiflap_suppressed): "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_due_but_reason_missing_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('replay_antiflap_suppressed_runs', 0), 0))}`"
+        )
+        frontend_antiflap_burnin = (
+            guard_loop_frontend_snapshot_trend.get("antiflap_burnin", {})
+            if isinstance(guard_loop_frontend_snapshot_trend.get("antiflap_burnin", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_metrics = (
+            frontend_antiflap_burnin.get("metrics", {})
+            if isinstance(frontend_antiflap_burnin.get("metrics", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_promotion = (
+            frontend_antiflap_burnin.get("promotion", {})
+            if isinstance(frontend_antiflap_burnin.get("promotion", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_dual_window = (
+            frontend_antiflap_burnin.get("dual_window", {})
+            if isinstance(frontend_antiflap_burnin.get("dual_window", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_dual_window_metrics = (
+            frontend_antiflap_burnin_dual_window.get("metrics", {})
+            if isinstance(frontend_antiflap_burnin_dual_window.get("metrics", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_dual_window_checks = (
+            frontend_antiflap_burnin_dual_window.get("checks", {})
+            if isinstance(frontend_antiflap_burnin_dual_window.get("checks", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_controlled_apply = (
+            frontend_antiflap_burnin_promotion.get("controlled_apply", {})
+            if isinstance(frontend_antiflap_burnin_promotion.get("controlled_apply", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_controlled_apply_apply_gate = (
+            frontend_antiflap_burnin_controlled_apply.get("apply_gate", {})
+            if isinstance(frontend_antiflap_burnin_controlled_apply.get("apply_gate", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_controlled_apply_approval = (
+            frontend_antiflap_burnin_controlled_apply.get("approval", {})
+            if isinstance(frontend_antiflap_burnin_controlled_apply.get("approval", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_controlled_apply_proposal = (
+            frontend_antiflap_burnin_controlled_apply.get("proposal", {})
+            if isinstance(frontend_antiflap_burnin_controlled_apply.get("proposal", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_controlled_apply_artifacts = (
+            frontend_antiflap_burnin_controlled_apply.get("artifacts", {})
+            if isinstance(frontend_antiflap_burnin_controlled_apply.get("artifacts", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_controlled_apply_artifact = (
+            frontend_antiflap_burnin_controlled_apply_artifacts.get("controlled_apply", {})
+            if isinstance(frontend_antiflap_burnin_controlled_apply_artifacts.get("controlled_apply", {}), dict)
+            else {}
+        )
+        frontend_hard_fail_route_audit = (
+            guard_loop_frontend_snapshot_trend.get("hard_fail_apply_route_audit", {})
+            if isinstance(guard_loop_frontend_snapshot_trend.get("hard_fail_apply_route_audit", {}), dict)
+            else {}
+        )
+        frontend_hard_fail_route_audit_metrics = (
+            frontend_hard_fail_route_audit.get("metrics", {})
+            if isinstance(frontend_hard_fail_route_audit.get("metrics", {}), dict)
+            else {}
+        )
+        frontend_hard_fail_route_audit_checks = (
+            frontend_hard_fail_route_audit.get("checks", {})
+            if isinstance(frontend_hard_fail_route_audit.get("checks", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_artifacts = (
+            frontend_antiflap_burnin.get("artifacts", {})
+            if isinstance(frontend_antiflap_burnin.get("artifacts", {}), dict)
+            else {}
+        )
+        frontend_antiflap_burnin_artifact = (
+            frontend_antiflap_burnin_artifacts.get("burnin", {})
+            if isinstance(frontend_antiflap_burnin_artifacts.get("burnin", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- antiflap_burnin(status/samples/window/min): "
+            + f"`{str(frontend_antiflap_burnin.get('status', 'inactive'))}` / "
+            + f"`{int(self._safe_float(frontend_antiflap_burnin.get('samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(frontend_antiflap_burnin.get('window_days', 0), 0))}` / "
+            + f"`{int(self._safe_float(frontend_antiflap_burnin.get('min_samples', 0), 0))}`"
+        )
+        lines.append(
+            "- antiflap_burnin(suppressed_ratio/missed/reason_missing): "
+            + f"`{self._safe_float(frontend_antiflap_burnin_metrics.get('suppressed_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{int(self._safe_float(frontend_antiflap_burnin_metrics.get('replay_missed_runs', 0), 0))}` / "
+            + f"`{int(self._safe_float(frontend_antiflap_burnin_metrics.get('reason_missing_runs', 0), 0))}`"
+        )
+        lines.append(
+            "- antiflap_burnin_dual_window(enabled/status/long_samples/min): "
+            + f"`{bool(frontend_antiflap_burnin_dual_window.get('enabled', False))}` / "
+            + f"`{str(frontend_antiflap_burnin_dual_window.get('status', 'inactive'))}` / "
+            + f"`{int(self._safe_float(frontend_antiflap_burnin_dual_window.get('long_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(frontend_antiflap_burnin_dual_window.get('min_long_samples', 0), 0))}`"
+        )
+        lines.append(
+            "- antiflap_burnin_dual_window(delta suppression/replay/traceability): "
+            + f"`{self._safe_float(frontend_antiflap_burnin_dual_window_metrics.get('suppressed_ratio_delta', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(frontend_antiflap_burnin_dual_window_metrics.get('replay_missed_ratio_delta', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(frontend_antiflap_burnin_dual_window_metrics.get('reason_missing_ratio_delta', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- antiflap_burnin_dual_window_checks(samples/suppression/replay/traceability): "
+            + f"`{bool(frontend_antiflap_burnin_dual_window_checks.get('samples_ready_ok', True))}` / "
+            + f"`{bool(frontend_antiflap_burnin_dual_window_checks.get('suppression_ratio_delta_ok', True))}` / "
+            + f"`{bool(frontend_antiflap_burnin_dual_window_checks.get('replay_missed_ratio_delta_ok', True))}` / "
+            + f"`{bool(frontend_antiflap_burnin_dual_window_checks.get('traceability_ratio_delta_ok', True))}`"
+        )
+        lines.append(
+            "- antiflap_burnin_promotion(enabled/current_hard_fail/eligible/recommendation): "
+            + f"`{bool(frontend_antiflap_burnin_promotion.get('enabled', False))}` / "
+            + f"`{bool(frontend_antiflap_burnin_promotion.get('current_hard_fail', False))}` / "
+            + f"`{bool(frontend_antiflap_burnin_promotion.get('eligible', False))}` / "
+            + f"`{str(frontend_antiflap_burnin_promotion.get('recommendation', 'none'))}`"
+        )
+        lines.append(
+            "- antiflap_burnin_artifact(json/md/checksum_index): "
+            + f"`{str(frontend_antiflap_burnin_artifact.get('json', '') or 'N/A')}` / "
+            + f"`{str(frontend_antiflap_burnin_artifact.get('md', '') or 'N/A')}` / "
+            + f"`{str(frontend_antiflap_burnin_artifact.get('checksum_index_path', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- hard_fail_controlled_apply(enabled/dry_run/recommended/reason): "
+            + f"`{bool(frontend_antiflap_burnin_controlled_apply.get('enabled', False))}` / "
+            + f"`{bool(frontend_antiflap_burnin_controlled_apply.get('dry_run', True))}` / "
+            + f"`{bool(frontend_antiflap_burnin_controlled_apply_apply_gate.get('apply_recommended', False))}` / "
+            + f"`{str(frontend_antiflap_burnin_controlled_apply_apply_gate.get('reason', 'none'))}`"
+        )
+        lines.append(
+            "- hard_fail_controlled_apply(proposal/approval/rollback_guard): "
+            + f"`{str(frontend_antiflap_burnin_controlled_apply_proposal.get('proposal_id', '') or 'N/A')}` / "
+            + f"`{bool(frontend_antiflap_burnin_controlled_apply_approval.get('approved', False))}` / "
+            + f"`{bool(frontend_antiflap_burnin_controlled_apply_apply_gate.get('rollback_guard_ok', True))}`"
+        )
+        lines.append(
+            "- hard_fail_controlled_apply_artifact(json/md/checksum_index): "
+            + f"`{str(frontend_antiflap_burnin_controlled_apply_artifact.get('json', '') or 'N/A')}` / "
+            + f"`{str(frontend_antiflap_burnin_controlled_apply_artifact.get('md', '') or 'N/A')}` / "
+            + f"`{str(frontend_antiflap_burnin_controlled_apply_artifact.get('checksum_index_path', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- hard_fail_controlled_apply_route_audit(status/samples/min/window): "
+            + f"`{str(frontend_hard_fail_route_audit.get('status', 'inactive'))}` / "
+            + f"`{int(self._safe_float(frontend_hard_fail_route_audit.get('samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(frontend_hard_fail_route_audit.get('min_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(frontend_hard_fail_route_audit.get('window_days', 0), 0))}`"
+        )
+        lines.append(
+            "- hard_fail_controlled_apply_route_audit(ratio apply/non_apply/rollback_guard): "
+            + f"`{self._safe_float(frontend_hard_fail_route_audit_metrics.get('apply_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(frontend_hard_fail_route_audit_metrics.get('non_apply_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(frontend_hard_fail_route_audit_metrics.get('rollback_guard_blocked_ratio', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- hard_fail_controlled_apply_route_audit(trendline rise non_apply/rollback_guard, drop apply): "
+            + f"`{self._safe_float(frontend_hard_fail_route_audit_metrics.get('trendline_non_apply_ratio_rise', 0.0), 0.0):+.2%}` / "
+            + f"`{self._safe_float(frontend_hard_fail_route_audit_metrics.get('trendline_rollback_guard_blocked_ratio_rise', 0.0), 0.0):+.2%}` / "
+            + f"`{self._safe_float(frontend_hard_fail_route_audit_metrics.get('trendline_apply_ratio_drop', 0.0), 0.0):+.2%}`"
+        )
+        lines.append(
+            "- hard_fail_controlled_apply_route_audit_checks(samples/non_apply/rollback/apply/trendline): "
+            + f"`{bool(frontend_hard_fail_route_audit_checks.get('samples_ready_ok', True))}` / "
+            + f"`{bool(frontend_hard_fail_route_audit_checks.get('non_apply_ratio_ok', True))}` / "
+            + f"`{bool(frontend_hard_fail_route_audit_checks.get('rollback_guard_ratio_ok', True))}` / "
+            + f"`{bool(frontend_hard_fail_route_audit_checks.get('apply_ratio_ok', True))}` / "
+            + f"`{bool(frontend_hard_fail_route_audit_checks.get('trendline_samples_ok', True))}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(guard_loop_frontend_snapshot_trend.get('alerts', [])) if guard_loop_frontend_snapshot_trend.get('alerts') else 'NONE'}`"
+        )
+        for k, v in guard_loop_frontend_snapshot_trend_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## Guard-Loop Cadence Non-Apply")
+        lines.append(f"- active: `{guard_loop_cadence_non_apply.get('active', False)}`")
+        lines.append(
+            "- gate_ok/monitor_failed: "
+            + f"`{bool(guard_loop_cadence_non_apply.get('gate_ok', True))}` / "
+            + f"`{bool(guard_loop_cadence_non_apply.get('monitor_failed', False))}`"
+        )
+        guard_loop_cadence_metrics = (
+            guard_loop_cadence_non_apply.get("metrics", {})
+            if isinstance(guard_loop_cadence_non_apply.get("metrics", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- cadence_due/non_apply/streak: "
+            + f"`{bool(guard_loop_cadence_metrics.get('cadence_due', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('non_apply', False))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('streak_windows', 0), 0))}`"
+        )
+        lines.append(
+            "- due_light/due_heavy/replay_allowed: "
+            + f"`{bool(guard_loop_cadence_metrics.get('due_light', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('due_heavy', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('replay_allowed', True))}`"
+        )
+        lines.append(
+            "- source_age_hours/window_key: "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('source_age_hours', -1.0), -1.0):.2f}` / "
+            + f"`{str(guard_loop_cadence_metrics.get('window_key', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- pulse_semantic(status/ran/ok/reason): "
+            + f"`{str(guard_loop_cadence_metrics.get('pulse_status', 'unknown') or 'unknown')}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('pulse_ran', False))}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('pulse_semantic_ok', True))}` / "
+            + f"`{str(guard_loop_cadence_metrics.get('pulse_reason', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- gap_backfill_semantic(due/status/pulse_ok/retro_ok/ok): "
+            + f"`{bool(guard_loop_cadence_metrics.get('gap_backfill_due', False))}` / "
+            + f"`{str(guard_loop_cadence_metrics.get('gap_backfill_status', 'unknown') or 'unknown')}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('gap_backfill_semantic_pulse_ok', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('gap_backfill_semantic_autorun_retro_ok', False))}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('gap_backfill_semantic_ok', True))}`"
+        )
+        lines.append(
+            "- semantic_drift(status/window/min): "
+            + f"`{str(guard_loop_cadence_metrics.get('semantic_drift_status', 'unknown') or 'unknown')}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('semantic_drift_window_days', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('semantic_drift_min_samples', 0), 0))}`"
+        )
+        lines.append(
+            "- semantic_drift(pulse samples/failures/fail_ratio/check): "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('pulse_semantic_drift_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('pulse_semantic_drift_failures', 0), 0))}` / "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('pulse_semantic_drift_fail_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('pulse_semantic_drift_ok', True))}`"
+        )
+        lines.append(
+            "- semantic_drift(backfill samples/failures/fail_ratio/check): "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('gap_backfill_semantic_drift_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('gap_backfill_semantic_drift_failures', 0), 0))}` / "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('gap_backfill_semantic_drift_fail_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('gap_backfill_semantic_drift_ok', True))}`"
+        )
+        lines.append(
+            "- trend_preset(active/engaged/level): "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_active', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_engaged', False))}` / "
+            + f"`{str(guard_loop_cadence_metrics.get('trend_preset_suggested_level', 'none') or 'none')}`"
+        )
+        lines.append(
+            "- trend_preset(due_light/due_heavy/replay_allowed): "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_due_light', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_due_heavy', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_replay_allowed', True))}`"
+        )
+        lines.append(
+            "- trend_preset(checks traceable/recovery/retro): "
+            + f"`{bool(guard_loop_cadence_checks.get('trend_preset_traceable_ok', True))}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('trend_preset_recovery_link_ok', True))}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('trend_preset_retro_source_ok', True))}`"
+        )
+        lines.append(
+            "- trend_preset(delta_applied/delta_cooldown): "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('trend_preset_applied_rate_delta', 0.0), 0.0):+.4f}` / "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('trend_preset_cooldown_block_rate_delta', 0.0), 0.0):+.4f}`"
+        )
+        lines.append(
+            "- trend_preset_drift(status/samples/min/artifact_written): "
+            + f"`{str(guard_loop_cadence_metrics.get('trend_preset_drift_status', 'unknown') or 'unknown')}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_min_samples', 0), 0))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_drift_artifact_written', False))}`"
+        )
+        lines.append(
+            "- trend_preset_drift_trendline(status/recent/prior/check): "
+            + f"`{str(guard_loop_cadence_metrics.get('trend_preset_drift_trendline_status', 'unknown') or 'unknown')}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_trendline_recent_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_trendline_prior_samples', 0), 0))}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('trend_preset_drift_trendline_ok', True))}`"
+        )
+        lines.append(
+            "- trend_preset_drift_trendline(delta_link_light/delta_link_heavy/delta_retro): "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_trendline_delta_link_light', 0.0), 0.0):+.3f}` / "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_trendline_delta_link_heavy', 0.0), 0.0):+.3f}` / "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_trendline_delta_retro', 0.0), 0.0):+.3f}`"
+        )
+        lines.append(
+            "- trend_preset_drift_auto_tune(enabled/ready/recommended/bounded): "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_enabled', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_ready', False))}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_apply_recommended', False))}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('trend_preset_drift_auto_tune_bounded_ok', True))}`"
+        )
+        lines.append(
+            "- trend_preset_drift_auto_tune(reason/step/hit_band): "
+            + f"`{str(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_reason', '') or 'N/A')}` / "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_step_max', 0.0), 0.0):.4f}` / "
+            + f"`{self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_hit_rate_low', 0.0), 0.0):.2%}~"
+            + f"{self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_hit_rate_high', 0.0), 0.0):.2%}`"
+        )
+        lines.append(
+            "- trend_preset_drift_auto_tune_handoff(mode/id/allowed/reason): "
+            + f"`{str(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_handoff_mode', '') or 'N/A')}` / "
+            + f"`{str(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_handoff_proposal_id', '') or 'N/A')}` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_handoff_apply_allowed', False))}` / "
+            + f"`{str(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_handoff_apply_reason', '') or 'N/A')}`"
+        )
+        lines.append(
+            "- trend_preset_drift_auto_tune_handoff(cooldown/anti_flap/check): "
+            + f"`{int(self._safe_float(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_handoff_cooldown_remaining_days', 0), 0))}d` / "
+            + f"`{bool(guard_loop_cadence_metrics.get('trend_preset_drift_auto_tune_handoff_anti_flap_blocked', False))}` / "
+            + f"`{bool(guard_loop_cadence_checks.get('trend_preset_drift_auto_tune_handoff_ok', True))}`"
+        )
+        lines.append(
+            "- trend_preset(reason_codes): `"
+            + (
+                ", ".join(guard_loop_cadence_metrics.get("trend_preset_reason_codes", []))
+                if isinstance(guard_loop_cadence_metrics.get("trend_preset_reason_codes", []), list)
+                and guard_loop_cadence_metrics.get("trend_preset_reason_codes", [])
+                else "NONE"
+            )
+            + "`"
+        )
+        lines.append(
+            "- trend_preset_drift(alerts): `"
+            + (
+                ", ".join(guard_loop_cadence_metrics.get("trend_preset_drift_alerts", []))
+                if isinstance(guard_loop_cadence_metrics.get("trend_preset_drift_alerts", []), list)
+                and guard_loop_cadence_metrics.get("trend_preset_drift_alerts", [])
+                else "NONE"
+            )
+            + "`"
+        )
+        cadence_triplet = (
+            f"{str(bool(cadence_lift_snapshot.get('applied', False))).lower()}/"
+            + f"{str(bool(cadence_lift_snapshot.get('blocked_by_cooldown', False))).lower()}/"
+            + f"{int(self._safe_float(cadence_lift_snapshot.get('cooldown_remaining_days', 0), 0))}d"
+        )
+        lines.append(
+            f"- cadence_lift_snapshot(applied/blocked/cooldown_remaining): `{cadence_triplet}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(guard_loop_cadence_non_apply.get('alerts', [])) if guard_loop_cadence_non_apply.get('alerts') else 'NONE'}`"
+        )
+        for k, v in guard_loop_cadence_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## Guard-Loop Cadence Lift Trend")
+        lines.append(f"- active: `{guard_loop_cadence_lift_trend.get('active', False)}`")
+        lines.append(
+            "- gate_ok/monitor_failed: "
+            + f"`{bool(guard_loop_cadence_lift_trend.get('gate_ok', True))}` / "
+            + f"`{bool(guard_loop_cadence_lift_trend.get('monitor_failed', False))}`"
+        )
+        guard_loop_cadence_lift_trend_metrics = (
+            guard_loop_cadence_lift_trend.get("metrics", {})
+            if isinstance(guard_loop_cadence_lift_trend.get("metrics", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- samples/min/window_days: "
+            + f"`{int(self._safe_float(guard_loop_cadence_lift_trend.get('samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_lift_trend.get('min_samples', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_lift_trend.get('window_days', 0), 0))}`"
+        )
+        lines.append(
+            "- requested/applied/blocked: "
+            + f"`{int(self._safe_float(guard_loop_cadence_lift_trend_metrics.get('requested_count', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_lift_trend_metrics.get('applied_count', 0), 0))}` / "
+            + f"`{int(self._safe_float(guard_loop_cadence_lift_trend_metrics.get('blocked_by_cooldown_count', 0), 0))}`"
+        )
+        lines.append(
+            "- applied_rate/cooldown_block_rate: "
+            + f"`{self._safe_float(guard_loop_cadence_lift_trend_metrics.get('applied_rate', 0.0), 0.0):.2%}` / "
+            + f"`{self._safe_float(guard_loop_cadence_lift_trend_metrics.get('cooldown_block_rate', 0.0), 0.0):.2%}`"
+        )
+        recent_lift_series = (
+            guard_loop_cadence_lift_trend.get("series", [])
+            if isinstance(guard_loop_cadence_lift_trend.get("series", []), list)
+            else []
+        )
+        if recent_lift_series:
+            lines.append("- recent_snapshots:")
+            for item in recent_lift_series[-5:]:
+                if not isinstance(item, dict):
+                    continue
+                lines.append(
+                    "  - "
+                    + f"{str(item.get('date', ''))}: "
+                    + f"requested={bool(item.get('requested', False))}, "
+                    + f"applied={bool(item.get('applied', False))}, "
+                    + f"blocked={bool(item.get('blocked_by_cooldown', False))}, "
+                    + f"reason={str(item.get('reason_code', '') or 'N/A')}"
+                )
+        lines.append(
+            f"- alerts: `{', '.join(guard_loop_cadence_lift_trend.get('alerts', [])) if guard_loop_cadence_lift_trend.get('alerts') else 'NONE'}`"
+        )
+        for k, v in guard_loop_cadence_lift_trend_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("### Drillbook")
+        lines.append("```bash")
+        lines.append(
+            f"python3 {str(self.output_dir.parent / 'infra' / 'local' / 'guard_loop.py')} --root {str(self.output_dir.parent)} --config {str(self.output_dir.parent / 'config.yaml')} --dry-run-recovery"
+        )
+        lines.append(f"lie run-halfhour-daemon --date {as_of.isoformat()} --dry-run")
+        lines.append(f"lie run-halfhour-pulse --date {as_of.isoformat()} --force --max-slot-runs 8")
+        lines.append(f"lie ops-report --date {as_of.isoformat()} --window-days 7")
+        lines.append(f"lie gate-report --date {as_of.isoformat()}")
+        lines.append("```")
+        lines.append("")
         lines.append("## 回滚建议")
         lines.append(f"- active: `{rollback_active}`")
         lines.append(f"- level: `{rollback_level}`")
@@ -6054,6 +18705,111 @@ class ReleaseOrchestrator:
         summary["paths"] = {"json": str(report_json), "md": str(report_md)}
         return summary
 
+    def _compaction_restore_auto_remediation_template(
+        self,
+        *,
+        as_of: date,
+        code: str,
+        alerts: list[str],
+        metrics: dict[str, Any],
+        checks: dict[str, Any],
+    ) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        trend_window_weeks = max(
+            1,
+            int(self._safe_float(val.get("ops_compaction_restore_trend_window_weeks", 8), 8)),
+        )
+        cadence_weeks = max(
+            1,
+            int(self._safe_float(val.get("ops_weekly_guardrail_compact_controlled_apply_cadence_weeks", 2), 2)),
+        )
+        chunk_days = max(
+            1,
+            int(self._safe_float(val.get("ops_weekly_guardrail_compact_chunk_days", 30), 30)),
+        )
+        delete_budget_rows = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_weekly_guardrail_compact_controlled_apply_delete_budget_rows", 25000),
+                    25000,
+                )
+            ),
+        )
+        compact_age_days = self._safe_float(metrics.get("compact_age_days", -1), -1.0)
+        restore_age_days = self._safe_float(metrics.get("restore_age_days", -1), -1.0)
+        restore_pass_ratio = self._safe_float(metrics.get("restore_pass_ratio", 1.0), 1.0)
+        restore_delta_ratio = self._safe_float(metrics.get("restore_delta_match_ratio", 1.0), 1.0)
+        compact_error_ratio = self._safe_float(metrics.get("compact_error_ratio", 0.0), 0.0)
+
+        patch: dict[str, Any] = {}
+        commands = [
+            f"lie verify-compaction-restore --run-id latest",
+            f"lie ops-report --date {as_of.isoformat()} --window-days 7",
+        ]
+        template_id = "compaction_restore_generic"
+        rationale = "先恢复 Compaction/Restore 审计链路，再执行带边界的配置修正。"
+
+        if code == "COMPACTION_RESTORE_TREND_INSUFFICIENT_SAMPLES":
+            template_id = "compaction_restore_backfill_samples"
+            patch["ops_weekly_guardrail_compact_controlled_apply_cadence_weeks"] = 1
+            patch["ops_compaction_restore_trend_window_weeks"] = min(26, max(12, int(trend_window_weeks)))
+            patch["ops_compaction_restore_trend_require_active"] = True
+            commands.insert(0, f"lie run-halfhour-pulse --date {as_of.isoformat()} --force --max-slot-runs 8")
+            rationale = "样本不足优先提升周维护覆盖密度，避免趋势判定长期失活。"
+        elif code == "COMPACTION_RESTORE_TREND_STALE":
+            template_id = "compaction_restore_refresh_stale"
+            patch["ops_weekly_guardrail_compact_controlled_apply_cadence_weeks"] = 1
+            patch["ops_compaction_restore_trend_window_weeks"] = min(26, max(12, int(trend_window_weeks)))
+            commands.insert(0, f"lie run-halfhour-pulse --date {as_of.isoformat()} --force --max-slot-runs 8")
+            rationale = (
+                "趋势工件陈旧时先执行强制补槽位，再把 cadence 收紧到每周可验证。"
+                + f" compact_age={compact_age_days:.2f}, restore_age={restore_age_days:.2f}"
+            )
+        elif code == "COMPACTION_RESTORE_TREND_RESTORE_VERIFY":
+            template_id = "compaction_restore_raise_verify_bar"
+            patch["ops_weekly_guardrail_compact_controlled_apply_require_restore_verify_pass"] = True
+            patch["ops_compaction_restore_trend_gate_hard_fail"] = True
+            patch["ops_compaction_restore_trend_min_restore_pass_ratio"] = 1.0
+            patch["ops_compaction_restore_trend_min_restore_delta_match_ratio"] = 1.0
+            commands.insert(0, f"lie verify-compaction-restore --run-id latest --keep-temp-db")
+            rationale = (
+                "restore 校验偏弱时将门禁硬化并固定 pass/delta 阈值，避免带缺陷 apply 晋升。"
+                + f" pass_ratio={restore_pass_ratio:.2%}, delta_ratio={restore_delta_ratio:.2%}"
+            )
+        elif code == "COMPACTION_RESTORE_TREND_COMPACT_ERROR":
+            template_id = "compaction_restore_reduce_apply_stress"
+            patch["ops_weekly_guardrail_compact_chunk_days"] = min(int(chunk_days), 14)
+            patch["ops_weekly_guardrail_compact_controlled_apply_delete_budget_rows"] = max(
+                5000,
+                int(delete_budget_rows // 2),
+            )
+            patch["ops_weekly_guardrail_compact_controlled_apply_cadence_weeks"] = max(1, int(cadence_weeks))
+            commands.insert(0, f"lie compact-executed-plans --start {(as_of - timedelta(days=30)).isoformat()} --end {as_of.isoformat()} --chunk-days {min(int(chunk_days), 14)}")
+            rationale = (
+                "compact 错误率高时先降低单次处理压力（chunk/delete budget），再恢复 cadence。"
+                + f" error_ratio={compact_error_ratio:.2%}"
+            )
+        else:
+            patch["ops_compaction_restore_trend_gate_hard_fail"] = bool(not checks.get("min_samples_ok", True))
+            patch["ops_weekly_guardrail_compact_controlled_apply_cadence_weeks"] = max(1, int(cadence_weeks))
+
+        return {
+            "template_id": template_id,
+            "code": str(code),
+            "commands": commands,
+            "config_patch": patch,
+            "inputs": {
+                "alerts": list(alerts),
+                "compact_age_days": compact_age_days,
+                "restore_age_days": restore_age_days,
+                "restore_pass_ratio": restore_pass_ratio,
+                "restore_delta_match_ratio": restore_delta_ratio,
+                "compact_error_ratio": compact_error_ratio,
+            },
+            "rationale": rationale,
+        }
+
     def _build_defect_plan(
         self,
         as_of: date,
@@ -6067,7 +18823,10 @@ class ReleaseOrchestrator:
         mode_drift: dict[str, Any] | None = None,
         style_drift: dict[str, Any] | None = None,
         stress_matrix_trend: dict[str, Any] | None = None,
+        stress_matrix_execution_friction: dict[str, Any] | None = None,
         reconcile_drift: dict[str, Any] | None = None,
+        guard_loop_cadence_non_apply: dict[str, Any] | None = None,
+        guard_loop_cadence_non_apply_lift_trend: dict[str, Any] | None = None,
         rollback_recommendation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         checks = gate.get("checks", {})
@@ -6138,6 +18897,15 @@ class ReleaseOrchestrator:
                     "action": "先收敛信号门槛与交易频次，再核验风格归因样本与漂移阈值配置。",
                 }
             )
+        if not bool(checks.get("stress_matrix_execution_friction_ok", True)):
+            defects.append(
+                {
+                    "category": "risk",
+                    "code": "STRESS_MATRIX_EXECUTION_FRICTION",
+                    "message": "Stress Matrix 执行摩擦压力门禁触发",
+                    "action": "优先复核延迟/滑点假设与执行成本建模，再收敛仓位和止损参数后重跑 stress matrix。",
+                }
+            )
         if not bool(checks.get("temporal_audit_ok", True)):
             defects.append(
                 {
@@ -6190,6 +18958,1316 @@ class ReleaseOrchestrator:
                     "code": "RISK_VIOLATION",
                     "message": "风险约束出现违规",
                     "action": "校验单笔/总暴露约束计算与执行器拦截逻辑。",
+                }
+            )
+        release_freshness_payload = (
+            gate.get("release_decision_freshness", {})
+            if isinstance(gate.get("release_decision_freshness", {}), dict)
+            else {}
+        )
+        release_freshness_alerts = (
+            release_freshness_payload.get("alerts", [])
+            if isinstance(release_freshness_payload.get("alerts", []), list)
+            else []
+        )
+        release_freshness_metrics = (
+            release_freshness_payload.get("metrics", {})
+            if isinstance(release_freshness_payload.get("metrics", {}), dict)
+            else {}
+        )
+        if not bool(checks.get("release_decision_freshness_ok", True)):
+            defects.append(
+                {
+                    "category": "report",
+                    "code": "RELEASE_DECISION_FRESHNESS",
+                    "message": (
+                        "release_decision 快照时效不达标，"
+                        + f"review_age_hours={self._safe_float(release_freshness_metrics.get('review_age_hours', -1), -1.0):.2f}"
+                    ),
+                    "action": (
+                        "优先补跑 lie review 与 lie gate-report，确认 review_delta / decision snapshot 的生成时间与时区一致。"
+                    ),
+                    "alerts": list(release_freshness_alerts),
+                }
+            )
+        degradation_guardrail_payload = (
+            gate.get("degradation_guardrail_dashboard", {})
+            if isinstance(gate.get("degradation_guardrail_dashboard", {}), dict)
+            else {}
+        )
+        degradation_guardrail_checks = (
+            degradation_guardrail_payload.get("checks", {})
+            if isinstance(degradation_guardrail_payload.get("checks", {}), dict)
+            else {}
+        )
+        degradation_guardrail_alerts = (
+            degradation_guardrail_payload.get("alerts", [])
+            if isinstance(degradation_guardrail_payload.get("alerts", []), list)
+            else []
+        )
+        degradation_guardrail_metrics = (
+            degradation_guardrail_payload.get("metrics", {})
+            if isinstance(degradation_guardrail_payload.get("metrics", {}), dict)
+            else {}
+        )
+        degradation_guardrail_thresholds = (
+            degradation_guardrail_payload.get("thresholds", {})
+            if isinstance(degradation_guardrail_payload.get("thresholds", {}), dict)
+            else {}
+        )
+        if not bool(checks.get("degradation_guardrail_dashboard_ok", True)):
+            guardrail_defect_added = False
+            if not bool(degradation_guardrail_checks.get("cooldown_hit_rate_ok", True)):
+                guardrail_defect_added = True
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "DEGRADATION_GUARDRAIL_COOLDOWN",
+                        "message": (
+                            "降级护栏 cooldown_hit_rate 超阈值："
+                            + f"{self._safe_float(degradation_guardrail_metrics.get('cooldown_hit_rate', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(degradation_guardrail_thresholds.get('ops_degradation_guardrail_cooldown_hit_rate_max', 1.0), 1.0):.2%}"
+                        ),
+                        "action": "检查 rollback 冷却触发逻辑与触发密度，必要时执行 guardrail-burnin 调整阈值。",
+                    }
+                )
+            if not bool(degradation_guardrail_checks.get("suppressed_trigger_density_ok", True)):
+                guardrail_defect_added = True
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "DEGRADATION_GUARDRAIL_SUPPRESSED",
+                        "message": (
+                            "降级护栏 suppressed_trigger_density 超阈值："
+                            + f"{self._safe_float(degradation_guardrail_metrics.get('suppressed_trigger_density', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(degradation_guardrail_thresholds.get('ops_degradation_guardrail_suppressed_trigger_density_max', 1.0), 1.0):.2%}"
+                        ),
+                        "action": "复核回滚触发条件是否过于敏感，并在 monitor 模式下执行阈值重估。",
+                    }
+                )
+            if not bool(degradation_guardrail_checks.get("promotion_latency_ok", True)):
+                guardrail_defect_added = True
+                defects.append(
+                    {
+                        "category": "model",
+                        "code": "DEGRADATION_GUARDRAIL_PROMOTION",
+                        "message": (
+                            "降级护栏 promotion_latency 超阈值："
+                            + f"{self._safe_float(degradation_guardrail_metrics.get('promotion_latency_avg_days', 0.0), 0.0):.2f}d > "
+                            + f"{int(self._safe_float(degradation_guardrail_thresholds.get('ops_degradation_guardrail_promotion_latency_days_max', 0), 0))}d"
+                        ),
+                        "action": "缩短回滚参数晋升链路，检查 stable-window 与 promotion-cooldown 配置。",
+                    }
+                )
+            if not guardrail_defect_added:
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "DEGRADATION_GUARDRAIL",
+                        "message": "降级护栏仪表板检查失败",
+                        "action": "执行 lie guardrail-burnin 并结合 alerts/series 定位阈值或策略链路异常。",
+                        "alerts": list(degradation_guardrail_alerts),
+                    }
+                )
+        degradation_guardrail_threshold_drift_payload = (
+            gate.get("degradation_guardrail_threshold_drift", {})
+            if isinstance(gate.get("degradation_guardrail_threshold_drift", {}), dict)
+            else {}
+        )
+        degradation_guardrail_threshold_drift_checks = (
+            degradation_guardrail_threshold_drift_payload.get("checks", {})
+            if isinstance(degradation_guardrail_threshold_drift_payload.get("checks", {}), dict)
+            else {}
+        )
+        degradation_guardrail_threshold_drift_alerts = (
+            degradation_guardrail_threshold_drift_payload.get("alerts", [])
+            if isinstance(degradation_guardrail_threshold_drift_payload.get("alerts", []), list)
+            else []
+        )
+        degradation_guardrail_threshold_drift_summary = (
+            degradation_guardrail_threshold_drift_payload.get("summary", {})
+            if isinstance(degradation_guardrail_threshold_drift_payload.get("summary", {}), dict)
+            else {}
+        )
+        degradation_guardrail_threshold_drift_status = (
+            str(degradation_guardrail_threshold_drift_payload.get("status", "unknown")).strip().lower()
+        )
+        if not bool(checks.get("degradation_guardrail_threshold_drift_ok", True)):
+            if not bool(degradation_guardrail_threshold_drift_checks.get("artifact_recent_ok", True)):
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "DEGRADATION_GUARDRAIL_THRESHOLD_DRIFT_STALE",
+                        "message": "降级护栏阈值漂移审计工件缺失或过期",
+                        "action": (
+                            "优先执行 lie guardrail-drift-audit，"
+                            + "若仍无样本则补跑 lie guardrail-burnin 生成可用审计基线。"
+                        ),
+                        "alerts": list(degradation_guardrail_threshold_drift_alerts),
+                    }
+                )
+            elif degradation_guardrail_threshold_drift_status == "critical":
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "DEGRADATION_GUARDRAIL_THRESHOLD_DRIFT_CRITICAL",
+                        "message": (
+                            "降级护栏阈值漂移达到 critical："
+                            + f"warn={int(self._safe_float(degradation_guardrail_threshold_drift_summary.get('warn_count', 0), 0))}, "
+                            + f"critical={int(self._safe_float(degradation_guardrail_threshold_drift_summary.get('critical_count', 0), 0))}"
+                        ),
+                        "action": (
+                            "立即执行 lie guardrail-burnin + lie guardrail-drift-audit，"
+                            + "回溯 live override 与基线阈值漂移链路，必要时冻结自动调参。"
+                        ),
+                        "alerts": list(degradation_guardrail_threshold_drift_alerts),
+                    }
+                )
+            elif degradation_guardrail_threshold_drift_status == "warn":
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "DEGRADATION_GUARDRAIL_THRESHOLD_DRIFT_WARN",
+                        "message": (
+                            "降级护栏阈值漂移达到 warn："
+                            + f"warn={int(self._safe_float(degradation_guardrail_threshold_drift_summary.get('warn_count', 0), 0))}, "
+                            + f"critical={int(self._safe_float(degradation_guardrail_threshold_drift_summary.get('critical_count', 0), 0))}"
+                        ),
+                        "action": (
+                            "按周复核阈值漂移来源，执行 lie guardrail-drift-audit 并结合 burnin 报告小步修正。"
+                        ),
+                        "alerts": list(degradation_guardrail_threshold_drift_alerts),
+                    }
+                )
+            else:
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "DEGRADATION_GUARDRAIL_THRESHOLD_DRIFT",
+                        "message": "降级护栏阈值漂移门禁失败",
+                        "action": "执行 lie guardrail-drift-audit 并核验 drift status 与 checks 输出一致性。",
+                        "alerts": list(degradation_guardrail_threshold_drift_alerts),
+                    }
+                )
+        dependency_audit_artifact_trend_payload = (
+            gate.get("dependency_audit_artifact_trend", {})
+            if isinstance(gate.get("dependency_audit_artifact_trend", {}), dict)
+            else {}
+        )
+        dependency_audit_artifact_trend_checks = (
+            dependency_audit_artifact_trend_payload.get("checks", {})
+            if isinstance(dependency_audit_artifact_trend_payload.get("checks", {}), dict)
+            else {}
+        )
+        dependency_audit_artifact_trend_alerts = (
+            dependency_audit_artifact_trend_payload.get("alerts", [])
+            if isinstance(dependency_audit_artifact_trend_payload.get("alerts", []), list)
+            else []
+        )
+        dependency_audit_artifact_trend_metrics = (
+            dependency_audit_artifact_trend_payload.get("metrics", {})
+            if isinstance(dependency_audit_artifact_trend_payload.get("metrics", {}), dict)
+            else {}
+        )
+        if not bool(checks.get("dependency_audit_artifact_trend_ok", True)):
+            trend_code = "DEPENDENCY_AUDIT_ARTIFACT_TREND"
+            trend_category = "report"
+            trend_message = "Dependency audit artifact 趋势门禁失败"
+            trend_action = "执行 lie dependency-audit --date TODAY，补齐样本后复核 artifact trend。"
+            if not bool(dependency_audit_artifact_trend_checks.get("artifact_recent_ok", True)):
+                trend_code = "DEPENDENCY_AUDIT_ARTIFACT_TREND_STALE"
+                trend_message = (
+                    "Dependency audit artifact 陈旧："
+                    + f"source_age_days={dependency_audit_artifact_trend_metrics.get('source_age_days', 'N/A')}"
+                )
+                trend_action = "先补跑 dependency-audit 生成当日工件，再执行 lie ops-report 校验 trend 恢复。"
+            elif not bool(dependency_audit_artifact_trend_checks.get("corrupt_ratio_ok", True)):
+                trend_code = "DEPENDENCY_AUDIT_ARTIFACT_TREND_CORRUPT"
+                trend_category = "execution"
+                trend_message = (
+                    "Dependency audit artifact 解析失败比例过高："
+                    + f"corrupt_ratio={self._safe_float(dependency_audit_artifact_trend_metrics.get('corrupt_ratio', 0.0), 0.0):.2%}"
+                )
+                trend_action = "检查 dependency_audit.json 写入链路与并发覆盖，修复后重跑 dependency-audit。"
+            elif not bool(dependency_audit_artifact_trend_checks.get("missing_ratio_ok", True)):
+                trend_code = "DEPENDENCY_AUDIT_ARTIFACT_TREND_MISSING"
+                trend_message = (
+                    "Dependency audit artifact 缺失比例过高："
+                    + f"missing_ratio={self._safe_float(dependency_audit_artifact_trend_metrics.get('missing_ratio', 0.0), 0.0):.2%}"
+                )
+                trend_action = "补齐缺失日 dependency-audit 工件并审查调度链路，避免无工件状态下放行。"
+            elif not bool(dependency_audit_artifact_trend_checks.get("min_samples_ok", True)):
+                trend_code = "DEPENDENCY_AUDIT_ARTIFACT_TREND_INSUFFICIENT"
+                trend_message = "Dependency audit artifact 趋势样本不足"
+                trend_action = "延长窗口并补跑 dependency-audit 至最小样本后再启用 hard-fail。"
+            defects.append(
+                {
+                    "category": trend_category,
+                    "code": trend_code,
+                    "message": trend_message,
+                    "action": trend_action,
+                    "alerts": list(dependency_audit_artifact_trend_alerts),
+                }
+            )
+        compaction_restore_trend_payload = (
+            gate.get("compaction_restore_trend", {})
+            if isinstance(gate.get("compaction_restore_trend", {}), dict)
+            else {}
+        )
+        compaction_restore_trend_checks = (
+            compaction_restore_trend_payload.get("checks", {})
+            if isinstance(compaction_restore_trend_payload.get("checks", {}), dict)
+            else {}
+        )
+        compaction_restore_trend_alerts = (
+            compaction_restore_trend_payload.get("alerts", [])
+            if isinstance(compaction_restore_trend_payload.get("alerts", []), list)
+            else []
+        )
+        compaction_restore_trend_metrics = (
+            compaction_restore_trend_payload.get("metrics", {})
+            if isinstance(compaction_restore_trend_payload.get("metrics", {}), dict)
+            else {}
+        )
+        if not bool(checks.get("compaction_restore_trend_ok", True)):
+            trend_code = "COMPACTION_RESTORE_TREND"
+            trend_category = "execution"
+            trend_message = "Compaction/Restore 趋势门禁失败"
+            trend_action = (
+                "执行 lie verify-compaction-restore 与 lie ops-report，"
+                + "优先修复 restore_verify 链路后再恢复 apply cadence。"
+            )
+            if "compaction_trend_insufficient_samples" in compaction_restore_trend_alerts:
+                trend_code = "COMPACTION_RESTORE_TREND_INSUFFICIENT_SAMPLES"
+                trend_category = "report"
+                trend_message = "Compaction/Restore 趋势样本不足（monitor require_active 未满足）"
+                trend_action = "补齐 weekly_guardrail maintenance 历史后再评估 gate_hard_fail 是否开启。"
+            elif any(
+                x in compaction_restore_trend_alerts
+                for x in ("compaction_trend_compact_stale", "compaction_trend_restore_verify_stale")
+            ):
+                trend_code = "COMPACTION_RESTORE_TREND_STALE"
+                trend_category = "report"
+                trend_message = (
+                    "Compaction/Restore 趋势工件陈旧："
+                    + f"compact_age={compaction_restore_trend_metrics.get('compact_age_days', 'N/A')}, "
+                    + f"restore_age={compaction_restore_trend_metrics.get('restore_age_days', 'N/A')}"
+                )
+                trend_action = "补跑 weekly_guardrail 与 restore-verify，确认最新 run_id 与 delta_match 一致。"
+            elif any(
+                x in compaction_restore_trend_alerts
+                for x in (
+                    "compaction_trend_restore_verify_pass_ratio_low",
+                    "compaction_trend_restore_verify_delta_ratio_low",
+                    "compaction_trend_latest_restore_delta_mismatch",
+                )
+            ):
+                trend_code = "COMPACTION_RESTORE_TREND_RESTORE_VERIFY"
+                trend_category = "risk"
+                trend_message = (
+                    "Compaction/Restore 趋势显示 restore_verify 通过率或 delta_match 不达标："
+                    + f"pass_ratio={self._safe_float(compaction_restore_trend_metrics.get('restore_pass_ratio', 0.0), 0.0):.2%}, "
+                    + f"delta_ratio={self._safe_float(compaction_restore_trend_metrics.get('restore_delta_match_ratio', 0.0), 0.0):.2%}"
+                )
+                trend_action = "冻结 controlled_apply，先完成 restore 校验链修复与回滚演练，再恢复周节奏。"
+            elif not bool(compaction_restore_trend_checks.get("compact_error_ratio_ok", True)):
+                trend_code = "COMPACTION_RESTORE_TREND_COMPACT_ERROR"
+                trend_category = "execution"
+                trend_message = (
+                    "Compaction/Restore 趋势显示 compact 错误率偏高："
+                    + f"error_ratio={self._safe_float(compaction_restore_trend_metrics.get('compact_error_ratio', 0.0), 0.0):.2%}"
+                )
+                trend_action = "先修复 compaction 执行失败原因（窗口/SQL/锁），再恢复 apply promotion。"
+
+            remediation_template = self._compaction_restore_auto_remediation_template(
+                as_of=as_of,
+                code=trend_code,
+                alerts=list(compaction_restore_trend_alerts),
+                metrics=compaction_restore_trend_metrics,
+                checks=compaction_restore_trend_checks,
+            )
+            defects.append(
+                {
+                    "category": trend_category,
+                    "code": trend_code,
+                    "message": trend_message,
+                    "action": trend_action,
+                    "alerts": list(compaction_restore_trend_alerts),
+                    "auto_remediation": remediation_template,
+                }
+            )
+        guard_loop_frontend_snapshot_payload = (
+            gate.get("guard_loop_frontend_snapshot_trend", {})
+            if isinstance(gate.get("guard_loop_frontend_snapshot_trend", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_snapshot_alerts = (
+            guard_loop_frontend_snapshot_payload.get("alerts", [])
+            if isinstance(guard_loop_frontend_snapshot_payload.get("alerts", []), list)
+            else []
+        )
+        guard_loop_frontend_snapshot_metrics = (
+            guard_loop_frontend_snapshot_payload.get("metrics", {})
+            if isinstance(guard_loop_frontend_snapshot_payload.get("metrics", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_snapshot_thresholds = (
+            guard_loop_frontend_snapshot_payload.get("thresholds", {})
+            if isinstance(guard_loop_frontend_snapshot_payload.get("thresholds", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_snapshot_route_audit = (
+            guard_loop_frontend_snapshot_payload.get("hard_fail_apply_route_audit", {})
+            if isinstance(guard_loop_frontend_snapshot_payload.get("hard_fail_apply_route_audit", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_snapshot_route_audit_metrics = (
+            guard_loop_frontend_snapshot_route_audit.get("metrics", {})
+            if isinstance(guard_loop_frontend_snapshot_route_audit.get("metrics", {}), dict)
+            else {}
+        )
+        guard_loop_frontend_snapshot_route_audit_thresholds = (
+            guard_loop_frontend_snapshot_route_audit.get("thresholds", {})
+            if isinstance(guard_loop_frontend_snapshot_route_audit.get("thresholds", {}), dict)
+            else {}
+        )
+        if not bool(checks.get("guard_loop_frontend_snapshot_trend_ok", True)):
+            frontend_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND"
+            frontend_category = "execution"
+            frontend_message = "Guard-loop frontend_snapshot 趋势门禁失败。"
+            frontend_action = (
+                "优先修复 dashboard/web 快照链路并核验 guard_loop_history 写盘，"
+                + "随后补跑 guard loop + gate-report 复核趋势指标。"
+            )
+            if "guard_loop_frontend_snapshot_trend_insufficient_samples" in guard_loop_frontend_snapshot_alerts:
+                frontend_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_INSUFFICIENT_SAMPLES"
+                frontend_category = "report"
+                frontend_message = (
+                    "frontend_snapshot 趋势样本不足："
+                    + f"samples={int(self._safe_float(guard_loop_frontend_snapshot_payload.get('samples', 0), 0))}, "
+                    + f"min={int(self._safe_float(guard_loop_frontend_snapshot_payload.get('min_samples', 0), 0))}"
+                )
+                frontend_action = "补齐 guard_loop_history 窗口样本后再开启 frontend_snapshot 趋势硬门禁。"
+            elif any(
+                x in guard_loop_frontend_snapshot_alerts
+                for x in (
+                    "guard_loop_frontend_snapshot_trend_timeout_ratio_high",
+                    "guard_loop_frontend_snapshot_trend_timeout_streak_high",
+                )
+            ):
+                frontend_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_TIMEOUT"
+                frontend_category = "risk"
+                frontend_message = (
+                    "frontend_snapshot 超时密度或超时连击超限："
+                    + f"timeout_ratio={self._safe_float(guard_loop_frontend_snapshot_metrics.get('timeout_ratio', 0.0), 0.0):.2%}, "
+                    + f"timeout_streak={int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('timeout_streak_current', 0), 0))}"
+                )
+                frontend_action = (
+                    "先定位 dashboard/web 测试慢点或阻塞依赖，缩短超时路径并恢复 snapshot 执行稳定性。"
+                )
+            elif "guard_loop_frontend_snapshot_trend_governance_failure_ratio_high" in guard_loop_frontend_snapshot_alerts:
+                frontend_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_GOVERNANCE"
+                frontend_category = "report"
+                frontend_message = (
+                    "frontend_snapshot 工件治理失败率超限："
+                    + f"{self._safe_float(guard_loop_frontend_snapshot_metrics.get('governance_failure_ratio', 0.0), 0.0):.2%} > "
+                    + f"{self._safe_float(guard_loop_frontend_snapshot_thresholds.get('ops_guard_loop_frontend_snapshot_trend_max_governance_failure_ratio', 1.0), 1.0):.2%}"
+                )
+                frontend_action = (
+                    "检查 frontend_snapshot 保留策略与 checksum index 写盘权限，"
+                    + "修复治理链路后再恢复趋势门禁。"
+                )
+            elif any(
+                x in guard_loop_frontend_snapshot_alerts
+                for x in (
+                    "guard_loop_frontend_snapshot_trend_failure_ratio_high",
+                    "guard_loop_frontend_snapshot_trend_failure_streak_high",
+                )
+            ):
+                frontend_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_FAILURE"
+                frontend_category = "execution"
+                frontend_message = (
+                    "frontend_snapshot 失败密度或失败连击超限："
+                    + f"failure_ratio={self._safe_float(guard_loop_frontend_snapshot_metrics.get('failure_ratio', 0.0), 0.0):.2%}, "
+                    + f"failure_streak={int(self._safe_float(guard_loop_frontend_snapshot_metrics.get('failure_streak_current', 0), 0))}"
+                )
+                frontend_action = (
+                    "先修复前端快照测试失败根因，再补跑半小时守护任务确认失败率回落后恢复硬门禁。"
+                )
+            elif any(
+                x in guard_loop_frontend_snapshot_alerts
+                for x in (
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_non_apply_ratio_high",
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_rollback_guard_ratio_high",
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_apply_ratio_low",
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_trendline_non_apply_rise",
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_trendline_rollback_guard_rise",
+                    "guard_loop_frontend_snapshot_trend_hard_fail_controlled_apply_route_trendline_apply_drop",
+                )
+            ):
+                frontend_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_HARD_FAIL_APPLY_ROUTE_AUDIT"
+                frontend_category = "risk"
+                frontend_message = (
+                    "frontend_snapshot hard-fail apply route 周期审计越界："
+                    + f"apply={self._safe_float(guard_loop_frontend_snapshot_route_audit_metrics.get('apply_ratio', 0.0), 0.0):.2%}, "
+                    + f"non_apply={self._safe_float(guard_loop_frontend_snapshot_route_audit_metrics.get('non_apply_ratio', 0.0), 0.0):.2%}, "
+                    + f"rollback_guard={self._safe_float(guard_loop_frontend_snapshot_route_audit_metrics.get('rollback_guard_blocked_ratio', 0.0), 0.0):.2%}"
+                )
+                frontend_action = (
+                    "优先修复 frontend hard-fail apply route 漂移并重跑 gate-report；"
+                    + "待 non-apply/rollback_guard 比例与 trendline delta 回归阈值后再恢复晋升。"
+                )
+
+            defects.append(
+                {
+                    "category": frontend_category,
+                    "code": frontend_code,
+                    "message": frontend_message,
+                    "action": frontend_action,
+                    "alerts": list(guard_loop_frontend_snapshot_alerts),
+                    "auto_remediation": {
+                        "template_id": "guard_loop_frontend_snapshot_trend_recover",
+                        "commands": [
+                            f"python3 {str(self.output_dir.parent / 'infra' / 'local' / 'guard_loop.py')} --root {str(self.output_dir.parent)} --config {str(self.output_dir.parent / 'config.yaml')} --dry-run-recovery",
+                            f"lie run-halfhour-daemon --date {as_of.isoformat()}",
+                            f"lie gate-report --date {as_of.isoformat()}",
+                        ],
+                        "config_patch": {
+                            "ops_guard_loop_frontend_snapshot_trend_gate_hard_fail": True,
+                            "ops_guard_loop_frontend_snapshot_trend_require_active": True,
+                        },
+                        "inputs": {
+                            "alerts": list(guard_loop_frontend_snapshot_alerts),
+                            "samples": int(
+                                self._safe_float(guard_loop_frontend_snapshot_payload.get("samples", 0), 0)
+                            ),
+                            "run_samples": int(
+                                self._safe_float(guard_loop_frontend_snapshot_metrics.get("run_samples", 0), 0)
+                            ),
+                            "failure_ratio": float(
+                                self._safe_float(guard_loop_frontend_snapshot_metrics.get("failure_ratio", 0.0), 0.0)
+                            ),
+                            "timeout_ratio": float(
+                                self._safe_float(guard_loop_frontend_snapshot_metrics.get("timeout_ratio", 0.0), 0.0)
+                            ),
+                            "governance_failure_ratio": float(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_metrics.get("governance_failure_ratio", 0.0),
+                                    0.0,
+                                )
+                            ),
+                            "failure_streak_current": int(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_metrics.get("failure_streak_current", 0),
+                                    0,
+                                )
+                            ),
+                            "timeout_streak_current": int(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_metrics.get("timeout_streak_current", 0),
+                                    0,
+                                )
+                            ),
+                            "route_audit_samples": int(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_route_audit.get("samples", 0),
+                                    0,
+                                )
+                            ),
+                            "route_audit_non_apply_ratio": float(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_route_audit_metrics.get("non_apply_ratio", 0.0),
+                                    0.0,
+                                )
+                            ),
+                            "route_audit_rollback_guard_ratio": float(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_route_audit_metrics.get(
+                                        "rollback_guard_blocked_ratio",
+                                        0.0,
+                                    ),
+                                    0.0,
+                                )
+                            ),
+                            "route_audit_apply_ratio": float(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_route_audit_metrics.get("apply_ratio", 0.0),
+                                    0.0,
+                                )
+                            ),
+                            "route_audit_non_apply_ratio_max": float(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_route_audit_thresholds.get(
+                                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_non_apply_ratio",
+                                        1.0,
+                                    ),
+                                    1.0,
+                                )
+                            ),
+                            "route_audit_rollback_guard_ratio_max": float(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_route_audit_thresholds.get(
+                                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_rollback_guard_ratio",
+                                        1.0,
+                                    ),
+                                    1.0,
+                                )
+                            ),
+                            "route_audit_apply_ratio_min": float(
+                                self._safe_float(
+                                    guard_loop_frontend_snapshot_route_audit_thresholds.get(
+                                        "ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_apply_ratio",
+                                        0.0,
+                                    ),
+                                    0.0,
+                                )
+                            ),
+                            "latest_snapshot_artifact_json": str(
+                                (
+                                    (
+                                        guard_loop_frontend_snapshot_payload.get("artifacts", {})
+                                        or {}
+                                    ).get("snapshot", {})
+                                    or {}
+                                ).get("json", "")
+                            ),
+                            "latest_snapshot_checksum_index": str(
+                                (
+                                    (
+                                        guard_loop_frontend_snapshot_payload.get("artifacts", {})
+                                        or {}
+                                    ).get("snapshot", {})
+                                    or {}
+                                ).get("checksum_index_path", "")
+                            ),
+                        },
+                    },
+                }
+            )
+        else:
+            frontend_route_audit_status = str(
+                guard_loop_frontend_snapshot_route_audit.get("status", "inactive")
+            ).strip().lower()
+            if (
+                bool(guard_loop_frontend_snapshot_route_audit.get("active", False))
+                and frontend_route_audit_status == "red"
+            ):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "GUARD_LOOP_FRONTEND_SNAPSHOT_HARD_FAIL_APPLY_ROUTE_AUDIT",
+                        "message": (
+                            "frontend_snapshot hard-fail apply route 周期审计越界："
+                            + f"apply={self._safe_float(guard_loop_frontend_snapshot_route_audit_metrics.get('apply_ratio', 0.0), 0.0):.2%}, "
+                            + f"non_apply={self._safe_float(guard_loop_frontend_snapshot_route_audit_metrics.get('non_apply_ratio', 0.0), 0.0):.2%}, "
+                            + f"rollback_guard={self._safe_float(guard_loop_frontend_snapshot_route_audit_metrics.get('rollback_guard_blocked_ratio', 0.0), 0.0):.2%}"
+                        ),
+                        "action": (
+                            "重跑 route weekly audit 并优先降低 non-apply/rollback_guard 集中度，"
+                            + "确认 trendline delta 回归阈值后再继续 controlled-apply 晋升。"
+                        ),
+                        "alerts": list(guard_loop_frontend_snapshot_alerts),
+                    }
+                )
+            frontend_replay_expected_runs = int(
+                self._safe_float(
+                    guard_loop_frontend_snapshot_metrics.get("replay_expected_runs", 0),
+                    0,
+                )
+            )
+            frontend_replay_executed_runs = int(
+                self._safe_float(
+                    guard_loop_frontend_snapshot_metrics.get("replay_executed_runs", 0),
+                    0,
+                )
+            )
+            frontend_replay_missed_runs = int(
+                self._safe_float(
+                    guard_loop_frontend_snapshot_metrics.get("replay_missed_runs", 0),
+                    0,
+                )
+            )
+            frontend_replay_reason_missing_runs = int(
+                self._safe_float(
+                    guard_loop_frontend_snapshot_metrics.get("replay_due_but_reason_missing_runs", 0),
+                    0,
+                )
+            )
+            frontend_replay_convergence_rate = self._safe_float(
+                guard_loop_frontend_snapshot_metrics.get("replay_convergence_rate", 1.0),
+                1.0,
+            )
+            if frontend_replay_missed_runs > 0:
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "GUARD_LOOP_FRONTEND_SNAPSHOT_REPLAY_CONVERGENCE",
+                        "message": (
+                            "frontend_snapshot replay 升级执行收敛不足："
+                            + f"expected={frontend_replay_expected_runs}, "
+                            + f"executed={frontend_replay_executed_runs}, "
+                            + f"missed={frontend_replay_missed_runs}, "
+                            + f"convergence={frontend_replay_convergence_rate:.2%}"
+                        ),
+                        "action": (
+                            "核对 guard_loop_history 中 frontend_snapshot trend due 与 recovery reason-codes 映射，"
+                            + "修复升级链路后补跑 guard loop + gate-report。"
+                        ),
+                        "alerts": list(guard_loop_frontend_snapshot_alerts),
+                    }
+                )
+            if frontend_replay_reason_missing_runs > 0:
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "GUARD_LOOP_FRONTEND_SNAPSHOT_REPLAY_TRACEABILITY",
+                        "message": (
+                            "frontend_snapshot replay 追溯链路缺失 reason-codes："
+                            + f"missing_runs={frontend_replay_reason_missing_runs}"
+                        ),
+                        "action": (
+                            "修复 recovery.reason_codes 写盘一致性，确保 every due escalation 都有可审计 reason-codes。"
+                        ),
+                        "alerts": list(guard_loop_frontend_snapshot_alerts),
+                    }
+                )
+            frontend_antiflap_burnin = (
+                guard_loop_frontend_snapshot_payload.get("antiflap_burnin", {})
+                if isinstance(guard_loop_frontend_snapshot_payload.get("antiflap_burnin", {}), dict)
+                else {}
+            )
+            frontend_antiflap_burnin_alerts = (
+                frontend_antiflap_burnin.get("alerts", [])
+                if isinstance(frontend_antiflap_burnin.get("alerts", []), list)
+                else []
+            )
+            frontend_antiflap_burnin_metrics = (
+                frontend_antiflap_burnin.get("metrics", {})
+                if isinstance(frontend_antiflap_burnin.get("metrics", {}), dict)
+                else {}
+            )
+            frontend_antiflap_burnin_promotion = (
+                frontend_antiflap_burnin.get("promotion", {})
+                if isinstance(frontend_antiflap_burnin.get("promotion", {}), dict)
+                else {}
+            )
+            frontend_antiflap_burnin_controlled_apply = (
+                frontend_antiflap_burnin_promotion.get("controlled_apply", {})
+                if isinstance(frontend_antiflap_burnin_promotion.get("controlled_apply", {}), dict)
+                else {}
+            )
+            frontend_antiflap_burnin_controlled_apply_apply_gate = (
+                frontend_antiflap_burnin_controlled_apply.get("apply_gate", {})
+                if isinstance(frontend_antiflap_burnin_controlled_apply.get("apply_gate", {}), dict)
+                else {}
+            )
+            frontend_antiflap_burnin_controlled_apply_approval = (
+                frontend_antiflap_burnin_controlled_apply.get("approval", {})
+                if isinstance(frontend_antiflap_burnin_controlled_apply.get("approval", {}), dict)
+                else {}
+            )
+            frontend_antiflap_burnin_controlled_apply_proposal = (
+                frontend_antiflap_burnin_controlled_apply.get("proposal", {})
+                if isinstance(frontend_antiflap_burnin_controlled_apply.get("proposal", {}), dict)
+                else {}
+            )
+            frontend_antiflap_burnin_controlled_apply_rollback_guard = (
+                frontend_antiflap_burnin_controlled_apply.get("rollback_guard", {})
+                if isinstance(frontend_antiflap_burnin_controlled_apply.get("rollback_guard", {}), dict)
+                else {}
+            )
+            if bool(frontend_antiflap_burnin.get("active", False)) and (
+                not bool(frontend_antiflap_burnin.get("ok", True))
+            ):
+                burnin_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_UNSTABLE"
+                burnin_category = "risk"
+                burnin_message = (
+                    "frontend_snapshot antiflap burn-in 不稳定："
+                    + f"status={str(frontend_antiflap_burnin.get('status', 'unknown'))}, "
+                    + f"suppressed_ratio={self._safe_float(frontend_antiflap_burnin_metrics.get('suppressed_ratio', 0.0), 0.0):.2%}, "
+                    + f"missed={int(self._safe_float(frontend_antiflap_burnin_metrics.get('replay_missed_runs', 0), 0))}, "
+                    + f"reason_missing={int(self._safe_float(frontend_antiflap_burnin_metrics.get('reason_missing_runs', 0), 0))}"
+                )
+                burnin_action = (
+                    "先维持 monitor 模式，收敛 antiflap 抑制密度与 replay 漏执行，再评估开启 hard-fail。"
+                )
+                if (
+                    "guard_loop_frontend_snapshot_antiflap_burnin_insufficient_samples"
+                    in frontend_antiflap_burnin_alerts
+                ):
+                    burnin_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_INSUFFICIENT_SAMPLES"
+                    burnin_category = "report"
+                    burnin_action = "补齐最近 3 日 frontend_snapshot 有效样本后再评估 burn-in 稳定性。"
+                elif (
+                    "guard_loop_frontend_snapshot_antiflap_burnin_dual_window_insufficient_samples"
+                    in frontend_antiflap_burnin_alerts
+                ):
+                    burnin_code = (
+                        "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_DUAL_WINDOW_SAMPLES"
+                    )
+                    burnin_category = "report"
+                    burnin_action = (
+                        "补齐 14 日基线窗口样本后再启用 dual-window 漂移门禁，避免短窗误判。"
+                    )
+                elif (
+                    "guard_loop_frontend_snapshot_antiflap_burnin_dual_window_suppression_delta_high"
+                    in frontend_antiflap_burnin_alerts
+                ):
+                    burnin_code = (
+                        "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_DUAL_WINDOW_SUPPRESSION_DRIFT"
+                    )
+                    burnin_category = "risk"
+                    burnin_action = (
+                        "短窗抑制率较14日基线抬升过快，需回调 antiflap 抑制参数并观察两窗收敛。"
+                    )
+                elif (
+                    "guard_loop_frontend_snapshot_antiflap_burnin_dual_window_replay_delta_high"
+                    in frontend_antiflap_burnin_alerts
+                ):
+                    burnin_code = (
+                        "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_DUAL_WINDOW_REPLAY_DRIFT"
+                    )
+                    burnin_category = "execution"
+                    burnin_action = (
+                        "短窗 replay missed 比例劣化，先修复 replay 链路再恢复 hard-fail 晋升节奏。"
+                    )
+                elif (
+                    "guard_loop_frontend_snapshot_antiflap_burnin_dual_window_traceability_delta_high"
+                    in frontend_antiflap_burnin_alerts
+                ):
+                    burnin_code = (
+                        "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_DUAL_WINDOW_TRACEABILITY_DRIFT"
+                    )
+                    burnin_category = "report"
+                    burnin_action = (
+                        "短窗 reason-codes 缺失比例相对14日基线异常抬升，需修复追溯链路一致性。"
+                    )
+                elif (
+                    "guard_loop_frontend_snapshot_antiflap_burnin_oversuppressed"
+                    in frontend_antiflap_burnin_alerts
+                ):
+                    burnin_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_OVERSUPPRESSION"
+                    burnin_category = "risk"
+                    burnin_action = (
+                        "下调 antiflap cooldown/repeat-timeout 抑制强度，避免 due 信号被过度吞噬。"
+                    )
+                elif (
+                    "guard_loop_frontend_snapshot_antiflap_burnin_replay_missed"
+                    in frontend_antiflap_burnin_alerts
+                ):
+                    burnin_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_REPLAY_MISSED"
+                    burnin_category = "execution"
+                    burnin_action = "修复 frontend trend due 与 recovery replay 执行链路，清零 missed_runs。"
+                elif (
+                    "guard_loop_frontend_snapshot_antiflap_burnin_traceability_missing"
+                    in frontend_antiflap_burnin_alerts
+                ):
+                    burnin_code = "GUARD_LOOP_FRONTEND_SNAPSHOT_ANTIFLAP_BURNIN_TRACEABILITY"
+                    burnin_category = "report"
+                    burnin_action = "修复 recovery.reason_codes 写盘一致性，确保 burn-in 追溯闭环。"
+                defects.append(
+                    {
+                        "category": burnin_category,
+                        "code": burnin_code,
+                        "message": burnin_message,
+                        "action": burnin_action,
+                        "alerts": list(frontend_antiflap_burnin_alerts),
+                    }
+                )
+            elif (
+                bool(frontend_antiflap_burnin.get("active", False))
+                and bool(frontend_antiflap_burnin.get("ok", False))
+                and bool(frontend_antiflap_burnin_promotion.get("enabled", False))
+                and bool(frontend_antiflap_burnin_promotion.get("eligible", False))
+                and (not bool(frontend_antiflap_burnin_promotion.get("current_hard_fail", False)))
+                and str(frontend_antiflap_burnin_promotion.get("recommendation", "")) == "enable_hard_fail"
+            ):
+                controlled_apply_enabled = bool(
+                    frontend_antiflap_burnin_controlled_apply.get("enabled", False)
+                )
+                controlled_apply_reason = str(
+                    frontend_antiflap_burnin_controlled_apply_apply_gate.get("reason", "")
+                ).strip()
+                rollback_guard_ok = bool(
+                    frontend_antiflap_burnin_controlled_apply_apply_gate.get(
+                        "rollback_guard_ok", True
+                    )
+                )
+                if controlled_apply_enabled and (not rollback_guard_ok):
+                    defects.append(
+                        {
+                            "category": "risk",
+                            "code": "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_HARD_FAIL_PROMOTION_ROLLBACK_GUARD",
+                            "message": (
+                                "frontend_snapshot hard-fail 晋升被 rollback guard 阻断："
+                                + f"rollback_level={str(frontend_antiflap_burnin_controlled_apply_rollback_guard.get('rollback_level', 'none'))}, "
+                                + f"rollback_active={bool(frontend_antiflap_burnin_controlled_apply_rollback_guard.get('rollback_active', False))}"
+                            ),
+                            "action": (
+                                "先清理 rollback 建议（soft/hard）并确认 anchor_ready，再恢复 hard-fail promotion apply。"
+                            ),
+                            "alerts": list(frontend_antiflap_burnin_alerts),
+                        }
+                    )
+                elif (
+                    controlled_apply_enabled
+                    and controlled_apply_reason == "dual_window_drift_red_non_apply"
+                ):
+                    dual_window = (
+                        frontend_antiflap_burnin.get("dual_window", {})
+                        if isinstance(frontend_antiflap_burnin.get("dual_window", {}), dict)
+                        else {}
+                    )
+                    dual_window_metrics = (
+                        dual_window.get("metrics", {})
+                        if isinstance(dual_window.get("metrics", {}), dict)
+                        else {}
+                    )
+                    dual_window_checks = (
+                        dual_window.get("checks", {})
+                        if isinstance(dual_window.get("checks", {}), dict)
+                        else {}
+                    )
+                    defects.append(
+                        {
+                            "category": "risk",
+                            "code": "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_HARD_FAIL_PROMOTION_DUAL_WINDOW_NON_APPLY",
+                            "message": (
+                                "frontend_snapshot hard-fail 晋升被 dual-window 漂移保护降级为 non-apply："
+                                + f"dual_window_status={str(dual_window.get('status', 'unknown'))}, "
+                                + f"suppression_delta={self._safe_float(dual_window_metrics.get('suppressed_ratio_delta', 0.0), 0.0):.2%}, "
+                                + f"replay_delta={self._safe_float(dual_window_metrics.get('replay_missed_ratio_delta', 0.0), 0.0):.2%}, "
+                                + f"traceability_delta={self._safe_float(dual_window_metrics.get('reason_missing_ratio_delta', 0.0), 0.0):.2%}"
+                            ),
+                            "action": (
+                                "优先修复 dual-window drift（短窗/长窗 suppression、replay、traceability）并重跑 gate-report，"
+                                + "确认 dual-window 由 red 恢复后再恢复 controlled-apply。"
+                            ),
+                            "alerts": list(frontend_antiflap_burnin_alerts),
+                            "inputs": {
+                                "dual_window_status": str(dual_window.get("status", "unknown")),
+                                "samples_ready_ok": bool(dual_window_checks.get("samples_ready_ok", True)),
+                                "suppression_delta_ok": bool(
+                                    dual_window_checks.get("suppression_ratio_delta_ok", True)
+                                ),
+                                "replay_delta_ok": bool(
+                                    dual_window_checks.get("replay_missed_ratio_delta_ok", True)
+                                ),
+                                "traceability_delta_ok": bool(
+                                    dual_window_checks.get("traceability_ratio_delta_ok", True)
+                                ),
+                            },
+                        }
+                    )
+                elif controlled_apply_enabled and controlled_apply_reason in {
+                    "manual_approval_missing",
+                    "manual_approval_not_confirmed",
+                    "manual_approval_proposal_mismatch",
+                }:
+                    defects.append(
+                        {
+                            "category": "report",
+                            "code": "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_HARD_FAIL_PROMOTION_APPROVAL_PENDING",
+                            "message": (
+                                "frontend_snapshot hard-fail 晋升等待审批 manifest："
+                                + f"reason={controlled_apply_reason}, "
+                                + f"proposal_id={str(frontend_antiflap_burnin_controlled_apply_proposal.get('proposal_id', '') or 'N/A')}"
+                            ),
+                            "action": (
+                                "补齐/修正 approval manifest（approved=true, proposal_id 匹配）后重跑 gate-report。"
+                            ),
+                            "alerts": list(frontend_antiflap_burnin_alerts),
+                            "inputs": {
+                                "approval_manifest_path": str(
+                                    frontend_antiflap_burnin_controlled_apply.get(
+                                        "approval_manifest_path", ""
+                                    )
+                                ),
+                                "proposal_id": str(
+                                    frontend_antiflap_burnin_controlled_apply_proposal.get(
+                                        "proposal_id", ""
+                                    )
+                                ),
+                                "approval_found": bool(
+                                    frontend_antiflap_burnin_controlled_apply_approval.get(
+                                        "found", False
+                                    )
+                                ),
+                                "approval_confirmed": bool(
+                                    frontend_antiflap_burnin_controlled_apply_approval.get(
+                                        "approved", False
+                                    )
+                                ),
+                                "approval_matches_proposal": bool(
+                                    frontend_antiflap_burnin_controlled_apply_approval.get(
+                                        "matches_proposal", False
+                                    )
+                                ),
+                            },
+                        }
+                    )
+                else:
+                    defects.append(
+                        {
+                            "category": "report",
+                            "code": "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_HARD_FAIL_PROMOTION_READY",
+                            "message": (
+                                "frontend_snapshot antiflap burn-in 已稳定，可晋升 trend gate 到 hard-fail。"
+                            ),
+                            "action": (
+                                "在低峰窗口将 `ops_guard_loop_frontend_snapshot_trend_gate_hard_fail` 由 false 切到 true，"
+                                + "并保持 burn-in 观测至少 3 天。"
+                            ),
+                            "alerts": list(frontend_antiflap_burnin_alerts),
+                        }
+                    )
+        guard_loop_cadence_payload = (
+            guard_loop_cadence_non_apply
+            if isinstance(guard_loop_cadence_non_apply, dict)
+            else (
+                gate.get("guard_loop_cadence_non_apply", {})
+                if isinstance(gate.get("guard_loop_cadence_non_apply", {}), dict)
+                else {}
+            )
+        )
+        guard_loop_cadence_alerts = (
+            guard_loop_cadence_payload.get("alerts", [])
+            if isinstance(guard_loop_cadence_payload.get("alerts", []), list)
+            else []
+        )
+        guard_loop_cadence_metrics = (
+            guard_loop_cadence_payload.get("metrics", {})
+            if isinstance(guard_loop_cadence_payload.get("metrics", {}), dict)
+            else {}
+        )
+        guard_loop_cadence_checks = (
+            guard_loop_cadence_payload.get("checks", {})
+            if isinstance(guard_loop_cadence_payload.get("checks", {}), dict)
+            else {}
+        )
+        if not bool(checks.get("guard_loop_cadence_non_apply_ok", True)):
+            cadence_code = "GUARD_LOOP_CADENCE_NON_APPLY"
+            cadence_category = "execution"
+            cadence_message = "Guard-loop 检测到 cadence_due + non-apply 异常，重放升级链路失真。"
+            cadence_action = (
+                f"优先执行 `python3 {str(self.output_dir.parent / 'infra' / 'local' / 'guard_loop.py')} --root {str(self.output_dir.parent)} --config {str(self.output_dir.parent / 'config.yaml')} --dry-run-recovery` "
+                + f"与 `lie ops-report --date {as_of.isoformat()} --window-days 7`，确认 reason-codes 与 recovery escalation 对齐。"
+            )
+            if any(
+                x in guard_loop_cadence_alerts
+                for x in ("guard_loop_cadence_artifact_missing", "guard_loop_cadence_artifact_stale", "guard_loop_cadence_inactive")
+            ):
+                cadence_code = "GUARD_LOOP_CADENCE_NON_APPLY_STALE"
+                cadence_category = "report"
+                cadence_message = (
+                    "Guard-loop cadence_non_apply 工件缺失或过期："
+                    + f"age_hours={self._safe_float(guard_loop_cadence_metrics.get('source_age_hours', -1.0), -1.0):.2f}"
+                )
+                cadence_action = (
+                    "先恢复 guard_loop 定时执行与日志写盘，再补跑一次 dry-run guard loop，确认 cadence_non_apply 输出恢复。"
+                )
+            elif "guard_loop_cadence_replay_disabled" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_NON_APPLY_REPLAY_DISABLED"
+                cadence_category = "risk"
+                cadence_message = "cadence_due 非 apply 窗口已触发，但 replay 被禁用（no_pulse_exec/策略关闭）。"
+                cadence_action = (
+                    "解除 replay 禁用并执行一次强制 pulse backfill，再观察 next bucket 是否释放 non-apply streak。"
+                )
+            elif "guard_loop_cadence_pulse_semantic_failed" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PULSE_SEMANTIC"
+                cadence_category = "execution"
+                cadence_message = (
+                    "guard-loop pulse 语义校验失败："
+                    + f"status={str(guard_loop_cadence_metrics.get('pulse_status', 'unknown'))}, "
+                    + f"reason={str(guard_loop_cadence_metrics.get('pulse_reason', '') or 'N/A')}"
+                )
+                cadence_action = (
+                    "优先重跑 `lie run-halfhour-pulse` 并核验 slot_errors/run_results/weekly_guardrail 输出，"
+                    + "确认语义状态恢复后再恢复 cadence 链路。"
+                )
+            elif "guard_loop_cadence_gap_backfill_semantic_failed" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_GAP_BACKFILL_SEMANTIC"
+                cadence_category = "execution"
+                cadence_message = (
+                    "guard-loop gap_backfill 语义校验失败："
+                    + f"status={str(guard_loop_cadence_metrics.get('gap_backfill_status', 'unknown'))}, "
+                    + f"pulse_ok={bool(guard_loop_cadence_metrics.get('gap_backfill_semantic_pulse_ok', False))}, "
+                    + f"autorun_retro_ok={bool(guard_loop_cadence_metrics.get('gap_backfill_semantic_autorun_retro_ok', False))}"
+                )
+                cadence_action = (
+                    "补跑强制 pulse + `lie autorun-retro --window-days 7`，"
+                    + "修复 gap_backfill 语义失败根因后再恢复自动补齐。"
+                )
+            elif "guard_loop_cadence_pulse_semantic_drift" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PULSE_SEMANTIC_DRIFT"
+                cadence_category = "risk"
+                cadence_message = (
+                    "guard-loop pulse 语义失败率漂移超限："
+                    + f"{self._safe_float(guard_loop_cadence_metrics.get('pulse_semantic_drift_fail_ratio', 0.0), 0.0):.2%} > "
+                    + f"{self._safe_float((guard_loop_cadence_payload.get('thresholds', {}) or {}).get('ops_guard_loop_cadence_non_apply_semantic_drift_max_pulse_fail_ratio', 1.0), 1.0):.2%}"
+                )
+                cadence_action = (
+                    "检查最近窗口的 slot_error 与 weekly_guardrail error 聚集，"
+                    + "收敛 pulse 执行频次并修复语义失败分支后再恢复硬门禁。"
+                )
+            elif "guard_loop_cadence_gap_backfill_semantic_drift" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_GAP_BACKFILL_SEMANTIC_DRIFT"
+                cadence_category = "risk"
+                cadence_message = (
+                    "guard-loop gap_backfill 语义失败率漂移超限："
+                    + f"{self._safe_float(guard_loop_cadence_metrics.get('gap_backfill_semantic_drift_fail_ratio', 0.0), 0.0):.2%} > "
+                    + f"{self._safe_float((guard_loop_cadence_payload.get('thresholds', {}) or {}).get('ops_guard_loop_cadence_non_apply_semantic_drift_max_gap_backfill_fail_ratio', 1.0), 1.0):.2%}"
+                )
+                cadence_action = (
+                    "回看 gap_backfill 失败链路（pulse/autorun-retro），"
+                    + "优先修复自动补齐语义门禁后再恢复正常 cadence。"
+                )
+            elif "guard_loop_cadence_semantic_drift_insufficient_samples" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_SEMANTIC_DRIFT_SAMPLES"
+                cadence_category = "report"
+                cadence_message = (
+                    "guard-loop 语义漂移样本不足："
+                    + f"pulse={int(self._safe_float(guard_loop_cadence_metrics.get('pulse_semantic_drift_samples', 0), 0))}, "
+                    + f"backfill={int(self._safe_float(guard_loop_cadence_metrics.get('gap_backfill_semantic_drift_samples', 0), 0))}, "
+                    + f"min={int(self._safe_float(guard_loop_cadence_metrics.get('semantic_drift_min_samples', 0), 0))}"
+                )
+                cadence_action = "补齐 guard_loop_history 窗口样本后再启用语义漂移硬门禁。"
+            elif "guard_loop_cadence_non_apply_heavy" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_NON_APPLY_HEAVY"
+                cadence_category = "risk"
+                cadence_message = (
+                    "cadence_due non-apply 已进入 heavy 区间："
+                    + f"streak={int(self._safe_float(guard_loop_cadence_metrics.get('streak_windows', 0), 0))}"
+                )
+                cadence_action = (
+                    "立即执行强制 pulse backfill + stable-replay，冻结 apply promotion，待 streak 清零后再恢复 cadence。"
+                )
+            elif "guard_loop_cadence_non_apply_light" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_NON_APPLY_LIGHT"
+                cadence_category = "execution"
+                cadence_message = (
+                    "cadence_due non-apply 已进入 light 区间："
+                    + f"streak={int(self._safe_float(guard_loop_cadence_metrics.get('streak_windows', 0), 0))}"
+                )
+                cadence_action = "优先补跑当前时段 pulse 并核验 compaction apply 证据，避免升级为 heavy。"
+            elif "guard_loop_cadence_trend_preset_untraceable" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PRESET_TRACEABILITY"
+                cadence_category = "execution"
+                cadence_message = "cadence lift trend preset 触发后缺少可追溯 reason-code 证据。"
+                cadence_action = (
+                    "核验 guard_loop cadence_non_apply.trend_preset 与 recovery.reason_codes 写盘一致性，"
+                    + "补齐 preset reason-code 后重跑 guard loop 与 gate-report。"
+                )
+            elif "guard_loop_cadence_trend_preset_recovery_link_missing" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PRESET_RECOVERY_LINK"
+                cadence_category = "risk"
+                cadence_message = "cadence lift trend preset 已触发，但 recovery 升级链路未闭环。"
+                cadence_action = (
+                    "检查 trend_preset due_light/due_heavy 与 recovery reason-codes 映射，"
+                    + "确认 heavy/light replay 命令落盘后再恢复自动升级。"
+                )
+            elif "guard_loop_cadence_trend_preset_retro_source_missing" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PRESET_RETRO_SOURCE"
+                cadence_category = "report"
+                cadence_message = "cadence lift trend preset 触发但缺少 retro 来源工件。"
+                cadence_action = "先补跑 `lie autorun-retro --window-days 7` 生成趋势对比基线，再恢复 preset 门禁。"
+            elif "guard_loop_cadence_trend_preset_drift_artifact_missing" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PRESET_DRIFT_ARTIFACT"
+                cadence_category = "report"
+                cadence_message = "cadence lift trend preset 漂移审计工件缺失或写盘失败。"
+                cadence_action = (
+                    "检查 guard_loop preset drift artifact 写盘权限与保留策略，"
+                    + "补跑 guard_loop dry-run 后确认 `*_guard_loop_preset_drift.{json,md}` 可生成。"
+                )
+            elif "guard_loop_cadence_trend_preset_drift_status_bad" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PRESET_DRIFT_STATUS"
+                cadence_category = "risk"
+                cadence_message = "cadence lift trend preset 漂移审计状态异常（warn/critical）。"
+                cadence_action = (
+                    "优先审查 preset recovery-link 与 retro 覆盖率，"
+                    + "再小步调整 preset light/heavy 阈值并观察 2-3 个窗口。"
+                )
+            elif "guard_loop_cadence_trend_preset_drift_trendline_bad" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PRESET_DRIFT_TRENDLINE"
+                cadence_category = "risk"
+                cadence_message = "cadence lift trend preset 近期窗口相对前序窗口恶化，趋势护栏触发。"
+                cadence_action = (
+                    "暂停阈值调整建议下发，先修复 recovery-link/retro 下滑原因，"
+                    + "待 trendline 连续回到稳定区间后再恢复阈值调整。"
+                )
+            elif "guard_loop_cadence_trend_preset_drift_auto_tune_unbounded" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PRESET_DRIFT_AUTOTUNE_BOUNDS"
+                cadence_category = "risk"
+                cadence_message = "cadence lift trend preset 漂移调参建议越界或 light/heavy 约束冲突。"
+                cadence_action = (
+                    "冻结自动调参建议下发，先修复 auto_tune bounds/gap 参数，"
+                    + "确认 suggested_thresholds 在步长与层级边界内后再恢复。"
+                )
+            elif "guard_loop_cadence_trend_preset_drift_auto_tune_handoff_invalid" in guard_loop_cadence_alerts:
+                cadence_code = "GUARD_LOOP_CADENCE_PRESET_DRIFT_AUTOTUNE_HANDOFF"
+                cadence_category = "execution"
+                cadence_message = "cadence lift trend preset 自动调参 handoff 合约缺失或字段不完整。"
+                cadence_action = (
+                    "校验 drift auto_tune.handoff 的 proposal_only 合约字段（proposal_id/apply_gate/reason），"
+                    + "确保只输出建议并通过 cooldown/anti-flap 门控后再下发。"
+                )
+            if any(
+                x in guard_loop_cadence_alerts
+                for x in ("guard_loop_cadence_reason_codes_untraceable", "guard_loop_cadence_recovery_escalation_missing")
+            ):
+                cadence_code = "GUARD_LOOP_CADENCE_NON_APPLY_TRACEABILITY"
+                cadence_category = "execution"
+                cadence_message = "guard-loop reason-codes 与 recovery escalation 链路不一致，追溯性受损。"
+                cadence_action = "修复 cadence_non_apply/recovery reason-codes 写盘一致性后重跑 guard loop 与 gate-report。"
+
+            defects.append(
+                {
+                    "category": cadence_category,
+                    "code": cadence_code,
+                    "message": cadence_message,
+                    "action": cadence_action,
+                    "alerts": list(guard_loop_cadence_alerts),
+                    "reason_codes": list(guard_loop_cadence_metrics.get("cadence_reason_codes", [])),
+                    "recovery_reason_codes": list(guard_loop_cadence_metrics.get("recovery_reason_codes", [])),
+                    "auto_remediation": {
+                        "template_id": "guard_loop_cadence_non_apply_recover",
+                        "commands": [
+                            f"python3 {str(self.output_dir.parent / 'infra' / 'local' / 'guard_loop.py')} --root {str(self.output_dir.parent)} --config {str(self.output_dir.parent / 'config.yaml')} --dry-run-recovery",
+                            f"lie run-halfhour-pulse --date {as_of.isoformat()} --force --max-slot-runs 8",
+                            f"lie ops-report --date {as_of.isoformat()} --window-days 7",
+                        ],
+                        "config_patch": {
+                            "ops_guard_loop_cadence_non_apply_gate_hard_fail": True,
+                            "ops_guard_loop_cadence_non_apply_require_reason_codes": True,
+                            "ops_guard_loop_cadence_non_apply_require_recovery_escalation": True,
+                        },
+                        "inputs": {
+                            "alerts": list(guard_loop_cadence_alerts),
+                            "streak_windows": int(self._safe_float(guard_loop_cadence_metrics.get("streak_windows", 0), 0)),
+                            "due_light": bool(guard_loop_cadence_metrics.get("due_light", False)),
+                            "due_heavy": bool(guard_loop_cadence_metrics.get("due_heavy", False)),
+                            "replay_allowed": bool(guard_loop_cadence_metrics.get("replay_allowed", True)),
+                            "pulse_status": str(guard_loop_cadence_metrics.get("pulse_status", "unknown")),
+                            "pulse_reason": str(guard_loop_cadence_metrics.get("pulse_reason", "")),
+                            "pulse_semantic_ok": bool(
+                                guard_loop_cadence_metrics.get("pulse_semantic_ok", True)
+                            ),
+                            "gap_backfill_status": str(
+                                guard_loop_cadence_metrics.get("gap_backfill_status", "unknown")
+                            ),
+                            "gap_backfill_semantic_ok": bool(
+                                guard_loop_cadence_metrics.get("gap_backfill_semantic_ok", True)
+                            ),
+                            "pulse_semantic_drift_fail_ratio": float(
+                                self._safe_float(
+                                    guard_loop_cadence_metrics.get("pulse_semantic_drift_fail_ratio", 0.0),
+                                    0.0,
+                                )
+                            ),
+                            "gap_backfill_semantic_drift_fail_ratio": float(
+                                self._safe_float(
+                                    guard_loop_cadence_metrics.get(
+                                        "gap_backfill_semantic_drift_fail_ratio",
+                                        0.0,
+                                    ),
+                                    0.0,
+                                )
+                            ),
+                            "trend_preset_level": str(
+                                guard_loop_cadence_metrics.get("trend_preset_suggested_level", "none")
+                            ),
+                            "trend_preset_due_light": bool(
+                                guard_loop_cadence_metrics.get("trend_preset_due_light", False)
+                            ),
+                            "trend_preset_due_heavy": bool(
+                                guard_loop_cadence_metrics.get("trend_preset_due_heavy", False)
+                            ),
+                            "trend_preset_reason_codes": list(
+                                guard_loop_cadence_metrics.get("trend_preset_reason_codes", [])
+                            ),
+                            "trend_preset_drift_status": str(
+                                guard_loop_cadence_metrics.get("trend_preset_drift_status", "unknown")
+                            ),
+                            "trend_preset_drift_alerts": list(
+                                guard_loop_cadence_metrics.get("trend_preset_drift_alerts", [])
+                            ),
+                            "trend_preset_drift_artifact_json": str(
+                                guard_loop_cadence_metrics.get("trend_preset_drift_artifact_json", "")
+                            ),
+                        },
+                    },
+                }
+            )
+        guard_loop_cadence_lift_trend_payload = (
+            guard_loop_cadence_non_apply_lift_trend
+            if isinstance(guard_loop_cadence_non_apply_lift_trend, dict)
+            else (
+                gate.get("guard_loop_cadence_non_apply_lift_trend", {})
+                if isinstance(gate.get("guard_loop_cadence_non_apply_lift_trend", {}), dict)
+                else {}
+            )
+        )
+        guard_loop_cadence_lift_trend_checks = (
+            guard_loop_cadence_lift_trend_payload.get("checks", {})
+            if isinstance(guard_loop_cadence_lift_trend_payload.get("checks", {}), dict)
+            else {}
+        )
+        guard_loop_cadence_lift_trend_alerts = (
+            guard_loop_cadence_lift_trend_payload.get("alerts", [])
+            if isinstance(guard_loop_cadence_lift_trend_payload.get("alerts", []), list)
+            else []
+        )
+        guard_loop_cadence_lift_trend_metrics = (
+            guard_loop_cadence_lift_trend_payload.get("metrics", {})
+            if isinstance(guard_loop_cadence_lift_trend_payload.get("metrics", {}), dict)
+            else {}
+        )
+        if (
+            not bool(checks.get("guard_loop_cadence_non_apply_lift_trend_ok", True))
+            or bool(guard_loop_cadence_lift_trend_payload.get("monitor_failed", False))
+        ):
+            lift_trend_code = "GUARD_LOOP_CADENCE_LIFT_TREND"
+            lift_trend_category = "execution"
+            lift_trend_message = (
+                "Guard-loop cadence rollback-lift 趋势异常，lift 应用/冷却阻断分布偏离预期。"
+            )
+            lift_trend_action = (
+                f"优先执行 `lie gate-report --date {as_of.isoformat()}` 与 `lie ops-report --date {as_of.isoformat()} --window-days 7`，"
+                + "核验 release_decision_snapshot 中 cadence lift 记录链路。"
+            )
+            if not bool(guard_loop_cadence_lift_trend_checks.get("min_samples_ok", True)):
+                lift_trend_code = "GUARD_LOOP_CADENCE_LIFT_TREND_INSUFFICIENT_SAMPLES"
+                lift_trend_category = "report"
+                lift_trend_message = (
+                    "Guard-loop cadence rollback-lift 趋势样本不足："
+                    + f"samples={int(self._safe_float(guard_loop_cadence_lift_trend_payload.get('samples', 0), 0))}, "
+                    + f"min={int(self._safe_float(guard_loop_cadence_lift_trend_payload.get('min_samples', 0), 0))}"
+                )
+                lift_trend_action = "先补齐 release_decision_snapshot 历史工件，再评估是否开启 lift_trend gate_hard_fail。"
+            elif not bool(guard_loop_cadence_lift_trend_checks.get("applied_rate_ok", True)):
+                lift_trend_code = "GUARD_LOOP_CADENCE_LIFT_TREND_APPLIED_RATE"
+                lift_trend_category = "risk"
+                lift_trend_message = (
+                    "Guard-loop cadence rollback-lift applied_rate 偏低："
+                    + f"{self._safe_float(guard_loop_cadence_lift_trend_metrics.get('applied_rate', 0.0), 0.0):.2%}"
+                )
+                lift_trend_action = "检查 cadence_non_apply lift 触发阈值与评分链，避免风险信号长期不触发 lift。"
+            elif not bool(guard_loop_cadence_lift_trend_checks.get("cooldown_block_rate_ok", True)):
+                lift_trend_code = "GUARD_LOOP_CADENCE_LIFT_TREND_COOLDOWN_BLOCK"
+                lift_trend_category = "execution"
+                lift_trend_message = (
+                    "Guard-loop cadence rollback-lift cooldown_block_rate 偏高："
+                    + f"{self._safe_float(guard_loop_cadence_lift_trend_metrics.get('cooldown_block_rate', 0.0), 0.0):.2%}"
+                )
+                lift_trend_action = "复核 cooldown_days 与 allow_upgrade_during_cooldown 组合，避免 lift 长期被冷却阻断。"
+
+            defects.append(
+                {
+                    "category": lift_trend_category,
+                    "code": lift_trend_code,
+                    "message": lift_trend_message,
+                    "action": lift_trend_action,
+                    "alerts": list(guard_loop_cadence_lift_trend_alerts),
                 }
             )
         if int(tests.get("returncode", 0)) != 0:
@@ -6638,6 +20716,365 @@ class ReleaseOrchestrator:
                         "action": "排查窗口数据缺失与模式路由逻辑，修复后全量复算 stress matrix。",
                     }
                 )
+        stress_exec_payload = (
+            stress_matrix_execution_friction if isinstance(stress_matrix_execution_friction, dict) else {}
+        )
+        stress_exec_active = bool(stress_exec_payload.get("active", False))
+        stress_exec_checks = (
+            stress_exec_payload.get("checks", {})
+            if isinstance(stress_exec_payload.get("checks", {}), dict)
+            else {}
+        )
+        stress_exec_metrics = (
+            stress_exec_payload.get("metrics", {})
+            if isinstance(stress_exec_payload.get("metrics", {}), dict)
+            else {}
+        )
+        stress_exec_thresholds = (
+            stress_exec_payload.get("thresholds", {})
+            if isinstance(stress_exec_payload.get("thresholds", {}), dict)
+            else {}
+        )
+        stress_exec_trendline = (
+            stress_exec_payload.get("trendline", {})
+            if isinstance(stress_exec_payload.get("trendline", {}), dict)
+            else {}
+        )
+        stress_exec_trendline_checks = (
+            stress_exec_trendline.get("checks", {})
+            if isinstance(stress_exec_trendline.get("checks", {}), dict)
+            else {}
+        )
+        stress_exec_trendline_alerts = (
+            stress_exec_trendline.get("alerts", [])
+            if isinstance(stress_exec_trendline.get("alerts", []), list)
+            else []
+        )
+        stress_exec_trendline_deltas = (
+            stress_exec_trendline.get("deltas", {})
+            if isinstance(stress_exec_trendline.get("deltas", {}), dict)
+            else {}
+        )
+        stress_exec_trendline_thresholds = (
+            stress_exec_trendline.get("thresholds", {})
+            if isinstance(stress_exec_trendline.get("thresholds", {}), dict)
+            else {}
+        )
+        stress_exec_trendline_auto_tune = (
+            stress_exec_trendline.get("auto_tune", {})
+            if isinstance(stress_exec_trendline.get("auto_tune", {}), dict)
+            else {}
+        )
+        stress_exec_trendline_controlled_apply = (
+            stress_exec_trendline_auto_tune.get("controlled_apply", {})
+            if isinstance(stress_exec_trendline_auto_tune.get("controlled_apply", {}), dict)
+            else {}
+        )
+        stress_exec_trendline_controlled_apply_ledger = (
+            stress_exec_trendline_controlled_apply.get("ledger", {})
+            if isinstance(stress_exec_trendline_controlled_apply.get("ledger", {}), dict)
+            else {}
+        )
+        if stress_exec_active:
+            if not bool(stress_exec_checks.get("annual_drop_ok", True)):
+                defects.append(
+                    {
+                        "category": "model",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_ANNUAL_DROP",
+                        "message": (
+                            "执行摩擦年化下行超限："
+                            + f"{self._safe_float(stress_exec_metrics.get('annual_drop', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(stress_exec_thresholds.get('mode_stress_execution_friction_max_annual_drop', 1.0), 1.0):.2%}"
+                        ),
+                        "action": "收敛入场阈值与持仓时长，降低对高摩擦成交的敏感度后重测。",
+                    }
+                )
+            if not bool(stress_exec_checks.get("drawdown_rise_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_DRAWDOWN",
+                        "message": (
+                            "执行摩擦回撤抬升超限："
+                            + f"{self._safe_float(stress_exec_metrics.get('drawdown_rise', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(stress_exec_thresholds.get('mode_stress_execution_friction_max_drawdown_rise', 1.0), 1.0):.2%}"
+                        ),
+                        "action": "提高保护仓比重并加严波动熔断阈值，优先保证尾部约束。",
+                    }
+                )
+            if not bool(stress_exec_checks.get("profit_factor_ratio_ok", True)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_PROFIT_FACTOR",
+                        "message": (
+                            "执行摩擦盈亏比保真度不足："
+                            + f"{self._safe_float(stress_exec_metrics.get('min_profit_factor_ratio', 0.0), 0.0):.3f} < "
+                            + f"{self._safe_float(stress_exec_thresholds.get('mode_stress_execution_friction_min_profit_factor_ratio', 0.0), 0.0):.3f}"
+                        ),
+                        "action": "复核成本模型与滑点假设，必要时下调模式 trade budget。",
+                    }
+                )
+            if not bool(stress_exec_checks.get("fail_ratio_ok", True)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_FAIL_RATIO",
+                        "message": (
+                            "执行摩擦失败率过高："
+                            + f"{self._safe_float(stress_exec_metrics.get('max_fail_ratio', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(stress_exec_thresholds.get('mode_stress_execution_friction_max_fail_ratio', 1.0), 1.0):.2%}"
+                        ),
+                        "action": "优先排查流动性不足窗口与成交延迟路径，再执行压力矩阵复算。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("trendline_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_TRENDLINE",
+                        "message": (
+                            "执行摩擦 trendline 漂移异常："
+                            + f"status={str(stress_exec_trendline.get('status', 'unknown'))}, "
+                            + f"samples={int(self._safe_float(stress_exec_trendline.get('samples', 0), 0))}"
+                        ),
+                        "action": "按 recent/prior 漂移拆解执行成本退化根因，并在修复后回放 stress matrix 连续窗口。",
+                        "alerts": list(stress_exec_trendline_alerts),
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("source_staleness_ok", True)):
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_TRENDLINE_STALE",
+                        "message": (
+                            "执行摩擦 trendline 源数据过期："
+                            + f"age_days={int(self._safe_float(stress_exec_trendline.get('source_age_days', 0), 0))} > "
+                            + f"{int(self._safe_float(stress_exec_trendline_thresholds.get('ops_stress_matrix_execution_friction_trendline_max_staleness_days', 0), 0))}"
+                        ),
+                        "action": "先补齐最新 stress matrix 产物，再恢复 trendline 门禁判定。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("auto_tune_bounded_ok", True)):
+                defects.append(
+                    {
+                        "category": "model",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_TRENDLINE_AUTOTUNE_BOUNDS",
+                        "message": "执行摩擦 trendline 自动阈值调整超出步长边界。",
+                        "action": "收紧 auto-tune step_max 或回退到静态阈值，避免阈值漂移失控。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_autotune_proposal_write_failed" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_TRENDLINE_AUTOTUNE_PROPOSAL_ARTIFACT",
+                        "message": "执行摩擦 trendline 自动调参提案工件写盘失败。",
+                        "action": "检查 review 目录写权限后重跑 gate-report，确保 proposal json/md 可追溯。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_stale" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_STALE",
+                        "message": "执行摩擦 trendline 提案超出受控应用时间窗，未应用建议阈值。",
+                        "action": "在窗口内重新审批最新 proposal，或放宽 controlled_apply_max_apply_window_days 后重跑 gate。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_approval_missing" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_APPROVAL",
+                        "message": "执行摩擦 trendline 受控应用缺少人工审批文件，阈值未生效。",
+                        "action": "写入 approval manifest（approved/proposal_id/approved_at）后重跑 gate。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_approval_mismatch" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_APPROVAL_MISMATCH",
+                        "message": "执行摩擦 trendline 审批 proposal_id 与当前提案不一致。",
+                        "action": "更新审批文件中的 proposal_id 至当前 proposal 并确认 approved=true。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_duplicate" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_DUPLICATE",
+                        "message": "执行摩擦 trendline 提案已在 ledger 中应用过，本次被反重复策略阻断。",
+                        "action": "如需再应用，请先生成新 proposal（参数变化）并重新审批，避免重复触发同一提案。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_ledger_read_failed" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_LEDGER_READ",
+                        "message": "执行摩擦 trendline 受控应用 ledger 读取失败，无法校验反重复约束。",
+                        "action": "修复 ledger 文件结构或权限后重跑 gate，确保 apply 历史可加载。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_ledger_write_failed" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_LEDGER_WRITE",
+                        "message": "执行摩擦 trendline 受控应用 ledger 写入失败，应用结果未持久化。",
+                        "action": "修复 ledger 写盘路径后重跑 gate，避免无审计链条的阈值应用。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_ledger_stale_detected" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_LEDGER_STALE",
+                        "message": (
+                            "执行摩擦 controlled-apply ledger 检出陈旧应用记录："
+                            + f"window_stale_ratio={self._safe_float(stress_exec_trendline_controlled_apply_ledger.get('window_stale_ratio', 0.0), 0.0):.2%}"
+                        ),
+                        "action": "复核审批时效与 apply 窗口策略，清理历史异常记录并收紧窗口。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_ledger_stale_ratio_high" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_LEDGER_STALE_RATIO",
+                        "message": (
+                            "执行摩擦 controlled-apply ledger stale_ratio 超阈值："
+                            + f"{self._safe_float(stress_exec_trendline_controlled_apply_ledger.get('window_stale_ratio', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(stress_exec_trendline_thresholds.get('ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_window_stale_ratio_max', 0.0), 0.0):.2%}"
+                        ),
+                        "action": "压缩审批-应用时延并复核 apply window，防止阈值提案长时间滞后。",
+                    }
+                )
+            if "stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_high" in set(
+                stress_exec_trendline_alerts
+            ):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_LEDGER_DUPLICATE_RATE",
+                        "message": (
+                            "执行摩擦 controlled-apply duplicate-block rate 超阈值："
+                            + f"{self._safe_float(stress_exec_trendline_controlled_apply_ledger.get('duplicate_block_rate', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(stress_exec_trendline_thresholds.get('ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_max', 0.0), 0.0):.2%}"
+                        ),
+                        "action": "检查重复审批/重复触发链路，确保每次 apply 对应唯一且增量的 proposal。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("controlled_apply_duplicate_ok", True)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_DUPLICATE_CHECK",
+                        "message": (
+                            "执行摩擦 controlled-apply 反重复检查失败："
+                            + f"proposal_id={str(stress_exec_trendline_controlled_apply.get('proposal_id', '') or 'N/A')}"
+                        ),
+                        "action": "生成新提案或回滚误用审批，确保同一 proposal 不被重复应用。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("controlled_apply_ledger_write_ok", True)):
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_LEDGER_IO",
+                        "message": (
+                            "执行摩擦 controlled-apply ledger I/O 异常："
+                            + f"path={str(stress_exec_trendline_controlled_apply_ledger.get('path', '') or 'N/A')}, "
+                            + f"error={str(stress_exec_trendline_controlled_apply_ledger.get('write_error', '') or 'N/A')}"
+                        ),
+                        "action": "修复 ledger 读写链路并复跑 gate，恢复 apply 审计可追溯性。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("controlled_apply_ledger_drift_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_CONTROLLED_APPLY_LEDGER_DRIFT_GATE",
+                        "message": (
+                            "执行摩擦 controlled-apply ledger drift 触发硬门禁："
+                            + f"stale_ratio={self._safe_float(stress_exec_trendline_controlled_apply_ledger.get('window_stale_ratio', 0.0), 0.0):.2%}, "
+                            + f"duplicate_block_rate={self._safe_float(stress_exec_trendline_controlled_apply_ledger.get('duplicate_block_rate', 0.0), 0.0):.2%}"
+                        ),
+                        "action": "先修复审批时效与重复触发漂移，再恢复 hard-fail 门禁。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("annual_drop_delta_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_TRENDLINE_ANNUAL_DROP",
+                        "message": (
+                            "执行摩擦 annual_drop trendline 上升超限："
+                            + f"{self._safe_float(stress_exec_trendline_deltas.get('annual_drop_rise', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(stress_exec_trendline_thresholds.get('ops_stress_matrix_execution_friction_trendline_max_annual_drop_rise', 1.0), 1.0):.2%}"
+                        ),
+                        "action": "优先降低高摩擦环境下的交易频次与持仓时长，重新评估年化损耗曲线。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("drawdown_rise_delta_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_TRENDLINE_DRAWDOWN",
+                        "message": (
+                            "执行摩擦 drawdown_rise trendline 上升超限："
+                            + f"{self._safe_float(stress_exec_trendline_deltas.get('drawdown_rise_delta', 0.0), 0.0):.2%} > "
+                            + f"{self._safe_float(stress_exec_trendline_thresholds.get('ops_stress_matrix_execution_friction_trendline_max_drawdown_rise', 1.0), 1.0):.2%}"
+                        ),
+                        "action": "提高防御仓约束并加严尾部保护触发，避免回撤惯性继续放大。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("profit_factor_ratio_delta_ok", True)):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_TRENDLINE_PROFIT_FACTOR",
+                        "message": (
+                            "执行摩擦 PF-ratio trendline 下行超限："
+                            + f"{self._safe_float(stress_exec_trendline_deltas.get('profit_factor_ratio_drop', 0.0), 0.0):.3f} > "
+                            + f"{self._safe_float(stress_exec_trendline_thresholds.get('ops_stress_matrix_execution_friction_trendline_max_profit_factor_ratio_drop', 1.0), 1.0):.3f}"
+                        ),
+                        "action": "收敛滑点/延迟敏感策略权重并校正成交假设，恢复 PF 保真度后再放开仓位。",
+                    }
+                )
+            if not bool(stress_exec_trendline_checks.get("samples_ready_ok", True)):
+                defects.append(
+                    {
+                        "category": "report",
+                        "code": "STRESS_MATRIX_EXECUTION_FRICTION_TRENDLINE_SAMPLES",
+                        "message": (
+                            "执行摩擦 trendline 样本不足："
+                            + f"{int(self._safe_float(stress_exec_trendline.get('samples', 0), 0))} < "
+                            + f"{int(self._safe_float(stress_exec_trendline.get('required_runs', 0), 0))}"
+                        ),
+                        "action": "补齐 mode_stress_matrix 历史样本后再启用 trendline 硬门禁。",
+                    }
+                )
 
         stress_history_payload = (
             gate.get("stress_autorun_history", {})
@@ -6859,6 +21296,11 @@ class ReleaseOrchestrator:
             if isinstance(reconcile_artifacts.get("row_diff", {}), dict)
             else {}
         )
+        reconcile_restore_verify_artifact = (
+            reconcile_artifacts.get("executed_dedup_restore_verify", {})
+            if isinstance(reconcile_artifacts.get("executed_dedup_restore_verify", {}), dict)
+            else {}
+        )
         if reconcile_active:
             if not bool(reconcile_checks.get("missing_ratio_ok", True)):
                 defects.append(
@@ -6889,6 +21331,38 @@ class ReleaseOrchestrator:
                         "code": "RECONCILE_CLOSED_COUNT",
                         "message": "平仓笔数对账漂移超限",
                         "action": "核查 executed_plans 回写条件与 manifest 统计口径。",
+                    }
+                )
+            if "reconcile_executed_dedup_drift" in set(reconcile_payload.get("alerts", [])):
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "RECONCILE_EXECUTED_DEDUP_DRIFT",
+                        "message": (
+                            "executed_plans 历史重复行比例偏高："
+                            + f"pruned_ratio={self._safe_float(reconcile_metrics.get('executed_closed_dedup_pruned_ratio', 0.0), 0.0):.2%}, "
+                            + f"days_ratio={self._safe_float(reconcile_metrics.get('executed_closed_dedup_days_ratio', 0.0), 0.0):.2%}"
+                        ),
+                        "action": "执行历史去重清理（按 date 分批重建 executed_plans）并重跑 reconcile/gate。",
+                    }
+                )
+            if "reconcile_executed_dedup_restore_unverified" in set(reconcile_payload.get("alerts", [])):
+                restore_path = str(reconcile_restore_verify_artifact.get("path", "")).strip()
+                restore_hint = f"最近验证工件：{restore_path}。" if restore_path else ""
+                defects.append(
+                    {
+                        "category": "execution",
+                        "code": "RECONCILE_EXECUTED_DEDUP_RESTORE_VERIFY",
+                        "message": (
+                            "executed_plans 去重后恢复链路未验证或验证失败："
+                            + f"status={reconcile_restore_verify_artifact.get('status', 'missing')}, "
+                            + f"reason={reconcile_restore_verify_artifact.get('reason', 'n/a')}"
+                        ),
+                        "action": (
+                            "先执行 lie verify-compaction-restore（针对最新或指定 run_id）确认 rollback 可恢复，"
+                            + "再重跑 reconcile/gate。"
+                            + restore_hint
+                        ),
                     }
                 )
             if not bool(reconcile_checks.get("closed_pnl_gap_ok", True)):
@@ -7041,6 +21515,17 @@ class ReleaseOrchestrator:
             if isinstance(artifact_governance_payload.get("metrics", {}), dict)
             else {}
         )
+        artifact_governance_baseline = (
+            artifact_governance_payload.get("baseline", {})
+            if isinstance(artifact_governance_payload.get("baseline", {}), dict)
+            else {}
+        )
+        artifact_governance_baseline_snapshot = (
+            artifact_governance_baseline.get("snapshot", {})
+            if isinstance(artifact_governance_baseline.get("snapshot", {}), dict)
+            else {}
+        )
+        baseline_source = str(artifact_governance_baseline.get("source", "")).strip().lower()
         if artifact_governance_active:
             if not bool(artifact_governance_checks.get("required_profiles_present_ok", True)):
                 defects.append(
@@ -7070,12 +21555,19 @@ class ReleaseOrchestrator:
                     }
                 )
             if int(artifact_governance_metrics.get("baseline_drift_profiles", 0)) > 0:
+                baseline_action = "核对 ops_artifact_governance_profile_baseline 与 profiles 声明，统一后重跑 gate/ops。"
+                if baseline_source == "snapshot":
+                    baseline_path = str(artifact_governance_baseline_snapshot.get("path", "")).strip()
+                    if baseline_path:
+                        baseline_action = (
+                            f"核对基线快照 `{baseline_path}` 与当前 profiles 声明；必要时回滚到 rollback_anchor 后重跑 gate/ops。"
+                        )
                 defects.append(
                     {
                         "category": "report",
                         "code": "ARTIFACT_GOVERNANCE_BASELINE_DRIFT",
                         "message": "Artifact governance profile 与基线配置不一致（baseline freeze 漂移）。",
-                        "action": "核对 ops_artifact_governance_profile_baseline 与 profiles 声明，统一后重跑 gate/ops。",
+                        "action": baseline_action,
                     }
                 )
             if not bool(artifact_governance_checks.get("strict_mode_ok", True)):
@@ -7089,6 +21581,9 @@ class ReleaseOrchestrator:
                 )
 
         rollback_payload = rollback_recommendation if isinstance(rollback_recommendation, dict) else {}
+        cadence_lift_snapshot = self._cadence_non_apply_lift_snapshot(
+            rollback_recommendation=rollback_payload
+        )
         rollback_level = str(rollback_payload.get("level", "none")).strip().lower() or "none"
         rollback_active = bool(rollback_payload.get("active", False))
         rollback_anchor_ready = bool(rollback_payload.get("anchor_ready", True))
@@ -7153,6 +21648,11 @@ class ReleaseOrchestrator:
                 f"优先修复 mode_drift 缺陷并重跑 lie ops-report --date {as_of.isoformat()} --window-days 7",
                 "确认 live/backtest 口径一致后再放开模式自适应更新",
             ] + [x for x in next_actions if x not in default_actions] + default_actions
+        if any(str(x.get("code", "")).startswith("STRESS_MATRIX_") for x in defects):
+            next_actions = [
+                f"优先修复 stress matrix 缺陷并重跑 lie stress-matrix --date {as_of.isoformat()}",
+                "核验执行摩擦阈值与窗口失败率收敛后，再执行 lie gate-report 与 review-loop。",
+            ] + [x for x in next_actions if x not in default_actions] + default_actions
         if any(str(x.get("code", "")).startswith("RECONCILE_") for x in defects):
             next_actions = [
                 f"优先修复 reconcile_drift 缺陷并重跑 lie ops-report --date {as_of.isoformat()} --window-days 7",
@@ -7167,6 +21667,36 @@ class ReleaseOrchestrator:
             next_actions = [
                 f"优先执行回滚建议并重跑 lie gate-report --date {as_of.isoformat()}",
                 "回滚后先局部回放，再执行 lie test-all 与 review-loop。",
+            ] + [x for x in next_actions if x not in default_actions] + default_actions
+        if any(str(x.get("code", "")).startswith("GUARD_LOOP_CADENCE_LIFT_") for x in defects):
+            next_actions = [
+                f"优先修复 guard-loop cadence lift trend 漂移并重跑 lie gate-report --date {as_of.isoformat()}",
+                "确认 applied_rate/cooldown_block_rate 收敛后，再执行 lie ops-report 与 review-loop。",
+            ] + [x for x in next_actions if x not in default_actions] + default_actions
+        if any(
+            str(x.get("code", "")).startswith(
+                "GUARD_LOOP_FRONTEND_SNAPSHOT_TREND_HARD_FAIL_PROMOTION_DUAL_WINDOW_"
+            )
+            for x in defects
+        ):
+            next_actions = [
+                f"优先修复 frontend_snapshot dual-window drift 并重跑 lie gate-report --date {as_of.isoformat()}",
+                "校正 dual-window suppression/replay/traceability delta 后，再恢复 hard-fail controlled-apply 晋升。",
+            ] + [x for x in next_actions if x not in default_actions] + default_actions
+        if any(
+            str(x.get("code", "")).startswith(
+                "GUARD_LOOP_FRONTEND_SNAPSHOT_HARD_FAIL_APPLY_ROUTE_AUDIT"
+            )
+            for x in defects
+        ):
+            next_actions = [
+                f"优先修复 frontend_snapshot hard-fail apply route 漂移并重跑 lie gate-report --date {as_of.isoformat()}",
+                "校正 apply/non-apply/rollback-guard 的周趋势分布并验证 trendline delta 阈值后，再恢复 controlled-apply。",
+            ] + [x for x in next_actions if x not in default_actions] + default_actions
+        if any(str(x.get("code", "")).startswith("GUARD_LOOP_CADENCE_") for x in defects):
+            next_actions = [
+                f"优先修复 guard-loop cadence_non_apply 漂移并重跑 lie gate-report --date {as_of.isoformat()}",
+                "确认 cadence_due non-apply streak 收敛后，再执行 lie ops-report 与 review-loop。",
             ] + [x for x in next_actions if x not in default_actions] + default_actions
         if any(str(x.get("code", "")).startswith("TEST_TIMEOUT") for x in defects):
             next_actions = [
@@ -7186,9 +21716,13 @@ class ReleaseOrchestrator:
             "slot_anomaly": slot_payload,
             "mode_drift": drift_payload,
             "stress_matrix_trend": stress_payload,
+            "stress_matrix_execution_friction": stress_exec_payload,
             "reconcile_drift": reconcile_payload,
+            "guard_loop_cadence_non_apply": guard_loop_cadence_payload,
+            "guard_loop_cadence_non_apply_lift_trend": guard_loop_cadence_lift_trend_payload,
             "artifact_governance": artifact_governance_payload,
             "rollback_recommendation": rollback_payload,
+            "cadence_non_apply_lift": cadence_lift_snapshot,
             "next_actions": next_actions,
         }
 
@@ -7234,16 +21768,46 @@ class ReleaseOrchestrator:
                 "- Stress Matrix 趋势: "
                 + f"active={stress_payload.get('active', False)}, alerts={stress_payload.get('alerts', [])}"
             )
+        if stress_exec_payload:
+            lines.append(
+                "- Stress Matrix 执行摩擦: "
+                + f"active={stress_exec_payload.get('active', False)}, alerts={stress_exec_payload.get('alerts', [])}, "
+                + f"status={stress_exec_payload.get('status', 'inactive')}, gate_ok={stress_exec_payload.get('gate_ok', True)}"
+            )
         if reconcile_payload:
             lines.append(
                 "- 对账漂移: "
                 + f"active={reconcile_payload.get('active', False)}, alerts={reconcile_payload.get('alerts', [])}"
+            )
+        if guard_loop_cadence_payload:
+            lines.append(
+                "- Guard Loop Cadence: "
+                + f"active={guard_loop_cadence_payload.get('active', False)}, alerts={guard_loop_cadence_payload.get('alerts', [])}"
+            )
+        if guard_loop_cadence_lift_trend_payload:
+            lines.append(
+                "- Guard Loop Cadence Lift Trend: "
+                + f"active={guard_loop_cadence_lift_trend_payload.get('active', False)}, "
+                + f"alerts={guard_loop_cadence_lift_trend_payload.get('alerts', [])}"
             )
         if rollback_payload:
             lines.append(
                 "- 回滚建议: "
                 + f"level={rollback_payload.get('level', 'none')}, target={rollback_payload.get('target_anchor', '')}"
             )
+        lines.append(
+            "- Guard Loop Cadence Lift: "
+            + f"applied={bool(cadence_lift_snapshot.get('applied', False))}, "
+            + f"blocked_by_cooldown={bool(cadence_lift_snapshot.get('blocked_by_cooldown', False))}, "
+            + f"cooldown_remaining_days={int(self._safe_float(cadence_lift_snapshot.get('cooldown_remaining_days', 0), 0))}"
+        )
+        lines.append(
+            "- Guard Loop Cadence Lift Detail: "
+            + f"base={str(cadence_lift_snapshot.get('base_level', 'none'))}, "
+            + f"requested={str(cadence_lift_snapshot.get('requested_level', 'none'))}, "
+            + f"applied={str(cadence_lift_snapshot.get('applied_level', 'none'))}, "
+            + f"reason={str(cadence_lift_snapshot.get('reason', '') or 'N/A')}"
+        )
         lines.append("")
         lines.append("## 缺陷分类")
         for item in defects:
@@ -7419,6 +21983,22 @@ class ReleaseOrchestrator:
             )
             stress_active = bool(stress_matrix_trend.get("active", False))
             stress_ok = all(bool(v) for v in stress_checks.values()) if stress_active else True
+            stress_matrix_execution_friction = (
+                gate.get("stress_matrix_execution_friction", {})
+                if isinstance(gate.get("stress_matrix_execution_friction", {}), dict)
+                else {}
+            )
+            stress_exec_checks = (
+                stress_matrix_execution_friction.get("checks", {})
+                if isinstance(stress_matrix_execution_friction.get("checks", {}), dict)
+                else {}
+            )
+            stress_exec_active = bool(stress_matrix_execution_friction.get("active", False))
+            stress_exec_ok = (
+                all(bool(v) for v in stress_exec_checks.values())
+                if stress_exec_active
+                else bool(stress_matrix_execution_friction.get("gate_ok", True))
+            )
             stress_autorun_adaptive = self._stress_autorun_adaptive_max_runs(
                 as_of=as_of,
                 base_max_runs=stress_autorun_max_runs,
@@ -7495,6 +22075,8 @@ class ReleaseOrchestrator:
                 stress_trigger_codes.append("mode_drift")
             if stress_autorun_on_stress_breach and stress_active and (not stress_ok):
                 stress_trigger_codes.append("stress_trend")
+            if stress_autorun_on_stress_breach and stress_exec_active and (not stress_exec_ok):
+                stress_trigger_codes.append("stress_execution_friction")
             if stress_autorun_enabled and stress_trigger_codes:
                 stress_autorun_payload["triggered"] = True
                 stress_autorun_payload["reason_codes"] = list(stress_trigger_codes)
@@ -7544,6 +22126,56 @@ class ReleaseOrchestrator:
             )
             reconcile_active = bool(reconcile_drift.get("active", False))
             reconcile_ok = all(bool(v) for v in reconcile_checks.values()) if reconcile_active else True
+            guard_loop_cadence_non_apply = (
+                gate.get("guard_loop_cadence_non_apply", {})
+                if isinstance(gate.get("guard_loop_cadence_non_apply", {}), dict)
+                else {}
+            )
+            guard_loop_cadence_checks = (
+                guard_loop_cadence_non_apply.get("checks", {})
+                if isinstance(guard_loop_cadence_non_apply.get("checks", {}), dict)
+                else {}
+            )
+            guard_loop_cadence_active = bool(guard_loop_cadence_non_apply.get("active", False))
+            guard_loop_cadence_ok = (
+                all(bool(v) for v in guard_loop_cadence_checks.values())
+                if guard_loop_cadence_active
+                else bool(guard_loop_cadence_non_apply.get("gate_ok", True))
+            )
+            guard_loop_cadence_lift_trend = (
+                gate.get("guard_loop_cadence_non_apply_lift_trend", {})
+                if isinstance(gate.get("guard_loop_cadence_non_apply_lift_trend", {}), dict)
+                else {}
+            )
+            guard_loop_cadence_lift_trend_checks = (
+                guard_loop_cadence_lift_trend.get("checks", {})
+                if isinstance(guard_loop_cadence_lift_trend.get("checks", {}), dict)
+                else {}
+            )
+            guard_loop_cadence_lift_trend_active = bool(guard_loop_cadence_lift_trend.get("active", False))
+            guard_loop_cadence_lift_trend_ok = (
+                all(bool(v) for v in guard_loop_cadence_lift_trend_checks.values())
+                if guard_loop_cadence_lift_trend_active
+                else bool(guard_loop_cadence_lift_trend.get("gate_ok", True))
+            )
+            guard_loop_frontend_snapshot_trend = (
+                gate.get("guard_loop_frontend_snapshot_trend", {})
+                if isinstance(gate.get("guard_loop_frontend_snapshot_trend", {}), dict)
+                else {}
+            )
+            guard_loop_frontend_snapshot_trend_checks = (
+                guard_loop_frontend_snapshot_trend.get("checks", {})
+                if isinstance(guard_loop_frontend_snapshot_trend.get("checks", {}), dict)
+                else {}
+            )
+            guard_loop_frontend_snapshot_trend_active = bool(
+                guard_loop_frontend_snapshot_trend.get("active", False)
+            )
+            guard_loop_frontend_snapshot_trend_ok = (
+                all(bool(v) for v in guard_loop_frontend_snapshot_trend_checks.values())
+                if guard_loop_frontend_snapshot_trend_active
+                else bool(guard_loop_frontend_snapshot_trend.get("gate_ok", True))
+            )
             rollback_rec = (
                 gate.get("rollback_recommendation", {})
                 if isinstance(gate.get("rollback_recommendation", {}), dict)
@@ -7581,10 +22213,28 @@ class ReleaseOrchestrator:
                     "stress_matrix_trend_active": stress_active,
                     "stress_matrix_trend_ok": stress_ok,
                     "stress_matrix_trend_alerts": list(stress_matrix_trend.get("alerts", [])),
+                    "stress_matrix_execution_friction_active": stress_exec_active,
+                    "stress_matrix_execution_friction_ok": stress_exec_ok,
+                    "stress_matrix_execution_friction_alerts": list(
+                        stress_matrix_execution_friction.get("alerts", [])
+                    ),
                     "stress_matrix_autorun": stress_autorun_payload,
                     "reconcile_drift_active": reconcile_active,
                     "reconcile_drift_ok": reconcile_ok,
                     "reconcile_drift_alerts": list(reconcile_drift.get("alerts", [])),
+                    "guard_loop_cadence_non_apply_active": guard_loop_cadence_active,
+                    "guard_loop_cadence_non_apply_ok": guard_loop_cadence_ok,
+                    "guard_loop_cadence_non_apply_alerts": list(guard_loop_cadence_non_apply.get("alerts", [])),
+                    "guard_loop_cadence_non_apply_lift_trend_active": guard_loop_cadence_lift_trend_active,
+                    "guard_loop_cadence_non_apply_lift_trend_ok": guard_loop_cadence_lift_trend_ok,
+                    "guard_loop_cadence_non_apply_lift_trend_alerts": list(
+                        guard_loop_cadence_lift_trend.get("alerts", [])
+                    ),
+                    "guard_loop_frontend_snapshot_trend_active": guard_loop_frontend_snapshot_trend_active,
+                    "guard_loop_frontend_snapshot_trend_ok": guard_loop_frontend_snapshot_trend_ok,
+                    "guard_loop_frontend_snapshot_trend_alerts": list(
+                        guard_loop_frontend_snapshot_trend.get("alerts", [])
+                    ),
                     "rollback_level": str(rollback_rec.get("level", "none")),
                     "rollback_action": str(rollback_rec.get("action", "no_rollback")),
                     "rollback_anchor_ready": bool(rollback_rec.get("anchor_ready", True)),
@@ -7618,14 +22268,37 @@ class ReleaseOrchestrator:
                     "fast_seed": timeout_fallback_seed,
                 }
             if ok:
+                baseline_promotion = self._promote_artifact_governance_baseline(
+                    as_of=as_of,
+                    round_no=round_no,
+                    gate=gate,
+                )
+                rounds[-1]["artifact_governance_baseline_promotion"] = baseline_promotion
+                baseline_promotion_path = self.output_dir / "review" / f"{as_of.isoformat()}_baseline_promotion.json"
+                write_json(baseline_promotion_path, baseline_promotion)
                 release_path = self.output_dir / "artifacts" / f"release_ready_{as_of.isoformat()}.json"
-                write_json(release_path, {"date": as_of.isoformat(), "passed": True, "rounds": rounds})
+                write_json(
+                    release_path,
+                    {
+                        "date": as_of.isoformat(),
+                        "passed": True,
+                        "rounds": rounds,
+                        "artifact_governance_baseline_promotion": baseline_promotion,
+                        "artifact_governance_baseline_promotion_path": str(baseline_promotion_path),
+                    },
+                )
                 if alert_path.exists():
                     try:
                         alert_path.unlink()
                     except OSError:
                         pass
-                return {"passed": True, "skipped": False, "rounds": rounds}
+                return {
+                    "passed": True,
+                    "skipped": False,
+                    "rounds": rounds,
+                    "artifact_governance_baseline_promotion": baseline_promotion,
+                    "artifact_governance_baseline_promotion_path": str(baseline_promotion_path),
+                }
             plan_paths = self._build_defect_plan(
                 as_of=as_of,
                 round_no=i + 1,
@@ -7638,7 +22311,10 @@ class ReleaseOrchestrator:
                 mode_drift=mode_drift,
                 style_drift=style_drift,
                 stress_matrix_trend=stress_matrix_trend,
+                stress_matrix_execution_friction=stress_matrix_execution_friction,
                 reconcile_drift=reconcile_drift,
+                guard_loop_cadence_non_apply=guard_loop_cadence_non_apply,
+                guard_loop_cadence_non_apply_lift_trend=guard_loop_cadence_lift_trend,
                 rollback_recommendation=rollback_rec,
             )
             rounds[-1]["defect_plan"] = plan_paths
@@ -7646,17 +22322,1428 @@ class ReleaseOrchestrator:
         write_json(alert_path, fail_payload)
         return fail_payload
 
-    def run_review_cycle(self, as_of: date, max_rounds: int = 2, ops_window_days: int | None = None) -> dict[str, Any]:
+    def degradation_guardrail_burnin(
+        self,
+        as_of: date,
+        days: int = 3,
+        run_stable_replay: bool = True,
+        auto_tune: bool = True,
+    ) -> dict[str, Any]:
+        d = as_of.isoformat()
+        window_days = max(1, int(days))
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        false_positive_target_max = self._clamp_float(
+            self._safe_float(val.get("ops_degradation_guardrail_false_positive_target_max", 0.20), 0.20),
+            0.0,
+            1.0,
+        )
+        min_samples = max(
+            1,
+            int(self._safe_float(val.get("ops_degradation_guardrail_dashboard_min_samples", 7), 7)),
+        )
+        autofill_review_if_missing = self._safe_bool(
+            val.get("ops_degradation_guardrail_burnin_autofill_review_if_missing", True),
+            True,
+        )
+        light_backfill_enabled = bool(
+            self._safe_bool(
+                val.get("ops_degradation_guardrail_burnin_light_backfill_enabled", True),
+                True,
+            )
+            and (self.run_degradation_calibration is not None)
+        )
+        light_backfill_max_days_per_run = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get("ops_degradation_guardrail_burnin_light_backfill_max_days_per_run", window_days),
+                    float(window_days),
+                )
+            ),
+        )
+        review_autofill_max_days_per_run = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get("ops_degradation_guardrail_burnin_review_autofill_max_days_per_run", window_days),
+                    float(window_days),
+                )
+            ),
+        )
+        low_cost_replay_enabled = self._safe_bool(
+            val.get("ops_degradation_guardrail_burnin_low_cost_replay_enabled", False),
+            False,
+        )
+        low_cost_replay_max_days_per_run = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_degradation_guardrail_burnin_low_cost_replay_max_days_per_run",
+                        min(window_days, 3),
+                    ),
+                    float(min(window_days, 3)),
+                )
+            ),
+        )
+        burnin_low_cost_cfg_max_days_per_run = int(low_cost_replay_max_days_per_run)
+        burnin_live_override_enabled = self._safe_bool(
+            val.get("ops_degradation_guardrail_burnin_use_live_overrides", True),
+            True,
+        )
+        burnin_live_override_path = self._resolve_output_path(
+            str(
+                val.get(
+                    "ops_degradation_guardrail_burnin_live_params_path",
+                    "artifacts/degradation_guardrail_burnin_live.yaml",
+                )
+            ).strip(),
+            fallback_rel="artifacts/degradation_guardrail_burnin_live.yaml",
+        )
+        burnin_live_override_applied = False
+        burnin_live_override_error = ""
+        burnin_live_override_payload: dict[str, Any] = {}
+        if burnin_live_override_enabled and burnin_live_override_path.exists():
+            try:
+                burnin_live_override_payload = (
+                    yaml.safe_load(burnin_live_override_path.read_text(encoding="utf-8")) or {}
+                )
+                if not isinstance(burnin_live_override_payload, dict):
+                    burnin_live_override_payload = {}
+                burnin_live_params = (
+                    burnin_live_override_payload.get("params", {})
+                    if isinstance(burnin_live_override_payload.get("params", {}), dict)
+                    else burnin_live_override_payload
+                )
+                if not isinstance(burnin_live_params, dict):
+                    burnin_live_params = {}
+                if "ops_degradation_guardrail_burnin_low_cost_replay_max_days_per_run" in burnin_live_params:
+                    candidate = int(
+                        self._safe_float(
+                            burnin_live_params.get("ops_degradation_guardrail_burnin_low_cost_replay_max_days_per_run"),
+                            low_cost_replay_max_days_per_run,
+                        )
+                    )
+                    if candidate >= 0:
+                        low_cost_replay_max_days_per_run = int(candidate)
+                        burnin_live_override_applied = True
+                    else:
+                        burnin_live_override_error = "invalid_live_override_max_days"
+            except Exception as exc:
+                burnin_live_override_error = f"{type(exc).__name__}:{exc}"
+        low_cost_budget_audit_enabled = self._safe_bool(
+            val.get("ops_degradation_guardrail_burnin_budget_audit_enabled", True),
+            True,
+        )
+        low_cost_budget_audit_auto_tune = self._safe_bool(
+            val.get("ops_degradation_guardrail_burnin_budget_audit_auto_tune", True),
+            True,
+        )
+        low_cost_budget_expand_recovery_ratio_min = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_degradation_guardrail_burnin_budget_audit_expand_recovery_ratio_min",
+                    0.75,
+                ),
+                0.75,
+            ),
+            0.0,
+            1.0,
+        )
+        low_cost_budget_shrink_recovery_ratio_max = self._clamp_float(
+            self._safe_float(
+                val.get(
+                    "ops_degradation_guardrail_burnin_budget_audit_shrink_recovery_ratio_max",
+                    0.40,
+                ),
+                0.40,
+            ),
+            0.0,
+            1.0,
+        )
+        if low_cost_budget_shrink_recovery_ratio_max > low_cost_budget_expand_recovery_ratio_min:
+            low_cost_budget_shrink_recovery_ratio_max = float(low_cost_budget_expand_recovery_ratio_min)
+        low_cost_budget_step_days = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get("ops_degradation_guardrail_burnin_budget_audit_step_days", 1),
+                    1.0,
+                )
+            ),
+        )
+        low_cost_budget_min_days = max(
+            0,
+            int(
+                self._safe_float(
+                    val.get("ops_degradation_guardrail_burnin_budget_audit_min_days", 0),
+                    0.0,
+                )
+            ),
+        )
+        low_cost_budget_max_days = max(
+            int(low_cost_budget_min_days),
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_degradation_guardrail_burnin_budget_audit_max_days",
+                        max(window_days, low_cost_replay_max_days_per_run),
+                    ),
+                    float(max(window_days, low_cost_replay_max_days_per_run)),
+                )
+            ),
+        )
+        require_min_samples_for_tune = self._safe_bool(
+            val.get("ops_degradation_guardrail_burnin_require_min_samples_for_tune", True),
+            True,
+        )
+        replay = (
+            self._run_stable_replay_check(as_of=as_of, days=window_days, run_eod_replay=True)
+            if run_stable_replay
+            else {
+                "as_of": d,
+                "replay_days": int(window_days),
+                "replay_executed": False,
+                "passed": True,
+                "checks": [],
+                "skipped": True,
+                "reason": "disabled_by_caller",
+            }
+        )
+        replay_checks = replay.get("checks", []) if isinstance(replay.get("checks", []), list) else []
+        replay_ok_by_date = {
+            str(item.get("date", "")).strip(): bool(item.get("ok", False))
+            for item in replay_checks
+            if isinstance(item, dict)
+        }
+
+        rows: list[dict[str, Any]] = []
+        active_days = 0
+        rollback_artifact_days = 0
+        monitor_failed_days = 0
+        false_positive_days = 0
+        cooldown_samples: list[float] = []
+        suppressed_samples: list[float] = []
+        latency_samples: list[float] = []
+        missing_rollback_days: list[str] = []
+        autofill_attempted_days = 0
+        autofill_succeeded_days = 0
+        autofill_failed_days = 0
+        light_backfill_attempted_days = 0
+        light_backfill_succeeded_days = 0
+        light_backfill_failed_days = 0
+        light_backfill_budget_skipped_days = 0
+        review_autofill_budget_skipped_days = 0
+        low_cost_replay_attempted_days = 0
+        low_cost_replay_succeeded_days = 0
+        low_cost_replay_failed_days = 0
+        low_cost_replay_budget_skipped_days = 0
+        review_dir = self.output_dir / "review"
+
+        for i in range(window_days):
+            day = as_of - timedelta(days=i)
+            day_tag = day.isoformat()
+            rollback_artifact_path = review_dir / f"{day_tag}_degradation_calibration_rollback.json"
+            rollback_exists_before = rollback_artifact_path.exists()
+            autofill_attempted = False
+            autofill_status = "not_needed" if rollback_exists_before else "missing"
+            autofill_error = ""
+            light_backfill_attempted = False
+            light_backfill_status = "not_needed" if rollback_exists_before else "missing"
+            light_backfill_error = ""
+
+            if (not rollback_exists_before) and light_backfill_enabled:
+                if light_backfill_attempted_days >= light_backfill_max_days_per_run:
+                    light_backfill_status = "budget_skipped"
+                    light_backfill_budget_skipped_days += 1
+                else:
+                    light_backfill_attempted = True
+                    light_backfill_attempted_days += 1
+                    try:
+                        if self.run_degradation_calibration is not None:
+                            self.run_degradation_calibration(day)
+                        if rollback_artifact_path.exists():
+                            light_backfill_status = "succeeded"
+                            light_backfill_succeeded_days += 1
+                        else:
+                            light_backfill_status = "calibration_done_artifact_missing"
+                            light_backfill_failed_days += 1
+                    except Exception as exc:
+                        light_backfill_status = "failed"
+                        light_backfill_error = f"{type(exc).__name__}:{exc}"
+                        light_backfill_failed_days += 1
+
+            if (not rollback_artifact_path.exists()) and autofill_review_if_missing:
+                if autofill_attempted_days >= review_autofill_max_days_per_run:
+                    autofill_status = "review_budget_skipped"
+                    review_autofill_budget_skipped_days += 1
+                else:
+                    autofill_attempted = True
+                    autofill_attempted_days += 1
+                    try:
+                        self.run_review(day)
+                        if rollback_artifact_path.exists():
+                            autofill_status = "succeeded"
+                            autofill_succeeded_days += 1
+                        else:
+                            autofill_status = "review_done_artifact_missing"
+                            autofill_failed_days += 1
+                    except Exception as exc:
+                        autofill_status = "failed"
+                        autofill_error = f"{type(exc).__name__}:{exc}"
+                        autofill_failed_days += 1
+            rollback_exists_after = rollback_artifact_path.exists()
+            if rollback_exists_after:
+                rollback_artifact_days += 1
+            else:
+                missing_rollback_days.append(day_tag)
+            gate = self.gate_report(
+                as_of=day,
+                run_tests=False,
+                run_review_if_missing=False,
+                run_stable_replay=False,
+            )
+            dashboard = (
+                gate.get("degradation_guardrail_dashboard", {})
+                if isinstance(gate.get("degradation_guardrail_dashboard", {}), dict)
+                else {}
+            )
+            dashboard_metrics = (
+                dashboard.get("metrics", {})
+                if isinstance(dashboard.get("metrics", {}), dict)
+                else {}
+            )
+            dashboard_thresholds = (
+                dashboard.get("thresholds", {})
+                if isinstance(dashboard.get("thresholds", {}), dict)
+                else {}
+            )
+            active = bool(dashboard.get("active", False))
+            sample_ready = bool(int(self._safe_float(dashboard.get("samples", 0), 0)) > 0)
+            monitor_failed = bool(dashboard.get("monitor_failed", False))
+            gate_passed = bool(gate.get("passed", False))
+            replay_ok = bool(replay_ok_by_date.get(day_tag, True))
+            false_positive = bool(sample_ready and monitor_failed and gate_passed and replay_ok)
+            failed_checks = sorted(
+                [
+                    str(k)
+                    for k, v in (gate.get("checks", {}) if isinstance(gate.get("checks", {}), dict) else {}).items()
+                    if not bool(v)
+                ]
+            )
+            if sample_ready:
+                active_days += 1
+                cooldown_samples.append(
+                    self._clamp_float(
+                        self._safe_float(dashboard_metrics.get("cooldown_hit_rate", 0.0), 0.0),
+                        0.0,
+                        1.0,
+                    )
+                )
+                suppressed_samples.append(
+                    self._clamp_float(
+                        self._safe_float(dashboard_metrics.get("suppressed_trigger_density", 0.0), 0.0),
+                        0.0,
+                        1.0,
+                    )
+                )
+                latency_avg = dashboard_metrics.get("promotion_latency_avg_days")
+                if latency_avg is not None:
+                    latency_samples.append(max(0.0, self._safe_float(latency_avg, 0.0)))
+            if monitor_failed:
+                monitor_failed_days += 1
+            if false_positive:
+                false_positive_days += 1
+
+            rows.append(
+                {
+                    "date": day_tag,
+                    "gate_passed": bool(gate_passed),
+                    "replay_ok": bool(replay_ok),
+                    "active": bool(active),
+                    "sample_ready": bool(sample_ready),
+                    "monitor_failed": bool(monitor_failed),
+                    "false_positive": bool(false_positive),
+                    "failed_checks": failed_checks,
+                    "metrics": {
+                        "cooldown_hit_rate": self._safe_float(
+                            dashboard_metrics.get("cooldown_hit_rate", 0.0),
+                            0.0,
+                        ),
+                        "suppressed_trigger_density": self._safe_float(
+                            dashboard_metrics.get("suppressed_trigger_density", 0.0),
+                            0.0,
+                        ),
+                        "promotion_latency_avg_days": (
+                            self._safe_float(dashboard_metrics.get("promotion_latency_avg_days", 0.0), 0.0)
+                            if dashboard_metrics.get("promotion_latency_avg_days") is not None
+                            else None
+                        ),
+                    },
+                    "thresholds": dashboard_thresholds,
+                    "rollback_artifact": {
+                        "path": str(rollback_artifact_path),
+                        "exists_before": bool(rollback_exists_before),
+                        "exists_after": bool(rollback_exists_after),
+                        "light_backfill_enabled": bool(light_backfill_enabled),
+                        "light_backfill_attempted": bool(light_backfill_attempted),
+                        "light_backfill_status": str(light_backfill_status),
+                        "light_backfill_error": str(light_backfill_error),
+                        "autofill_enabled": bool(autofill_review_if_missing),
+                        "autofill_attempted": bool(autofill_attempted),
+                        "autofill_status": str(autofill_status),
+                        "autofill_error": str(autofill_error),
+                        "low_cost_replay_enabled": bool(low_cost_replay_enabled),
+                        "low_cost_replay_attempted": False,
+                        "low_cost_replay_status": "not_attempted",
+                        "low_cost_replay_error": "",
+                    },
+                }
+            )
+
+        if low_cost_replay_enabled and low_cost_replay_max_days_per_run > 0:
+            for row in rows:
+                row_date = str(row.get("date", "")).strip()
+                if not row_date:
+                    continue
+                rollback_artifact = (
+                    row.get("rollback_artifact", {}) if isinstance(row.get("rollback_artifact", {}), dict) else {}
+                )
+                sample_ready_before = bool(row.get("sample_ready", False))
+                rollback_exists_before_replay = bool(rollback_artifact.get("exists_after", False))
+                if sample_ready_before and rollback_exists_before_replay:
+                    continue
+                if low_cost_replay_attempted_days >= low_cost_replay_max_days_per_run:
+                    low_cost_replay_budget_skipped_days += 1
+                    rollback_artifact["low_cost_replay_enabled"] = bool(low_cost_replay_enabled)
+                    rollback_artifact["low_cost_replay_attempted"] = False
+                    rollback_artifact["low_cost_replay_status"] = "budget_skipped"
+                    rollback_artifact["low_cost_replay_error"] = ""
+                    row["rollback_artifact"] = rollback_artifact
+                    continue
+                try:
+                    target_day = date.fromisoformat(row_date)
+                except Exception:
+                    low_cost_replay_failed_days += 1
+                    rollback_artifact["low_cost_replay_enabled"] = bool(low_cost_replay_enabled)
+                    rollback_artifact["low_cost_replay_attempted"] = True
+                    rollback_artifact["low_cost_replay_status"] = "invalid_date"
+                    rollback_artifact["low_cost_replay_error"] = f"invalid_date:{row_date}"
+                    row["rollback_artifact"] = rollback_artifact
+                    continue
+
+                low_cost_replay_attempted_days += 1
+                low_cost_replay_status = "succeeded"
+                low_cost_replay_error = ""
+                low_cost_replay_day_ok = True
+                try:
+                    replay_probe = self._run_stable_replay_check(
+                        as_of=target_day,
+                        days=1,
+                        run_eod_replay=True,
+                    )
+                    probe_checks = (
+                        replay_probe.get("checks", [])
+                        if isinstance(replay_probe.get("checks", []), list)
+                        else []
+                    )
+                    if probe_checks and isinstance(probe_checks[0], dict):
+                        low_cost_replay_day_ok = bool(
+                            probe_checks[0].get("ok", replay_probe.get("passed", True))
+                        )
+                    else:
+                        low_cost_replay_day_ok = bool(replay_probe.get("passed", True))
+                    low_cost_replay_succeeded_days += 1
+                except Exception as exc:
+                    low_cost_replay_day_ok = False
+                    low_cost_replay_status = "failed"
+                    low_cost_replay_error = f"{type(exc).__name__}:{exc}"
+                    low_cost_replay_failed_days += 1
+
+                rollback_path_raw = str(rollback_artifact.get("path", "")).strip()
+                rollback_exists_after_replay = bool(rollback_exists_before_replay)
+                if rollback_path_raw:
+                    try:
+                        rollback_exists_after_replay = Path(rollback_path_raw).exists()
+                    except Exception:
+                        rollback_exists_after_replay = bool(rollback_exists_before_replay)
+
+                if low_cost_replay_status == "succeeded":
+                    gate = self.gate_report(
+                        as_of=target_day,
+                        run_tests=False,
+                        run_review_if_missing=False,
+                        run_stable_replay=False,
+                    )
+                    dashboard = (
+                        gate.get("degradation_guardrail_dashboard", {})
+                        if isinstance(gate.get("degradation_guardrail_dashboard", {}), dict)
+                        else {}
+                    )
+                    dashboard_metrics = (
+                        dashboard.get("metrics", {})
+                        if isinstance(dashboard.get("metrics", {}), dict)
+                        else {}
+                    )
+                    dashboard_thresholds = (
+                        dashboard.get("thresholds", {})
+                        if isinstance(dashboard.get("thresholds", {}), dict)
+                        else {}
+                    )
+                    sample_ready = bool(int(self._safe_float(dashboard.get("samples", 0), 0)) > 0)
+                    monitor_failed = bool(dashboard.get("monitor_failed", False))
+                    gate_passed = bool(gate.get("passed", False))
+                    false_positive = bool(sample_ready and monitor_failed and gate_passed and low_cost_replay_day_ok)
+                    failed_checks = sorted(
+                        [
+                            str(k)
+                            for k, v in (
+                                gate.get("checks", {})
+                                if isinstance(gate.get("checks", {}), dict)
+                                else {}
+                            ).items()
+                            if not bool(v)
+                        ]
+                    )
+                    row.update(
+                        {
+                            "gate_passed": bool(gate_passed),
+                            "replay_ok": bool(low_cost_replay_day_ok),
+                            "active": bool(dashboard.get("active", False)),
+                            "sample_ready": bool(sample_ready),
+                            "monitor_failed": bool(monitor_failed),
+                            "false_positive": bool(false_positive),
+                            "failed_checks": failed_checks,
+                            "metrics": {
+                                "cooldown_hit_rate": self._safe_float(
+                                    dashboard_metrics.get("cooldown_hit_rate", 0.0),
+                                    0.0,
+                                ),
+                                "suppressed_trigger_density": self._safe_float(
+                                    dashboard_metrics.get("suppressed_trigger_density", 0.0),
+                                    0.0,
+                                ),
+                                "promotion_latency_avg_days": (
+                                    self._safe_float(dashboard_metrics.get("promotion_latency_avg_days", 0.0), 0.0)
+                                    if dashboard_metrics.get("promotion_latency_avg_days") is not None
+                                    else None
+                                ),
+                            },
+                            "thresholds": dashboard_thresholds,
+                        }
+                    )
+
+                rollback_artifact["exists_after"] = bool(rollback_exists_after_replay)
+                rollback_artifact["low_cost_replay_enabled"] = bool(low_cost_replay_enabled)
+                rollback_artifact["low_cost_replay_attempted"] = True
+                rollback_artifact["low_cost_replay_status"] = str(low_cost_replay_status)
+                rollback_artifact["low_cost_replay_error"] = str(low_cost_replay_error)
+                row["rollback_artifact"] = rollback_artifact
+
+        rows.sort(key=lambda x: str(x.get("date", "")))
+        active_days = 0
+        rollback_artifact_days = 0
+        monitor_failed_days = 0
+        false_positive_days = 0
+        cooldown_samples = []
+        suppressed_samples = []
+        latency_samples = []
+        missing_rollback_days = []
+        for row in rows:
+            sample_ready = bool(row.get("sample_ready", False))
+            monitor_failed = bool(row.get("monitor_failed", False))
+            gate_passed = bool(row.get("gate_passed", False))
+            replay_ok = bool(row.get("replay_ok", True))
+            false_positive = bool(sample_ready and monitor_failed and gate_passed and replay_ok)
+            row["false_positive"] = bool(false_positive)
+            rollback_artifact = (
+                row.get("rollback_artifact", {}) if isinstance(row.get("rollback_artifact", {}), dict) else {}
+            )
+            rollback_exists = bool(rollback_artifact.get("exists_after", False))
+            if rollback_exists:
+                rollback_artifact_days += 1
+            else:
+                row_date = str(row.get("date", "")).strip()
+                if row_date:
+                    missing_rollback_days.append(row_date)
+            if sample_ready:
+                active_days += 1
+                metrics = row.get("metrics", {}) if isinstance(row.get("metrics", {}), dict) else {}
+                cooldown_samples.append(
+                    self._clamp_float(
+                        self._safe_float(metrics.get("cooldown_hit_rate", 0.0), 0.0),
+                        0.0,
+                        1.0,
+                    )
+                )
+                suppressed_samples.append(
+                    self._clamp_float(
+                        self._safe_float(metrics.get("suppressed_trigger_density", 0.0), 0.0),
+                        0.0,
+                        1.0,
+                    )
+                )
+                latency_avg = metrics.get("promotion_latency_avg_days")
+                if latency_avg is not None:
+                    latency_samples.append(max(0.0, self._safe_float(latency_avg, 0.0)))
+            if monitor_failed:
+                monitor_failed_days += 1
+            if false_positive:
+                false_positive_days += 1
+
+        false_positive_ratio = self._ratio(false_positive_days, active_days)
+        monitor_failed_ratio = self._ratio(monitor_failed_days, active_days)
+        active_days_ok = bool(active_days >= min_samples)
+        rollback_artifact_days_ok = bool(rollback_artifact_days >= min_samples)
+        coverage_ok = bool(active_days_ok and rollback_artifact_days_ok)
+        low_cost_replay_recovery_ratio = (
+            self._ratio(low_cost_replay_succeeded_days, low_cost_replay_attempted_days)
+            if int(low_cost_replay_attempted_days) > 0
+            else None
+        )
+        low_cost_replay_failure_ratio = (
+            self._ratio(low_cost_replay_failed_days, low_cost_replay_attempted_days)
+            if int(low_cost_replay_attempted_days) > 0
+            else None
+        )
+        low_cost_budget_pressure = bool(low_cost_replay_budget_skipped_days > 0)
+        low_cost_budget_recommended_days = int(low_cost_replay_max_days_per_run)
+        low_cost_budget_reason = "disabled"
+        low_cost_budget_tune_applied = False
+        low_cost_budget_tune_write_error = ""
+        low_cost_budget_live_write_path = ""
+        if low_cost_budget_audit_enabled:
+            if not low_cost_replay_enabled:
+                low_cost_budget_reason = "low_cost_replay_disabled"
+            elif int(low_cost_replay_attempted_days) <= 0:
+                low_cost_budget_reason = "no_attempts"
+            elif (
+                low_cost_replay_recovery_ratio is not None
+                and float(low_cost_replay_recovery_ratio) <= float(low_cost_budget_shrink_recovery_ratio_max)
+                and int(low_cost_replay_failed_days) > 0
+            ):
+                candidate = max(
+                    int(low_cost_budget_min_days),
+                    int(low_cost_replay_max_days_per_run) - int(low_cost_budget_step_days),
+                )
+                if int(candidate) < int(low_cost_replay_max_days_per_run):
+                    low_cost_budget_recommended_days = int(candidate)
+                    low_cost_budget_reason = "shrink_low_recovery_ratio"
+                else:
+                    low_cost_budget_reason = "shrink_at_floor"
+            elif (
+                low_cost_replay_recovery_ratio is not None
+                and float(low_cost_replay_recovery_ratio) >= float(low_cost_budget_expand_recovery_ratio_min)
+                and bool(low_cost_budget_pressure)
+                and (not bool(coverage_ok))
+            ):
+                candidate = min(
+                    int(low_cost_budget_max_days),
+                    int(low_cost_replay_max_days_per_run) + int(low_cost_budget_step_days),
+                )
+                if int(candidate) > int(low_cost_replay_max_days_per_run):
+                    low_cost_budget_recommended_days = int(candidate)
+                    low_cost_budget_reason = "expand_high_recovery_under_pressure"
+                else:
+                    low_cost_budget_reason = "expand_at_ceiling"
+            elif bool(low_cost_budget_pressure):
+                low_cost_budget_reason = "pressure_observed_keep"
+            else:
+                low_cost_budget_reason = "stable_keep"
+
+            if (
+                low_cost_budget_audit_auto_tune
+                and int(low_cost_budget_recommended_days) != int(low_cost_replay_max_days_per_run)
+                and burnin_live_override_enabled
+            ):
+                payload = {
+                    "schema_version": 1,
+                    "as_of": d,
+                    "generated_at": datetime.now().isoformat(),
+                    "source": "degradation_guardrail_burnin_budget_audit",
+                    "metrics": {
+                        "low_cost_replay_attempted_days": int(low_cost_replay_attempted_days),
+                        "low_cost_replay_succeeded_days": int(low_cost_replay_succeeded_days),
+                        "low_cost_replay_failed_days": int(low_cost_replay_failed_days),
+                        "low_cost_replay_budget_skipped_days": int(low_cost_replay_budget_skipped_days),
+                        "low_cost_replay_recovery_ratio": (
+                            float(low_cost_replay_recovery_ratio)
+                            if low_cost_replay_recovery_ratio is not None
+                            else None
+                        ),
+                        "low_cost_replay_failure_ratio": (
+                            float(low_cost_replay_failure_ratio)
+                            if low_cost_replay_failure_ratio is not None
+                            else None
+                        ),
+                        "coverage_ok": bool(coverage_ok),
+                        "budget_pressure": bool(low_cost_budget_pressure),
+                    },
+                    "params": {
+                        "ops_degradation_guardrail_burnin_low_cost_replay_max_days_per_run": int(
+                            low_cost_budget_recommended_days
+                        ),
+                    },
+                }
+                try:
+                    burnin_live_override_path.parent.mkdir(parents=True, exist_ok=True)
+                    burnin_live_override_path.write_text(
+                        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+                        encoding="utf-8",
+                    )
+                    low_cost_budget_tune_applied = True
+                    low_cost_budget_live_write_path = str(burnin_live_override_path)
+                except Exception as exc:
+                    low_cost_budget_tune_write_error = f"{type(exc).__name__}:{exc}"
+                    low_cost_budget_reason = "auto_tune_write_failed"
+        low_cost_replay_budget_audit = {
+            "enabled": bool(low_cost_budget_audit_enabled),
+            "auto_tune_enabled": bool(low_cost_budget_audit_auto_tune),
+            "live_override_enabled": bool(burnin_live_override_enabled),
+            "live_override_path": str(burnin_live_override_path),
+            "live_override_applied": bool(burnin_live_override_applied),
+            "live_override_error": str(burnin_live_override_error),
+            "configured_max_days_per_run": int(burnin_low_cost_cfg_max_days_per_run),
+            "effective_max_days_per_run": int(low_cost_replay_max_days_per_run),
+            "recommended_max_days_per_run": int(low_cost_budget_recommended_days),
+            "recovery_ratio": (
+                float(low_cost_replay_recovery_ratio) if low_cost_replay_recovery_ratio is not None else None
+            ),
+            "failure_ratio": (
+                float(low_cost_replay_failure_ratio) if low_cost_replay_failure_ratio is not None else None
+            ),
+            "budget_pressure": bool(low_cost_budget_pressure),
+            "coverage_ok": bool(coverage_ok),
+            "reason": str(low_cost_budget_reason),
+            "expand_recovery_ratio_min": float(low_cost_budget_expand_recovery_ratio_min),
+            "shrink_recovery_ratio_max": float(low_cost_budget_shrink_recovery_ratio_max),
+            "step_days": int(low_cost_budget_step_days),
+            "min_days": int(low_cost_budget_min_days),
+            "max_days": int(low_cost_budget_max_days),
+            "tune_applied": bool(low_cost_budget_tune_applied),
+            "tune_write_error": str(low_cost_budget_tune_write_error),
+            "tune_write_path": str(low_cost_budget_live_write_path),
+        }
+
+        latest_dashboard = self._degradation_guardrail_dashboard_metrics(as_of=as_of)
+        latest_thresholds = (
+            latest_dashboard.get("thresholds", {})
+            if isinstance(latest_dashboard.get("thresholds", {}), dict)
+            else {}
+        )
+        current_cooldown_max = self._clamp_float(
+            self._safe_float(latest_thresholds.get("ops_degradation_guardrail_cooldown_hit_rate_max", 0.80), 0.80),
+            0.0,
+            1.0,
+        )
+        current_suppressed_max = self._clamp_float(
+            self._safe_float(
+                latest_thresholds.get("ops_degradation_guardrail_suppressed_trigger_density_max", 0.60),
+                0.60,
+            ),
+            0.0,
+            1.0,
+        )
+        current_promotion_latency_max = max(
+            1,
+            int(
+                self._safe_float(
+                    latest_thresholds.get("ops_degradation_guardrail_promotion_latency_days_max", 21),
+                    21,
+                )
+            ),
+        )
+
+        cooldown_p90 = self._quantile(cooldown_samples, 0.90)
+        suppressed_p90 = self._quantile(suppressed_samples, 0.90)
+        latency_p90 = self._quantile(latency_samples, 0.90)
+
+        recommended_cooldown_max = current_cooldown_max
+        if cooldown_p90 is not None:
+            recommended_cooldown_max = self._clamp_float(
+                max(current_cooldown_max, float(cooldown_p90) + 0.05),
+                0.0,
+                1.0,
+            )
+        recommended_suppressed_max = current_suppressed_max
+        if suppressed_p90 is not None:
+            recommended_suppressed_max = self._clamp_float(
+                max(current_suppressed_max, float(suppressed_p90) + 0.05),
+                0.0,
+                1.0,
+            )
+        recommended_promotion_latency_max = current_promotion_latency_max
+        if latency_p90 is not None:
+            recommended_promotion_latency_max = max(
+                int(current_promotion_latency_max),
+                int(math.ceil(float(latency_p90) + 2.0)),
+            )
+
+        should_tune = bool(
+            auto_tune
+            and active_days > 0
+            and (coverage_ok or (not require_min_samples_for_tune))
+            and false_positive_ratio > float(false_positive_target_max)
+            and (
+                abs(float(recommended_cooldown_max) - float(current_cooldown_max)) > 1e-12
+                or abs(float(recommended_suppressed_max) - float(current_suppressed_max)) > 1e-12
+                or int(recommended_promotion_latency_max) != int(current_promotion_latency_max)
+            )
+        )
+        live_path = self._resolve_output_path(
+            str(
+                val.get(
+                    "ops_degradation_guardrail_dashboard_live_params_path",
+                    "artifacts/degradation_guardrail_dashboard_live.yaml",
+                )
+            ).strip(),
+            fallback_rel="artifacts/degradation_guardrail_dashboard_live.yaml",
+        )
+        live_payload = {
+            "schema_version": 1,
+            "as_of": d,
+            "generated_at": datetime.now().isoformat(),
+            "window_days": int(window_days),
+            "false_positive_target_max": float(false_positive_target_max),
+            "false_positive_ratio": float(false_positive_ratio),
+            "active_days": int(active_days),
+            "min_samples": int(min_samples),
+            "active_days_ok": bool(active_days_ok),
+            "rollback_artifact_days": int(rollback_artifact_days),
+            "rollback_artifact_days_ok": bool(rollback_artifact_days_ok),
+            "coverage_ok": bool(coverage_ok),
+            "require_min_samples_for_tune": bool(require_min_samples_for_tune),
+            "light_backfill_enabled": bool(light_backfill_enabled),
+            "light_backfill_max_days_per_run": int(light_backfill_max_days_per_run),
+            "light_backfill_attempted_days": int(light_backfill_attempted_days),
+            "light_backfill_succeeded_days": int(light_backfill_succeeded_days),
+            "light_backfill_failed_days": int(light_backfill_failed_days),
+            "light_backfill_budget_skipped_days": int(light_backfill_budget_skipped_days),
+            "autofill_review_if_missing": bool(autofill_review_if_missing),
+            "review_autofill_max_days_per_run": int(review_autofill_max_days_per_run),
+            "autofill_attempted_days": int(autofill_attempted_days),
+            "autofill_succeeded_days": int(autofill_succeeded_days),
+            "autofill_failed_days": int(autofill_failed_days),
+            "review_autofill_budget_skipped_days": int(review_autofill_budget_skipped_days),
+            "low_cost_replay_enabled": bool(low_cost_replay_enabled),
+            "low_cost_replay_max_days_per_run": int(low_cost_replay_max_days_per_run),
+            "low_cost_replay_attempted_days": int(low_cost_replay_attempted_days),
+            "low_cost_replay_succeeded_days": int(low_cost_replay_succeeded_days),
+            "low_cost_replay_failed_days": int(low_cost_replay_failed_days),
+            "low_cost_replay_budget_skipped_days": int(low_cost_replay_budget_skipped_days),
+            "low_cost_replay_recovery_ratio": (
+                float(low_cost_replay_recovery_ratio) if low_cost_replay_recovery_ratio is not None else None
+            ),
+            "low_cost_replay_failure_ratio": (
+                float(low_cost_replay_failure_ratio) if low_cost_replay_failure_ratio is not None else None
+            ),
+            "low_cost_replay_budget_audit": low_cost_replay_budget_audit,
+            "missing_rollback_days": list(missing_rollback_days),
+            "monitor_failed_days": int(monitor_failed_days),
+            "false_positive_days": int(false_positive_days),
+            "quantiles": {
+                "cooldown_hit_rate_p90": cooldown_p90,
+                "suppressed_trigger_density_p90": suppressed_p90,
+                "promotion_latency_avg_days_p90": latency_p90,
+            },
+            "current_thresholds": {
+                "ops_degradation_guardrail_cooldown_hit_rate_max": float(current_cooldown_max),
+                "ops_degradation_guardrail_suppressed_trigger_density_max": float(current_suppressed_max),
+                "ops_degradation_guardrail_promotion_latency_days_max": int(current_promotion_latency_max),
+            },
+            "params": {
+                "ops_degradation_guardrail_cooldown_hit_rate_max": float(recommended_cooldown_max),
+                "ops_degradation_guardrail_suppressed_trigger_density_max": float(recommended_suppressed_max),
+                "ops_degradation_guardrail_promotion_latency_days_max": int(recommended_promotion_latency_max),
+            },
+            "apply_recommended": bool(should_tune),
+            "reason": (
+                "false_positive_ratio_above_target"
+                if should_tune
+                else (
+                    "insufficient_sample_coverage"
+                    if (require_min_samples_for_tune and (not coverage_ok))
+                    else (
+                        "ratio_within_target"
+                        if false_positive_ratio <= float(false_positive_target_max)
+                        else "no_parameter_change_needed"
+                    )
+                )
+            ),
+        }
+        write_error = ""
+        if should_tune:
+            try:
+                live_path.parent.mkdir(parents=True, exist_ok=True)
+                live_path.write_text(
+                    yaml.safe_dump(live_payload, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                write_error = f"{type(exc).__name__}:{exc}"
+                should_tune = False
+                live_payload["apply_recommended"] = False
+                live_payload["reason"] = "write_failed"
+                live_payload["write_error"] = write_error
+
+        summary = {
+            "as_of": d,
+            "window_days": int(window_days),
+            "active_days": int(active_days),
+            "min_samples": int(min_samples),
+            "active_days_ok": bool(active_days_ok),
+            "rollback_artifact_days": int(rollback_artifact_days),
+            "rollback_artifact_days_ok": bool(rollback_artifact_days_ok),
+            "coverage_ok": bool(coverage_ok),
+            "missing_rollback_days": list(missing_rollback_days),
+            "autofill": {
+                "enabled": bool(autofill_review_if_missing),
+                "max_days_per_run": int(review_autofill_max_days_per_run),
+                "attempted_days": int(autofill_attempted_days),
+                "succeeded_days": int(autofill_succeeded_days),
+                "failed_days": int(autofill_failed_days),
+                "budget_skipped_days": int(review_autofill_budget_skipped_days),
+            },
+            "light_backfill": {
+                "enabled": bool(light_backfill_enabled),
+                "max_days_per_run": int(light_backfill_max_days_per_run),
+                "attempted_days": int(light_backfill_attempted_days),
+                "succeeded_days": int(light_backfill_succeeded_days),
+                "failed_days": int(light_backfill_failed_days),
+                "budget_skipped_days": int(light_backfill_budget_skipped_days),
+            },
+            "low_cost_replay": {
+                "enabled": bool(low_cost_replay_enabled),
+                "max_days_per_run": int(low_cost_replay_max_days_per_run),
+                "attempted_days": int(low_cost_replay_attempted_days),
+                "succeeded_days": int(low_cost_replay_succeeded_days),
+                "failed_days": int(low_cost_replay_failed_days),
+                "budget_skipped_days": int(low_cost_replay_budget_skipped_days),
+                "recovery_ratio": (
+                    float(low_cost_replay_recovery_ratio) if low_cost_replay_recovery_ratio is not None else None
+                ),
+                "failure_ratio": (
+                    float(low_cost_replay_failure_ratio) if low_cost_replay_failure_ratio is not None else None
+                ),
+            },
+            "low_cost_replay_budget_audit": low_cost_replay_budget_audit,
+            "monitor_failed_days": int(monitor_failed_days),
+            "false_positive_days": int(false_positive_days),
+            "monitor_failed_ratio": float(monitor_failed_ratio),
+            "false_positive_ratio": float(false_positive_ratio),
+            "false_positive_target_max": float(false_positive_target_max),
+        }
+        out = {
+            "date": d,
+            "summary": summary,
+            "replay": replay,
+            "rows": rows,
+            "latest_dashboard": latest_dashboard,
+            "coverage": {
+                "active_days": int(active_days),
+                "rollback_artifact_days": int(rollback_artifact_days),
+                "min_samples": int(min_samples),
+                "active_days_ok": bool(active_days_ok),
+                "rollback_artifact_days_ok": bool(rollback_artifact_days_ok),
+                "coverage_ok": bool(coverage_ok),
+                "missing_rollback_days": list(missing_rollback_days),
+                "light_backfill_enabled": bool(light_backfill_enabled),
+                "light_backfill_max_days_per_run": int(light_backfill_max_days_per_run),
+                "light_backfill_attempted_days": int(light_backfill_attempted_days),
+                "light_backfill_succeeded_days": int(light_backfill_succeeded_days),
+                "light_backfill_failed_days": int(light_backfill_failed_days),
+                "light_backfill_budget_skipped_days": int(light_backfill_budget_skipped_days),
+                "low_cost_replay_enabled": bool(low_cost_replay_enabled),
+                "low_cost_replay_max_days_per_run": int(low_cost_replay_max_days_per_run),
+                "low_cost_replay_attempted_days": int(low_cost_replay_attempted_days),
+                "low_cost_replay_succeeded_days": int(low_cost_replay_succeeded_days),
+                "low_cost_replay_failed_days": int(low_cost_replay_failed_days),
+                "low_cost_replay_budget_skipped_days": int(low_cost_replay_budget_skipped_days),
+                "low_cost_replay_recovery_ratio": (
+                    float(low_cost_replay_recovery_ratio) if low_cost_replay_recovery_ratio is not None else None
+                ),
+                "low_cost_replay_failure_ratio": (
+                    float(low_cost_replay_failure_ratio) if low_cost_replay_failure_ratio is not None else None
+                ),
+                "autofill_review_if_missing": bool(autofill_review_if_missing),
+                "review_autofill_max_days_per_run": int(review_autofill_max_days_per_run),
+                "autofill_attempted_days": int(autofill_attempted_days),
+                "autofill_succeeded_days": int(autofill_succeeded_days),
+                "autofill_failed_days": int(autofill_failed_days),
+                "review_autofill_budget_skipped_days": int(review_autofill_budget_skipped_days),
+            },
+            "low_cost_replay_budget_audit": low_cost_replay_budget_audit,
+            "burnin_live_overrides": {
+                "enabled": bool(burnin_live_override_enabled),
+                "path": str(burnin_live_override_path),
+                "applied": bool(burnin_live_override_applied),
+                "error": str(burnin_live_override_error),
+            },
+            "live_overrides": {
+                "enabled": bool(
+                    self._safe_bool(val.get("ops_degradation_guardrail_dashboard_use_live_overrides", True), True)
+                ),
+                "path": str(live_path),
+                "applied": bool(should_tune),
+                "write_error": write_error,
+                "payload": live_payload,
+            },
+        }
+
+        report_json = self.output_dir / "review" / f"{d}_degradation_guardrail_burnin.json"
+        report_md = self.output_dir / "review" / f"{d}_degradation_guardrail_burnin.md"
+        write_json(report_json, out)
+        lines = [
+            f"# 降级护栏 Burn-in 报告 | {d}",
+            "",
+            f"- window_days: `{int(window_days)}`",
+            f"- active_days/min_samples: `{int(active_days)}` / `{int(min_samples)}`",
+            f"- rollback_artifact_days/min_samples: `{int(rollback_artifact_days)}` / `{int(min_samples)}`",
+            f"- coverage_ok: `{bool(coverage_ok)}`",
+            (
+                "- light_backfill(enabled/max/attempted/succeeded/failed/skipped): "
+                + f"`{bool(light_backfill_enabled)}` / "
+                + f"`{int(light_backfill_max_days_per_run)}` / "
+                + f"`{int(light_backfill_attempted_days)}` / "
+                + f"`{int(light_backfill_succeeded_days)}` / "
+                + f"`{int(light_backfill_failed_days)}` / "
+                + f"`{int(light_backfill_budget_skipped_days)}`"
+            ),
+            (
+                "- review_autofill(enabled/max/attempted/succeeded/failed/skipped): "
+                + f"`{bool(autofill_review_if_missing)}` / "
+                + f"`{int(review_autofill_max_days_per_run)}` / "
+                + f"`{int(autofill_attempted_days)}` / "
+                + f"`{int(autofill_succeeded_days)}` / "
+                + f"`{int(autofill_failed_days)}` / "
+                + f"`{int(review_autofill_budget_skipped_days)}`"
+            ),
+            (
+                "- low_cost_replay(enabled/max/attempted/succeeded/failed/skipped): "
+                + f"`{bool(low_cost_replay_enabled)}` / "
+                + f"`{int(low_cost_replay_max_days_per_run)}` / "
+                + f"`{int(low_cost_replay_attempted_days)}` / "
+                + f"`{int(low_cost_replay_succeeded_days)}` / "
+                + f"`{int(low_cost_replay_failed_days)}` / "
+                + f"`{int(low_cost_replay_budget_skipped_days)}`"
+            ),
+            (
+                "- low_cost_replay(recovery/failure): "
+                + (
+                    f"`{float(low_cost_replay_recovery_ratio):.2%}`"
+                    if low_cost_replay_recovery_ratio is not None
+                    else "`N/A`"
+                )
+                + " / "
+                + (
+                    f"`{float(low_cost_replay_failure_ratio):.2%}`"
+                    if low_cost_replay_failure_ratio is not None
+                    else "`N/A`"
+                )
+            ),
+            (
+                "- low_cost_budget_audit(reason/recommended/tuned): "
+                + f"`{str(low_cost_replay_budget_audit.get('reason', ''))}` / "
+                + f"`{int(low_cost_replay_budget_audit.get('recommended_max_days_per_run', low_cost_replay_max_days_per_run))}` / "
+                + f"`{bool(low_cost_replay_budget_audit.get('tune_applied', False))}`"
+            ),
+            f"- monitor_failed_days: `{int(monitor_failed_days)}` (`{monitor_failed_ratio:.2%}`)",
+            f"- false_positive_days: `{int(false_positive_days)}` (`{false_positive_ratio:.2%}`)",
+            f"- false_positive_target_max: `{float(false_positive_target_max):.2%}`",
+            f"- live_override_applied: `{bool(should_tune)}`",
+            f"- live_override_path: `{str(live_path)}`",
+            "",
+            "## 推荐阈值",
+            (
+                "- cooldown_hit_rate_max: "
+                + f"`{float(current_cooldown_max):.3f}` -> `{float(recommended_cooldown_max):.3f}`"
+            ),
+            (
+                "- suppressed_trigger_density_max: "
+                + f"`{float(current_suppressed_max):.3f}` -> `{float(recommended_suppressed_max):.3f}`"
+            ),
+            (
+                "- promotion_latency_days_max: "
+                + f"`{int(current_promotion_latency_max)}` -> `{int(recommended_promotion_latency_max)}`"
+            ),
+            "",
+            "## 每日诊断",
+        ]
+        for row in rows:
+            metrics = row.get("metrics", {}) if isinstance(row.get("metrics", {}), dict) else {}
+            rollback_artifact = (
+                row.get("rollback_artifact", {}) if isinstance(row.get("rollback_artifact", {}), dict) else {}
+            )
+            lines.append(
+                "- "
+                + f"{row.get('date')}: "
+                + f"active=`{bool(row.get('active', False))}` "
+                + f"sample_ready=`{bool(row.get('sample_ready', False))}` "
+                + f"monitor_failed=`{bool(row.get('monitor_failed', False))}` "
+                + f"gate_passed=`{bool(row.get('gate_passed', False))}` "
+                + f"replay_ok=`{bool(row.get('replay_ok', True))}` "
+                + f"false_positive=`{bool(row.get('false_positive', False))}` "
+                + f"rollback_artifact=`{bool(rollback_artifact.get('exists_after', False))}` "
+                + f"light_backfill=`{str(rollback_artifact.get('light_backfill_status', ''))}` "
+                + f"autofill=`{str(rollback_artifact.get('autofill_status', ''))}` "
+                + f"low_cost_replay=`{str(rollback_artifact.get('low_cost_replay_status', ''))}` "
+                + f"cooldown=`{self._safe_float(metrics.get('cooldown_hit_rate', 0.0), 0.0):.2%}` "
+                + f"suppressed=`{self._safe_float(metrics.get('suppressed_trigger_density', 0.0), 0.0):.2%}`"
+            )
+        if missing_rollback_days:
+            lines.extend(
+                [
+                    "",
+                    "## 缺失 rollback 工件日期",
+                    "- " + ", ".join(sorted(set(str(x) for x in missing_rollback_days))),
+                ]
+            )
+        if write_error:
+            lines.extend(["", "## 写入异常", f"- `{write_error}`"])
+        write_markdown(report_md, "\n".join(lines) + "\n")
+        out["paths"] = {"json": str(report_json), "md": str(report_md)}
+        return out
+
+    def degradation_guardrail_threshold_drift_audit(
+        self,
+        as_of: date,
+        window_days: int = 56,
+    ) -> dict[str, Any]:
+        d = as_of.isoformat()
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        lookback_days = max(7, int(window_days))
+        warn_ratio = self._clamp_float(
+            self._safe_float(val.get("ops_degradation_guardrail_threshold_drift_warn_ratio", 0.25), 0.25),
+            0.0,
+            10.0,
+        )
+        critical_ratio = self._clamp_float(
+            self._safe_float(val.get("ops_degradation_guardrail_threshold_drift_critical_ratio", 0.40), 0.40),
+            0.0,
+            10.0,
+        )
+        if critical_ratio < warn_ratio:
+            critical_ratio = float(warn_ratio)
+        min_burnin_samples = max(
+            1,
+            int(
+                self._safe_float(
+                    val.get(
+                        "ops_degradation_guardrail_threshold_drift_min_burnin_samples",
+                        val.get("ops_degradation_guardrail_dashboard_min_samples", 7),
+                    ),
+                    self._safe_float(val.get("ops_degradation_guardrail_dashboard_min_samples", 7), 7),
+                )
+            ),
+        )
+
+        param_specs: dict[str, dict[str, Any]] = {
+            "ops_degradation_guardrail_cooldown_hit_rate_max": {
+                "kind": "float",
+                "default": 0.80,
+                "min": 0.0,
+                "max": 1.0,
+            },
+            "ops_degradation_guardrail_suppressed_trigger_density_max": {
+                "kind": "float",
+                "default": 0.60,
+                "min": 0.0,
+                "max": 1.0,
+            },
+            "ops_degradation_guardrail_promotion_latency_days_max": {
+                "kind": "int",
+                "default": 21,
+                "min": 1,
+            },
+        }
+
+        def _normalize_value(raw: Any, spec: dict[str, Any]) -> float:
+            kind = str(spec.get("kind", "float"))
+            default_v = spec.get("default", 0.0)
+            if kind == "int":
+                v_int = int(self._safe_float(raw, self._safe_float(default_v, 0.0)))
+                min_v = int(spec.get("min", 1))
+                return float(max(min_v, v_int))
+            min_v = float(spec.get("min", 0.0))
+            max_v = float(spec.get("max", 1.0))
+            return float(self._clamp_float(self._safe_float(raw, self._safe_float(default_v, 0.0)), min_v, max_v))
+
+        live_path = self._resolve_output_path(
+            str(
+                val.get(
+                    "ops_degradation_guardrail_dashboard_live_params_path",
+                    "artifacts/degradation_guardrail_dashboard_live.yaml",
+                )
+            ).strip(),
+            fallback_rel="artifacts/degradation_guardrail_dashboard_live.yaml",
+        )
+        live_payload: dict[str, Any] = {}
+        if live_path.exists():
+            try:
+                loaded_live = yaml.safe_load(live_path.read_text(encoding="utf-8"))
+                if isinstance(loaded_live, dict):
+                    live_payload = loaded_live
+            except Exception:
+                live_payload = {}
+        live_params = live_payload.get("params", {}) if isinstance(live_payload.get("params", {}), dict) else {}
+
+        window_start = as_of - timedelta(days=lookback_days - 1)
+        review_dir = self.output_dir / "review"
+        burnin_rows_by_date: dict[str, dict[str, Any]] = {}
+        recent_values: dict[str, list[float]] = {k: [] for k in param_specs}
+
+        for path in sorted(review_dir.glob("*_degradation_guardrail_burnin.json")):
+            stem = str(path.name).replace("_degradation_guardrail_burnin.json", "")
+            try:
+                report_day = date.fromisoformat(stem)
+            except Exception:
+                continue
+            if report_day < window_start or report_day > as_of:
+                continue
+            payload = self.load_json_safely(path)
+            if not isinstance(payload, dict):
+                continue
+            live_overrides = payload.get("live_overrides", {}) if isinstance(payload.get("live_overrides", {}), dict) else {}
+            live_override_payload = (
+                live_overrides.get("payload", {}) if isinstance(live_overrides.get("payload", {}), dict) else {}
+            )
+            param_payload = live_override_payload.get("params", {}) if isinstance(live_override_payload.get("params", {}), dict) else {}
+            apply_recommended = bool(live_override_payload.get("apply_recommended", False))
+            row_samples = payload.get("rows", []) if isinstance(payload.get("rows", []), list) else []
+            used_row_samples = False
+            for sample in row_samples:
+                if not isinstance(sample, dict):
+                    continue
+                sample_date_txt = str(sample.get("date", "")).strip()
+                if not sample_date_txt:
+                    continue
+                try:
+                    sample_date = date.fromisoformat(sample_date_txt)
+                except Exception:
+                    continue
+                if sample_date < window_start or sample_date > as_of:
+                    continue
+                thresholds = sample.get("thresholds", {}) if isinstance(sample.get("thresholds", {}), dict) else {}
+                row_params: dict[str, float] = {}
+                for param_name, spec in param_specs.items():
+                    raw_v = thresholds.get(param_name, param_payload.get(param_name))
+                    row_params[param_name] = _normalize_value(raw_v, spec)
+                burnin_rows_by_date[sample_date.isoformat()] = {
+                    "date": sample_date.isoformat(),
+                    "path": str(path),
+                    "source": "daily_row",
+                    "params": row_params,
+                    "apply_recommended": bool(apply_recommended),
+                }
+                used_row_samples = True
+            if used_row_samples:
+                continue
+            row_params_fallback: dict[str, float] = {}
+            for param_name, spec in param_specs.items():
+                row_params_fallback[param_name] = _normalize_value(param_payload.get(param_name), spec)
+            burnin_rows_by_date[report_day.isoformat()] = {
+                "date": report_day.isoformat(),
+                "path": str(path),
+                "source": "report_payload",
+                "params": row_params_fallback,
+                "apply_recommended": bool(apply_recommended),
+            }
+
+        burnin_rows = [burnin_rows_by_date[dtag] for dtag in sorted(burnin_rows_by_date.keys())]
+        for row in burnin_rows:
+            params_row = row.get("params", {}) if isinstance(row.get("params", {}), dict) else {}
+            for param_name, spec in param_specs.items():
+                recent_values[param_name].append(
+                    float(_normalize_value(params_row.get(param_name, spec.get("default")), spec))
+                )
+
+        severity_rank = {"ok": 0, "warn": 1, "critical": 2}
+        params_audit: dict[str, dict[str, Any]] = {}
+        alerts: list[str] = []
+        worst_severity = "ok"
+        warn_count = 0
+        critical_count = 0
+
+        for param_name, spec in param_specs.items():
+            baseline = _normalize_value(val.get(param_name, spec.get("default")), spec)
+            current = _normalize_value(live_params.get(param_name, baseline), spec)
+            recent_median = self._quantile(recent_values.get(param_name, []), 0.50)
+
+            baseline_drift = abs(float(current) - float(baseline)) / max(abs(float(baseline)), 1e-9)
+            recent_drift = None
+            if recent_median is not None:
+                recent_drift = abs(float(current) - float(recent_median)) / max(abs(float(recent_median)), 1e-9)
+            max_drift = max(float(baseline_drift), float(recent_drift) if recent_drift is not None else 0.0)
+
+            severity = "ok"
+            if max_drift >= float(critical_ratio):
+                severity = "critical"
+                critical_count += 1
+                alerts.append(f"degradation_guardrail_threshold_drift_critical:{param_name}")
+            elif max_drift >= float(warn_ratio):
+                severity = "warn"
+                warn_count += 1
+                alerts.append(f"degradation_guardrail_threshold_drift_warn:{param_name}")
+
+            if severity_rank[severity] > severity_rank[worst_severity]:
+                worst_severity = severity
+
+            params_audit[param_name] = {
+                "baseline": float(baseline) if spec.get("kind") == "float" else int(baseline),
+                "current": float(current) if spec.get("kind") == "float" else int(current),
+                "recent_median": (
+                    float(recent_median) if (recent_median is not None and spec.get("kind") == "float") else (
+                        int(recent_median) if recent_median is not None else None
+                    )
+                ),
+                "baseline_drift_ratio": float(baseline_drift),
+                "recent_median_drift_ratio": float(recent_drift) if recent_drift is not None else None,
+                "max_drift_ratio": float(max_drift),
+                "severity": severity,
+                "samples": int(len(recent_values.get(param_name, []))),
+            }
+
+        burnin_samples = int(len(burnin_rows))
+        burnin_samples_ok = bool(burnin_samples >= min_burnin_samples)
+        if not burnin_samples_ok:
+            alerts.append("degradation_guardrail_threshold_drift_insufficient_burnin_samples")
+
+        status = str(worst_severity)
+        if (not burnin_samples_ok) and status == "ok":
+            status = "insufficient_samples"
+
+        out: dict[str, Any] = {
+            "date": d,
+            "status": status,
+            "summary": {
+                "params_total": int(len(param_specs)),
+                "warn_count": int(warn_count),
+                "critical_count": int(critical_count),
+                "burnin_samples": int(burnin_samples),
+                "burnin_min_samples": int(min_burnin_samples),
+                "burnin_samples_ok": bool(burnin_samples_ok),
+            },
+            "window": {
+                "lookback_days": int(lookback_days),
+                "start": window_start.isoformat(),
+                "end": d,
+            },
+            "thresholds": {
+                "ops_degradation_guardrail_threshold_drift_warn_ratio": float(warn_ratio),
+                "ops_degradation_guardrail_threshold_drift_critical_ratio": float(critical_ratio),
+                "ops_degradation_guardrail_threshold_drift_min_burnin_samples": int(min_burnin_samples),
+            },
+            "live_overrides": {
+                "path": str(live_path),
+                "exists": bool(live_path.exists()),
+                "as_of": str(live_payload.get("as_of", "")),
+            },
+            "alerts": alerts,
+            "params": params_audit,
+            "burnin_reports": burnin_rows,
+        }
+
+        report_json = self.output_dir / "review" / f"{d}_degradation_guardrail_threshold_drift.json"
+        report_md = self.output_dir / "review" / f"{d}_degradation_guardrail_threshold_drift.md"
+        write_json(report_json, out)
+        lines = [
+            f"# 降级护栏阈值漂移审计 | {d}",
+            "",
+            f"- status: `{status}`",
+            f"- lookback_days: `{int(lookback_days)}`",
+            f"- burnin_samples/min_samples: `{int(burnin_samples)}` / `{int(min_burnin_samples)}`",
+            f"- burnin_samples_ok: `{bool(burnin_samples_ok)}`",
+            f"- warn/critical: `{int(warn_count)}` / `{int(critical_count)}`",
+            f"- live_overrides_path: `{str(live_path)}`",
+            "",
+            "## 阈值漂移",
+        ]
+        for param_name, row in params_audit.items():
+            lines.append(
+                "- "
+                + f"{param_name}: severity=`{row.get('severity')}` "
+                + f"current=`{row.get('current')}` baseline=`{row.get('baseline')}` "
+                + f"recent_median=`{row.get('recent_median')}` "
+                + f"drift(baseline/recent/max)=`{self._safe_float(row.get('baseline_drift_ratio', 0.0), 0.0):.3f}`/"
+                + f"`{self._safe_float(row.get('recent_median_drift_ratio', 0.0), 0.0):.3f}`/"
+                + f"`{self._safe_float(row.get('max_drift_ratio', 0.0), 0.0):.3f}`"
+            )
+        if alerts:
+            lines.extend(["", "## Alerts"])
+            for alert in alerts:
+                lines.append(f"- `{alert}`")
+        write_markdown(report_md, "\n".join(lines) + "\n")
+        out["paths"] = {"json": str(report_json), "md": str(report_md)}
+        return out
+
+    def run_review_cycle(
+        self,
+        as_of: date,
+        max_rounds: int = 2,
+        ops_window_days: int | None = None,
+        trace_id: str | None = None,
+        parent_event_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_trace_id = str(trace_id or derive_trace_id(source="release.run_review_cycle", as_of=as_of))
+        start_event_envelope, start_event_stream = self._emit_release_event(
+            as_of=as_of,
+            source="release.run_review_cycle",
+            event_type="release.review_cycle.start",
+            payload={
+                "max_rounds": int(max_rounds),
+                "ops_window_days": int(ops_window_days) if ops_window_days is not None else None,
+            },
+            trace_id=resolved_trace_id,
+            parent_event_id=parent_event_id,
+        )
+        start_event_id = str(start_event_envelope.get("event_id", ""))
         replay_days = int(self.settings.validation.get("required_stable_replay_days", 3))
         ops_days = int(ops_window_days or replay_days)
         review_loop = self.review_until_pass(as_of=as_of, max_rounds=max_rounds)
-        gate = self.gate_report(as_of=as_of, run_tests=False, run_review_if_missing=False)
+        gate = self.gate_report(
+            as_of=as_of,
+            run_tests=False,
+            run_review_if_missing=False,
+            trace_id=resolved_trace_id,
+            parent_event_id=start_event_id,
+        )
         ops = self.ops_report(as_of=as_of, window_days=ops_days)
         health = self.health_check(as_of, True)
-        return {
+        out = {
             "date": as_of.isoformat(),
             "review_loop": review_loop,
             "gate_report": gate,
             "ops_report": ops,
             "health": health,
+            "release_decision": gate.get("release_decision", {}) if isinstance(gate.get("release_decision", {}), dict) else {},
         }
+        final_event_envelope, final_event_stream = self._emit_release_event(
+            as_of=as_of,
+            source="release.run_review_cycle",
+            event_type="release.review_cycle.completed",
+            payload={
+                "release_ready": bool((out.get("release_decision", {}) or {}).get("gate_passed", gate.get("passed", False))),
+                "gate_passed": bool(gate.get("passed", False)),
+                "ops_status": str(ops.get("status", "")),
+                "health_status": str(health.get("status", "")),
+                "review_defect_count": len((review_loop.get("defect_plan", {}) or {}).get("items", []))
+                if isinstance((review_loop.get("defect_plan", {}) or {}).get("items", []), list)
+                else 0,
+            },
+            trace_id=resolved_trace_id,
+            parent_event_id=start_event_id,
+        )
+        out["trace_id"] = resolved_trace_id
+        out["traceparent"] = str(final_event_envelope.get("traceparent", ""))
+        out["event_envelope"] = final_event_envelope
+        out["event_stream_path"] = final_event_stream
+        out["event_chain"] = {
+            "start_event_id": start_event_id,
+            "start_stream_path": start_event_stream,
+            "gate_event_id": str((gate.get("event_envelope", {}) or {}).get("event_id", "")),
+            "gate_traceparent": str((gate.get("event_envelope", {}) or {}).get("traceparent", "")),
+            "gate_stream_path": str(gate.get("event_stream_path", "")),
+            "final_event_id": str(final_event_envelope.get("event_id", "")),
+            "final_stream_path": final_event_stream,
+        }
+        return out

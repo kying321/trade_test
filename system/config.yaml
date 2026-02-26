@@ -35,6 +35,7 @@ validation:
   unresolved_conflict_max: 0.005
   source_confidence_min: 0.75
   low_confidence_source_ratio_max: 0.40
+  low_confidence_source_ratio_hard_fail: false
   use_mode_profiles: true
   mode_profile_blend_with_live: 0.55
   positive_window_ratio_min: 0.70
@@ -113,6 +114,35 @@ validation:
   ops_stress_matrix_annual_return_drop_max: 0.08
   ops_stress_matrix_drawdown_rise_max: 0.08
   ops_stress_matrix_fail_ratio_max: 0.50
+  ops_stress_matrix_execution_friction_trendline_enabled: true
+  ops_stress_matrix_execution_friction_trendline_require_active: false
+  ops_stress_matrix_execution_friction_trendline_require_samples: false
+  ops_stress_matrix_execution_friction_trendline_recent_runs: 3
+  ops_stress_matrix_execution_friction_trendline_prior_runs: 3
+  ops_stress_matrix_execution_friction_trendline_min_runs: 4
+  ops_stress_matrix_execution_friction_trendline_max_annual_drop_rise: 0.05
+  ops_stress_matrix_execution_friction_trendline_max_drawdown_rise: 0.05
+  ops_stress_matrix_execution_friction_trendline_max_profit_factor_ratio_drop: 0.10
+  ops_stress_matrix_execution_friction_trendline_staleness_guard_enabled: true
+  ops_stress_matrix_execution_friction_trendline_max_staleness_days: 7
+  ops_stress_matrix_execution_friction_trendline_autotune_enabled: true
+  ops_stress_matrix_execution_friction_trendline_autotune_apply_enabled: true
+  ops_stress_matrix_execution_friction_trendline_autotune_lookback_runs: 12
+  ops_stress_matrix_execution_friction_trendline_autotune_min_transitions: 6
+  ops_stress_matrix_execution_friction_trendline_autotune_quantile: 0.80
+  ops_stress_matrix_execution_friction_trendline_autotune_step_max: 0.02
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_enabled: true
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_manual_approval_required: true
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_max_apply_window_days: 7
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_approval_manifest_path: output/artifacts/stress_matrix_execution_friction_trendline_autotune_approval.json
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_enabled: true
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_retention_days: 180
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_staleness_window_days: 30
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_path: output/artifacts/stress_matrix_execution_friction_trendline_controlled_apply_ledger.json
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_drift_enabled: true
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_drift_gate_hard_fail: false
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_window_stale_ratio_max: 0.20
+  ops_stress_matrix_execution_friction_trendline_controlled_apply_ledger_duplicate_block_rate_max: 0.30
   ops_stress_autorun_history_enabled: true
   ops_stress_autorun_history_window_days: 30
   ops_stress_autorun_history_min_rounds: 3
@@ -141,6 +171,8 @@ validation:
   ops_slot_eod_anomaly_ratio_max: 0.50
   ops_slot_eod_quality_anomaly_ratio_max: 0.50
   ops_slot_eod_risk_anomaly_ratio_max: 0.50
+  ops_slot_soft_quality_flag_prefixes:
+    - LOW_CONFIDENCE_SOURCE_RATIO_HIGH
   ops_slot_eod_quality_anomaly_ratio_max_by_regime:
     trend: 0.55
     range: 0.50
@@ -160,6 +192,12 @@ validation:
   ops_slot_regime_tune_missing_ratio_hard_cap: 0.80
   ops_slot_source_confidence_floor: 0.75
   ops_slot_risk_multiplier_floor: 0.20
+  ops_slot_degradation_enabled: true
+  ops_slot_hysteresis_enabled: true
+  ops_slot_degradation_soft_multiplier: 1.15
+  ops_slot_degradation_hard_multiplier: 1.40
+  ops_slot_hysteresis_soft_streak_days: 2
+  ops_slot_hysteresis_hard_streak_days: 3
   ops_reconcile_window_days: 7
   ops_reconcile_min_samples: 3
   ops_reconcile_missing_ratio_max: 0.35
@@ -167,6 +205,14 @@ validation:
   ops_reconcile_closed_count_gap_ratio_max: 0.10
   ops_reconcile_closed_pnl_gap_abs_max: 0.001
   ops_reconcile_open_gap_ratio_max: 0.25
+  ops_reconcile_executed_dedup_monitor_enabled: true
+  ops_reconcile_executed_dedup_gate_hard_fail: false
+  ops_reconcile_executed_dedup_pruned_ratio_max: 0.35
+  ops_reconcile_executed_dedup_days_ratio_max: 0.50
+  ops_reconcile_executed_dedup_restore_verify_enabled: true
+  ops_reconcile_executed_dedup_restore_verify_hard_fail: false
+  ops_reconcile_executed_dedup_restore_verify_max_age_days: 14
+  ops_reconcile_executed_dedup_restore_verify_min_backup_rows: 1
   ops_reconcile_broker_missing_ratio_max: 0.50
   ops_reconcile_broker_gap_ratio_max: 0.10
   ops_reconcile_broker_pnl_gap_abs_max: 0.001
@@ -217,6 +263,10 @@ validation:
       retention_days: 30
       checksum_index_enabled: true
   ops_artifact_governance_strict_mode_enabled: false
+  ops_artifact_governance_baseline_snapshot_enabled: true
+  ops_artifact_governance_baseline_snapshot_path: "artifacts/baselines/artifact_governance/active_baseline.yaml"
+  ops_artifact_governance_baseline_history_dir: "artifacts/baselines/artifact_governance/history"
+  ops_artifact_governance_baseline_auto_promote_on_review_pass: true
   ops_artifact_governance_profile_baseline:
     temporal_autofix_patch:
       json_glob: "*_temporal_autofix_patch.json"
@@ -250,6 +300,208 @@ validation:
   ops_risk_multiplier_drift_max: 0.30
   ops_source_confidence_floor: 0.75
   ops_mode_health_fail_days_max: 2
+  ops_state_switch_rate_max_by_mode:
+    ultra_short: 1.25
+    swing: 1.00
+    long: 0.85
+  ops_state_mode_switch_min_dwell_days: 2
+  ops_state_degradation_enabled: true
+  ops_state_hysteresis_enabled: true
+  ops_state_degradation_soft_multiplier: 1.10
+  ops_state_degradation_hard_multiplier: 1.35
+  ops_state_degradation_floor_soft_ratio: 0.96
+  ops_state_degradation_floor_hard_ratio: 0.90
+  ops_state_hysteresis_soft_streak_days: 2
+  ops_state_hysteresis_hard_streak_days: 3
+  ops_degradation_calibration_enabled: true
+  ops_degradation_calibration_window_days: 30
+  ops_degradation_calibration_min_samples: 20
+  ops_degradation_calibration_fp_target: 0.08
+  ops_degradation_calibration_fn_target: 0.05
+  ops_degradation_calibration_step_multiplier: 0.03
+  ops_degradation_calibration_step_floor_ratio: 0.02
+  ops_degradation_calibration_step_streak_days: 1
+  ops_degradation_calibration_multiplier_min: 1.00
+  ops_degradation_calibration_multiplier_max: 2.00
+  ops_degradation_calibration_floor_ratio_min: 0.70
+  ops_degradation_calibration_floor_ratio_max: 1.00
+  ops_degradation_calibration_streak_min: 1
+  ops_degradation_calibration_streak_max: 7
+  ops_degradation_calibration_use_live_overrides: true
+  ops_degradation_calibration_live_params_path: "artifacts/degradation_params_live.yaml"
+  ops_degradation_calibration_rollback_enabled: true
+  ops_degradation_calibration_rollback_window_days: 30
+  ops_degradation_calibration_rollback_recent_days: 5
+  ops_degradation_calibration_rollback_min_samples: 20
+  ops_degradation_calibration_rollback_fn_rise_min: 0.03
+  ops_degradation_calibration_rollback_gate_fail_rise_min: 0.10
+  ops_degradation_calibration_rollback_stable_min_samples: 20
+  ops_degradation_calibration_rollback_stable_fn_rate_max: 0.05
+  ops_degradation_calibration_rollback_stable_gate_fail_ratio_max: 0.20
+  ops_degradation_calibration_rollback_auto_promote_on_stable: true
+  ops_degradation_calibration_rollback_cooldown_days: 3
+  ops_degradation_calibration_rollback_promotion_cooldown_days: 7
+  ops_degradation_calibration_rollback_hysteresis_window_days: 7
+  ops_degradation_calibration_rollback_trigger_hysteresis_buffer: 0.02
+  ops_degradation_calibration_rollback_stable_hysteresis_buffer: 0.01
+  ops_degradation_calibration_rollback_active_snapshot_path: "artifacts/baselines/degradation_calibration/active_snapshot.yaml"
+  ops_degradation_calibration_rollback_history_dir: "artifacts/baselines/degradation_calibration/history"
+  ops_degradation_calibration_snapshot_chain_enabled: true
+  ops_degradation_calibration_snapshot_chain_require_active: false
+  ops_degradation_calibration_snapshot_chain_require_checksum: false
+  ops_degradation_calibration_snapshot_chain_require_history_alignment: false
+  ops_degradation_calibration_snapshot_chain_max_depth: 8
+  ops_snapshot_chain_gate_enabled: true
+  ops_snapshot_chain_gate_hard_fail: true
+  ops_snapshot_chain_gate_require_active: false
+  ops_snapshot_chain_gate_require_checksum: false
+  ops_snapshot_chain_gate_require_history_alignment: false
+  ops_snapshot_chain_gate_max_depth: 8
+  release_decision_freshness_enabled: true
+  release_decision_freshness_hard_fail: true
+  release_decision_review_max_staleness_hours: 24
+  release_decision_gate_max_staleness_hours: 12
+  release_decision_eod_max_staleness_hours: 12
+  ops_degradation_guardrail_dashboard_enabled: true
+  ops_degradation_guardrail_dashboard_hard_fail: false
+  ops_degradation_guardrail_dashboard_window_days: 30
+  ops_degradation_guardrail_dashboard_min_samples: 7
+  ops_degradation_guardrail_dashboard_use_live_overrides: true
+  ops_degradation_guardrail_dashboard_live_params_path: "artifacts/degradation_guardrail_dashboard_live.yaml"
+  ops_degradation_guardrail_cooldown_hit_rate_max: 0.80
+  ops_degradation_guardrail_suppressed_trigger_density_max: 0.60
+  ops_degradation_guardrail_promotion_latency_days_max: 21
+  ops_degradation_guardrail_false_positive_target_max: 0.20
+  ops_degradation_guardrail_burnin_autofill_review_if_missing: true
+  ops_degradation_guardrail_burnin_require_min_samples_for_tune: true
+  ops_degradation_guardrail_burnin_light_backfill_enabled: true
+  ops_degradation_guardrail_burnin_light_backfill_max_days_per_run: 3
+  ops_degradation_guardrail_burnin_review_autofill_max_days_per_run: 0
+  ops_degradation_guardrail_burnin_low_cost_replay_enabled: true
+  ops_degradation_guardrail_burnin_low_cost_replay_max_days_per_run: 2
+  ops_degradation_guardrail_burnin_use_live_overrides: true
+  ops_degradation_guardrail_burnin_live_params_path: "artifacts/degradation_guardrail_burnin_live.yaml"
+  ops_degradation_guardrail_burnin_budget_audit_enabled: true
+  ops_degradation_guardrail_burnin_budget_audit_auto_tune: true
+  ops_degradation_guardrail_burnin_budget_audit_expand_recovery_ratio_min: 0.75
+  ops_degradation_guardrail_burnin_budget_audit_shrink_recovery_ratio_max: 0.40
+  ops_degradation_guardrail_burnin_budget_audit_step_days: 1
+  ops_degradation_guardrail_burnin_budget_audit_min_days: 0
+  ops_degradation_guardrail_burnin_budget_audit_max_days: 7
+  ops_degradation_guardrail_threshold_drift_enabled: true
+  ops_degradation_guardrail_threshold_drift_gate_hard_fail: false
+  ops_degradation_guardrail_threshold_drift_require_active: false
+  ops_degradation_guardrail_threshold_drift_max_staleness_days: 14
+  ops_degradation_guardrail_threshold_drift_min_burnin_samples: 7
+  ops_degradation_guardrail_threshold_drift_autofix_enabled: true
+  ops_degradation_guardrail_threshold_drift_autofix_on_missing: true
+  ops_degradation_guardrail_threshold_drift_autofix_on_stale: true
+  ops_degradation_guardrail_threshold_drift_autofix_window_days: 56
+  ops_degradation_guardrail_threshold_drift_warn_ratio: 0.25
+  ops_degradation_guardrail_threshold_drift_critical_ratio: 0.40
+  ops_guard_loop_cadence_non_apply_semantic_drift_window_days: 14
+  ops_guard_loop_cadence_non_apply_semantic_drift_min_samples: 6
+  ops_guard_loop_cadence_non_apply_semantic_drift_max_pulse_fail_ratio: 0.20
+  ops_guard_loop_cadence_non_apply_semantic_drift_max_gap_backfill_fail_ratio: 0.35
+  ops_guard_loop_cadence_lift_trend_preset_light_applied_delta_max: -0.15
+  ops_guard_loop_cadence_lift_trend_preset_heavy_applied_delta_max: -0.30
+  ops_guard_loop_cadence_lift_trend_preset_light_cooldown_delta_min: 0.15
+  ops_guard_loop_cadence_lift_trend_preset_heavy_cooldown_delta_min: 0.30
+  ops_guard_loop_cadence_lift_trend_preset_drift_window_days: 14
+  ops_guard_loop_cadence_lift_trend_preset_drift_retention_days: 30
+  ops_guard_loop_cadence_lift_trend_preset_drift_min_samples: 6
+  ops_guard_loop_cadence_lift_trend_preset_drift_min_recovery_link_rate: 0.75
+  ops_guard_loop_cadence_lift_trend_preset_drift_min_retro_found_rate: 0.60
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_enabled: true
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_min_samples: 10
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_step_max: 0.03
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_low: 0.20
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_hit_rate_high: 0.60
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_applied_gap_min: 0.05
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_cooldown_gap_min: 0.05
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_enabled: true
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_apply_cooldown_days: 3
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_anti_flap_enabled: true
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_anti_flap_min_delta: 0.01
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_anti_flap_window_days: 7
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_staleness_guard_enabled: true
+  ops_guard_loop_cadence_lift_trend_preset_drift_auto_tune_handoff_max_staleness_days: 7
+  ops_guard_loop_cadence_lift_trend_preset_drift_trendline_enabled: true
+  ops_guard_loop_cadence_lift_trend_preset_drift_trendline_recent_days: 7
+  ops_guard_loop_cadence_lift_trend_preset_drift_trendline_prior_days: 7
+  ops_guard_loop_cadence_lift_trend_preset_drift_trendline_min_samples: 3
+  ops_guard_loop_cadence_lift_trend_preset_drift_trendline_max_recovery_link_drop: 0.20
+  ops_guard_loop_cadence_lift_trend_preset_drift_trendline_max_retro_found_drop: 0.20
+  ops_guard_loop_frontend_snapshot_retention_days: 30
+  ops_guard_loop_frontend_snapshot_checksum_index_enabled: true
+  ops_guard_loop_frontend_snapshot_trend_enabled: true
+  ops_guard_loop_frontend_snapshot_trend_gate_hard_fail: false
+  ops_guard_loop_frontend_snapshot_trend_require_active: false
+  ops_guard_loop_frontend_snapshot_trend_window_days: 14
+  ops_guard_loop_frontend_snapshot_trend_min_samples: 4
+  ops_guard_loop_frontend_snapshot_trend_max_failure_ratio: 0.35
+  ops_guard_loop_frontend_snapshot_trend_max_timeout_ratio: 0.20
+  ops_guard_loop_frontend_snapshot_trend_max_governance_failure_ratio: 0.20
+  ops_guard_loop_frontend_snapshot_trend_max_failure_streak: 2
+  ops_guard_loop_frontend_snapshot_trend_max_timeout_streak: 2
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_enabled: true
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_cooldown_hours: 6.0
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_window_runs: 8
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_max_escalations: 2
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_repeat_timeout_min_timeout_streak: 2
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_enabled: true
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_window_days: 3
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_min_samples: 3
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_suppression_ratio: 0.50
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_require_zero_missed_runs: true
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_max_reason_missing_runs: 0
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_retention_days: 30
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_checksum_index_enabled: true
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_enabled: true
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_long_days: 14
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_min_long_samples: 3
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_suppression_ratio_delta: 0.35
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_replay_missed_ratio_delta: 0.10
+  ops_guard_loop_frontend_snapshot_recovery_antiflap_burnin_dual_window_max_reason_missing_ratio_delta: 0.10
+  ops_guard_loop_frontend_snapshot_trend_gate_promote_on_burnin: false
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_enabled: true
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_manual_approval_required: true
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_max_apply_window_days: 7
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_approval_manifest_path: output/artifacts/frontend_snapshot_trend_hard_fail_approval.json
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_dry_run: true
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_rollback_guard_enabled: true
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_retention_days: 60
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_checksum_index_enabled: true
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_enabled: true
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_gate_hard_fail: false
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_window_days: 28
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_samples: 7
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_non_apply_ratio: 0.85
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_max_rollback_guard_ratio: 0.35
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_min_apply_ratio: 0.05
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_recent_days: 7
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_prior_days: 7
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_min_samples: 3
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_non_apply_ratio_rise: 0.25
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_rollback_guard_ratio_rise: 0.15
+  ops_guard_loop_frontend_snapshot_trend_controlled_apply_route_audit_trendline_max_apply_ratio_drop: 0.20
+  ops_weekly_guardrail_enabled: true
+  ops_weekly_guardrail_weekday: 7
+  ops_weekly_guardrail_trigger_slot: "20:30"
+  ops_weekly_guardrail_burnin_days: 7
+  ops_weekly_guardrail_drift_window_days: 56
+  ops_weekly_guardrail_auto_tune: true
+  ops_weekly_guardrail_run_stable_replay: true
+  ops_weekly_guardrail_require_ops_window: true
+  ops_weekly_guardrail_require_burnin_coverage: true
+  ops_weekly_guardrail_compact_enabled: true
+  ops_weekly_guardrail_compact_dry_run: true
+  ops_weekly_guardrail_compact_window_days: 180
+  ops_weekly_guardrail_compact_chunk_days: 30
+  ops_weekly_guardrail_compact_max_delete_rows: null
+  ops_weekly_guardrail_compact_verify_restore: true
+  ops_weekly_guardrail_compact_verify_keep_temp_db: false
+  weekly_guardrail_history_limit: 104
   broker_snapshot_source_mode: "paper_engine"  # paper_engine | live_adapter | hybrid_prefer_live
   broker_snapshot_live_mapping_profile: "generic"  # generic | ibkr | binance | ctp
   broker_snapshot_live_inbox: "output/artifacts/broker_live_inbox"

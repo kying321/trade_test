@@ -224,6 +224,13 @@ lie run-slot --date 2026-02-13 --slot 08:40
 lie run-slot --date 2026-02-13 --slot 15:10
 lie run-slot --date 2026-02-13 --slot ops
 
+# 半小时脉冲执行（建议由 cron / automation 每30分钟触发）
+lie run-halfhour-pulse --date 2026-02-13 --slot 11:00
+# 干跑（只看当前脉冲会触发什么，不落状态）
+lie run-halfhour-pulse --date 2026-02-13 --slot 11:00 --dry-run
+# 默认可省略 date/slot，自动使用本地当天+当前时间
+lie run-halfhour-pulse
+
 # 单日全流程
 lie run-session --date 2026-02-13
 lie run-review-cycle --date 2026-02-13 --max-rounds 2
@@ -235,9 +242,27 @@ lie run-daemon --poll-seconds 30
 # 仅预演当前时刻会触发哪些槽位（不执行，不写状态）
 lie run-daemon --dry-run
 
-# 本地 cron 安装/卸载
+# 半小时脉冲守护（轮询触发，每个半小时桶最多执行一次）
+lie run-halfhour-daemon --poll-seconds 30
+# 仅预演当前半小时桶是否会触发脉冲（不执行，不写状态）
+lie run-halfhour-daemon --dry-run
+
+# 本地 cron 安装/卸载（固定时段）
 ./infra/local/install_cron.sh
 ./infra/local/uninstall_cron.sh
+
+# 30分钟 Guard Loop（路径确定性 + 去抖 + 重恢复限频）
+python3 ./infra/local/guard_loop.py --dry-run-recovery
+./infra/local/install_guard_cron.sh
+./infra/local/uninstall_guard_cron.sh
+
+# 无监督自动执行（推荐先读运行手册）
+# docs/WORKFLOW_AUTO.md
+# 建议双 automation 错峰：
+# - mainline :00/:30
+# - guard    :10/:40
+# 日常验证默认 fast 模式（Execution Kernel 变更再跑全量）
+# PYTHONPATH=src python3 -m lie_engine.cli --config config.yaml test-all --fast --fast-ratio 0.10
 
 # 健康检查与失败重试
 lie health-check --date 2026-02-13

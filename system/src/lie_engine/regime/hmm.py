@@ -21,11 +21,17 @@ def _build_features(df: pd.DataFrame) -> np.ndarray:
     r5 = np.log(close / close.shift(5)).replace([np.inf, -np.inf], np.nan)
     sigma20 = close.pct_change().rolling(20).std(ddof=0)
     dvol20 = vol.pct_change(20)
-    feat = pd.concat([r5, sigma20, dvol20], axis=1)
-    feat.columns = ["r5", "sigma20", "dvol20"]
+
+    # Multi-modal anti-fragile features (default to 0.0 if not injected)
+    micro = df["micro_imbalance"].astype(float) if "micro_imbalance" in df.columns else pd.Series(0.0, index=df.index)
+    sent = df["sentiment_pca"].astype(float) if "sentiment_pca" in df.columns else pd.Series(0.0, index=df.index)
+    onchain = df["onchain_proxy"].astype(float) if "onchain_proxy" in df.columns else pd.Series(0.0, index=df.index)
+
+    feat = pd.concat([r5, sigma20, dvol20, micro, sent, onchain], axis=1)
+    feat.columns = ["r5", "sigma20", "dvol20", "micro_imbalance", "sentiment_pca", "onchain_proxy"]
     feat = feat.dropna()
     if feat.empty:
-        return np.empty((0, 3), dtype=float)
+        return np.empty((0, 6), dtype=float)
     x = feat.to_numpy(dtype=float)
     mu = x.mean(axis=0)
     sd = x.std(axis=0)
@@ -49,8 +55,8 @@ class GaussianHMM3:
         self.startprob_ = np.full(self.n_states, 1.0 / self.n_states)
         self.transmat_ = np.full((self.n_states, self.n_states), 0.05)
         np.fill_diagonal(self.transmat_, 0.90)
-        self.means_ = np.zeros((self.n_states, 3))
-        self.vars_ = np.ones((self.n_states, 3))
+        self.means_ = np.zeros((self.n_states, 6))
+        self.vars_ = np.ones((self.n_states, 6))
         self._fitted = False
 
     def _init_params(self, x: np.ndarray) -> None:
@@ -104,7 +110,7 @@ class GaussianHMM3:
 
     def fit(self, x: np.ndarray) -> "GaussianHMM3":
         if x.shape[0] < 10:
-            self._init_params(x if x.size else np.zeros((3, 3)))
+            self._init_params(x if x.size else np.zeros((3, 6)))
             self._fitted = True
             return self
 
