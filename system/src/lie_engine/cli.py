@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime
 import json
+from pathlib import Path
+import sys
 from zoneinfo import ZoneInfo
 
 from lie_engine.config import load_settings, validate_settings
@@ -15,7 +17,9 @@ def _parse_date(s: str) -> date:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="lie", description="Liè Antifragile Trading System CLI")
+    argv0 = Path(sys.argv[0]).name.strip().lower() if sys.argv else ""
+    prog = argv0 if argv0 in {"fenlie", "lie"} else "fenlie"
+    parser = argparse.ArgumentParser(prog=prog, description="Fenlie Antifragile Trading System CLI")
     parser.add_argument("--config", default=None, help="Path to config.yaml")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

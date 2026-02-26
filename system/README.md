@@ -1,4 +1,4 @@
-# 离厄反脆弱交易系统
+# Fenlie（离厄）反脆弱交易系统
 
 架构复盘文档：
 
@@ -12,6 +12,8 @@ docs/DEMO_VERSIONING_BASELINE.md
 
 ```bash
 python3 -m pip install -e .
+# 新主入口（兼容保留 lie）
+fenlie run-eod --date 2026-02-13
 lie run-eod --date 2026-02-13
 lie test-all
 # 快速子样本测试（确定性）

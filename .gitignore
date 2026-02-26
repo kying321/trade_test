@@ -42,3 +42,6 @@ system/output/state/
 *.lock
 *.pid
 *.flag
+
+# ===== Raw research source files (local-only) =====
+*.pdf

@@ -15,6 +15,7 @@ This standard defines what must be committed and what must remain runtime-local.
 - `system/output/**`
 - `**/__pycache__/`, `*.pyc`, `*.egg-info/`
 - `.DS_Store`, lock/pid/flag files
+- root `*.pdf` raw research source files
 
 Runtime outputs are valuable for operations but should not be source-of-truth in Git.
 Persisted decisions should be summarized into `system/docs/` if long-lived.
@@ -34,4 +35,3 @@ Persisted decisions should be summarized into `system/docs/` if long-lived.
 2. Run validation/tests.
 3. Sync only commit-zone files.
 4. Push branch and open PR.
-
