@@ -78,6 +78,26 @@ def _first_non_option(tokens: list[str], start: int = 0) -> str:
     return ""
 
 
+def _first_lie_subcommand(tokens: list[str], start: int = 0) -> str:
+    i = max(0, int(start))
+    while i < len(tokens):
+        tok = str(tokens[i])
+        if not tok:
+            i += 1
+            continue
+        if tok.startswith("--config="):
+            i += 1
+            continue
+        if tok in {"--config", "-c"}:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        return tok
+    return ""
+
+
 def _normalize_command(command: str) -> tuple[str, str]:
     raw = str(command or "").strip()
     if not raw:
@@ -92,7 +112,7 @@ def _normalize_command(command: str) -> tuple[str, str]:
     first = _basename(tokens[0]).lower()
 
     if first == "lie":
-        sub = _first_non_option(tokens, 1)
+        sub = _first_lie_subcommand(tokens, 1)
         if sub:
             return f"lie {sub}", raw
         return "lie", raw
@@ -103,7 +123,7 @@ def _normalize_command(command: str) -> tuple[str, str]:
             if midx + 1 < len(tokens):
                 module = tokens[midx + 1]
                 if module == "lie_engine.cli":
-                    sub = _first_non_option(tokens, midx + 2)
+                    sub = _first_lie_subcommand(tokens, midx + 2)
                     return (f"lie {sub}" if sub else "lie"), raw
                 sub = _first_non_option(tokens, midx + 2)
                 return (f"python -m {module} {sub}".strip() if sub else f"python -m {module}"), raw

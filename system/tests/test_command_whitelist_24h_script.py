@@ -33,6 +33,13 @@ class CommandWhitelist24hScriptTests(unittest.TestCase):
                     json.dumps({"timestamp": inside_1, "command": "lie run-slot --date 2026-02-28 --slot eod", "returncode": 0}),
                     json.dumps({"timestamp": inside_2, "command": "lie run-slot --date 2026-02-28 --slot eod", "returncode": 1}),
                     json.dumps({"timestamp": inside_3, "command": "bash scripts/auto_git_sync.sh --dry-run", "returncode": 0}),
+                    json.dumps(
+                        {
+                            "timestamp": inside_3,
+                            "command": "python -m lie_engine.cli --config config.yaml health-check --date 2026-02-28",
+                            "returncode": 0,
+                        }
+                    ),
                     json.dumps({"timestamp": outside_1, "command": "lie run-slot --date 2026-02-27 --slot eod", "returncode": 0}),
                 ]
             )
@@ -62,17 +69,18 @@ class CommandWhitelist24hScriptTests(unittest.TestCase):
         out = json.loads(proc.stdout)
         self.assertIn("review_json", out)
         payload = json.loads(Path(str(out["review_json"])) .read_text(encoding="utf-8"))
-        self.assertEqual(str(payload.get("status", "")), "FAILED")
+        self.assertEqual(str(payload.get("status", "")), "WARN")
 
         totals = payload.get("totals", {})
-        self.assertEqual(int(totals.get("events", 0)), 4)
-        self.assertEqual(int(totals.get("success_runs", 0)), 3)
+        self.assertEqual(int(totals.get("events", 0)), 5)
+        self.assertEqual(int(totals.get("success_runs", 0)), 4)
 
         whitelist = payload.get("whitelist", [])
         keys = {str(x.get("command", "")) for x in whitelist if isinstance(x, dict)}
         self.assertIn("lie run-slot", keys)
         self.assertIn("bash auto_git_sync.sh", keys)
         self.assertIn("lie test-all", keys)
+        self.assertIn("lie health-check", keys)
 
         run_slot = next(x for x in whitelist if str(x.get("command", "")) == "lie run-slot")
         self.assertEqual(int(run_slot.get("total_runs", 0)), 2)
