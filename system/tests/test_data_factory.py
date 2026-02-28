@@ -21,6 +21,11 @@ class DataFactoryTests(unittest.TestCase):
         self.assertEqual(len(providers), 1)
         self.assertEqual(getattr(providers[0], "name", ""), "open_source_primary")
 
+    def test_build_tushare_binance_hybrid(self) -> None:
+        providers = build_provider_stack("tushare_binance_hybrid")
+        self.assertEqual(len(providers), 1)
+        self.assertEqual(getattr(providers[0], "name", ""), "tushare_binance_hybrid")
+
     def test_unknown_profile_raises(self) -> None:
         with self.assertRaises(ValueError):
             build_provider_stack("unknown_profile")

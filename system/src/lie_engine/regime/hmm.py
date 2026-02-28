@@ -5,6 +5,8 @@ import math
 
 import numpy as np
 import pandas as pd
+import yaml
+from pathlib import Path
 
 
 def _logsumexp(a: np.ndarray, axis: int | None = None) -> np.ndarray:
@@ -21,19 +23,32 @@ def _build_features(df: pd.DataFrame) -> np.ndarray:
     r5 = np.log(close / close.shift(5)).replace([np.inf, -np.inf], np.nan)
     sigma20 = close.pct_change().rolling(20).std(ddof=0)
     dvol20 = vol.pct_change(20)
-
-    # Multi-modal anti-fragile features (default to 0.0 if not injected)
-    micro = df["micro_imbalance"].astype(float) if "micro_imbalance" in df.columns else pd.Series(0.0, index=df.index)
-    sent = df["sentiment_pca"].astype(float) if "sentiment_pca" in df.columns else pd.Series(0.0, index=df.index)
-    onchain = df["onchain_proxy"].astype(float) if "onchain_proxy" in df.columns else pd.Series(0.0, index=df.index)
-
-    feat = pd.concat([r5, sigma20, dvol20, micro, sent, onchain], axis=1)
-    feat.columns = ["r5", "sigma20", "dvol20", "micro_imbalance", "sentiment_pca", "onchain_proxy"]
+    
+    # [ONTOLOGICAL PATCH: Dark Matter Extractor]
+    # Ingest execution pain (fn_rate/degradation) as a 4th physical dimension
+    Z_pain = pd.Series(0.0, index=df.index)
+    deg_path = Path(__file__).parent.parent.parent.parent / "output" / "artifacts" / "degradation_params_live.yaml"
+    if deg_path.exists():
+        try:
+            with open(deg_path, "r", encoding="utf-8") as f:
+                deg_cfg = yaml.safe_load(f)
+                state_fn = float(deg_cfg.get("domains", {}).get("state", {}).get("fn_rate", 0.0))
+                # Normalize pain (0-1)
+                pain_scalar = min(1.0, state_fn / 0.10)  # max pain anchored at 10% fn_rate
+                # Apply simulated temporal decay to recent bars to map pain onto the time series
+                decay = np.exp(-np.arange(len(df))[::-1] / 10.0)
+                Z_pain = pd.Series(pain_scalar * decay, index=df.index)
+        except Exception:
+            pass
+            
+    feat = pd.concat([r5, sigma20, dvol20, Z_pain], axis=1)
+    feat.columns = ["r5", "sigma20", "dvol20", "Z_pain"]
     feat = feat.dropna()
     if feat.empty:
-        return np.empty((0, 6), dtype=float)
+        return np.empty((0, 4), dtype=float)
     x = feat.to_numpy(dtype=float)
     mu = x.mean(axis=0)
+    # Don't standardize the Z_pain boolean/scalar too aggressively if its variance is zero
     sd = x.std(axis=0)
     sd = np.where(sd < 1e-6, 1.0, sd)
     return (x - mu) / sd
@@ -55,8 +70,9 @@ class GaussianHMM3:
         self.startprob_ = np.full(self.n_states, 1.0 / self.n_states)
         self.transmat_ = np.full((self.n_states, self.n_states), 0.05)
         np.fill_diagonal(self.transmat_, 0.90)
-        self.means_ = np.zeros((self.n_states, 6))
-        self.vars_ = np.ones((self.n_states, 6))
+        # [ONTOLOGICAL PATCH: 4D Matrix]
+        self.means_ = np.zeros((self.n_states, 4))
+        self.vars_ = np.ones((self.n_states, 4))
         self._fitted = False
 
     def _init_params(self, x: np.ndarray) -> None:
@@ -110,7 +126,7 @@ class GaussianHMM3:
 
     def fit(self, x: np.ndarray) -> "GaussianHMM3":
         if x.shape[0] < 10:
-            self._init_params(x if x.size else np.zeros((3, 6)))
+            self._init_params(x if x.size else np.zeros((3, 4)))
             self._fitted = True
             return self
 
@@ -152,6 +168,11 @@ class GaussianHMM3:
         gamma, _, _ = self._forward_backward(self._log_emission(x))
         return gamma
 
+def _is_high_pain_state(x: np.ndarray, model: GaussianHMM3, state_idx: int) -> bool:
+    """Detect if a specific latent state strictly corresponds to high execution pain."""
+    # Column index 3 is Z_pain. If the state's mean pain is abnormally high (> 0.5 normalize threshold)
+    return float(model.means_[state_idx, 3]) > 0.5
+
 
 def infer_hmm_state(df: pd.DataFrame) -> dict[str, float]:
     x = _build_features(df)
@@ -165,12 +186,27 @@ def infer_hmm_state(df: pd.DataFrame) -> dict[str, float]:
     # Map latent states to bull/range/bear by mean return factor ordering.
     returns = model.means_[:, 0]
     idx_sorted = np.argsort(returns)
-    bear_idx = idx_sorted[0]
-    range_idx = idx_sorted[1]
+    
+    # [ONTOLOGICAL PATCH: Regime Recalibration]
+    # If the highest return state (pseudo-bull) has extreme average execution pain, 
+    # shatter the bull illusion. Re-assign its probabilities to bear/uncertainty.
     bull_idx = idx_sorted[2]
+    range_idx = idx_sorted[1]
+    bear_idx = idx_sorted[0]
+    
+    bull_prob = float(probs[bull_idx])
+    range_prob = float(probs[range_idx])
+    bear_prob = float(probs[bear_idx])
+    
+    if _is_high_pain_state(x, model, bull_idx) or _is_high_pain_state(x, model, range_idx):
+        # The organism is bleeding despite the 'visible' price action looking healthy.
+        # Transfer all optimistic probabilities to bear, forcing `ACT -> HIBERNATE`.
+        bear_prob = bear_prob + bull_prob + (range_prob * 0.5)
+        range_prob = range_prob * 0.5
+        bull_prob = 0.0
 
     return {
-        "bull": float(probs[bull_idx]),
-        "range": float(probs[range_idx]),
-        "bear": float(probs[bear_idx]),
+        "bull": bull_prob,
+        "range": range_prob,
+        "bear": bear_prob,
     }

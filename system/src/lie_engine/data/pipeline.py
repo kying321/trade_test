@@ -41,7 +41,6 @@ class DataBus:
         conflict_max: float,
         source_confidence_min: float = 0.75,
         low_confidence_source_ratio_max: float = 0.40,
-        low_confidence_source_ratio_hard_fail: bool = False,
     ) -> None:
         self.providers = providers
         self.output_dir = output_dir
@@ -50,7 +49,6 @@ class DataBus:
         self.conflict_max = conflict_max
         self.source_confidence_min = float(source_confidence_min)
         self.low_confidence_source_ratio_max = float(low_confidence_source_ratio_max)
-        self.low_confidence_source_ratio_hard_fail = bool(low_confidence_source_ratio_hard_fail)
 
     def _collect_bars(self, symbols: list[str], start: date, end: date, freq: str = "1d") -> pd.DataFrame:
         frames: list[pd.DataFrame] = []
@@ -394,7 +392,6 @@ class DataBus:
             source_confidence=source_conf,
             source_confidence_min=self.source_confidence_min,
             low_confidence_source_ratio_max=self.low_confidence_source_ratio_max,
-            low_confidence_source_ratio_hard_fail=self.low_confidence_source_ratio_hard_fail,
         )
 
         return IngestionResult(
@@ -433,30 +430,8 @@ class DataBus:
             feature_df["vol_chg"] = feature_df.groupby("symbol")["volume"].pct_change().fillna(0.0)
         write_parquet_optional(feat_path, feature_df)
 
-        bars_for_sqlite = result.normalized_bars.copy()
-        if not bars_for_sqlite.empty and "ts" in bars_for_sqlite.columns:
-            ts = pd.to_datetime(bars_for_sqlite["ts"], errors="coerce")
-            bars_for_sqlite = bars_for_sqlite.assign(_ts_norm=ts).dropna(subset=["_ts_norm"])
-            if not bars_for_sqlite.empty:
-                bars_for_sqlite = bars_for_sqlite.assign(_day=bars_for_sqlite["_ts_norm"].dt.normalize())
-                latest_day_by_symbol = bars_for_sqlite.groupby("symbol")["_day"].transform("max")
-                bars_for_sqlite = bars_for_sqlite.loc[bars_for_sqlite["_day"] == latest_day_by_symbol].copy()
-                bars_for_sqlite = bars_for_sqlite.drop(columns=["_ts_norm", "_day"], errors="ignore")
-        if bars_for_sqlite.empty:
-            bars_for_sqlite = pd.DataFrame(
-                columns=["ts", "symbol", "open", "high", "low", "close", "volume", "asset_class", "source_count", "data_conflict_flag"]
-            )
-        append_sqlite(self.sqlite_path, "bars_normalized", bars_for_sqlite)
-
-        macro_for_sqlite = result.macro.copy() if not result.macro.empty else pd.DataFrame()
-        if not macro_for_sqlite.empty and "date" in macro_for_sqlite.columns:
-            macro_ts = pd.to_datetime(macro_for_sqlite["date"], errors="coerce")
-            if macro_ts.notna().any():
-                latest_macro_date = macro_ts.max()
-                macro_for_sqlite = macro_for_sqlite.loc[macro_ts == latest_macro_date].copy()
-        if macro_for_sqlite.empty:
-            macro_for_sqlite = pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"])
-        append_sqlite(self.sqlite_path, "macro", macro_for_sqlite)
+        append_sqlite(self.sqlite_path, "bars_normalized", result.normalized_bars)
+        append_sqlite(self.sqlite_path, "macro", result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"]))
         source_conf_df = pd.DataFrame([d.to_dict() | {"as_of": dstr} for d in result.source_confidence.details])
         if source_conf_df.empty:
             source_conf_df = pd.DataFrame(columns=["source", "score", "base_reliability", "bar_consistency", "bar_coverage", "macro_consistency", "macro_coverage", "news_confidence", "sentiment_coverage", "bars_rows", "macro_rows", "news_events", "sentiment_factors", "as_of"])

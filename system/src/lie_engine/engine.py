@@ -3,31 +3,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from contextlib import closing
-import hashlib
-import inspect
 import json
 from pathlib import Path
 import re
 import sqlite3
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import yaml
 
 from lie_engine.backtest import BacktestConfig, run_walk_forward_backtest
+from lie_engine.backtest.crypto_factor import run_crypto_factor_backtest
 from lie_engine.config import SystemSettings, assert_valid_settings, load_settings
 from lie_engine.data import DataBus, build_provider_stack
-from lie_engine.data.storage import (
-    append_sqlite,
-    apply_sqlite_retention,
-    collect_sqlite_stats,
-    run_sqlite_vacuum_analyze,
-    write_csv,
-    write_json,
-    write_markdown,
-)
+from lie_engine.data.storage import append_sqlite, write_csv, write_json, write_markdown
 from lie_engine.models import BacktestResult, NewsEvent, RegimeLabel, RegimeState, ReviewDelta, TradePlan
 from lie_engine.orchestration import (
     ArchitectureOrchestrator,
@@ -47,6 +37,8 @@ from lie_engine.reporting import render_daily_briefing, render_mode_stress_matri
 from lie_engine.review import ReviewThresholds, bounded_bayesian_update, build_review_delta
 from lie_engine.risk import RiskManager, infer_edge_from_trades
 from lie_engine.signal import SignalEngineConfig, expand_universe, scan_signals
+
+CRYPTO_PAIR_RE = re.compile(r"^[A-Z]{2,20}(USDT|USD|BUSD|FDUSD|USDC)$")
 
 
 @dataclass(slots=True)
@@ -77,9 +69,6 @@ class LieEngine:
             conflict_max=float(settings.validation.get("unresolved_conflict_max", 0.005)),
             source_confidence_min=float(settings.validation.get("source_confidence_min", 0.75)),
             low_confidence_source_ratio_max=float(settings.validation.get("low_confidence_source_ratio_max", 0.40)),
-            low_confidence_source_ratio_hard_fail=bool(
-                settings.validation.get("low_confidence_source_ratio_hard_fail", False)
-            ),
         )
 
         self.risk_manager = RiskManager(
@@ -111,81 +100,9 @@ class LieEngine:
         except Exception:
             return {}
 
-    def _release_decision_snapshot(self, *, as_of: date, stage: str = "general") -> dict[str, Any]:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        freshness_enabled = bool(val.get("release_decision_freshness_enabled", True))
-        stage_norm = str(stage).strip().lower() or "general"
-        max_staleness_by_stage = {
-            "review": max(1, int(self._safe_float(val.get("release_decision_review_max_staleness_hours", 24), 24))),
-            "gate": max(1, int(self._safe_float(val.get("release_decision_gate_max_staleness_hours", 12), 12))),
-            "eod": max(1, int(self._safe_float(val.get("release_decision_eod_max_staleness_hours", 12), 12))),
-            "general": max(1, int(self._safe_float(val.get("release_decision_gate_max_staleness_hours", 12), 12))),
-        }
-        max_staleness_hours = int(max_staleness_by_stage.get(stage_norm, max_staleness_by_stage["general"]))
-        path = self.ctx.output_dir / "review" / f"{as_of.isoformat()}_release_decision_snapshot.json"
-        payload = self._load_json_safely(path)
-        decision_id_raw = str(payload.get("decision_id", "")).strip() if payload else ""
-        snapshot_date = str(payload.get("date", "")).strip() if payload else ""
-        date_match = bool(snapshot_date == as_of.isoformat())
-        generated_at = self._parse_iso_datetime((payload or {}).get("generated_at")) if payload else None
-        generated_from = "payload_generated_at"
-        if generated_at is None and path.exists():
-            try:
-                generated_at = datetime.fromtimestamp(path.stat().st_mtime)
-                generated_from = "file_mtime"
-            except Exception:
-                generated_at = None
-        age_hours = None
-        if generated_at is not None:
-            age_hours = max(0.0, (datetime.now() - generated_at).total_seconds() / 3600.0)
-        fresh = bool(payload and date_match)
-        reason = "ok"
-        if not payload:
-            reason = "missing_snapshot"
-            fresh = False
-        elif not date_match:
-            reason = "date_mismatch"
-            fresh = False
-        elif freshness_enabled:
-            if age_hours is None:
-                reason = "missing_timestamp"
-                fresh = False
-            elif float(age_hours) > float(max_staleness_hours):
-                reason = "stale_snapshot"
-                fresh = False
-        usable = bool(payload and fresh)
-        decision_id = str(decision_id_raw) if usable else ""
-        return {
-            "found": bool(payload),
-            "path": str(path),
-            "decision_id": decision_id,
-            "decision_id_raw": str(decision_id_raw),
-            "payload": payload if isinstance(payload, dict) else {},
-            "freshness": {
-                "enabled": bool(freshness_enabled),
-                "stage": str(stage_norm),
-                "max_staleness_hours": int(max_staleness_hours),
-                "snapshot_date": str(snapshot_date),
-                "date_match": bool(date_match),
-                "generated_at": generated_at.isoformat() if generated_at is not None else "",
-                "generated_from": str(generated_from),
-                "age_hours": (float(age_hours) if age_hours is not None else None),
-                "fresh": bool(fresh),
-                "usable": bool(usable),
-                "reason": str(reason),
-            },
-        }
-
     @staticmethod
     def _clamp_float(v: float, lo: float, hi: float) -> float:
         return float(max(lo, min(hi, v)))
-
-    @staticmethod
-    def _safe_float(v: Any, default: float = 0.0) -> float:
-        try:
-            return float(v)
-        except Exception:
-            return float(default)
 
     @staticmethod
     def _clamp_int(v: float | int, lo: int, hi: int) -> int:
@@ -280,6 +197,140 @@ class LieEngine:
                 "total_violations": int(sum(int(r["violations"]) for r in rows)),
             }
         return {"as_of": as_of.isoformat(), "lookback_days": lb, "modes": modes}
+
+    def _crypto_factor_failover_state_path(self) -> Path:
+        return self.ctx.output_dir / "artifacts" / "crypto_factor_failover_state.yaml"
+
+    def _load_crypto_factor_failover_state(self) -> dict[str, Any]:
+        p = self._crypto_factor_failover_state_path()
+        if not p.exists():
+            return {}
+        try:
+            raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    def _save_crypto_factor_failover_state(self, payload: dict[str, Any]) -> None:
+        p = self._crypto_factor_failover_state_path()
+        write_markdown(p, yaml.safe_dump(payload, allow_unicode=True, sort_keys=False))
+
+    def _crypto_factor_failover_policy(self) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        window_runs = max(1, int(val.get("crypto_factor_failover_window_runs", 3)))
+        freeze_days = max(1, int(val.get("crypto_factor_failover_freeze_days", 3)))
+        lookback_days = max(window_runs, int(val.get("crypto_factor_failover_lookback_days", 365)))
+        return {
+            "enabled": bool(val.get("crypto_factor_failover_enabled", True)),
+            "window_runs": int(window_runs),
+            "profit_factor_min": float(val.get("crypto_factor_failover_profit_factor_min", 1.0)),
+            "annual_return_min": float(val.get("crypto_factor_failover_annual_return_min", 0.0)),
+            "freeze_days": int(freeze_days),
+            "lookback_days": int(lookback_days),
+        }
+
+    def _recent_crypto_factor_runs(self, *, as_of: date, lookback_days: int) -> list[dict[str, Any]]:
+        manifest_dir = self.ctx.output_dir / "artifacts" / "manifests"
+        if not manifest_dir.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        for path in sorted(manifest_dir.glob("backtest_*.json")):
+            payload = self._load_json_safely(path)
+            metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics", {}), dict) else {}
+            if not bool(metrics.get("crypto_universe", False)):
+                continue
+            if str(metrics.get("selected_engine", "")).strip() != "crypto_factor":
+                continue
+            run_id = str(payload.get("run_id", "")).strip() or path.stem.replace("backtest_", "", 1)
+            _, end_d = self._parse_backtest_run_id_dates(run_id)
+            if end_d is None or end_d > as_of:
+                continue
+            if (as_of - end_d).days > max(1, int(lookback_days)):
+                continue
+            rows.append(
+                {
+                    "end": end_d.isoformat(),
+                    "annual_return": float(metrics.get("annual_return", 0.0)),
+                    "profit_factor": float(metrics.get("profit_factor", 0.0)),
+                    "max_drawdown": float(metrics.get("max_drawdown", 0.0)),
+                    "trades": int(metrics.get("trades", 0)),
+                }
+            )
+        rows.sort(key=lambda x: str(x.get("end", "")))
+        return rows
+
+    def _crypto_execution_friction_policy(self) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        return {
+            "enabled": bool(val.get("crypto_execution_friction_guard_enabled", True)),
+            "p95_bps_max": float(val.get("crypto_execution_friction_p95_bps_max", 35.0)),
+            "depth_floor_usdt": float(val.get("crypto_execution_friction_depth_floor_usdt", 5_000_000.0)),
+            "target_notional_usdt": float(val.get("crypto_execution_friction_target_notional_usdt", 20_000.0)),
+            "artifact_max_age_days": max(0, int(val.get("crypto_execution_friction_artifact_max_age_days", 2))),
+        }
+
+    def _load_latest_crypto_execution_friction_summary(self) -> dict[str, Any]:
+        review_dir = self.ctx.output_dir / "review"
+        if not review_dir.exists():
+            return {}
+        files = sorted(review_dir.glob("*_binance_execution_friction_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in files:
+            payload = self._load_json_safely(path)
+            if payload and isinstance(payload, dict):
+                return {"path": str(path), "payload": payload}
+        return {}
+
+    def _evaluate_crypto_execution_friction_guard(self, *, as_of: date, policy: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+        enabled = bool(policy.get("enabled", False))
+        out = {
+            "enabled": bool(enabled),
+            "blocked": False,
+            "reason": "",
+            "p95_bps": 0.0,
+            "depth_p50_usdt": 0.0,
+            "stale_days": None,
+            "artifact_path": str(source.get("path", "")),
+        }
+        if not enabled:
+            return out
+
+        payload = source.get("payload", {}) if isinstance(source.get("payload", {}), dict) else {}
+        if not payload:
+            out["blocked"] = True
+            out["reason"] = "friction_artifact_missing"
+            return out
+
+        as_of_dt = self._parse_iso_datetime(payload.get("as_of"))
+        stale_days = None
+        if as_of_dt is not None:
+            stale_days = max(0, (as_of - as_of_dt.date()).days)
+        out["stale_days"] = stale_days
+
+        target_notional = max(1.0, float(policy.get("target_notional_usdt", 20_000.0)))
+        key = f"notional_{int(round(target_notional))}"
+        slippage = payload.get("slippage_bps", {}) if isinstance(payload.get("slippage_bps", {}), dict) else {}
+        sl_node = slippage.get(key, {}) if isinstance(slippage.get(key, {}), dict) else {}
+        p95_bps = float(sl_node.get("p95", 1e9))
+        out["p95_bps"] = float(p95_bps)
+
+        liq = payload.get("liquidity", {}) if isinstance(payload.get("liquidity", {}), dict) else {}
+        qv_node = liq.get("quote_volume_usdt", {}) if isinstance(liq.get("quote_volume_usdt", {}), dict) else {}
+        depth_p50 = float(qv_node.get("p50", 0.0))
+        out["depth_p50_usdt"] = float(depth_p50)
+
+        reasons: list[str] = []
+        max_age = max(0, int(policy.get("artifact_max_age_days", 2)))
+        if stale_days is None or stale_days > max_age:
+            reasons.append("friction_artifact_stale")
+        if p95_bps > float(policy.get("p95_bps_max", 35.0)):
+            reasons.append("friction_p95_breach")
+        if depth_p50 < float(policy.get("depth_floor_usdt", 5_000_000.0)):
+            reasons.append("friction_depth_breach")
+
+        if reasons:
+            out["blocked"] = True
+            out["reason"] = ",".join(reasons)
+        return out
 
     def _review_backtest_start(self, as_of: date) -> date:
         default_start = date(2015, 1, 1)
@@ -425,1821 +476,6 @@ class LieEngine:
 
     def _slot_regime_tuning_path(self) -> Path:
         return self.ctx.output_dir / "artifacts" / "slot_regime_thresholds_live.yaml"
-
-    def _resolve_output_artifact_path(self, raw: str, *, fallback_rel: str) -> Path:
-        text = str(raw or "").strip() or str(fallback_rel)
-        path = Path(text)
-        if path.is_absolute():
-            return path
-        parts = list(path.parts)
-        if parts and str(parts[0]).strip().lower() == "output":
-            path = Path(*parts[1:]) if len(parts) > 1 else Path()
-        return self.ctx.output_dir / path
-
-    def _resolve_user_output_path(self, raw: str | None, *, fallback: Path) -> Path:
-        if not str(raw or "").strip():
-            return fallback
-        candidate = Path(str(raw).strip())
-        if candidate.is_absolute():
-            return candidate
-        parts = list(candidate.parts)
-        if parts and str(parts[0]).strip().lower() == "output":
-            candidate = Path(*parts[1:]) if len(parts) > 1 else Path()
-        return self.ctx.output_dir / candidate
-
-    def _stress_exec_controlled_apply_manifest_path(self) -> Path:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        raw = str(
-            val.get(
-                "ops_stress_matrix_execution_friction_trendline_controlled_apply_approval_manifest_path",
-                "artifacts/stress_matrix_execution_friction_trendline_autotune_approval.json",
-            )
-        ).strip()
-        return self._resolve_output_artifact_path(
-            raw,
-            fallback_rel="artifacts/stress_matrix_execution_friction_trendline_autotune_approval.json",
-        )
-
-    def _frontend_hard_fail_controlled_apply_manifest_path(self) -> Path:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        raw = str(
-            val.get(
-                "ops_guard_loop_frontend_snapshot_trend_controlled_apply_approval_manifest_path",
-                "artifacts/frontend_snapshot_trend_hard_fail_approval.json",
-            )
-        ).strip()
-        return self._resolve_output_artifact_path(
-            raw,
-            fallback_rel="artifacts/frontend_snapshot_trend_hard_fail_approval.json",
-        )
-
-    @staticmethod
-    def _proposal_date_from_name(path: Path) -> date | None:
-        stem = str(path.name)
-        if "_" not in stem:
-            return None
-        prefix = stem.split("_", 1)[0]
-        try:
-            return date.fromisoformat(prefix)
-        except Exception:
-            return None
-
-    def _resolve_stress_exec_trendline_proposal_path(
-        self,
-        *,
-        as_of: date | None,
-        proposal_path: str | None,
-    ) -> Path | None:
-        if str(proposal_path or "").strip():
-            return self._resolve_user_output_path(str(proposal_path), fallback=self.ctx.output_dir / "review")
-
-        review_dir = self.ctx.output_dir / "review"
-        if as_of is not None:
-            return review_dir / f"{as_of.isoformat()}_stress_matrix_execution_friction_trendline_autotune_proposal.json"
-
-        latest: tuple[date, Path] | None = None
-        for path in sorted(review_dir.glob("*_stress_matrix_execution_friction_trendline_autotune_proposal.json")):
-            d = self._proposal_date_from_name(path)
-            if d is None:
-                continue
-            if (latest is None) or (d > latest[0]):
-                latest = (d, path)
-        return latest[1] if latest is not None else None
-
-    def _load_stress_exec_trendline_proposal(
-        self,
-        *,
-        as_of: date | None,
-        proposal_path: str | None,
-    ) -> dict[str, Any]:
-        path = self._resolve_stress_exec_trendline_proposal_path(as_of=as_of, proposal_path=proposal_path)
-        if path is None:
-            return {
-                "found": False,
-                "path": "",
-                "date": "",
-                "generated": False,
-                "proposal_id": "",
-                "payload": {},
-            }
-        payload = self._load_json_safely(path)
-        doc = payload if isinstance(payload, dict) else {}
-        proposal_id = str(doc.get("proposal_id", "")).strip()
-        generated = bool(doc.get("generated", False))
-        proposal_date = self._proposal_date_from_name(path)
-        return {
-            "found": bool(doc),
-            "path": str(path),
-            "date": proposal_date.isoformat() if proposal_date is not None else "",
-            "generated": bool(generated),
-            "proposal_id": str(proposal_id),
-            "payload": doc,
-        }
-
-    def _resolve_frontend_hard_fail_proposal_path(
-        self,
-        *,
-        as_of: date | None,
-        proposal_path: str | None,
-    ) -> Path | None:
-        if str(proposal_path or "").strip():
-            return self._resolve_user_output_path(str(proposal_path), fallback=self.ctx.output_dir / "review")
-
-        review_dir = self.ctx.output_dir / "review"
-        if as_of is not None:
-            return review_dir / f"{as_of.isoformat()}_frontend_snapshot_trend_hard_fail_proposal.json"
-
-        latest: tuple[date, Path] | None = None
-        for path in sorted(review_dir.glob("*_frontend_snapshot_trend_hard_fail_proposal.json")):
-            d = self._proposal_date_from_name(path)
-            if d is None:
-                continue
-            if (latest is None) or (d > latest[0]):
-                latest = (d, path)
-        return latest[1] if latest is not None else None
-
-    def _load_frontend_hard_fail_proposal(
-        self,
-        *,
-        as_of: date | None,
-        proposal_path: str | None,
-    ) -> dict[str, Any]:
-        path = self._resolve_frontend_hard_fail_proposal_path(as_of=as_of, proposal_path=proposal_path)
-        if path is None:
-            return {
-                "found": False,
-                "path": "",
-                "date": "",
-                "generated": False,
-                "proposal_id": "",
-                "payload": {},
-            }
-        payload = self._load_json_safely(path)
-        doc = payload if isinstance(payload, dict) else {}
-        proposal_id = str(doc.get("proposal_id", "")).strip()
-        generated = bool(doc.get("generated", False))
-        proposal_date = self._proposal_date_from_name(path)
-        return {
-            "found": bool(doc),
-            "path": str(path),
-            "date": proposal_date.isoformat() if proposal_date is not None else "",
-            "generated": bool(generated),
-            "proposal_id": str(proposal_id),
-            "payload": doc,
-        }
-
-    def _lint_stress_exec_controlled_apply_approval_manifest(
-        self,
-        *,
-        payload: dict[str, Any],
-        expected_proposal_id: str,
-    ) -> dict[str, Any]:
-        errors: list[str] = []
-        checks: dict[str, bool] = {}
-        approved = payload.get("approved")
-        proposal_id = str(payload.get("proposal_id", "")).strip()
-        approved_at_raw = payload.get("approved_at")
-        approved_at = self._parse_iso_datetime(approved_at_raw)
-
-        checks["approved_bool_ok"] = isinstance(approved, bool)
-        if not checks["approved_bool_ok"]:
-            errors.append("approved_not_bool")
-        checks["proposal_id_present_ok"] = bool(proposal_id)
-        if not checks["proposal_id_present_ok"]:
-            errors.append("proposal_id_missing")
-        checks["approved_at_ok"] = approved_at is not None
-        if not checks["approved_at_ok"]:
-            errors.append("approved_at_invalid")
-        checks["proposal_id_match_ok"] = (
-            True if not expected_proposal_id else bool(proposal_id == str(expected_proposal_id))
-        )
-        if not checks["proposal_id_match_ok"]:
-            errors.append("proposal_id_mismatch")
-        checks["schema_ok"] = bool(
-            checks["approved_bool_ok"] and checks["proposal_id_present_ok"] and checks["approved_at_ok"]
-        )
-        return {
-            "ok": bool(not errors),
-            "errors": errors,
-            "checks": checks,
-        }
-
-    def _lint_frontend_hard_fail_controlled_apply_approval_manifest(
-        self,
-        *,
-        payload: dict[str, Any],
-        expected_proposal_id: str,
-    ) -> dict[str, Any]:
-        errors: list[str] = []
-        checks: dict[str, bool] = {}
-        approved = payload.get("approved")
-        proposal_id = str(payload.get("proposal_id", "")).strip()
-        approved_at_raw = payload.get("approved_at")
-        approved_at = self._parse_iso_datetime(approved_at_raw)
-
-        checks["approved_bool_ok"] = isinstance(approved, bool)
-        if not checks["approved_bool_ok"]:
-            errors.append("approved_not_bool")
-        checks["proposal_id_present_ok"] = bool(proposal_id)
-        if not checks["proposal_id_present_ok"]:
-            errors.append("proposal_id_missing")
-        checks["approved_at_ok"] = approved_at is not None
-        if not checks["approved_at_ok"]:
-            errors.append("approved_at_invalid")
-        checks["proposal_id_match_ok"] = (
-            True if not expected_proposal_id else bool(proposal_id == str(expected_proposal_id))
-        )
-        if not checks["proposal_id_match_ok"]:
-            errors.append("proposal_id_mismatch")
-        checks["schema_ok"] = bool(
-            checks["approved_bool_ok"] and checks["proposal_id_present_ok"] and checks["approved_at_ok"]
-        )
-        return {
-            "ok": bool(not errors),
-            "errors": errors,
-            "checks": checks,
-        }
-
-    def stress_exec_controlled_apply_approval_manifest(
-        self,
-        *,
-        as_of: date | None = None,
-        proposal_id: str | None = None,
-        approved: bool = True,
-        approved_at: str | None = None,
-        proposal_path: str | None = None,
-        manifest_path: str | None = None,
-        validate_only: bool = False,
-    ) -> dict[str, Any]:
-        tz_name = str(self.settings.timezone or "Asia/Shanghai").strip() or "Asia/Shanghai"
-        now_local = datetime.now(ZoneInfo(tz_name))
-        as_of_day = as_of if as_of is not None else now_local.date()
-        proposal_meta = self._load_stress_exec_trendline_proposal(as_of=as_of_day, proposal_path=proposal_path)
-        proposal_doc = proposal_meta.get("payload", {}) if isinstance(proposal_meta.get("payload", {}), dict) else {}
-
-        provided_proposal_id = str(proposal_id or "").strip()
-        assisted_proposal_id = ""
-        if not provided_proposal_id:
-            candidate_id = str(proposal_meta.get("proposal_id", "")).strip()
-            if candidate_id:
-                assisted_proposal_id = candidate_id
-        final_proposal_id = provided_proposal_id or assisted_proposal_id
-
-        approved_at_dt = self._parse_iso_datetime(approved_at) if str(approved_at or "").strip() else now_local
-        approved_at_text = (
-            approved_at_dt.isoformat() if approved_at_dt is not None else str(approved_at or "").strip()
-        )
-
-        default_manifest_path = self._stress_exec_controlled_apply_manifest_path()
-        target_manifest_path = self._resolve_user_output_path(manifest_path, fallback=default_manifest_path)
-        proposal_doc_apply_gate = (
-            proposal_doc.get("apply_gate", {})
-            if isinstance(proposal_doc.get("apply_gate", {}), dict)
-            else {}
-        )
-        candidate_payload: dict[str, Any] = {
-            "schema_version": 1,
-            "type": "stress_exec_trendline_controlled_apply_approval",
-            "approved": bool(approved),
-            "proposal_id": str(final_proposal_id),
-            "approved_at": str(approved_at_text),
-            "as_of": as_of_day.isoformat(),
-            "timezone": str(tz_name),
-            "source": "lie stress-exec-approval-manifest",
-            "proposal": {
-                "found": bool(proposal_meta.get("found", False)),
-                "path": str(proposal_meta.get("path", "")),
-                "date": str(proposal_meta.get("date", "")),
-                "generated": bool(proposal_meta.get("generated", False)),
-                "proposal_id": str(proposal_meta.get("proposal_id", "")),
-                "apply_gate_reason": str(proposal_doc_apply_gate.get("reason", "") or ""),
-            },
-            "meta": {
-                "proposal_id_assisted": bool((not provided_proposal_id) and bool(assisted_proposal_id)),
-                "proposal_id_provided": bool(provided_proposal_id),
-                "validate_only": bool(validate_only),
-                "generated_at": now_local.isoformat(),
-            },
-        }
-
-        lint = self._lint_stress_exec_controlled_apply_approval_manifest(
-            payload=candidate_payload,
-            expected_proposal_id=str(proposal_meta.get("proposal_id", "")),
-        )
-        checks = dict(lint.get("checks", {})) if isinstance(lint.get("checks", {}), dict) else {}
-        checks["proposal_found_ok"] = bool(proposal_meta.get("found", False))
-        checks["proposal_generated_ok"] = bool(proposal_meta.get("generated", False))
-        checks["approved_flag_true_ok"] = bool(bool(candidate_payload.get("approved", False)))
-        errors = list(lint.get("errors", [])) if isinstance(lint.get("errors", []), list) else []
-        if not checks["proposal_found_ok"]:
-            errors.append("proposal_artifact_missing")
-        if checks["proposal_found_ok"] and (not checks["proposal_generated_ok"]):
-            errors.append("proposal_not_generated")
-        if not checks["approved_flag_true_ok"]:
-            errors.append("approval_flag_false")
-
-        write_allowed = bool(
-            checks.get("schema_ok", False)
-            and checks.get("proposal_id_match_ok", False)
-            and checks["proposal_found_ok"]
-            and checks["proposal_generated_ok"]
-            and checks["approved_flag_true_ok"]
-        )
-
-        existing_manifest = self._load_json_safely(target_manifest_path)
-        existing_lint = (
-            self._lint_stress_exec_controlled_apply_approval_manifest(
-                payload=existing_manifest,
-                expected_proposal_id=str(proposal_meta.get("proposal_id", "")),
-            )
-            if existing_manifest
-            else {"ok": False, "errors": ["manifest_missing"], "checks": {}}
-        )
-
-        written = False
-        write_error = ""
-        if (not validate_only) and write_allowed:
-            try:
-                target_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-                write_json(target_manifest_path, candidate_payload)
-                written = True
-            except Exception as exc:
-                write_error = f"{type(exc).__name__}:{exc}"
-                errors.append("manifest_write_failed")
-        elif (not validate_only) and (not write_allowed):
-            errors.append("write_blocked_by_lint")
-
-        errors = list(dict.fromkeys([str(x).strip() for x in errors if str(x).strip()]))
-        return {
-            "ok": bool((validate_only and not errors) or (written and not errors)),
-            "date": as_of_day.isoformat(),
-            "timezone": str(tz_name),
-            "validate_only": bool(validate_only),
-            "written": bool(written),
-            "write_allowed": bool(write_allowed),
-            "write_error": str(write_error),
-            "manifest_path": str(target_manifest_path),
-            "proposal": {
-                "found": bool(proposal_meta.get("found", False)),
-                "path": str(proposal_meta.get("path", "")),
-                "date": str(proposal_meta.get("date", "")),
-                "generated": bool(proposal_meta.get("generated", False)),
-                "proposal_id": str(proposal_meta.get("proposal_id", "")),
-            },
-            "candidate_manifest": candidate_payload,
-            "checks": checks,
-            "errors": errors,
-            "existing_manifest": {
-                "found": bool(existing_manifest),
-                "lint": existing_lint,
-            },
-        }
-
-    def frontend_hard_fail_controlled_apply_approval_manifest(
-        self,
-        *,
-        as_of: date | None = None,
-        proposal_id: str | None = None,
-        approved: bool = True,
-        approved_at: str | None = None,
-        proposal_path: str | None = None,
-        manifest_path: str | None = None,
-        validate_only: bool = False,
-    ) -> dict[str, Any]:
-        tz_name = str(self.settings.timezone or "Asia/Shanghai").strip() or "Asia/Shanghai"
-        now_local = datetime.now(ZoneInfo(tz_name))
-        as_of_day = as_of if as_of is not None else now_local.date()
-        proposal_meta = self._load_frontend_hard_fail_proposal(as_of=as_of_day, proposal_path=proposal_path)
-        proposal_doc = proposal_meta.get("payload", {}) if isinstance(proposal_meta.get("payload", {}), dict) else {}
-
-        provided_proposal_id = str(proposal_id or "").strip()
-        assisted_proposal_id = ""
-        if not provided_proposal_id:
-            candidate_id = str(proposal_meta.get("proposal_id", "")).strip()
-            if candidate_id:
-                assisted_proposal_id = candidate_id
-        final_proposal_id = provided_proposal_id or assisted_proposal_id
-
-        approved_at_dt = self._parse_iso_datetime(approved_at) if str(approved_at or "").strip() else now_local
-        approved_at_text = (
-            approved_at_dt.isoformat() if approved_at_dt is not None else str(approved_at or "").strip()
-        )
-
-        default_manifest_path = self._frontend_hard_fail_controlled_apply_manifest_path()
-        target_manifest_path = self._resolve_user_output_path(manifest_path, fallback=default_manifest_path)
-        proposal_doc_promotion = (
-            proposal_doc.get("promotion", {})
-            if isinstance(proposal_doc.get("promotion", {}), dict)
-            else {}
-        )
-        candidate_payload: dict[str, Any] = {
-            "schema_version": 1,
-            "type": "frontend_snapshot_trend_hard_fail_approval",
-            "approved": bool(approved),
-            "proposal_id": str(final_proposal_id),
-            "approved_at": str(approved_at_text),
-            "as_of": as_of_day.isoformat(),
-            "timezone": str(tz_name),
-            "source": "lie frontend-hard-fail-approval-manifest",
-            "proposal": {
-                "found": bool(proposal_meta.get("found", False)),
-                "path": str(proposal_meta.get("path", "")),
-                "date": str(proposal_meta.get("date", "")),
-                "generated": bool(proposal_meta.get("generated", False)),
-                "proposal_id": str(proposal_meta.get("proposal_id", "")),
-                "promotion_recommendation": str(proposal_doc.get("promotion_recommendation", "")),
-                "burnin_ok": bool(
-                    (proposal_doc.get("burnin", {}) or {}).get("ok", False)
-                    if isinstance(proposal_doc.get("burnin", {}), dict)
-                    else False
-                ),
-                "controlled_apply_reason": str(proposal_doc_promotion.get("reason", "") or ""),
-            },
-            "meta": {
-                "proposal_id_assisted": bool((not provided_proposal_id) and bool(assisted_proposal_id)),
-                "proposal_id_provided": bool(provided_proposal_id),
-                "validate_only": bool(validate_only),
-                "generated_at": now_local.isoformat(),
-            },
-        }
-
-        lint = self._lint_frontend_hard_fail_controlled_apply_approval_manifest(
-            payload=candidate_payload,
-            expected_proposal_id=str(proposal_meta.get("proposal_id", "")),
-        )
-        checks = dict(lint.get("checks", {})) if isinstance(lint.get("checks", {}), dict) else {}
-        checks["proposal_found_ok"] = bool(proposal_meta.get("found", False))
-        checks["proposal_generated_ok"] = bool(proposal_meta.get("generated", False))
-        checks["approved_flag_true_ok"] = bool(bool(candidate_payload.get("approved", False)))
-        errors = list(lint.get("errors", [])) if isinstance(lint.get("errors", []), list) else []
-        if not checks["proposal_found_ok"]:
-            errors.append("proposal_artifact_missing")
-        if checks["proposal_found_ok"] and (not checks["proposal_generated_ok"]):
-            errors.append("proposal_not_generated")
-        if not checks["approved_flag_true_ok"]:
-            errors.append("approval_flag_false")
-
-        write_allowed = bool(
-            checks.get("schema_ok", False)
-            and checks.get("proposal_id_match_ok", False)
-            and checks["proposal_found_ok"]
-            and checks["proposal_generated_ok"]
-            and checks["approved_flag_true_ok"]
-        )
-
-        existing_manifest = self._load_json_safely(target_manifest_path)
-        existing_lint = (
-            self._lint_frontend_hard_fail_controlled_apply_approval_manifest(
-                payload=existing_manifest,
-                expected_proposal_id=str(proposal_meta.get("proposal_id", "")),
-            )
-            if existing_manifest
-            else {"ok": False, "errors": ["manifest_missing"], "checks": {}}
-        )
-
-        written = False
-        write_error = ""
-        if (not validate_only) and write_allowed:
-            try:
-                target_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-                write_json(target_manifest_path, candidate_payload)
-                written = True
-            except Exception as exc:
-                write_error = f"{type(exc).__name__}:{exc}"
-                errors.append("manifest_write_failed")
-        elif (not validate_only) and (not write_allowed):
-            errors.append("write_blocked_by_lint")
-
-        errors = list(dict.fromkeys([str(x).strip() for x in errors if str(x).strip()]))
-        return {
-            "ok": bool((validate_only and not errors) or (written and not errors)),
-            "date": as_of_day.isoformat(),
-            "timezone": str(tz_name),
-            "validate_only": bool(validate_only),
-            "written": bool(written),
-            "write_allowed": bool(write_allowed),
-            "write_error": str(write_error),
-            "manifest_path": str(target_manifest_path),
-            "proposal": {
-                "found": bool(proposal_meta.get("found", False)),
-                "path": str(proposal_meta.get("path", "")),
-                "date": str(proposal_meta.get("date", "")),
-                "generated": bool(proposal_meta.get("generated", False)),
-                "proposal_id": str(proposal_meta.get("proposal_id", "")),
-            },
-            "candidate_manifest": candidate_payload,
-            "checks": checks,
-            "errors": errors,
-            "existing_manifest": {
-                "found": bool(existing_manifest),
-                "lint": existing_lint,
-            },
-        }
-
-    def _degradation_calibration_live_path(self) -> Path:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        raw = str(val.get("ops_degradation_calibration_live_params_path", "artifacts/degradation_params_live.yaml")).strip()
-        return self._resolve_output_artifact_path(
-            raw,
-            fallback_rel="artifacts/degradation_params_live.yaml",
-        )
-
-    def _base_degradation_params(self) -> dict[str, float]:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        return {
-            "ops_slot_degradation_soft_multiplier": float(val.get("ops_slot_degradation_soft_multiplier", 1.15)),
-            "ops_slot_degradation_hard_multiplier": float(val.get("ops_slot_degradation_hard_multiplier", 1.40)),
-            "ops_slot_hysteresis_soft_streak_days": float(val.get("ops_slot_hysteresis_soft_streak_days", 2)),
-            "ops_slot_hysteresis_hard_streak_days": float(val.get("ops_slot_hysteresis_hard_streak_days", 3)),
-            "ops_state_degradation_soft_multiplier": float(val.get("ops_state_degradation_soft_multiplier", 1.10)),
-            "ops_state_degradation_hard_multiplier": float(val.get("ops_state_degradation_hard_multiplier", 1.35)),
-            "ops_state_degradation_floor_soft_ratio": float(val.get("ops_state_degradation_floor_soft_ratio", 0.96)),
-            "ops_state_degradation_floor_hard_ratio": float(val.get("ops_state_degradation_floor_hard_ratio", 0.90)),
-            "ops_state_hysteresis_soft_streak_days": float(val.get("ops_state_hysteresis_soft_streak_days", 2)),
-            "ops_state_hysteresis_hard_streak_days": float(val.get("ops_state_hysteresis_hard_streak_days", 3)),
-        }
-
-    def _load_live_degradation_params(self) -> dict[str, Any]:
-        path = self._degradation_calibration_live_path()
-        params = self._base_degradation_params()
-        if not path.exists():
-            return {"path": str(path), "found": False, "params": params}
-        try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception as exc:
-            return {
-                "path": str(path),
-                "found": False,
-                "params": params,
-                "error": f"{type(exc).__name__}:{exc}",
-            }
-        candidate = payload.get("params", {}) if isinstance(payload.get("params", {}), dict) else payload
-        if isinstance(candidate, dict):
-            for key in list(params.keys()):
-                raw = candidate.get(key)
-                if isinstance(raw, (int, float)):
-                    params[key] = float(raw)
-        return {"path": str(path), "found": True, "params": params}
-
-    @staticmethod
-    def _degradation_metric_is_lower(*, domain: str, metric: str) -> bool:
-        metric_key = str(metric or "").strip()
-        if str(domain).strip() == "state":
-            return metric_key in {"risk_multiplier_floor", "source_confidence_floor"}
-        return False
-
-    def _degradation_replay_stats(self, *, as_of: date, window_days: int) -> dict[str, Any]:
-        review_dir = self.ctx.output_dir / "review"
-        scanned_days = max(1, int(window_days))
-        loaded_days = 0
-        domains: dict[str, dict[str, Any]] = {
-            "slot": {
-                "samples": 0,
-                "tp": 0,
-                "tn": 0,
-                "fp": 0,
-                "fn": 0,
-                "metrics": {},
-                "days": [],
-            },
-            "state": {
-                "samples": 0,
-                "tp": 0,
-                "tn": 0,
-                "fp": 0,
-                "fn": 0,
-                "metrics": {},
-                "days": [],
-            },
-        }
-        section_map = {
-            "slot": "slot_anomaly",
-            "state": "state_stability",
-        }
-
-        for i in range(scanned_days):
-            day = as_of - timedelta(days=i)
-            payload = self._load_json_safely(review_dir / f"{day.isoformat()}_gate_report.json")
-            if not payload:
-                continue
-            loaded_days += 1
-            for domain, section_key in section_map.items():
-                section = payload.get(section_key, {}) if isinstance(payload.get(section_key, {}), dict) else {}
-                if not bool(section.get("active", False)):
-                    continue
-                degradation = section.get("degradation", {}) if isinstance(section.get("degradation", {}), dict) else {}
-                if not bool(degradation.get("enabled", False)):
-                    continue
-                checks = degradation.get("checks", {}) if isinstance(degradation.get("checks", {}), dict) else {}
-                if not checks:
-                    continue
-                day_samples = 0
-                day_fp = 0
-                day_fn = 0
-                for metric, row in checks.items():
-                    if not isinstance(row, dict):
-                        continue
-                    if "value" not in row or "threshold" not in row or "ok" not in row:
-                        continue
-                    value = float(self._safe_float(row.get("value", 0.0), 0.0))
-                    threshold = float(self._safe_float(row.get("threshold", 0.0), 0.0))
-                    predicted_breach = not bool(row.get("ok", True))
-                    lower_metric = self._degradation_metric_is_lower(domain=domain, metric=str(metric))
-                    strict_breach = bool(value < threshold) if lower_metric else bool(value > threshold)
-                    stats = domains[domain]
-                    stats["samples"] = int(stats["samples"]) + 1
-                    day_samples += 1
-                    metric_rows = stats["metrics"]
-                    metric_key = str(metric)
-                    metric_stats = (
-                        metric_rows.get(metric_key, {})
-                        if isinstance(metric_rows.get(metric_key, {}), dict)
-                        else {}
-                    )
-                    if not metric_stats:
-                        metric_stats = {"samples": 0, "tp": 0, "tn": 0, "fp": 0, "fn": 0}
-                    metric_stats["samples"] = int(metric_stats["samples"]) + 1
-                    if strict_breach and predicted_breach:
-                        stats["tp"] = int(stats["tp"]) + 1
-                        metric_stats["tp"] = int(metric_stats["tp"]) + 1
-                    elif (not strict_breach) and (not predicted_breach):
-                        stats["tn"] = int(stats["tn"]) + 1
-                        metric_stats["tn"] = int(metric_stats["tn"]) + 1
-                    elif (not strict_breach) and predicted_breach:
-                        stats["fp"] = int(stats["fp"]) + 1
-                        metric_stats["fp"] = int(metric_stats["fp"]) + 1
-                        day_fp += 1
-                    else:
-                        stats["fn"] = int(stats["fn"]) + 1
-                        metric_stats["fn"] = int(metric_stats["fn"]) + 1
-                        day_fn += 1
-                    metric_rows[metric_key] = metric_stats
-                if day_samples > 0:
-                    domains[domain]["days"].append(
-                        {
-                            "date": day.isoformat(),
-                            "samples": int(day_samples),
-                            "false_positive": int(day_fp),
-                            "false_negative": int(day_fn),
-                        }
-                    )
-
-        for stats in domains.values():
-            samples = max(1, int(stats["samples"]))
-            stats["fp_rate"] = float(int(stats["fp"]) / samples)
-            stats["fn_rate"] = float(int(stats["fn"]) / samples)
-            stats["precision"] = float(int(stats["tp"]) / max(1, int(stats["tp"]) + int(stats["fp"])))
-            stats["recall"] = float(int(stats["tp"]) / max(1, int(stats["tp"]) + int(stats["fn"])))
-
-        return {
-            "scanned_days": int(scanned_days),
-            "loaded_days": int(loaded_days),
-            "domains": domains,
-        }
-
-    @staticmethod
-    def _ratio_trend_from_rows(
-        *,
-        rows: list[dict[str, Any]],
-        num_key: str,
-        den_key: str,
-        recent_days: int,
-    ) -> dict[str, Any]:
-        if not rows:
-            return {
-                "rows": 0,
-                "recent_rows": 0,
-                "base_rows": 0,
-                "recent_num": 0,
-                "recent_den": 0,
-                "recent_ratio": 0.0,
-                "base_num": 0,
-                "base_den": 0,
-                "base_ratio": 0.0,
-                "ratio_rise": 0.0,
-            }
-        ordered = sorted(
-            [x for x in rows if isinstance(x, dict)],
-            key=lambda x: str(x.get("date", "")),
-        )
-        if not ordered:
-            return {
-                "rows": 0,
-                "recent_rows": 0,
-                "base_rows": 0,
-                "recent_num": 0,
-                "recent_den": 0,
-                "recent_ratio": 0.0,
-                "base_num": 0,
-                "base_den": 0,
-                "base_ratio": 0.0,
-                "ratio_rise": 0.0,
-            }
-        recent_n = max(1, min(int(recent_days), len(ordered)))
-        recent_rows = ordered[-recent_n:]
-        base_rows = ordered[:-recent_n]
-
-        def _agg(payload_rows: list[dict[str, Any]]) -> tuple[int, int, float]:
-            num = sum(int(max(0.0, float(row.get(num_key, 0.0)))) for row in payload_rows)
-            den = sum(int(max(0.0, float(row.get(den_key, 0.0)))) for row in payload_rows)
-            ratio = float(num / den) if den > 0 else 0.0
-            return int(num), int(den), float(ratio)
-
-        recent_num, recent_den, recent_ratio = _agg(recent_rows)
-        base_num, base_den, base_ratio = _agg(base_rows)
-        if base_den <= 0:
-            base_ratio = float(recent_ratio)
-        return {
-            "rows": int(len(ordered)),
-            "recent_rows": int(len(recent_rows)),
-            "base_rows": int(len(base_rows)),
-            "recent_num": int(recent_num),
-            "recent_den": int(recent_den),
-            "recent_ratio": float(recent_ratio),
-            "base_num": int(base_num),
-            "base_den": int(base_den),
-            "base_ratio": float(base_ratio),
-            "ratio_rise": float(recent_ratio - base_ratio),
-        }
-
-    def _degradation_gate_fail_series(self, *, as_of: date, window_days: int) -> list[dict[str, Any]]:
-        review_dir = self.ctx.output_dir / "review"
-        out: list[dict[str, Any]] = []
-        for i in range(max(1, int(window_days))):
-            day = as_of - timedelta(days=i)
-            payload = self._load_json_safely(review_dir / f"{day.isoformat()}_gate_report.json")
-            if not payload:
-                continue
-            passed = bool(payload.get("passed", False))
-            out.append(
-                {
-                    "date": day.isoformat(),
-                    "failed": int(0 if passed else 1),
-                    "days": 1,
-                }
-            )
-        return out
-
-    def _degradation_rollback_event_series(self, *, as_of: date, window_days: int) -> list[dict[str, Any]]:
-        review_dir = self.ctx.output_dir / "review"
-        out: list[dict[str, Any]] = []
-        for i in range(max(1, int(window_days))):
-            day = as_of - timedelta(days=i)
-            payload = self._load_json_safely(review_dir / f"{day.isoformat()}_degradation_calibration_rollback.json")
-            if not payload:
-                continue
-            snapshot_promotion = (
-                payload.get("snapshot_promotion", {})
-                if isinstance(payload.get("snapshot_promotion", {}), dict)
-                else {}
-            )
-            out.append(
-                {
-                    "date": day.isoformat(),
-                    "rollback_triggered": bool(payload.get("triggered", False)),
-                    "rollback_applied": bool(payload.get("applied", False)),
-                    "promotion_eligible": bool(snapshot_promotion.get("eligible", False)),
-                    "promotion_promoted": bool(snapshot_promotion.get("promoted", False)),
-                    "reason": str(payload.get("reason", "")),
-                    "promotion_reason": str(snapshot_promotion.get("reason", "")),
-                }
-            )
-        return out
-
-    def _degradation_calibration_snapshot_paths(self) -> dict[str, Path]:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        active_raw = str(
-            val.get(
-                "ops_degradation_calibration_rollback_active_snapshot_path",
-                "artifacts/baselines/degradation_calibration/active_snapshot.yaml",
-            )
-        ).strip()
-        history_raw = str(
-            val.get(
-                "ops_degradation_calibration_rollback_history_dir",
-                "artifacts/baselines/degradation_calibration/history",
-            )
-        ).strip()
-        return {
-            "active": self._resolve_output_artifact_path(
-                active_raw,
-                fallback_rel="artifacts/baselines/degradation_calibration/active_snapshot.yaml",
-            ),
-            "history_dir": self._resolve_output_artifact_path(
-                history_raw,
-                fallback_rel="artifacts/baselines/degradation_calibration/history",
-            ),
-        }
-
-    @staticmethod
-    def _canonical_json(value: Any) -> str:
-        try:
-            return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        except Exception:
-            return "{}"
-
-    def _degradation_snapshot_chain_checksum(self, *, params: dict[str, Any], rollback_anchor: str) -> str:
-        payload = {
-            "params": params,
-            "rollback_anchor": str(rollback_anchor).strip(),
-        }
-        return hashlib.sha1(self._canonical_json(payload).encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _resolve_snapshot_chain_path(*, raw: str, history_dir: Path) -> Path:
-        txt = str(raw or "").strip()
-        if not txt:
-            return Path()
-        path = Path(txt)
-        if path.is_absolute():
-            return path
-        return (history_dir / path).resolve()
-
-    def _load_degradation_calibration_snapshot(self, *, path: Path) -> dict[str, Any]:
-        base = self._base_degradation_params()
-        if not path.exists():
-            return {"found": False, "path": str(path), "params": base}
-        try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception as exc:
-            return {
-                "found": False,
-                "path": str(path),
-                "params": base,
-                "error": f"{type(exc).__name__}:{exc}",
-            }
-        raw_dict = payload if isinstance(payload, dict) else {}
-        raw_params = raw_dict.get("params", {}) if isinstance(raw_dict.get("params", {}), dict) else raw_dict
-        params = dict(base)
-        if isinstance(raw_params, dict):
-            for key in list(params.keys()):
-                if isinstance(raw_params.get(key), (int, float)):
-                    params[key] = float(raw_params[key])
-        rollback_anchor = str(raw_dict.get("rollback_anchor", "")).strip()
-        params_checksum_expected = hashlib.sha1(self._canonical_json(params).encode("utf-8")).hexdigest()
-        params_checksum_raw = str(raw_dict.get("params_checksum", "")).strip()
-        params_checksum_present = bool(params_checksum_raw)
-        params_checksum_ok = bool((not params_checksum_present) or (params_checksum_raw == params_checksum_expected))
-        chain_checksum_expected = self._degradation_snapshot_chain_checksum(params=params, rollback_anchor=rollback_anchor)
-        chain_checksum_raw = str(raw_dict.get("chain_checksum", "")).strip()
-        chain_checksum_present = bool(chain_checksum_raw)
-        chain_checksum_ok = bool((not chain_checksum_present) or (chain_checksum_raw == chain_checksum_expected))
-        return {
-            "found": True,
-            "path": str(path),
-            "params": params,
-            "as_of": str(raw_dict.get("as_of", "")),
-            "promoted_at": str(raw_dict.get("promoted_at", "")),
-            "history_path": str(raw_dict.get("history_path", "")),
-            "snapshot_path": str(raw_dict.get("snapshot_path", "")),
-            "rollback_anchor": rollback_anchor,
-            "checksum": {
-                "params_present": bool(params_checksum_present),
-                "params_raw": str(params_checksum_raw),
-                "params_expected": str(params_checksum_expected),
-                "params_ok": bool(params_checksum_ok),
-                "chain_present": bool(chain_checksum_present),
-                "chain_raw": str(chain_checksum_raw),
-                "chain_expected": str(chain_checksum_expected),
-                "chain_ok": bool(chain_checksum_ok),
-            },
-        }
-
-    def _degradation_snapshot_chain_integrity(
-        self,
-        *,
-        active_snapshot: dict[str, Any],
-        snapshot_paths: dict[str, Path],
-    ) -> dict[str, Any]:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        enabled = bool(val.get("ops_degradation_calibration_snapshot_chain_enabled", True))
-        require_active = bool(val.get("ops_degradation_calibration_snapshot_chain_require_active", False))
-        require_checksum = bool(val.get("ops_degradation_calibration_snapshot_chain_require_checksum", False))
-        require_history_alignment = bool(
-            val.get("ops_degradation_calibration_snapshot_chain_require_history_alignment", False)
-        )
-        max_depth = max(
-            1,
-            int(
-                self._safe_float(
-                    val.get("ops_degradation_calibration_snapshot_chain_max_depth", 8),
-                    8,
-                )
-            ),
-        )
-        active_path = Path(str(active_snapshot.get("path", snapshot_paths.get("active", "")))).resolve()
-        history_dir = Path(snapshot_paths.get("history_dir", self.ctx.output_dir / "artifacts")).resolve()
-        if not enabled:
-            return {
-                "enabled": False,
-                "active": False,
-                "ok": True,
-                "checks": {},
-                "thresholds": {
-                    "require_active": bool(require_active),
-                    "require_checksum": bool(require_checksum),
-                    "require_history_alignment": bool(require_history_alignment),
-                    "max_depth": int(max_depth),
-                },
-                "metrics": {},
-                "alerts": [],
-                "chain": [],
-            }
-
-        active_found = bool(active_snapshot.get("found", False) and active_path.exists())
-        monitor_active = bool(active_found or require_active)
-        nodes: list[dict[str, Any]] = []
-        checksum_fail_nodes = 0
-        checksum_missing_nodes = 0
-        missing_anchor_nodes = 0
-        history_mismatch_nodes = 0
-        parse_error_nodes = 0
-        loop_detected = False
-        depth_exceeded = False
-        seen: set[str] = set()
-
-        if active_found:
-            current_path = active_path
-            for depth in range(max_depth):
-                resolved = str(current_path.resolve())
-                if resolved in seen:
-                    loop_detected = True
-                    break
-                seen.add(resolved)
-
-                node = self._load_degradation_calibration_snapshot(path=current_path)
-                checksum_payload = node.get("checksum", {}) if isinstance(node.get("checksum", {}), dict) else {}
-                params_present = bool(checksum_payload.get("params_present", False))
-                chain_present = bool(checksum_payload.get("chain_present", False))
-                params_ok = bool(checksum_payload.get("params_ok", True))
-                chain_ok = bool(checksum_payload.get("chain_ok", True))
-                checksum_ok = bool(params_ok and chain_ok)
-                if (params_present and (not params_ok)) or (chain_present and (not chain_ok)):
-                    checksum_fail_nodes += 1
-                if require_checksum and ((not params_present) or (not chain_present)):
-                    checksum_missing_nodes += 1
-
-                history_path = str(node.get("history_path", "")).strip() or str(node.get("snapshot_path", "")).strip()
-                if require_history_alignment:
-                    if not history_path:
-                        history_mismatch_nodes += 1
-                    else:
-                        expected_path = self._resolve_snapshot_chain_path(raw=history_path, history_dir=history_dir)
-                        if not expected_path.exists():
-                            history_mismatch_nodes += 1
-                        elif expected_path.resolve() != current_path.resolve():
-                            # Active snapshot file is a movable pointer; it may point to a history file.
-                            if current_path.resolve() != active_path.resolve():
-                                history_mismatch_nodes += 1
-
-                error = str(node.get("error", "")).strip()
-                if error:
-                    parse_error_nodes += 1
-
-                anchor_raw = str(node.get("rollback_anchor", "")).strip()
-                anchor_path = self._resolve_snapshot_chain_path(raw=anchor_raw, history_dir=history_dir)
-                anchor_exists = bool(anchor_raw and anchor_path.exists())
-                if anchor_raw and (not anchor_exists):
-                    missing_anchor_nodes += 1
-
-                nodes.append(
-                    {
-                        "depth": int(depth),
-                        "path": str(current_path),
-                        "found": bool(node.get("found", False)),
-                        "as_of": str(node.get("as_of", "")),
-                        "promoted_at": str(node.get("promoted_at", "")),
-                        "history_path": str(history_path),
-                        "rollback_anchor": str(anchor_raw),
-                        "rollback_anchor_exists": bool(anchor_exists),
-                        "checksum_present": bool(params_present and chain_present),
-                        "checksum_ok": bool(checksum_ok),
-                        "params_checksum_present": bool(params_present),
-                        "params_checksum_ok": bool(params_ok),
-                        "chain_checksum_present": bool(chain_present),
-                        "chain_checksum_ok": bool(chain_ok),
-                        "error": error,
-                    }
-                )
-
-                if not anchor_raw:
-                    break
-                if not anchor_exists:
-                    break
-                next_resolved = str(anchor_path.resolve())
-                if next_resolved in seen:
-                    loop_detected = True
-                    break
-                current_path = anchor_path
-            else:
-                depth_exceeded = True
-
-        checks = {
-            "active_snapshot_found_ok": bool((not require_active) or active_found),
-            "chain_anchor_resolved_ok": bool((not monitor_active) or (missing_anchor_nodes == 0)),
-            "chain_loop_free_ok": bool((not monitor_active) or (not loop_detected)),
-            "chain_depth_ok": bool((not monitor_active) or (not depth_exceeded)),
-            "chain_checksum_ok": bool(
-                (not monitor_active)
-                or (
-                    checksum_fail_nodes == 0
-                    and ((not require_checksum) or (checksum_missing_nodes == 0))
-                )
-            ),
-            "history_path_alignment_ok": bool(
-                (not monitor_active)
-                or ((not require_history_alignment) or (history_mismatch_nodes == 0))
-            ),
-            "snapshot_parse_ok": bool((not monitor_active) or (parse_error_nodes == 0)),
-        }
-        overall = bool(all(bool(v) for v in checks.values()))
-        alerts: list[str] = []
-        if monitor_active and not checks["active_snapshot_found_ok"]:
-            alerts.append("snapshot_chain_active_missing")
-        if monitor_active and not checks["chain_anchor_resolved_ok"]:
-            alerts.append("snapshot_chain_anchor_missing")
-        if monitor_active and not checks["chain_loop_free_ok"]:
-            alerts.append("snapshot_chain_loop_detected")
-        if monitor_active and not checks["chain_depth_ok"]:
-            alerts.append("snapshot_chain_depth_exceeded")
-        if monitor_active and not checks["chain_checksum_ok"]:
-            alerts.append("snapshot_chain_checksum_failed")
-        if monitor_active and not checks["history_path_alignment_ok"]:
-            alerts.append("snapshot_chain_history_mismatch")
-        if monitor_active and not checks["snapshot_parse_ok"]:
-            alerts.append("snapshot_chain_parse_failed")
-        return {
-            "enabled": True,
-            "active": bool(monitor_active),
-            "ok": bool(overall),
-            "checks": checks,
-            "thresholds": {
-                "require_active": bool(require_active),
-                "require_checksum": bool(require_checksum),
-                "require_history_alignment": bool(require_history_alignment),
-                "max_depth": int(max_depth),
-            },
-            "metrics": {
-                "chain_depth": int(len(nodes)),
-                "checksum_fail_nodes": int(checksum_fail_nodes),
-                "checksum_missing_nodes": int(checksum_missing_nodes),
-                "missing_anchor_nodes": int(missing_anchor_nodes),
-                "history_mismatch_nodes": int(history_mismatch_nodes),
-                "parse_error_nodes": int(parse_error_nodes),
-                "loop_detected": bool(loop_detected),
-                "depth_exceeded": bool(depth_exceeded),
-            },
-            "alerts": alerts,
-            "chain": nodes,
-        }
-
-    def _calibrate_degradation_params(self, *, as_of: date) -> dict[str, Any]:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        enabled = bool(val.get("ops_degradation_calibration_enabled", True))
-        window_days = max(3, int(val.get("ops_degradation_calibration_window_days", 30)))
-        min_samples = max(1, int(val.get("ops_degradation_calibration_min_samples", 20)))
-        fp_target = self._clamp_float(float(val.get("ops_degradation_calibration_fp_target", 0.08)), 0.0, 1.0)
-        fn_target = self._clamp_float(float(val.get("ops_degradation_calibration_fn_target", 0.05)), 0.0, 1.0)
-        step_multiplier = self._clamp_float(float(val.get("ops_degradation_calibration_step_multiplier", 0.03)), 1e-3, 1.0)
-        step_floor_ratio = self._clamp_float(float(val.get("ops_degradation_calibration_step_floor_ratio", 0.02)), 1e-3, 1.0)
-        step_streak = max(1, int(val.get("ops_degradation_calibration_step_streak_days", 1)))
-        multiplier_min = max(1.0, self._safe_float(val.get("ops_degradation_calibration_multiplier_min", 1.0), 1.0))
-        multiplier_max = max(multiplier_min, self._safe_float(val.get("ops_degradation_calibration_multiplier_max", 2.0), 2.0))
-        floor_ratio_min = self._clamp_float(
-            self._safe_float(val.get("ops_degradation_calibration_floor_ratio_min", 0.70), 0.70),
-            0.0,
-            1.0,
-        )
-        floor_ratio_max = self._clamp_float(
-            self._safe_float(val.get("ops_degradation_calibration_floor_ratio_max", 1.00), 1.00),
-            floor_ratio_min,
-            1.0,
-        )
-        streak_min = max(1, int(val.get("ops_degradation_calibration_streak_min", 1)))
-        streak_max = max(streak_min, int(val.get("ops_degradation_calibration_streak_max", 7)))
-        rollback_enabled = bool(val.get("ops_degradation_calibration_rollback_enabled", True))
-        rollback_window_days = max(3, int(val.get("ops_degradation_calibration_rollback_window_days", window_days)))
-        rollback_recent_days = max(1, int(val.get("ops_degradation_calibration_rollback_recent_days", 5)))
-        rollback_min_samples = max(1, int(val.get("ops_degradation_calibration_rollback_min_samples", min_samples)))
-        rollback_fn_rise_min = self._clamp_float(
-            self._safe_float(val.get("ops_degradation_calibration_rollback_fn_rise_min", 0.03), 0.03),
-            0.0,
-            1.0,
-        )
-        rollback_gate_fail_rise_min = self._clamp_float(
-            self._safe_float(
-                val.get("ops_degradation_calibration_rollback_gate_fail_rise_min", 0.10),
-                0.10,
-            ),
-            0.0,
-            1.0,
-        )
-        rollback_auto_promote_on_stable = bool(
-            val.get("ops_degradation_calibration_rollback_auto_promote_on_stable", True)
-        )
-        rollback_stable_min_samples = max(
-            1,
-            int(val.get("ops_degradation_calibration_rollback_stable_min_samples", min_samples)),
-        )
-        rollback_stable_fn_rate_max = self._clamp_float(
-            self._safe_float(val.get("ops_degradation_calibration_rollback_stable_fn_rate_max", fn_target), fn_target),
-            0.0,
-            1.0,
-        )
-        rollback_stable_gate_fail_ratio_max = self._clamp_float(
-            self._safe_float(
-                val.get("ops_degradation_calibration_rollback_stable_gate_fail_ratio_max", 0.20),
-                0.20,
-            ),
-            0.0,
-            1.0,
-        )
-        rollback_cooldown_days = max(
-            0,
-            int(val.get("ops_degradation_calibration_rollback_cooldown_days", 3)),
-        )
-        rollback_promotion_cooldown_days = max(
-            0,
-            int(val.get("ops_degradation_calibration_rollback_promotion_cooldown_days", 7)),
-        )
-        rollback_hysteresis_window_days = max(
-            1,
-            int(
-                val.get(
-                    "ops_degradation_calibration_rollback_hysteresis_window_days",
-                    max(
-                        rollback_recent_days,
-                        rollback_cooldown_days,
-                        rollback_promotion_cooldown_days,
-                        1,
-                    ),
-                )
-            ),
-        )
-        rollback_trigger_hysteresis_buffer = self._clamp_float(
-            self._safe_float(
-                val.get("ops_degradation_calibration_rollback_trigger_hysteresis_buffer", 0.02),
-                0.02,
-            ),
-            0.0,
-            1.0,
-        )
-        rollback_stable_hysteresis_buffer = self._clamp_float(
-            self._safe_float(
-                val.get("ops_degradation_calibration_rollback_stable_hysteresis_buffer", 0.01),
-                0.01,
-            ),
-            0.0,
-            1.0,
-        )
-        live_override_enabled = bool(val.get("ops_degradation_calibration_use_live_overrides", True))
-        live_snapshot = self._load_live_degradation_params() if live_override_enabled else {
-            "path": str(self._degradation_calibration_live_path()),
-            "found": False,
-            "params": self._base_degradation_params(),
-        }
-        current_params = dict(live_snapshot.get("params", {})) if isinstance(live_snapshot.get("params", {}), dict) else self._base_degradation_params()
-        replay = self._degradation_replay_stats(as_of=as_of, window_days=window_days)
-        tuned_params = dict(current_params)
-        domain_out: dict[str, Any] = {}
-        changed = False
-
-        def _direction(*, fp_rate: float, fn_rate: float) -> tuple[str, str]:
-            fp_excess = float(fp_rate - fp_target)
-            fn_excess = float(fn_rate - fn_target)
-            if fp_excess <= 0.0 and fn_excess <= 0.0:
-                return "hold", "within_target"
-            if fp_excess > 0.0 and fn_excess <= 0.0:
-                return "relax", "fp_above_target"
-            if fn_excess > 0.0 and fp_excess <= 0.0:
-                return "tighten", "fn_above_target"
-            if (fp_excess - fn_excess) > 0.01:
-                return "relax", "fp_dominant"
-            if (fn_excess - fp_excess) > 0.01:
-                return "tighten", "fn_dominant"
-            return "hold", "fp_fn_conflict"
-
-        for domain in ("slot", "state"):
-            stats = replay.get("domains", {}).get(domain, {}) if isinstance(replay.get("domains", {}), dict) else {}
-            samples = int(stats.get("samples", 0))
-            fp_rate = float(self._safe_float(stats.get("fp_rate", 0.0), 0.0))
-            fn_rate = float(self._safe_float(stats.get("fn_rate", 0.0), 0.0))
-            direction = "hold"
-            reason = "disabled" if not enabled else "insufficient_samples"
-            applied = False
-
-            if enabled and samples >= min_samples:
-                direction, reason = _direction(fp_rate=fp_rate, fn_rate=fn_rate)
-
-            if enabled and samples >= min_samples and direction in {"relax", "tighten"}:
-                sign = 1.0 if direction == "relax" else -1.0
-                if domain == "slot":
-                    old_soft = float(self._safe_float(tuned_params.get("ops_slot_degradation_soft_multiplier", 1.15), 1.15))
-                    old_hard = float(self._safe_float(tuned_params.get("ops_slot_degradation_hard_multiplier", 1.40), 1.40))
-                    old_soft_streak = int(self._safe_float(tuned_params.get("ops_slot_hysteresis_soft_streak_days", 2), 2))
-                    old_hard_streak = int(self._safe_float(tuned_params.get("ops_slot_hysteresis_hard_streak_days", 3), 3))
-
-                    new_soft = self._clamp_float(old_soft + sign * step_multiplier, multiplier_min, multiplier_max)
-                    new_hard = self._clamp_float(old_hard + sign * step_multiplier, multiplier_min, multiplier_max)
-                    new_hard = max(new_soft, new_hard)
-
-                    soft_streak = self._clamp_int(old_soft_streak + int(sign) * step_streak, streak_min, streak_max)
-                    hard_streak = self._clamp_int(old_hard_streak + int(sign) * step_streak, streak_min, streak_max)
-                    hard_streak = max(soft_streak, hard_streak)
-
-                    tuned_params["ops_slot_degradation_soft_multiplier"] = float(new_soft)
-                    tuned_params["ops_slot_degradation_hard_multiplier"] = float(new_hard)
-                    tuned_params["ops_slot_hysteresis_soft_streak_days"] = float(soft_streak)
-                    tuned_params["ops_slot_hysteresis_hard_streak_days"] = float(hard_streak)
-                    applied = (
-                        abs(new_soft - old_soft) > 1e-9
-                        or abs(new_hard - old_hard) > 1e-9
-                        or int(soft_streak) != int(old_soft_streak)
-                        or int(hard_streak) != int(old_hard_streak)
-                    )
-                else:
-                    old_soft = float(self._safe_float(tuned_params.get("ops_state_degradation_soft_multiplier", 1.10), 1.10))
-                    old_hard = float(self._safe_float(tuned_params.get("ops_state_degradation_hard_multiplier", 1.35), 1.35))
-                    old_floor_soft = float(self._safe_float(tuned_params.get("ops_state_degradation_floor_soft_ratio", 0.96), 0.96))
-                    old_floor_hard = float(self._safe_float(tuned_params.get("ops_state_degradation_floor_hard_ratio", 0.90), 0.90))
-                    old_soft_streak = int(self._safe_float(tuned_params.get("ops_state_hysteresis_soft_streak_days", 2), 2))
-                    old_hard_streak = int(self._safe_float(tuned_params.get("ops_state_hysteresis_hard_streak_days", 3), 3))
-
-                    new_soft = self._clamp_float(old_soft + sign * step_multiplier, multiplier_min, multiplier_max)
-                    new_hard = self._clamp_float(old_hard + sign * step_multiplier, multiplier_min, multiplier_max)
-                    new_hard = max(new_soft, new_hard)
-
-                    floor_sign = -sign
-                    new_floor_soft = self._clamp_float(
-                        old_floor_soft + floor_sign * step_floor_ratio,
-                        floor_ratio_min,
-                        floor_ratio_max,
-                    )
-                    new_floor_hard = self._clamp_float(
-                        old_floor_hard + floor_sign * step_floor_ratio,
-                        floor_ratio_min,
-                        floor_ratio_max,
-                    )
-                    new_floor_hard = min(new_floor_soft, new_floor_hard)
-
-                    soft_streak = self._clamp_int(old_soft_streak + int(sign) * step_streak, streak_min, streak_max)
-                    hard_streak = self._clamp_int(old_hard_streak + int(sign) * step_streak, streak_min, streak_max)
-                    hard_streak = max(soft_streak, hard_streak)
-
-                    tuned_params["ops_state_degradation_soft_multiplier"] = float(new_soft)
-                    tuned_params["ops_state_degradation_hard_multiplier"] = float(new_hard)
-                    tuned_params["ops_state_degradation_floor_soft_ratio"] = float(new_floor_soft)
-                    tuned_params["ops_state_degradation_floor_hard_ratio"] = float(new_floor_hard)
-                    tuned_params["ops_state_hysteresis_soft_streak_days"] = float(soft_streak)
-                    tuned_params["ops_state_hysteresis_hard_streak_days"] = float(hard_streak)
-                    applied = (
-                        abs(new_soft - old_soft) > 1e-9
-                        or abs(new_hard - old_hard) > 1e-9
-                        or abs(new_floor_soft - old_floor_soft) > 1e-9
-                        or abs(new_floor_hard - old_floor_hard) > 1e-9
-                        or int(soft_streak) != int(old_soft_streak)
-                        or int(hard_streak) != int(old_hard_streak)
-                    )
-
-            domain_out[domain] = {
-                "samples": int(samples),
-                "tp": int(stats.get("tp", 0)),
-                "tn": int(stats.get("tn", 0)),
-                "fp": int(stats.get("fp", 0)),
-                "fn": int(stats.get("fn", 0)),
-                "fp_rate": float(fp_rate),
-                "fn_rate": float(fn_rate),
-                "precision": float(self._safe_float(stats.get("precision", 0.0), 0.0)),
-                "recall": float(self._safe_float(stats.get("recall", 0.0), 0.0)),
-                "direction": str(direction),
-                "reason": str(reason),
-                "applied": bool(applied),
-                "metrics": stats.get("metrics", {}) if isinstance(stats.get("metrics", {}), dict) else {},
-                "days": stats.get("days", []) if isinstance(stats.get("days", []), list) else [],
-            }
-            changed = changed or bool(applied)
-
-        for key in (
-            "ops_slot_hysteresis_soft_streak_days",
-            "ops_slot_hysteresis_hard_streak_days",
-            "ops_state_hysteresis_soft_streak_days",
-            "ops_state_hysteresis_hard_streak_days",
-        ):
-            tuned_params[key] = float(self._clamp_int(tuned_params.get(key, 1.0), streak_min, streak_max))
-
-        replay_for_rollback = (
-            replay
-            if int(rollback_window_days) == int(window_days)
-            else self._degradation_replay_stats(as_of=as_of, window_days=rollback_window_days)
-        )
-        gate_fail_series = self._degradation_gate_fail_series(as_of=as_of, window_days=rollback_window_days)
-        gate_fail_trend = self._ratio_trend_from_rows(
-            rows=gate_fail_series,
-            num_key="failed",
-            den_key="days",
-            recent_days=rollback_recent_days,
-        )
-        rollback_event_window_days = max(
-            int(rollback_window_days),
-            int(rollback_cooldown_days) + 1,
-            int(rollback_promotion_cooldown_days) + 1,
-            int(rollback_hysteresis_window_days),
-            int(rollback_recent_days),
-        )
-        rollback_event_series = self._degradation_rollback_event_series(
-            as_of=as_of,
-            window_days=rollback_event_window_days,
-        )
-
-        def _event_days_ago(row: dict[str, Any]) -> int | None:
-            raw = str(row.get("date", "")).strip()
-            if not raw:
-                return None
-            try:
-                day = date.fromisoformat(raw)
-            except ValueError:
-                return None
-            return max(0, (as_of - day).days)
-
-        def _days_since_latest(flag_key: str) -> int | None:
-            best: int | None = None
-            for row in rollback_event_series:
-                if not bool(row.get(flag_key, False)):
-                    continue
-                days_ago = _event_days_ago(row)
-                if days_ago is None:
-                    continue
-                if best is None or days_ago < best:
-                    best = days_ago
-            return best
-
-        recent_rollback_events = 0
-        recent_promotion_events = 0
-        for row in rollback_event_series:
-            days_ago = _event_days_ago(row)
-            if days_ago is None or days_ago > int(rollback_hysteresis_window_days):
-                continue
-            if bool(row.get("rollback_applied", False)):
-                recent_rollback_events += 1
-            if bool(row.get("promotion_promoted", False)):
-                recent_promotion_events += 1
-        trigger_hysteresis_active = bool(recent_rollback_events > 0)
-        stable_hysteresis_active = bool((recent_rollback_events + recent_promotion_events) > 0)
-        effective_fn_rise_min = self._clamp_float(
-            float(rollback_fn_rise_min)
-            + (float(rollback_trigger_hysteresis_buffer) if trigger_hysteresis_active else 0.0),
-            0.0,
-            1.0,
-        )
-        effective_gate_fail_rise_min = self._clamp_float(
-            float(rollback_gate_fail_rise_min)
-            + (float(rollback_trigger_hysteresis_buffer) if trigger_hysteresis_active else 0.0),
-            0.0,
-            1.0,
-        )
-        effective_stable_fn_rate_max = self._clamp_float(
-            float(rollback_stable_fn_rate_max)
-            - (float(rollback_stable_hysteresis_buffer) if stable_hysteresis_active else 0.0),
-            0.0,
-            1.0,
-        )
-        effective_stable_gate_fail_ratio_max = self._clamp_float(
-            float(rollback_stable_gate_fail_ratio_max)
-            - (float(rollback_stable_hysteresis_buffer) if stable_hysteresis_active else 0.0),
-            0.0,
-            1.0,
-        )
-        last_rollback_days_ago = _days_since_latest("rollback_applied")
-        last_promotion_days_ago = _days_since_latest("promotion_promoted")
-        rollback_cooldown_active = bool(
-            int(rollback_cooldown_days) > 0
-            and last_rollback_days_ago is not None
-            and int(last_rollback_days_ago) < int(rollback_cooldown_days)
-        )
-        promotion_cooldown_active = bool(
-            int(rollback_promotion_cooldown_days) > 0
-            and (
-                (
-                    last_rollback_days_ago is not None
-                    and int(last_rollback_days_ago) < int(rollback_promotion_cooldown_days)
-                )
-                or (
-                    last_promotion_days_ago is not None
-                    and int(last_promotion_days_ago) < int(rollback_promotion_cooldown_days)
-                )
-            )
-        )
-        rollback_domain_trends: dict[str, Any] = {}
-        rollback_domain_triggered: list[str] = []
-        for domain in ("slot", "state"):
-            stats = (
-                replay_for_rollback.get("domains", {}).get(domain, {})
-                if isinstance(replay_for_rollback.get("domains", {}), dict)
-                else {}
-            )
-            trend = self._ratio_trend_from_rows(
-                rows=stats.get("days", []) if isinstance(stats.get("days", []), list) else [],
-                num_key="false_negative",
-                den_key="samples",
-                recent_days=rollback_recent_days,
-            )
-            triggered = bool(
-                int(trend.get("recent_den", 0)) >= rollback_min_samples
-                and float(self._safe_float(trend.get("ratio_rise", 0.0), 0.0)) >= effective_fn_rise_min
-            )
-            if triggered:
-                rollback_domain_triggered.append(str(domain))
-            rollback_domain_trends[domain] = {
-                "triggered": bool(triggered),
-                "rise_min_base": float(rollback_fn_rise_min),
-                "rise_min_effective": float(effective_fn_rise_min),
-                "trend": trend,
-            }
-
-        gate_rise = float(self._safe_float(gate_fail_trend.get("ratio_rise", 0.0), 0.0))
-        gate_triggered = bool(
-            int(gate_fail_trend.get("recent_den", 0)) >= rollback_min_samples
-            and gate_rise >= effective_gate_fail_rise_min
-        )
-        rollback_triggered_raw = bool(enabled and rollback_enabled and gate_triggered and bool(rollback_domain_triggered))
-        rollback_triggered = bool(rollback_triggered_raw and (not rollback_cooldown_active))
-        rollback_domain = ""
-        if rollback_domain_triggered:
-            rollback_domain = max(
-                rollback_domain_triggered,
-                key=lambda name: float(
-                    self._safe_float(
-                        (
-                            rollback_domain_trends.get(str(name), {})
-                            .get("trend", {})
-                            .get("ratio_rise", 0.0)
-                        ),
-                        0.0,
-                    )
-                ),
-            )
-
-        snapshot_paths = self._degradation_calibration_snapshot_paths()
-        snapshot_active = self._load_degradation_calibration_snapshot(path=snapshot_paths["active"])
-        snapshot_integrity = self._degradation_snapshot_chain_integrity(
-            active_snapshot=snapshot_active,
-            snapshot_paths=snapshot_paths,
-        )
-        snapshot_params = (
-            snapshot_active.get("params", {})
-            if isinstance(snapshot_active.get("params", {}), dict)
-            else {}
-        )
-        rollback_applied = False
-        rollback_reason = (
-            "disabled"
-            if not rollback_enabled
-            else ("rollback_cooldown_active" if (rollback_triggered_raw and rollback_cooldown_active) else "not_triggered")
-        )
-        rollback_source_path = ""
-        tuned_before_rollback = dict(tuned_params)
-        if rollback_triggered:
-            if not snapshot_params:
-                rollback_reason = "triggered_but_snapshot_missing"
-            elif not bool(snapshot_integrity.get("ok", False)):
-                rollback_reason = "triggered_but_snapshot_chain_invalid"
-            else:
-                for key, raw in snapshot_params.items():
-                    if isinstance(raw, (int, float)):
-                        tuned_params[str(key)] = float(raw)
-                rollback_applied = any(
-                    abs(float(self._safe_float(tuned_before_rollback.get(k, 0.0), 0.0)) - float(self._safe_float(v, 0.0)))
-                    > 1e-9
-                    for k, v in tuned_params.items()
-                )
-                changed = changed or rollback_applied
-                rollback_reason = "rollback_to_stable_snapshot"
-                rollback_source_path = str(snapshot_active.get("path", ""))
-
-        snapshot_promotion = {
-            "eligible": False,
-            "promoted": False,
-            "reason": "disabled",
-            "active_path": str(snapshot_paths["active"]),
-            "history_path": "",
-            "rollback_anchor": str(snapshot_active.get("path", "")),
-        }
-        if rollback_enabled:
-            snapshot_promotion["reason"] = "not_eligible"
-            stable_gate_ok = (
-                int(gate_fail_trend.get("recent_den", 0)) >= rollback_stable_min_samples
-                and float(self._safe_float(gate_fail_trend.get("recent_ratio", 0.0), 0.0))
-                <= effective_stable_gate_fail_ratio_max
-            )
-            stable_domain_ok = True
-            for domain in ("slot", "state"):
-                trend = (
-                    rollback_domain_trends.get(domain, {}).get("trend", {})
-                    if isinstance(rollback_domain_trends.get(domain, {}), dict)
-                    else {}
-                )
-                sample_ok = int(trend.get("recent_den", 0)) >= rollback_stable_min_samples
-                ratio_ok = float(self._safe_float(trend.get("recent_ratio", 0.0), 0.0)) <= effective_stable_fn_rate_max
-                if not (sample_ok and ratio_ok):
-                    stable_domain_ok = False
-                    break
-            stable_eligible = bool(
-                enabled
-                and rollback_auto_promote_on_stable
-                and (not rollback_applied)
-                and (not promotion_cooldown_active)
-                and stable_gate_ok
-                and stable_domain_ok
-            )
-            snapshot_promotion["eligible"] = bool(stable_eligible)
-            if (not stable_eligible) and promotion_cooldown_active:
-                snapshot_promotion["reason"] = "promotion_cooldown_active"
-            if stable_eligible:
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                history_path = snapshot_paths["history_dir"] / f"{as_of.isoformat()}_{stamp}.yaml"
-                rollback_anchor = str(snapshot_active.get("history_path", "") or snapshot_active.get("path", ""))
-                params_checksum = hashlib.sha1(self._canonical_json(tuned_params).encode("utf-8")).hexdigest()
-                chain_checksum = self._degradation_snapshot_chain_checksum(
-                    params=tuned_params,
-                    rollback_anchor=rollback_anchor,
-                )
-                payload = {
-                    "schema_version": 1,
-                    "as_of": as_of.isoformat(),
-                    "promoted_at": datetime.now().isoformat(),
-                    "params": tuned_params,
-                    "snapshot_path": str(history_path),
-                    "history_path": str(history_path),
-                    "rollback_anchor": rollback_anchor,
-                    "params_checksum": str(params_checksum),
-                    "chain_checksum": str(chain_checksum),
-                    "stable_gate_fail_ratio": float(self._safe_float(gate_fail_trend.get("recent_ratio", 0.0), 0.0)),
-                    "stable_fn_recent_ratio": {
-                        "slot": float(
-                            self._safe_float(
-                                (
-                                    rollback_domain_trends.get("slot", {})
-                                    .get("trend", {})
-                                    .get("recent_ratio", 0.0)
-                                ),
-                                0.0,
-                            )
-                        ),
-                        "state": float(
-                            self._safe_float(
-                                (
-                                    rollback_domain_trends.get("state", {})
-                                    .get("trend", {})
-                                    .get("recent_ratio", 0.0)
-                                ),
-                                0.0,
-                            )
-                        ),
-                    },
-                }
-                try:
-                    history_path.parent.mkdir(parents=True, exist_ok=True)
-                    snapshot_paths["active"].parent.mkdir(parents=True, exist_ok=True)
-                    write_markdown(history_path, yaml.safe_dump(payload, allow_unicode=True, sort_keys=False))
-                    write_markdown(snapshot_paths["active"], yaml.safe_dump(payload, allow_unicode=True, sort_keys=False))
-                    snapshot_promotion["promoted"] = True
-                    snapshot_promotion["reason"] = "promoted"
-                    snapshot_promotion["history_path"] = str(history_path)
-                    snapshot_promotion["rollback_anchor"] = rollback_anchor
-                except Exception as exc:
-                    snapshot_promotion["reason"] = "promote_write_failed"
-                    snapshot_promotion["error"] = f"{type(exc).__name__}:{exc}"
-
-        rollback_summary = {
-            "enabled": bool(rollback_enabled),
-            "triggered": bool(rollback_triggered),
-            "applied": bool(rollback_applied),
-            "reason": str(rollback_reason),
-            "domain": str(rollback_domain),
-            "window_days": int(rollback_window_days),
-            "recent_days": int(rollback_recent_days),
-            "min_samples": int(rollback_min_samples),
-            "fn_rise_min": float(rollback_fn_rise_min),
-            "fn_rise_min_effective": float(effective_fn_rise_min),
-            "gate_fail_rise_min": float(rollback_gate_fail_rise_min),
-            "gate_fail_rise_min_effective": float(effective_gate_fail_rise_min),
-            "triggered_raw": bool(rollback_triggered_raw),
-            "gate_fail_trend": gate_fail_trend,
-            "domains": rollback_domain_trends,
-            "cooldown": {
-                "rollback_days": int(rollback_cooldown_days),
-                "promotion_days": int(rollback_promotion_cooldown_days),
-                "rollback_active": bool(rollback_cooldown_active),
-                "promotion_active": bool(promotion_cooldown_active),
-                "last_rollback_days_ago": (int(last_rollback_days_ago) if last_rollback_days_ago is not None else None),
-                "last_promotion_days_ago": (int(last_promotion_days_ago) if last_promotion_days_ago is not None else None),
-            },
-            "anti_flap": {
-                "window_days": int(rollback_hysteresis_window_days),
-                "trigger_buffer": float(rollback_trigger_hysteresis_buffer),
-                "stable_buffer": float(rollback_stable_hysteresis_buffer),
-                "trigger_hysteresis_active": bool(trigger_hysteresis_active),
-                "stable_hysteresis_active": bool(stable_hysteresis_active),
-                "recent_rollback_events": int(recent_rollback_events),
-                "recent_promotion_events": int(recent_promotion_events),
-                "stable_fn_rate_max_base": float(rollback_stable_fn_rate_max),
-                "stable_fn_rate_max_effective": float(effective_stable_fn_rate_max),
-                "stable_gate_fail_ratio_max_base": float(rollback_stable_gate_fail_ratio_max),
-                "stable_gate_fail_ratio_max_effective": float(effective_stable_gate_fail_ratio_max),
-            },
-            "snapshot": {
-                "active_path": str(snapshot_paths["active"]),
-                "history_dir": str(snapshot_paths["history_dir"]),
-                "found": bool(snapshot_active.get("found", False)),
-                "source_path": str(rollback_source_path),
-                "as_of": str(snapshot_active.get("as_of", "")),
-                "promoted_at": str(snapshot_active.get("promoted_at", "")),
-                "rollback_anchor": str(snapshot_active.get("rollback_anchor", "")),
-                "integrity": snapshot_integrity,
-                "checksum": (
-                    snapshot_active.get("checksum", {})
-                    if isinstance(snapshot_active.get("checksum", {}), dict)
-                    else {}
-                ),
-            },
-            "snapshot_promotion": snapshot_promotion,
-        }
-
-        live_payload = {
-            "schema_version": 1,
-            "as_of": as_of.isoformat(),
-            "generated_at": datetime.now().isoformat(),
-            "enabled": bool(enabled),
-            "window_days": int(window_days),
-            "min_samples": int(min_samples),
-            "fp_target": float(fp_target),
-            "fn_target": float(fn_target),
-            "step_multiplier": float(step_multiplier),
-            "step_floor_ratio": float(step_floor_ratio),
-            "step_streak_days": int(step_streak),
-            "multiplier_bounds": {"min": float(multiplier_min), "max": float(multiplier_max)},
-            "floor_ratio_bounds": {"min": float(floor_ratio_min), "max": float(floor_ratio_max)},
-            "streak_bounds": {"min": int(streak_min), "max": int(streak_max)},
-            "replay": {
-                "scanned_days": int(replay.get("scanned_days", 0)),
-                "loaded_days": int(replay.get("loaded_days", 0)),
-            },
-            "domains": domain_out,
-            "params": tuned_params,
-            "changed": bool(changed),
-            "live_override_enabled": bool(live_override_enabled),
-            "live_base_found": bool(live_snapshot.get("found", False)),
-            "rollback_guard": rollback_summary,
-        }
-
-        live_path = self._degradation_calibration_live_path()
-        review_dir = self.ctx.output_dir / "review"
-        review_json_path = review_dir / f"{as_of.isoformat()}_degradation_calibration.json"
-        review_md_path = review_dir / f"{as_of.isoformat()}_degradation_calibration.md"
-        rollback_json_path = review_dir / f"{as_of.isoformat()}_degradation_calibration_rollback.json"
-        rollback_md_path = review_dir / f"{as_of.isoformat()}_degradation_calibration_rollback.md"
-        write_error = ""
-        try:
-            live_path.parent.mkdir(parents=True, exist_ok=True)
-            review_dir.mkdir(parents=True, exist_ok=True)
-            write_markdown(live_path, yaml.safe_dump(live_payload, allow_unicode=True, sort_keys=False))
-            write_json(review_json_path, live_payload)
-            md_lines = [
-                f"# Degradation Calibration ({as_of.isoformat()})",
-                "",
-                f"- enabled: `{enabled}`",
-                f"- changed: `{bool(changed)}`",
-                f"- window_days: `{int(window_days)}`",
-                f"- min_samples: `{int(min_samples)}`",
-                f"- fp_target / fn_target: `{fp_target:.2%}` / `{fn_target:.2%}`",
-                "",
-            ]
-            for domain in ("slot", "state"):
-                row = domain_out.get(domain, {}) if isinstance(domain_out.get(domain, {}), dict) else {}
-                md_lines.extend(
-                    [
-                        f"## {domain}",
-                        f"- samples: `{int(row.get('samples', 0))}`",
-                        f"- fp/fn rate: `{float(self._safe_float(row.get('fp_rate', 0.0), 0.0)):.2%}` / `{float(self._safe_float(row.get('fn_rate', 0.0), 0.0)):.2%}`",
-                        f"- direction: `{str(row.get('direction', 'hold'))}` ({str(row.get('reason', ''))})",
-                        f"- applied: `{bool(row.get('applied', False))}`",
-                        "",
-                    ]
-                )
-            write_markdown(review_md_path, "\n".join(md_lines))
-            write_json(rollback_json_path, rollback_summary)
-            rollback_lines = [
-                f"# Degradation Rollback Guard ({as_of.isoformat()})",
-                "",
-                f"- enabled: `{bool(rollback_summary.get('enabled', False))}`",
-                f"- triggered: `{bool(rollback_summary.get('triggered', False))}`",
-                f"- triggered_raw: `{bool(rollback_summary.get('triggered_raw', False))}`",
-                f"- applied: `{bool(rollback_summary.get('applied', False))}`",
-                f"- reason: `{str(rollback_summary.get('reason', ''))}`",
-                f"- domain: `{str(rollback_summary.get('domain', ''))}`",
-                "",
-            ]
-            gate_trend = (
-                rollback_summary.get("gate_fail_trend", {})
-                if isinstance(rollback_summary.get("gate_fail_trend", {}), dict)
-                else {}
-            )
-            rollback_lines.append(
-                "- gate_fail_ratio(base/recent/rise): "
-                + f"`{float(self._safe_float(gate_trend.get('base_ratio', 0.0), 0.0)):.2%}` / "
-                + f"`{float(self._safe_float(gate_trend.get('recent_ratio', 0.0), 0.0)):.2%}` / "
-                + f"`{float(self._safe_float(gate_trend.get('ratio_rise', 0.0), 0.0)):+.2%}`"
-            )
-            cooldown_payload = (
-                rollback_summary.get("cooldown", {})
-                if isinstance(rollback_summary.get("cooldown", {}), dict)
-                else {}
-            )
-            rollback_lines.append(
-                "- cooldown(rollback/promotion,active): "
-                + f"`{int(self._safe_float(cooldown_payload.get('rollback_days', 0), 0.0))}` / "
-                + f"`{int(self._safe_float(cooldown_payload.get('promotion_days', 0), 0.0))}` | "
-                + f"`{bool(cooldown_payload.get('rollback_active', False))}` / "
-                + f"`{bool(cooldown_payload.get('promotion_active', False))}`"
-            )
-            rollback_lines.append(
-                f"- snapshot_source: `{str((rollback_summary.get('snapshot', {}) or {}).get('source_path', '') or 'N/A')}`"
-            )
-            anti_flap_payload = (
-                rollback_summary.get("anti_flap", {})
-                if isinstance(rollback_summary.get("anti_flap", {}), dict)
-                else {}
-            )
-            rollback_lines.append(
-                "- anti_flap(window/trigger_buffer/stable_buffer): "
-                + f"`{int(self._safe_float(anti_flap_payload.get('window_days', 0), 0.0))}` / "
-                + f"`{float(self._safe_float(anti_flap_payload.get('trigger_buffer', 0.0), 0.0)):.2%}` / "
-                + f"`{float(self._safe_float(anti_flap_payload.get('stable_buffer', 0.0), 0.0)):.2%}`"
-            )
-            promotion = (
-                rollback_summary.get("snapshot_promotion", {})
-                if isinstance(rollback_summary.get("snapshot_promotion", {}), dict)
-                else {}
-            )
-            rollback_lines.append(
-                "- snapshot_promotion(eligible/promoted/reason): "
-                + f"`{bool(promotion.get('eligible', False))}` / "
-                + f"`{bool(promotion.get('promoted', False))}` / "
-                + f"`{str(promotion.get('reason', ''))}`"
-            )
-            for domain in ("slot", "state"):
-                trend = (
-                    (
-                        rollback_summary.get("domains", {})
-                        if isinstance(rollback_summary.get("domains", {}), dict)
-                        else {}
-                    )
-                    .get(domain, {})
-                )
-                trend_payload = trend.get("trend", {}) if isinstance(trend.get("trend", {}), dict) else {}
-                rollback_lines.append(
-                    f"- {domain}_fn_ratio(base/recent/rise): "
-                    + f"`{float(self._safe_float(trend_payload.get('base_ratio', 0.0), 0.0)):.2%}` / "
-                    + f"`{float(self._safe_float(trend_payload.get('recent_ratio', 0.0), 0.0)):.2%}` / "
-                    + f"`{float(self._safe_float(trend_payload.get('ratio_rise', 0.0), 0.0)):+.2%}` | "
-                    + f"triggered=`{bool(trend.get('triggered', False))}`"
-                )
-            write_markdown(rollback_md_path, "\n".join(rollback_lines))
-        except Exception as exc:
-            write_error = f"{type(exc).__name__}:{exc}"
-
-        result = {
-            "enabled": bool(enabled),
-            "applied": bool(enabled),
-            "changed": bool(changed),
-            "window_days": int(window_days),
-            "min_samples": int(min_samples),
-            "fp_target": float(fp_target),
-            "fn_target": float(fn_target),
-            "step_multiplier": float(step_multiplier),
-            "step_floor_ratio": float(step_floor_ratio),
-            "step_streak_days": int(step_streak),
-            "live_override_enabled": bool(live_override_enabled),
-            "live_base_found": bool(live_snapshot.get("found", False)),
-            "replay": live_payload.get("replay", {}),
-            "domains": domain_out,
-            "params": tuned_params,
-            "path": str(live_path),
-            "rollback": rollback_summary,
-            "artifacts": {
-                "json": str(review_json_path),
-                "md": str(review_md_path),
-                "rollback_json": str(rollback_json_path),
-                "rollback_md": str(rollback_md_path),
-            },
-        }
-        if not enabled:
-            result["applied"] = False
-            result["changed"] = False
-            result["reason"] = "disabled"
-        elif write_error:
-            result["write_error"] = write_error
-        return result
 
     def _tune_slot_regime_thresholds(self, *, as_of: date) -> dict[str, Any]:
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
@@ -2674,7 +910,7 @@ class LieEngine:
         lookback_days = int(self.settings.validation.get("factor_lookback_days", 120))
         start = as_of - timedelta(days=max(lookback_days * 2, 220))
         symbols = self._core_symbols()
-        bars, ingest = self._run_ingestion_range_compat(start=start, end=as_of, symbols=symbols, persist=False)
+        bars, ingest = self._run_ingestion_range(start=start, end=as_of, symbols=symbols)
         bars = self._filter_model_path_bars(bars)
         return estimate_factor_contrib_120d(
             bars=bars,
@@ -2683,13 +919,7 @@ class LieEngine:
             lookback_days=lookback_days,
         )
 
-    def _run_ingestion(
-        self,
-        as_of: date,
-        symbols: list[str],
-        *,
-        persist: bool = True,
-    ) -> tuple[pd.DataFrame, Any]:
+    def _run_ingestion(self, as_of: date, symbols: list[str]) -> tuple[pd.DataFrame, Any]:
         start = as_of - timedelta(days=420)
         start_ts = datetime.combine(as_of, time(0, 0)) - timedelta(days=1)
         end_ts = datetime.combine(as_of, time(23, 59))
@@ -2718,19 +948,11 @@ class LieEngine:
             )
             symbols = expanded
 
-        if persist:
-            self.data_bus.persist(as_of=as_of, result=result)
+        self.data_bus.persist(as_of=as_of, result=result)
         model_bars = self._filter_model_path_bars(result.normalized_bars)
         return model_bars, result
 
-    def _run_ingestion_range(
-        self,
-        start: date,
-        end: date,
-        symbols: list[str],
-        *,
-        persist: bool = False,
-    ) -> tuple[pd.DataFrame, Any]:
+    def _run_ingestion_range(self, start: date, end: date, symbols: list[str]) -> tuple[pd.DataFrame, Any]:
         start_ts = datetime.combine(start, time(0, 0))
         end_ts = datetime.combine(end, time(23, 59))
 
@@ -2757,29 +979,9 @@ class LieEngine:
                 langs=("zh", "en"),
             )
 
-        if persist:
-            self.data_bus.persist(as_of=end, result=result)
+        self.data_bus.persist(as_of=end, result=result)
         model_bars = self._filter_model_path_bars(result.normalized_bars)
         return model_bars, result
-
-    def _run_ingestion_range_compat(
-        self,
-        *,
-        start: date,
-        end: date,
-        symbols: list[str],
-        persist: bool = False,
-    ) -> tuple[pd.DataFrame, Any]:
-        # Compatibility shim for monkeypatched/custom callables that do not accept
-        # the newer "persist" keyword.
-        runner = self._run_ingestion_range
-        try:
-            params = inspect.signature(runner).parameters
-        except (TypeError, ValueError):
-            params = {}
-        if "persist" in params:
-            return runner(start=start, end=end, symbols=symbols, persist=persist)
-        return runner(start=start, end=end, symbols=symbols)
 
     def _regime_from_bars(self, as_of: date, bars: pd.DataFrame):
         if bars.empty:
@@ -3212,30 +1414,7 @@ class LieEngine:
             }
         return out
 
-    def _delete_sqlite_rows_for_date(self, *, table: str, dstr: str) -> None:
-        if not self.ctx.sqlite_path.exists():
-            return
-        allowed_tables = {"executed_plans", "latest_positions", "trade_plans"}
-        if table not in allowed_tables:
-            return
-        try:
-            with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
-                with closing(conn.cursor()) as cur:
-                    cur.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-                        (table,),
-                    )
-                    if cur.fetchone() is None:
-                        return
-                    cur.execute(f'DELETE FROM "{table}" WHERE date = ?', (dstr,))
-                conn.commit()
-        except Exception:
-            return
-
     def _settle_open_paper_positions(self, *, as_of: date, bars: pd.DataFrame) -> dict[str, Any]:
-        as_of_str = as_of.isoformat()
-        # Ensure same-day replay does not duplicate closed rows.
-        self._delete_sqlite_rows_for_date(table="executed_plans", dstr=as_of_str)
         positions = self._load_open_paper_positions()
         if not positions:
             return {
@@ -3273,7 +1452,6 @@ class LieEngine:
         remaining: list[dict[str, Any]] = []
         closed_rows: list[dict[str, Any]] = []
         missing_symbol_count = 0
-        future_open_date_count = 0
 
         for pos in positions:
             symbol = str(pos.get("symbol", "")).strip()
@@ -3291,11 +1469,6 @@ class LieEngine:
             risk_pct = float(pos.get("risk_pct", 0.0))
             hold_days = max(1, int(pos.get("hold_days", 1)))
             open_date = self._parse_iso_date(pos.get("open_date")) or as_of
-            if open_date > as_of:
-                # Historical backfills may load future-dated states; keep but do not settle.
-                remaining.append(pos)
-                future_open_date_count += 1
-                continue
             holding_days = max(0, (as_of - open_date).days)
             runtime_mode = str(pos.get("runtime_mode", "base")).strip() or "base"
 
@@ -3359,14 +1532,13 @@ class LieEngine:
         return {
             "closed_df": closed_df,
             "remaining_positions": remaining,
-                "summary": {
-                    "open_before": len(positions),
-                    "closed_count": int(len(closed_rows)),
-                    "closed_pnl": float(closed_df["pnl"].sum()) if not closed_df.empty else 0.0,
-                    "missing_symbol_count": int(missing_symbol_count),
-                    "future_open_date_count": int(future_open_date_count),
-                },
-            }
+            "summary": {
+                "open_before": len(positions),
+                "closed_count": int(len(closed_rows)),
+                "closed_pnl": float(closed_df["pnl"].sum()) if not closed_df.empty else 0.0,
+                "missing_symbol_count": int(missing_symbol_count),
+            },
+        }
 
     @staticmethod
     def _build_open_positions_from_plans(
@@ -3415,23 +1587,8 @@ class LieEngine:
         if pos.empty:
             return {}, {}, 0.0
 
-        pos = pos.copy()
-        pos["status"] = pos["status"].astype(str).str.upper()
-        pos["size_pct"] = pd.to_numeric(pos["size_pct"], errors="coerce")
         pos = pos[pos["status"] == "ACTIVE"]
-        pos = pos.dropna(subset=["symbol", "size_pct"])
-        if pos.empty:
-            return {}, {}, 0.0
-
-        by_symbol_raw = pos.groupby("symbol")["size_pct"].sum().to_dict()
-        by_symbol: dict[str, float] = {}
-        for sym, val in by_symbol_raw.items():
-            fval = float(val)
-            if not np.isfinite(fval):
-                continue
-            by_symbol[str(sym)] = fval
-        if not by_symbol:
-            return {}, {}, 0.0
+        by_symbol = pos.groupby("symbol")["size_pct"].sum().to_dict()
         theme_map = self._theme_map()
         by_theme: dict[str, float] = {}
         for sym, val in by_symbol.items():
@@ -3442,13 +1599,8 @@ class LieEngine:
         return by_symbol, by_theme, total
 
     def run_eod(self, as_of: date) -> dict[str, Any]:
-        run_date = as_of.isoformat()
-        # Replace day-level snapshots on rerun to avoid stale state poisoning reconcile metrics.
-        self._delete_sqlite_rows_for_date(table="latest_positions", dstr=run_date)
-        self._delete_sqlite_rows_for_date(table="trade_plans", dstr=run_date)
-
         symbols = self._core_symbols()
-        bars, ingest = self._run_ingestion(as_of, symbols, persist=True)
+        bars, ingest = self._run_ingestion(as_of, symbols)
         paper_exec = self._settle_open_paper_positions(as_of=as_of, bars=bars)
         regime = self._regime_from_bars(as_of=as_of, bars=bars)
         live_params = self._load_live_params()
@@ -3600,14 +1752,14 @@ class LieEngine:
                     "notes",
                 ]
             )
-        append_sqlite(self.ctx.sqlite_path, "signals", signals_df.assign(date=run_date))
-        append_sqlite(self.ctx.sqlite_path, "trade_plans", plans_df.assign(date=run_date))
+        append_sqlite(self.ctx.sqlite_path, "signals", signals_df)
+        append_sqlite(self.ctx.sqlite_path, "trade_plans", plans_df.assign(date=as_of.isoformat()))
 
         # latest positions snapshot for risk budgeting
         append_sqlite(
             self.ctx.sqlite_path,
             "latest_positions",
-            plans_df.assign(date=run_date),
+            plans_df.assign(date=as_of.isoformat()),
         )
         open_positions = self._build_open_positions_from_plans(
             as_of=as_of,
@@ -3623,12 +1775,6 @@ class LieEngine:
             paper_exec_summary=(paper_exec.get("summary", {}) if isinstance(paper_exec.get("summary", {}), dict) else {}),
         )
         broker_snapshot_ref = str(broker_snapshot_path) if broker_snapshot_path is not None else ""
-        release_decision = self._release_decision_snapshot(as_of=as_of, stage="eod")
-        release_decision_freshness = (
-            release_decision.get("freshness", {})
-            if isinstance(release_decision.get("freshness", {}), dict)
-            else {}
-        )
         manifest_path = write_run_manifest(
             output_dir=self.ctx.output_dir,
             run_type="eod",
@@ -3655,16 +1801,6 @@ class LieEngine:
                 "quality_passed": bool(ingest.quality.passed),
                 "trade_blocked": bool(guard.trade_blocked),
             },
-            metadata={
-                "release_decision_id": str(release_decision.get("decision_id", "")),
-                "release_decision_snapshot": str(release_decision.get("path", "")),
-                "release_decision_found": bool(release_decision.get("found", False)),
-                "release_decision_fresh": bool(release_decision_freshness.get("fresh", False)),
-                "release_decision_usable": bool(release_decision_freshness.get("usable", False)),
-                "release_decision_stage": str(release_decision_freshness.get("stage", "")),
-                "release_decision_age_hours": release_decision_freshness.get("age_hours"),
-                "release_decision_stale_reason": str(release_decision_freshness.get("reason", "")),
-            },
         )
 
         return {
@@ -3687,15 +1823,11 @@ class LieEngine:
             "closed_pnl": float((paper_exec.get("summary", {}) or {}).get("closed_pnl", 0.0)),
             "open_positions": int(len(active_positions)),
             "broker_snapshot": broker_snapshot_ref,
-            "release_decision_id": str(release_decision.get("decision_id", "")),
-            "release_decision_fresh": bool(release_decision_freshness.get("fresh", False)),
-            "release_decision_usable": bool(release_decision_freshness.get("usable", False)),
-            "release_decision_stale_reason": str(release_decision_freshness.get("reason", "")),
         }
 
     def run_premarket(self, as_of: date) -> dict[str, Any]:
         symbols = self._core_symbols()
-        bars, ingest = self._run_ingestion(as_of, symbols, persist=False)
+        bars, ingest = self._run_ingestion(as_of, symbols)
         regime = self._regime_from_bars(as_of=as_of, bars=bars)
         market_factor_state = self._market_factor_state(sentiment=ingest.sentiment, regime=regime, bars=bars)
         live_params = self._load_live_params()
@@ -3759,7 +1891,7 @@ class LieEngine:
 
     def run_intraday_check(self, as_of: date, slot: str) -> dict[str, Any]:
         symbols = self._core_symbols()
-        bars, ingest = self._run_ingestion(as_of, symbols, persist=False)
+        bars, ingest = self._run_ingestion(as_of, symbols)
         regime = self._regime_from_bars(as_of=as_of, bars=bars)
         market_factor_state = self._market_factor_state(sentiment=ingest.sentiment, regime=regime, bars=bars)
         live_params = self._load_live_params()
@@ -3781,27 +1913,8 @@ class LieEngine:
             recent_trades=recent_trades,
         )
 
-        schedule = self.settings.schedule if isinstance(self.settings.schedule, dict) else {}
-        raw_slots = schedule.get("intraday_slots", ["10:30", "14:30"])
-        configured_slots: list[str] = []
-        seen: set[str] = set()
-        if isinstance(raw_slots, list):
-            for raw in raw_slots:
-                txt = str(raw).strip()
-                if not txt or txt in seen:
-                    continue
-                try:
-                    hh, mm = txt.split(":")
-                    if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
-                        continue
-                except Exception:
-                    continue
-                seen.add(txt)
-                configured_slots.append(txt)
-        if not configured_slots:
-            configured_slots = ["10:30", "14:30"]
-        if slot not in set(configured_slots):
-            slot = configured_slots[0]
+        if slot not in {"10:30", "14:30"}:
+            slot = "10:30"
 
         payload = {
             "date": as_of.isoformat(),
@@ -3847,7 +1960,9 @@ class LieEngine:
         symbols = self._core_symbols()
         # include dynamic candidates for wider stress
         symbols = expand_universe(symbols, pd.DataFrame(), int(self.settings.universe.get("max_dynamic_additions", 5)))
-        bars, _ = self._run_ingestion_range_compat(start=start, end=end, symbols=symbols, persist=False)
+        warmup_days = max(260, int(BacktestConfig().proxy_lookback) * 3)
+        ingest_start = max(date(2015, 1, 1), start - timedelta(days=warmup_days))
+        bars, _ = self._run_ingestion_range(start=ingest_start, end=end, symbols=symbols)
         params = self._load_live_params()
         runtime_regime = self._regime_from_bars(as_of=end, bars=bars)
         runtime_params = self._resolve_runtime_params(regime=runtime_regime, live_params=params)
@@ -3855,6 +1970,13 @@ class LieEngine:
         convexity_min = float(runtime_params["convexity_min"])
         hold_days = self._clamp_int(runtime_params["hold_days"], 1, 20)
         max_daily_trades = self._clamp_int(runtime_params["max_daily_trades"], 1, 5)
+        is_crypto_universe = bool(symbols) and all(CRYPTO_PAIR_RE.match(str(s).strip().upper()) for s in symbols)
+        if is_crypto_universe:
+            # Crypto daily bars are noisier and existing signal geometry caps convexity reach.
+            signal_conf = self._clamp_float(signal_conf, 35.0, 52.0)
+            convexity_min = self._clamp_float(convexity_min, 0.8, 1.6)
+            hold_days = self._clamp_int(hold_days, 1, 10)
+            max_daily_trades = self._clamp_int(max_daily_trades, 1, 5)
         bt_cfg = BacktestConfig(
             signal_confidence_min=signal_conf,
             convexity_min=convexity_min,
@@ -3862,7 +1984,7 @@ class LieEngine:
             hold_days=hold_days,
         )
 
-        result = run_walk_forward_backtest(
+        legacy_result = run_walk_forward_backtest(
             bars=bars,
             start=start,
             end=end,
@@ -3874,6 +1996,177 @@ class LieEngine:
             valid_years=1,
             step_months=3,
         )
+        result = legacy_result
+        selected_engine = "event_wf"
+        dd_gate = float(self.settings.validation.get("max_drawdown_max", 0.18))
+        factor_diag: dict[str, Any] = {}
+        friction_policy = self._crypto_execution_friction_policy() if is_crypto_universe else {}
+        friction_source = self._load_latest_crypto_execution_friction_summary() if is_crypto_universe else {}
+        friction_guard = (
+            self._evaluate_crypto_execution_friction_guard(
+                as_of=end,
+                policy=friction_policy,
+                source=friction_source,
+            )
+            if is_crypto_universe
+            else {"enabled": False, "blocked": False, "reason": ""}
+        )
+        failover_policy = self._crypto_factor_failover_policy() if is_crypto_universe else {}
+        failover_state = self._load_crypto_factor_failover_state() if is_crypto_universe else {}
+        failover_freeze_until = (
+            self._parse_iso_date(failover_state.get("freeze_until"))
+            if isinstance(failover_state, dict)
+            else None
+        )
+        failover_state_active = bool(failover_state.get("active", False)) if isinstance(failover_state, dict) else False
+        wall_clock_date = date.today()
+        failover_active = bool(
+            is_crypto_universe
+            and bool(failover_policy.get("enabled", False))
+            and bool(failover_state_active)
+            and (failover_freeze_until is not None)
+            and (wall_clock_date <= failover_freeze_until)
+        )
+        failover_triggered = False
+
+        if is_crypto_universe:
+            factor_diag = {
+                "legacy": {
+                    "annual_return": float(legacy_result.annual_return),
+                    "max_drawdown": float(legacy_result.max_drawdown),
+                    "trades": int(legacy_result.trades),
+                },
+                "dd_gate": float(dd_gate),
+                "friction_guard": friction_guard,
+                "failover": {
+                    "policy": failover_policy,
+                    "state": failover_state,
+                    "active": bool(failover_active),
+                    "freeze_until": failover_freeze_until.isoformat() if failover_freeze_until else "",
+                    "wall_clock_date": wall_clock_date.isoformat(),
+                },
+            }
+            factor_summary = None
+            if bool(friction_guard.get("blocked", False)):
+                selected_engine = "event_wf_friction_guard"
+                if bool(failover_policy.get("enabled", False)):
+                    failover_triggered = True
+                    failover_active = True
+                    failover_freeze_until = end + timedelta(days=max(1, int(failover_policy.get("freeze_days", 3))))
+                    self._save_crypto_factor_failover_state(
+                        {
+                            "active": True,
+                            "trigger_date": end.isoformat(),
+                            "freeze_until": failover_freeze_until.isoformat(),
+                            "window_runs": int(failover_policy.get("window_runs", 3)),
+                            "profit_factor_min": float(failover_policy.get("profit_factor_min", 1.0)),
+                            "annual_return_min": float(failover_policy.get("annual_return_min", 0.0)),
+                            "updated_at": datetime.now().isoformat(),
+                            "reason": f"execution_friction_guard:{str(friction_guard.get('reason', ''))}",
+                        }
+                    )
+                    factor_diag["failover"]["active"] = True
+                    factor_diag["failover"]["freeze_until"] = failover_freeze_until.isoformat()
+            elif failover_active:
+                selected_engine = "event_wf_failover_freeze"
+            else:
+                try:
+                    factor_summary = run_crypto_factor_backtest(
+                        bars=bars,
+                        start=start,
+                        end=end,
+                        dd_limit=dd_gate,
+                        max_factors=4,
+                    )
+                    factor_result = factor_summary.result
+                    factor_diag["factor"] = {
+                        "annual_return": float(factor_result.annual_return),
+                        "max_drawdown": float(factor_result.max_drawdown),
+                        "trades": int(factor_result.trades),
+                        "dd_ok": bool(factor_summary.dd_ok),
+                        "objective": float(factor_summary.objective),
+                        "params": dict(factor_summary.params),
+                        "factor_weights": dict(factor_summary.factor_weights),
+                    }
+                    prefer_factor = bool(factor_summary.dd_ok) and (
+                        int(legacy_result.trades) < 3
+                        or float(legacy_result.max_drawdown) > dd_gate
+                        or float(factor_result.annual_return) > float(legacy_result.annual_return)
+                    )
+                    factor_diag["prefer_factor"] = bool(prefer_factor)
+                    if prefer_factor:
+                        result = factor_result
+                        selected_engine = "crypto_factor"
+                except Exception as exc:  # noqa: BLE001
+                    factor_diag["error"] = str(exc)
+
+            if bool(failover_policy.get("enabled", False)) and factor_summary is not None:
+                recent_rows = self._recent_crypto_factor_runs(as_of=end, lookback_days=int(failover_policy.get("lookback_days", 365)))
+                current_row = {
+                    "end": end.isoformat(),
+                    "annual_return": float(factor_summary.result.annual_return),
+                    "profit_factor": float(factor_summary.result.profit_factor),
+                    "max_drawdown": float(factor_summary.result.max_drawdown),
+                    "trades": int(factor_summary.result.trades),
+                }
+                recent_rows = [r for r in recent_rows if str(r.get("end", "")) != end.isoformat()] + [current_row]
+                window_runs = max(1, int(failover_policy.get("window_runs", 3)))
+                tail = recent_rows[-window_runs:]
+                pf_min = float(failover_policy.get("profit_factor_min", 1.0))
+                ar_min = float(failover_policy.get("annual_return_min", 0.0))
+                bad_consecutive = len(tail) >= window_runs and all(
+                    (float(r.get("profit_factor", 0.0)) < pf_min)
+                    or (float(r.get("annual_return", 0.0)) < ar_min)
+                    for r in tail
+                )
+                factor_diag["failover"]["tail"] = tail
+                factor_diag["failover"]["bad_consecutive"] = bool(bad_consecutive)
+                factor_diag["failover"]["window_runs"] = int(window_runs)
+                if bad_consecutive:
+                    failover_triggered = True
+                    failover_active = True
+                    failover_freeze_until = end + timedelta(days=max(1, int(failover_policy.get("freeze_days", 3))))
+                    self._save_crypto_factor_failover_state(
+                        {
+                            "active": True,
+                            "trigger_date": end.isoformat(),
+                            "freeze_until": failover_freeze_until.isoformat(),
+                            "window_runs": int(window_runs),
+                            "profit_factor_min": float(pf_min),
+                            "annual_return_min": float(ar_min),
+                            "updated_at": datetime.now().isoformat(),
+                            "reason": "crypto_factor_consecutive_degraded",
+                        }
+                    )
+                    if selected_engine == "crypto_factor":
+                        result = legacy_result
+                        selected_engine = "event_wf_failover_triggered"
+                elif failover_freeze_until is not None and end > failover_freeze_until:
+                    failover_active = False
+                    self._save_crypto_factor_failover_state(
+                        {
+                            "active": False,
+                            "trigger_date": str(failover_state.get("trigger_date", "")),
+                            "freeze_until": failover_freeze_until.isoformat(),
+                            "window_runs": int(window_runs),
+                            "profit_factor_min": float(pf_min),
+                            "annual_return_min": float(ar_min),
+                            "updated_at": datetime.now().isoformat(),
+                            "reason": "freeze_expired",
+                        }
+                    )
+
+            diag_path = self.ctx.output_dir / "review" / f"{end.isoformat()}_crypto_factor_backtest_{start.isoformat()}_{end.isoformat()}.json"
+            write_json(
+                diag_path,
+                {
+                    "as_of": datetime.now().isoformat(),
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "selected_engine": selected_engine,
+                    "diag": factor_diag,
+                },
+            )
 
         out_path = self.ctx.output_dir / "artifacts" / f"backtest_{start.isoformat()}_{end.isoformat()}.json"
         write_json(out_path, result.to_dict())
@@ -3890,6 +2183,22 @@ class LieEngine:
                 "profit_factor": float(result.profit_factor),
                 "trades": int(result.trades),
                 "runtime_mode": str(runtime_params.get("mode", "base")),
+                "ingest_start": ingest_start.isoformat(),
+                "signal_confidence_min_effective": float(signal_conf),
+                "convexity_min_effective": float(convexity_min),
+                "hold_days_effective": int(hold_days),
+                "max_daily_trades_effective": int(max_daily_trades),
+                "crypto_universe": bool(is_crypto_universe),
+                "selected_engine": str(selected_engine),
+                "factor_failover_enabled": bool(failover_policy.get("enabled", False)) if is_crypto_universe else False,
+                "factor_failover_active": bool(failover_active) if is_crypto_universe else False,
+                "factor_failover_triggered": bool(failover_triggered) if is_crypto_universe else False,
+                "factor_failover_freeze_until": failover_freeze_until.isoformat() if failover_freeze_until else "",
+                "factor_friction_guard_enabled": bool(friction_guard.get("enabled", False)) if is_crypto_universe else False,
+                "factor_friction_guard_blocked": bool(friction_guard.get("blocked", False)) if is_crypto_universe else False,
+                "factor_friction_guard_reason": str(friction_guard.get("reason", "")) if is_crypto_universe else "",
+                "factor_friction_guard_p95_bps": float(friction_guard.get("p95_bps", 0.0)) if is_crypto_universe else 0.0,
+                "factor_friction_guard_depth_p50_usdt": float(friction_guard.get("depth_p50_usdt", 0.0)) if is_crypto_universe else 0.0,
             },
             checks={"violations": int(result.violations)},
         )
@@ -3911,7 +2220,6 @@ class LieEngine:
         modes: list[str] | None = None,
         windows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         profiles = self._resolved_mode_profiles()
         default_modes = ["ultra_short", "swing", "long"]
         mode_candidates = modes if isinstance(modes, list) and modes else default_modes
@@ -3953,24 +2261,14 @@ class LieEngine:
         atr_extreme = float(self.settings.thresholds.get("atr_extreme", 2.0))
 
         matrix_rows: list[dict[str, Any]] = []
-        window_cache: list[dict[str, Any]] = []
         for w in parsed_windows:
             w_name = str(w.get("name", "window"))
             w_start = self._parse_iso_date(w.get("start"))
             w_end = self._parse_iso_date(w.get("end"))
             if w_start is None or w_end is None:
                 continue
-            bars, _ = self._run_ingestion_range_compat(start=w_start, end=w_end, symbols=symbols, persist=False)
+            bars, _ = self._run_ingestion_range(start=w_start, end=w_end, symbols=symbols)
             bars_empty = bool(bars.empty)
-            window_cache.append(
-                {
-                    "name": w_name,
-                    "start": w_start,
-                    "end": w_end,
-                    "bars": bars,
-                    "bars_empty": bars_empty,
-                }
-            )
             for mode in selected_modes:
                 profile = profiles.get(mode, profiles.get("swing", self._default_mode_profiles().get("swing", {})))
                 cfg = BacktestConfig(
@@ -4078,301 +2376,6 @@ class LieEngine:
 
         summary_rows.sort(key=lambda x: float(x.get("robustness_score", -1e9)), reverse=True)
         best_mode = str(summary_rows[0]["mode"]) if summary_rows else "N/A"
-        reference_mode = (
-            best_mode
-            if isinstance(best_mode, str) and best_mode in profiles
-            else ("swing" if "swing" in profiles else next(iter(profiles.keys())))
-        )
-        reference_profile = profiles.get(reference_mode, profiles.get("swing", self._default_mode_profiles().get("swing", {})))
-
-        friction_enabled = bool(val.get("mode_stress_execution_friction_enabled", True))
-        raw_friction_scenarios = (
-            val.get("mode_stress_execution_friction_scenarios", [])
-            if isinstance(val.get("mode_stress_execution_friction_scenarios", []), list)
-            else []
-        )
-        friction_scenarios: list[dict[str, Any]] = []
-        for idx, raw in enumerate(raw_friction_scenarios):
-            if not isinstance(raw, dict):
-                continue
-            s_name = str(raw.get("name", "")).strip() or f"scenario_{idx + 1}"
-            latency_days = self._clamp_int(raw.get("execution_latency_days", raw.get("latency_days", 0)), 0, 5)
-            friction_multiplier = max(
-                0.0,
-                float(raw.get("execution_friction_multiplier", raw.get("friction_multiplier", 1.0))),
-            )
-            extra_slippage_bps = max(
-                0.0,
-                float(raw.get("execution_extra_slippage_bps", raw.get("extra_slippage_bps", 0.0))),
-            )
-            friction_scenarios.append(
-                {
-                    "name": s_name,
-                    "execution_latency_days": int(latency_days),
-                    "execution_friction_multiplier": float(friction_multiplier),
-                    "execution_extra_slippage_bps": float(extra_slippage_bps),
-                }
-            )
-        if not friction_scenarios:
-            friction_scenarios = [
-                {
-                    "name": "baseline",
-                    "execution_latency_days": 0,
-                    "execution_friction_multiplier": 1.0,
-                    "execution_extra_slippage_bps": 0.0,
-                },
-                {
-                    "name": "mild_friction",
-                    "execution_latency_days": 1,
-                    "execution_friction_multiplier": 1.15,
-                    "execution_extra_slippage_bps": 3.0,
-                },
-                {
-                    "name": "stress_friction",
-                    "execution_latency_days": 2,
-                    "execution_friction_multiplier": 1.35,
-                    "execution_extra_slippage_bps": 8.0,
-                },
-            ]
-
-        friction_rows: list[dict[str, Any]] = []
-        friction_summary: list[dict[str, Any]] = []
-        for scenario in friction_scenarios:
-            s_name = str(scenario.get("name", "scenario"))
-            latency_days = int(scenario.get("execution_latency_days", 0))
-            friction_multiplier = float(scenario.get("execution_friction_multiplier", 1.0))
-            extra_slippage_bps = float(scenario.get("execution_extra_slippage_bps", 0.0))
-            ok_rows: list[dict[str, Any]] = []
-            fail_rows = 0
-            for w in window_cache:
-                w_name = str(w.get("name", "window"))
-                w_start = w.get("start")
-                w_end = w.get("end")
-                bars = w.get("bars")
-                bars_empty = bool(w.get("bars_empty", True))
-                if not isinstance(w_start, date) or not isinstance(w_end, date):
-                    continue
-                cfg = BacktestConfig(
-                    signal_confidence_min=float(reference_profile.get("signal_confidence_min", 60.0)),
-                    convexity_min=float(reference_profile.get("convexity_min", 2.0)),
-                    max_daily_trades=self._clamp_int(reference_profile.get("max_daily_trades", 2.0), 1, 5),
-                    hold_days=self._clamp_int(reference_profile.get("hold_days", 5.0), 1, 20),
-                    execution_latency_days=int(latency_days),
-                    execution_friction_multiplier=float(friction_multiplier),
-                    execution_extra_slippage_bps=float(extra_slippage_bps),
-                    strict_temporal_guard=True,
-                )
-                if bars_empty or not isinstance(bars, pd.DataFrame):
-                    result = BacktestResult(
-                        start=w_start,
-                        end=w_end,
-                        total_return=0.0,
-                        annual_return=0.0,
-                        max_drawdown=0.0,
-                        win_rate=0.0,
-                        profit_factor=0.0,
-                        expectancy=0.0,
-                        trades=0,
-                        violations=0,
-                        positive_window_ratio=0.0,
-                        equity_curve=[],
-                        by_asset={},
-                    )
-                    status = "no_data"
-                else:
-                    result = run_walk_forward_backtest(
-                        bars=bars,
-                        start=w_start,
-                        end=w_end,
-                        trend_thr=trend_thr,
-                        mean_thr=mean_thr,
-                        atr_extreme=atr_extreme,
-                        cfg_template=cfg,
-                        train_years=3,
-                        valid_years=1,
-                        step_months=3,
-                    )
-                    status = "ok"
-                row = {
-                    "scenario": s_name,
-                    "reference_mode": reference_mode,
-                    "execution_latency_days": int(latency_days),
-                    "execution_friction_multiplier": float(friction_multiplier),
-                    "execution_extra_slippage_bps": float(extra_slippage_bps),
-                    "window": w_name,
-                    "start": w_start.isoformat(),
-                    "end": w_end.isoformat(),
-                    "status": status,
-                    "total_return": float(result.total_return),
-                    "annual_return": float(result.annual_return),
-                    "max_drawdown": float(result.max_drawdown),
-                    "win_rate": float(result.win_rate),
-                    "profit_factor": float(result.profit_factor),
-                    "expectancy": float(result.expectancy),
-                    "trades": int(result.trades),
-                    "violations": int(result.violations),
-                    "positive_window_ratio": float(result.positive_window_ratio),
-                }
-                friction_rows.append(row)
-                if status == "ok":
-                    ok_rows.append(row)
-                else:
-                    fail_rows += 1
-
-            if not ok_rows:
-                friction_summary.append(
-                    {
-                        "scenario": s_name,
-                        "reference_mode": reference_mode,
-                        "windows": 0,
-                        "avg_annual_return": 0.0,
-                        "worst_drawdown": 0.0,
-                        "avg_profit_factor": 0.0,
-                        "avg_positive_window_ratio": 0.0,
-                        "fail_ratio": 1.0 if window_cache else 0.0,
-                        "robustness_score": -1.0,
-                    }
-                )
-                continue
-            n = float(len(ok_rows))
-            avg_annual = float(sum(float(r.get("annual_return", 0.0)) for r in ok_rows) / n)
-            worst_drawdown = float(max(float(r.get("max_drawdown", 0.0)) for r in ok_rows))
-            avg_pf = float(sum(float(r.get("profit_factor", 0.0)) for r in ok_rows) / n)
-            avg_pwr = float(sum(float(r.get("positive_window_ratio", 0.0)) for r in ok_rows) / n)
-            fail_ratio = float(fail_rows / max(1, len(window_cache)))
-            robustness_score = float(
-                avg_annual - worst_drawdown + 0.10 * (avg_pf - 1.0) + 0.05 * (avg_pwr - 0.5) - 0.05 * fail_ratio
-            )
-            friction_summary.append(
-                {
-                    "scenario": s_name,
-                    "reference_mode": reference_mode,
-                    "windows": int(len(ok_rows)),
-                    "avg_annual_return": float(avg_annual),
-                    "worst_drawdown": float(worst_drawdown),
-                    "avg_profit_factor": float(avg_pf),
-                    "avg_positive_window_ratio": float(avg_pwr),
-                    "fail_ratio": float(fail_ratio),
-                    "robustness_score": float(robustness_score),
-                }
-            )
-
-        base_summary = friction_summary[0] if friction_summary else {}
-        stress_summaries = friction_summary[1:] if len(friction_summary) > 1 else []
-        annual_drop_max = self._clamp_float(
-            self._safe_float(val.get("mode_stress_execution_friction_max_annual_drop", 0.10), 0.10),
-            0.0,
-            1.0,
-        )
-        drawdown_rise_max = self._clamp_float(
-            self._safe_float(val.get("mode_stress_execution_friction_max_drawdown_rise", 0.08), 0.08),
-            0.0,
-            1.0,
-        )
-        min_pf_ratio = self._clamp_float(
-            self._safe_float(val.get("mode_stress_execution_friction_min_profit_factor_ratio", 0.75), 0.75),
-            0.0,
-            1.0,
-        )
-        fail_ratio_max = self._clamp_float(
-            self._safe_float(val.get("mode_stress_execution_friction_max_fail_ratio", 0.50), 0.50),
-            0.0,
-            1.0,
-        )
-        positive_window_ratio_drop_max = self._clamp_float(
-            self._safe_float(
-                val.get("mode_stress_execution_friction_max_positive_window_ratio_drop", 0.20),
-                0.20,
-            ),
-            0.0,
-            1.0,
-        )
-        base_pf = float(base_summary.get("avg_profit_factor", 0.0)) if isinstance(base_summary, dict) else 0.0
-        base_annual = float(base_summary.get("avg_annual_return", 0.0)) if isinstance(base_summary, dict) else 0.0
-        base_dd = float(base_summary.get("worst_drawdown", 0.0)) if isinstance(base_summary, dict) else 0.0
-        base_pwr = float(base_summary.get("avg_positive_window_ratio", 0.0)) if isinstance(base_summary, dict) else 0.0
-        annual_drop = max(
-            [0.0] + [max(0.0, base_annual - float(x.get("avg_annual_return", 0.0))) for x in stress_summaries]
-        )
-        drawdown_rise = max(
-            [0.0] + [max(0.0, float(x.get("worst_drawdown", 0.0)) - base_dd) for x in stress_summaries]
-        )
-        min_profit_factor_ratio = 1.0
-        if stress_summaries:
-            if base_pf > 1e-9:
-                min_profit_factor_ratio = min(
-                    max(0.0, float(x.get("avg_profit_factor", 0.0)) / base_pf) for x in stress_summaries
-                )
-            else:
-                min_profit_factor_ratio = min(
-                    1.0 if float(x.get("avg_profit_factor", 0.0)) <= 0.0 else 0.0 for x in stress_summaries
-                )
-        max_fail_ratio = max([0.0] + [max(0.0, float(x.get("fail_ratio", 0.0))) for x in stress_summaries])
-        max_positive_window_ratio_drop = max(
-            [0.0] + [max(0.0, base_pwr - float(x.get("avg_positive_window_ratio", 0.0))) for x in stress_summaries]
-        )
-        friction_scorecard_active = bool(
-            friction_enabled
-            and len(stress_summaries) > 0
-            and isinstance(base_summary, dict)
-            and int(base_summary.get("windows", 0)) > 0
-        )
-        friction_checks = {
-            "annual_drop_ok": bool(annual_drop <= annual_drop_max),
-            "drawdown_rise_ok": bool(drawdown_rise <= drawdown_rise_max),
-            "profit_factor_ratio_ok": bool(min_profit_factor_ratio >= min_pf_ratio),
-            "fail_ratio_ok": bool(max_fail_ratio <= fail_ratio_max),
-            "positive_window_ratio_drop_ok": bool(max_positive_window_ratio_drop <= positive_window_ratio_drop_max),
-        }
-        if not friction_scorecard_active:
-            friction_checks = {k: True for k in friction_checks}
-        friction_alerts: list[str] = []
-        if friction_scorecard_active:
-            if not friction_checks["annual_drop_ok"]:
-                friction_alerts.append("stress_matrix_execution_friction_annual_drop")
-            if not friction_checks["drawdown_rise_ok"]:
-                friction_alerts.append("stress_matrix_execution_friction_drawdown_rise")
-            if not friction_checks["profit_factor_ratio_ok"]:
-                friction_alerts.append("stress_matrix_execution_friction_profit_factor_ratio")
-            if not friction_checks["fail_ratio_ok"]:
-                friction_alerts.append("stress_matrix_execution_friction_fail_ratio")
-            if not friction_checks["positive_window_ratio_drop_ok"]:
-                friction_alerts.append("stress_matrix_execution_friction_positive_window_ratio_drop")
-        failed_count = int(sum(1 for passed in friction_checks.values() if not bool(passed)))
-        friction_status = "inactive"
-        if friction_scorecard_active:
-            friction_status = "ok" if failed_count == 0 else ("warn" if failed_count <= 2 else "critical")
-        friction_scorecard = {
-            "active": bool(friction_scorecard_active),
-            "enabled": bool(friction_enabled),
-            "status": friction_status,
-            "gate_ok": bool(all(bool(v) for v in friction_checks.values())) if friction_scorecard_active else True,
-            "checks": friction_checks,
-            "thresholds": {
-                "mode_stress_execution_friction_max_annual_drop": float(annual_drop_max),
-                "mode_stress_execution_friction_max_drawdown_rise": float(drawdown_rise_max),
-                "mode_stress_execution_friction_min_profit_factor_ratio": float(min_pf_ratio),
-                "mode_stress_execution_friction_max_fail_ratio": float(fail_ratio_max),
-                "mode_stress_execution_friction_max_positive_window_ratio_drop": float(
-                    positive_window_ratio_drop_max
-                ),
-            },
-            "metrics": {
-                "reference_mode": reference_mode,
-                "base_avg_annual_return": float(base_annual),
-                "base_worst_drawdown": float(base_dd),
-                "base_avg_profit_factor": float(base_pf),
-                "base_avg_positive_window_ratio": float(base_pwr),
-                "annual_drop": float(annual_drop),
-                "drawdown_rise": float(drawdown_rise),
-                "min_profit_factor_ratio": float(min_profit_factor_ratio),
-                "max_fail_ratio": float(max_fail_ratio),
-                "max_positive_window_ratio_drop": float(max_positive_window_ratio_drop),
-                "scenario_count": int(len(friction_summary)),
-                "stress_scenario_count": int(len(stress_summaries)),
-            },
-            "alerts": friction_alerts,
-        }
 
         payload: dict[str, Any] = {
             "date": as_of.isoformat(),
@@ -4383,14 +2386,6 @@ class LieEngine:
             "matrix": matrix_rows,
             "mode_summary": summary_rows,
             "best_mode": best_mode,
-            "execution_friction": {
-                "enabled": bool(friction_enabled),
-                "reference_mode": reference_mode,
-                "scenarios": friction_scenarios,
-                "matrix": friction_rows,
-                "scenario_summary": friction_summary,
-                "scorecard": friction_scorecard,
-            },
         }
 
         review_dir = self.ctx.output_dir / "review"
@@ -4424,12 +2419,8 @@ class LieEngine:
                 "mode_count": int(len(selected_modes)),
                 "window_count": int(len(parsed_windows)),
                 "best_mode": best_mode,
-                "execution_friction_active": bool(friction_scorecard.get("active", False)),
             },
-            checks={
-                "matrix_rows": int(len(matrix_rows)),
-                "execution_friction_scenarios": int(len(friction_scenarios)),
-            },
+            checks={"matrix_rows": int(len(matrix_rows))},
         )
         payload["paths"] = {"json": str(json_path), "md": str(md_path)}
         payload["manifest"] = str(manifest_path)
@@ -5066,12 +3057,7 @@ class LieEngine:
         block_on_alert = bool(val.get("style_drift_block_on_alert", False))
 
         fetch_start = max(start, as_of - timedelta(days=max(60, lookback_days * 2)))
-        bars, _ = self._run_ingestion_range_compat(
-            start=fetch_start,
-            end=as_of,
-            symbols=self._core_symbols(),
-            persist=False,
-        )
+        bars, _ = self._run_ingestion_range(start=fetch_start, end=as_of, symbols=self._core_symbols())
         panel = self._style_feature_panel(bars)
         if panel.empty:
             return {
@@ -5472,7 +3458,6 @@ class LieEngine:
             mode_history=mode_history,
         )
         slot_regime_tuning = self._tune_slot_regime_thresholds(as_of=as_of)
-        degradation_calibration = self._calibrate_degradation_params(as_of=as_of)
         self._apply_mode_health_guard(
             review=review,
             current_params=params,
@@ -5495,29 +3480,6 @@ class LieEngine:
             + f"applied={bool(slot_regime_tuning.get('applied', False))}; "
             + f"changed={bool(slot_regime_tuning.get('changed', False))}; "
             + f"path={slot_regime_tuning.get('path', '')}"
-        )
-        review.notes.append(
-            "degradation_calibration="
-            + f"applied={bool(degradation_calibration.get('applied', False))}; "
-            + f"changed={bool(degradation_calibration.get('changed', False))}; "
-            + f"path={degradation_calibration.get('path', '')}"
-        )
-        degradation_rollback = (
-            degradation_calibration.get("rollback", {})
-            if isinstance(degradation_calibration.get("rollback", {}), dict)
-            else {}
-        )
-        snapshot_promotion = (
-            degradation_rollback.get("snapshot_promotion", {})
-            if isinstance(degradation_rollback.get("snapshot_promotion", {}), dict)
-            else {}
-        )
-        review.notes.append(
-            "degradation_rollback_guard="
-            + f"triggered={bool(degradation_rollback.get('triggered', False))}; "
-            + f"applied={bool(degradation_rollback.get('applied', False))}; "
-            + f"domain={str(degradation_rollback.get('domain', ''))}; "
-            + f"snapshot_promoted={bool(snapshot_promotion.get('promoted', False))}"
         )
         review.rollback_anchor = rollback_anchor
 
@@ -5545,7 +3507,6 @@ class LieEngine:
         audit_payload["mode_adaptive"] = mode_adaptive
         audit_payload["style_drift_guard"] = style_drift_guard
         audit_payload["slot_regime_tuning"] = slot_regime_tuning
-        audit_payload["degradation_calibration"] = degradation_calibration
         audit_payload["style_diagnostics"] = style_diag
         audit_payload["generated_at"] = datetime.now().isoformat()
         write_markdown(delta_path, yaml.safe_dump(audit_payload, allow_unicode=True, sort_keys=False))
@@ -5554,51 +3515,15 @@ class LieEngine:
         write_markdown(live_params_path, yaml.safe_dump(review.parameter_changes, allow_unicode=True, sort_keys=False))
 
         append_sqlite(self.ctx.sqlite_path, "review_runs", pd.DataFrame([audit_payload]))
-        manifest_artifacts = {
-            "review_report": str(review_path),
-            "param_delta": str(delta_path),
-            "live_params": str(live_params_path),
-        }
-        degradation_artifacts = (
-            degradation_calibration.get("artifacts", {})
-            if isinstance(degradation_calibration.get("artifacts", {}), dict)
-            else {}
-        )
-        degradation_json = str(degradation_artifacts.get("json", "")).strip()
-        degradation_md = str(degradation_artifacts.get("md", "")).strip()
-        degradation_rollback_json = str(degradation_artifacts.get("rollback_json", "")).strip()
-        degradation_rollback_md = str(degradation_artifacts.get("rollback_md", "")).strip()
-        if degradation_json:
-            manifest_artifacts["degradation_calibration_json"] = degradation_json
-        if degradation_md:
-            manifest_artifacts["degradation_calibration_md"] = degradation_md
-        if degradation_rollback_json:
-            manifest_artifacts["degradation_calibration_rollback_json"] = degradation_rollback_json
-        if degradation_rollback_md:
-            manifest_artifacts["degradation_calibration_rollback_md"] = degradation_rollback_md
-
-        degradation_rollback = (
-            degradation_calibration.get("rollback", {})
-            if isinstance(degradation_calibration.get("rollback", {}), dict)
-            else {}
-        )
-        degradation_snapshot_promotion = (
-            degradation_rollback.get("snapshot_promotion", {})
-            if isinstance(degradation_rollback.get("snapshot_promotion", {}), dict)
-            else {}
-        )
-        release_decision = self._release_decision_snapshot(as_of=as_of, stage="review")
-        release_decision_freshness = (
-            release_decision.get("freshness", {})
-            if isinstance(release_decision.get("freshness", {}), dict)
-            else {}
-        )
-
         manifest_path = write_run_manifest(
             output_dir=self.ctx.output_dir,
             run_type="review",
             run_id=as_of.isoformat(),
-            artifacts=manifest_artifacts,
+            artifacts={
+                "review_report": str(review_path),
+                "param_delta": str(delta_path),
+                "live_params": str(live_params_path),
+            },
             metrics={
                 "pass_gate": bool(review.pass_gate),
                 "defects": int(len(review.defects)),
@@ -5608,11 +3533,6 @@ class LieEngine:
                 "mode_adaptive_applied": bool(mode_adaptive.get("applied", False)),
                 "mode_adaptive_direction": str(mode_adaptive.get("direction", "none")),
                 "slot_regime_tuning_changed": bool(slot_regime_tuning.get("changed", False)),
-                "degradation_calibration_applied": bool(degradation_calibration.get("applied", False)),
-                "degradation_calibration_changed": bool(degradation_calibration.get("changed", False)),
-                "degradation_rollback_triggered": bool(degradation_rollback.get("triggered", False)),
-                "degradation_rollback_applied": bool(degradation_rollback.get("applied", False)),
-                "degradation_snapshot_promoted": bool(degradation_snapshot_promotion.get("promoted", False)),
                 "style_drift_score": float(style_diag.get("style_drift_score", 0.0)),
                 "style_drift_alerts": int(
                     sum(1 for x in style_diag.get("alerts", []) if str(x).startswith("style_drift:"))
@@ -5626,97 +3546,31 @@ class LieEngine:
                 "max_drawdown": float(bt.max_drawdown),
                 "violations": int(bt.violations),
             },
-            metadata={
-                "release_decision_id": str(release_decision.get("decision_id", "")),
-                "release_decision_snapshot": str(release_decision.get("path", "")),
-                "release_decision_found": bool(release_decision.get("found", False)),
-                "release_decision_fresh": bool(release_decision_freshness.get("fresh", False)),
-                "release_decision_usable": bool(release_decision_freshness.get("usable", False)),
-                "release_decision_stage": str(release_decision_freshness.get("stage", "")),
-                "release_decision_age_hours": release_decision_freshness.get("age_hours"),
-                "release_decision_stale_reason": str(release_decision_freshness.get("reason", "")),
-            },
         )
         review.notes.append(f"manifest={manifest_path}")
-        if str(release_decision.get("decision_id", "")).strip():
-            review.notes.append(f"release_decision_id={release_decision.get('decision_id', '')}")
         return review
 
     def test_all(
         self,
         *,
         fast: bool = False,
-        tier: str | None = None,
-        standard_ratio: float = 0.35,
         fast_ratio: float = 0.10,
         fast_shard_index: int = 0,
         fast_shard_total: int = 1,
         fast_seed: str = "lie-fast-v1",
-        fast_tail_priority: bool = True,
-        fast_tail_floor: int = 3,
-        isolate_shard_workspace: bool | None = None,
-        shard_workspace_root: str | None = None,
     ) -> dict[str, Any]:
         return self._testing_orchestrator().test_all(
             fast=fast,
-            tier=tier,
-            standard_ratio=standard_ratio,
             fast_ratio=fast_ratio,
             fast_shard_index=fast_shard_index,
             fast_shard_total=fast_shard_total,
             fast_seed=fast_seed,
-            fast_tail_priority=fast_tail_priority,
-            fast_tail_floor=fast_tail_floor,
-            isolate_shard_workspace=isolate_shard_workspace,
-            shard_workspace_root=shard_workspace_root,
         )
 
-    def test_chaos(
-        self,
-        *,
-        max_tests: int = 24,
-        fast_shard_index: int = 0,
-        fast_shard_total: int = 1,
-        seed: str = "lie-chaos-v1",
-        isolate_shard_workspace: bool = True,
-        shard_workspace_root: str | None = None,
-        include_probes: bool = True,
-        probe_timeout_seconds: int = 30,
-    ) -> dict[str, Any]:
-        return self._testing_orchestrator().test_chaos(
-            max_tests=max_tests,
-            fast_shard_index=fast_shard_index,
-            fast_shard_total=fast_shard_total,
-            seed=seed,
-            isolate_shard_workspace=isolate_shard_workspace,
-            shard_workspace_root=shard_workspace_root,
-            include_probes=include_probes,
-            probe_timeout_seconds=probe_timeout_seconds,
-        )
-
-    def stable_replay_check(
-        self,
-        as_of: date,
-        days: int | None = None,
-        run_eod_replay: bool = True,
-    ) -> dict[str, Any]:
-        return self._observability_orchestrator().stable_replay_check(
-            as_of=as_of,
-            days=days,
-            run_eod_replay=run_eod_replay,
-        )
+    def stable_replay_check(self, as_of: date, days: int | None = None) -> dict[str, Any]:
+        return self._observability_orchestrator().stable_replay_check(as_of=as_of, days=days)
 
     def _release_orchestrator(self) -> ReleaseOrchestrator:
-        def _stable_replay_callback(d: date, days: int | None, run_eod_replay: bool = True) -> dict[str, Any]:
-            try:
-                return self.stable_replay_check(
-                    d,
-                    days=days,
-                    run_eod_replay=run_eod_replay,
-                )
-            except TypeError:
-                return self.stable_replay_check(d, days=days)
-
         return ReleaseOrchestrator(
             settings=self.settings,
             output_dir=self.ctx.output_dir,
@@ -5724,12 +3578,11 @@ class LieEngine:
             backtest_snapshot=lambda d: self._backtest_snapshot(d),
             run_review=lambda d: self.run_review(d),
             health_check=lambda d, require_review: self.health_check(d, require_review=require_review),
-            stable_replay_check=_stable_replay_callback,
+            stable_replay_check=lambda d, days: self.stable_replay_check(d, days=days),
             test_all=lambda **kwargs: self.test_all(**kwargs),
             load_json_safely=lambda p: self._load_json_safely(p),
             sqlite_path=self.ctx.sqlite_path,
             run_stress_matrix=lambda d, modes: self.run_mode_stress_matrix(as_of=d, modes=modes),
-            run_degradation_calibration=lambda d: self.run_degradation_calibration(as_of=d),
         )
 
     def _architecture_orchestrator(self) -> ArchitectureOrchestrator:
@@ -5769,43 +3622,8 @@ class LieEngine:
             run_premarket=lambda d: self.run_premarket(d),
             run_intraday_check=lambda d, slot: self.run_intraday_check(d, slot=slot),
             run_eod=lambda d: self.run_eod(d),
-            run_review_cycle=lambda d, max_rounds, **kwargs: self.run_review_cycle(
-                as_of=d,
-                max_rounds=max_rounds,
-                trace_id=str(kwargs.get("trace_id", "")).strip() or None,
-                parent_event_id=str(kwargs.get("parent_event_id", "")).strip() or None,
-            ),
+            run_review_cycle=lambda d, max_rounds: self.run_review_cycle(as_of=d, max_rounds=max_rounds),
             ops_report=lambda d, window_days: self.ops_report(as_of=d, window_days=window_days),
-            health_check=lambda d, require_review: self.health_check(as_of=d, require_review=require_review),
-            run_guardrail_burnin=lambda d, days, run_stable_replay, auto_tune: self.degradation_guardrail_burnin(
-                as_of=d,
-                days=days,
-                run_stable_replay=run_stable_replay,
-                auto_tune=auto_tune,
-            ),
-            run_guardrail_threshold_drift_audit=lambda d, window_days: self.degradation_guardrail_threshold_drift_audit(
-                as_of=d,
-                window_days=window_days,
-            ),
-            run_compact_executed_plans=lambda start, end, chunk_days, dry_run, max_delete_rows: self.compact_executed_plans_duplicates(
-                start=start,
-                end=end,
-                chunk_days=chunk_days,
-                dry_run=dry_run,
-                max_delete_rows=max_delete_rows,
-            ),
-            verify_compaction_restore=lambda run_id, keep_temp_db: self.verify_executed_plans_compaction_restore(
-                run_id=run_id,
-                keep_temp_db=keep_temp_db,
-            ),
-            run_db_maintenance=lambda d, retention_days, tables, vacuum, analyze, apply: self.maintain_sqlite(
-                as_of=d,
-                retention_days=retention_days,
-                tables=tables,
-                vacuum=vacuum,
-                analyze=analyze,
-                apply=apply,
-            ),
         )
 
     def gate_report(
@@ -5813,210 +3631,24 @@ class LieEngine:
         as_of: date,
         run_tests: bool = False,
         run_review_if_missing: bool = True,
-        run_stable_replay: bool = True,
-        trace_id: str | None = None,
-        parent_event_id: str | None = None,
     ) -> dict[str, Any]:
         return self._release_orchestrator().gate_report(
             as_of=as_of,
             run_tests=run_tests,
             run_review_if_missing=run_review_if_missing,
-            run_stable_replay=run_stable_replay,
-            trace_id=trace_id,
-            parent_event_id=parent_event_id,
         )
 
     def ops_report(self, as_of: date, window_days: int = 7) -> dict[str, Any]:
         return self._release_orchestrator().ops_report(as_of=as_of, window_days=window_days)
 
-    def degradation_guardrail_burnin(
-        self,
-        as_of: date,
-        days: int = 3,
-        run_stable_replay: bool = True,
-        auto_tune: bool = True,
-    ) -> dict[str, Any]:
-        return self._release_orchestrator().degradation_guardrail_burnin(
-            as_of=as_of,
-            days=days,
-            run_stable_replay=run_stable_replay,
-            auto_tune=auto_tune,
-        )
-
-    def run_degradation_calibration(self, as_of: date) -> dict[str, Any]:
-        return self._calibrate_degradation_params(as_of=as_of)
-
-    def degradation_guardrail_threshold_drift_audit(
-        self,
-        as_of: date,
-        window_days: int = 56,
-    ) -> dict[str, Any]:
-        return self._release_orchestrator().degradation_guardrail_threshold_drift_audit(
-            as_of=as_of,
-            window_days=window_days,
-        )
-
-    def maintain_sqlite(
-        self,
-        *,
-        as_of: date | None = None,
-        retention_days: int | None = None,
-        tables: list[str] | None = None,
-        vacuum: bool = False,
-        analyze: bool = False,
-        apply: bool = False,
-    ) -> dict[str, Any]:
-        tz = ZoneInfo(self.settings.timezone)
-        anchor = as_of if as_of is not None else datetime.now(tz).date()
-        selected_tables = [str(x).strip() for x in (tables or []) if str(x).strip()]
-        if not selected_tables:
-            selected_tables = [
-                "bars_normalized",
-                "macro",
-                "source_confidence",
-                "quality",
-                "signals",
-                "trade_plans",
-                "latest_positions",
-                "executed_plans",
-                "review_runs",
-                "backtest_runs",
-            ]
-
-        before_stats = collect_sqlite_stats(self.ctx.sqlite_path, tables=selected_tables)
-        retention_enabled = retention_days is not None and int(retention_days) > 0
-        retention_result: dict[str, Any]
-        if retention_enabled:
-            retention_result = apply_sqlite_retention(
-                self.ctx.sqlite_path,
-                as_of=anchor,
-                retention_days=int(retention_days or 0),
-                tables=selected_tables,
-                apply=bool(apply),
-            )
-        else:
-            retention_result = {
-                "enabled": False,
-                "apply": bool(apply),
-                "retention_days": None,
-                "cutoff_date": "",
-                "status": "skipped",
-                "reason": "retention_disabled",
-                "tables": [],
-                "deleted_rows": 0,
-                "eligible_rows": 0,
-                "missing_tables": [],
-                "db_path": str(self.ctx.sqlite_path),
-            }
-
-        vacuum_result = run_sqlite_vacuum_analyze(
-            self.ctx.sqlite_path,
-            run_vacuum=bool(vacuum),
-            run_analyze=bool(analyze),
-            apply=bool(apply),
-        )
-        after_stats = collect_sqlite_stats(self.ctx.sqlite_path, tables=selected_tables)
-        run_id = datetime.now(tz).strftime("%Y%m%d_%H%M%S")
-        report_dir = self.ctx.output_dir / "artifacts" / "maintenance" / "sqlite" / run_id
-        report_dir.mkdir(parents=True, exist_ok=True)
-        report_json = report_dir / "report.json"
-        report_md = report_dir / "report.md"
-
-        before_bytes = int(before_stats.get("file_bytes", 0) or 0)
-        after_bytes = int(after_stats.get("file_bytes", 0) or 0)
-        delta_bytes = int(after_bytes - before_bytes)
-        out = {
-            "run_id": str(run_id),
-            "as_of": anchor.isoformat(),
-            "apply": bool(apply),
-            "tables": list(selected_tables),
-            "db_path": str(self.ctx.sqlite_path),
-            "retention": retention_result,
-            "vacuum": vacuum_result,
-            "stats": {
-                "before": before_stats,
-                "after": after_stats,
-                "file_bytes_delta": int(delta_bytes),
-            },
-            "paths": {
-                "json": str(report_json),
-                "md": str(report_md),
-            },
-        }
-        write_json(report_json, out)
-        lines = [
-            "# SQLite Maintenance Report",
-            "",
-            f"- run_id: `{run_id}`",
-            f"- as_of: `{anchor.isoformat()}`",
-            f"- apply: `{bool(apply)}`",
-            f"- db_path: `{self.ctx.sqlite_path}`",
-            (
-                "- retention(enabled/days/eligible/deleted): "
-                + f"`{bool(retention_result.get('enabled', False))}` / "
-                + f"`{retention_result.get('retention_days', 'N/A')}` / "
-                + f"`{int(retention_result.get('eligible_rows', 0) or 0)}` / "
-                + f"`{int(retention_result.get('deleted_rows', 0) or 0)}`"
-            ),
-            (
-                "- vacuum(analyze/vacuum/executed): "
-                + f"`{bool(vacuum_result.get('run_analyze', False))}` / "
-                + f"`{bool(vacuum_result.get('run_vacuum', False))}` / "
-                + f"`{bool(vacuum_result.get('apply', False))}`"
-            ),
-            (
-                "- file_bytes(before/after/delta): "
-                + f"`{before_bytes}` / `{after_bytes}` / `{delta_bytes}`"
-            ),
-        ]
-        write_markdown(report_md, "\n".join(lines) + "\n")
-        return out
-
-    def compact_executed_plans_duplicates(
-        self,
-        *,
-        start: date,
-        end: date,
-        chunk_days: int = 30,
-        dry_run: bool = True,
-        max_delete_rows: int | None = None,
-    ) -> dict[str, Any]:
-        return self._release_orchestrator().compact_executed_plans_duplicates(
-            start=start,
-            end=end,
-            chunk_days=chunk_days,
-            dry_run=dry_run,
-            max_delete_rows=max_delete_rows,
-        )
-
-    def verify_executed_plans_compaction_restore(
-        self,
-        *,
-        run_id: str | None = None,
-        keep_temp_db: bool = False,
-    ) -> dict[str, Any]:
-        return self._release_orchestrator().verify_executed_plans_compaction_restore(
-            run_id=run_id,
-            keep_temp_db=keep_temp_db,
-        )
-
     def review_until_pass(self, as_of: date, max_rounds: int = 3) -> dict[str, Any]:
         return self._release_orchestrator().review_until_pass(as_of=as_of, max_rounds=max_rounds)
 
-    def run_review_cycle(
-        self,
-        as_of: date,
-        max_rounds: int = 2,
-        ops_window_days: int | None = None,
-        trace_id: str | None = None,
-        parent_event_id: str | None = None,
-    ) -> dict[str, Any]:
+    def run_review_cycle(self, as_of: date, max_rounds: int = 2, ops_window_days: int | None = None) -> dict[str, Any]:
         return self._release_orchestrator().run_review_cycle(
             as_of=as_of,
             max_rounds=max_rounds,
             ops_window_days=ops_window_days,
-            trace_id=trace_id,
-            parent_event_id=parent_event_id,
         )
 
     def run_slot(self, as_of: date, slot: str, max_review_rounds: int = 2) -> dict[str, Any]:
@@ -6033,38 +3665,6 @@ class LieEngine:
             max_review_rounds=max_review_rounds,
         )
 
-    def run_autorun_retro(self, as_of: date, window_days: int = 7) -> dict[str, Any]:
-        return self._scheduler_orchestrator().run_autorun_retro(
-            as_of=as_of,
-            window_days=window_days,
-        )
-
-    def run_halfhour_pulse(
-        self,
-        as_of: date,
-        slot: str | None = None,
-        max_review_rounds: int = 2,
-        max_slot_runs: int = 2,
-        slot_retry_max: int = 2,
-        ops_every_n_pulses: int = 4,
-        force: bool = False,
-        dry_run: bool = False,
-        trace_id: str | None = None,
-        parent_event_id: str | None = None,
-    ) -> dict[str, Any]:
-        return self._scheduler_orchestrator().run_halfhour_pulse(
-            as_of=as_of,
-            slot=slot,
-            max_review_rounds=max_review_rounds,
-            max_slot_runs=max_slot_runs,
-            slot_retry_max=slot_retry_max,
-            ops_every_n_pulses=ops_every_n_pulses,
-            force=force,
-            dry_run=dry_run,
-            trace_id=trace_id,
-            parent_event_id=parent_event_id,
-        )
-
     def run_daemon(
         self,
         poll_seconds: int = 30,
@@ -6076,26 +3676,6 @@ class LieEngine:
             poll_seconds=poll_seconds,
             max_cycles=max_cycles,
             max_review_rounds=max_review_rounds,
-            dry_run=dry_run,
-        )
-
-    def run_halfhour_daemon(
-        self,
-        poll_seconds: int = 30,
-        max_cycles: int | None = None,
-        max_review_rounds: int = 2,
-        max_slot_runs: int = 2,
-        slot_retry_max: int = 2,
-        ops_every_n_pulses: int = 4,
-        dry_run: bool = False,
-    ) -> dict[str, Any]:
-        return self._scheduler_orchestrator().run_halfhour_daemon(
-            poll_seconds=poll_seconds,
-            max_cycles=max_cycles,
-            max_review_rounds=max_review_rounds,
-            max_slot_runs=max_slot_runs,
-            slot_retry_max=slot_retry_max,
-            ops_every_n_pulses=ops_every_n_pulses,
             dry_run=dry_run,
         )
 

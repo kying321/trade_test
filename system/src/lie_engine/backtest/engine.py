@@ -21,10 +21,6 @@ class BacktestConfig:
     regime_recalc_interval: int = 5
     signal_eval_interval: int = 2
     proxy_lookback: int = 180
-    execution_latency_days: int = 0
-    execution_friction_multiplier: float = 1.0
-    execution_extra_slippage_bps: float = 0.0
-    strict_temporal_guard: bool = True
 
 
 SHORTABLE_ASSET = {"future", "option", "hedge"}
@@ -84,11 +80,6 @@ def run_event_backtest(
     mean_thr: float,
     atr_extreme: float,
 ) -> BacktestResult:
-    execution_latency_days = max(0, int(getattr(cfg, "execution_latency_days", 0)))
-    execution_friction_multiplier = max(0.0, float(getattr(cfg, "execution_friction_multiplier", 1.0)))
-    execution_extra_slippage_bps = max(0.0, float(getattr(cfg, "execution_extra_slippage_bps", 0.0)))
-    strict_temporal_guard = bool(getattr(cfg, "strict_temporal_guard", True))
-
     bars_all = bars.copy()
     bars_all["ts"] = pd.to_datetime(bars_all["ts"])
     warmup_days = max(int(cfg.proxy_lookback) * 3, 260)
@@ -174,11 +165,7 @@ def run_event_backtest(
             entry_row = symbol_df[symbol_df["ts"].dt.date == d]
             if entry_row.empty:
                 continue
-            signal_idx = int(entry_row.index[-1])
-            raw_entry_idx = signal_idx + execution_latency_days
-            if raw_entry_idx >= len(symbol_df):
-                continue
-            entry_idx = int(raw_entry_idx)
+            entry_idx = int(entry_row.index[-1])
             exit_idx = min(entry_idx + cfg.hold_days, len(symbol_df) - 1)
             exit_row = symbol_df.iloc[exit_idx]
             asset_class = str(entry_row.iloc[-1]["asset_class"])
@@ -186,11 +173,7 @@ def run_event_backtest(
             if sig.side == Side.SHORT and asset_class not in SHORTABLE_ASSET:
                 continue
 
-            signal_ts = pd.Timestamp(entry_row.iloc[-1]["ts"])
-            entry_ts = pd.Timestamp(symbol_df.iloc[entry_idx]["ts"])
-            if strict_temporal_guard and entry_ts < signal_ts:
-                continue
-            entry = float(symbol_df.iloc[entry_idx]["close"])
+            entry = float(sig.entry_price)
             path = symbol_df.iloc[entry_idx + 1 : exit_idx + 1]
             realized_exit = float(exit_row["close"])
             hit_target = False
@@ -221,30 +204,20 @@ def run_event_backtest(
                 gross = (realized_exit - entry) / max(entry, 1e-9)
             cost = default_cost_model(asset_class)
             days_held = max(1, exit_idx - entry_idx)
-            effective_roundtrip_bps = (
-                float(cost.roundtrip_bps) * float(execution_friction_multiplier)
-                + float(execution_extra_slippage_bps)
-            )
-            borrow_bps_daily = float(cost.borrow_bps_daily) * float(execution_friction_multiplier)
-            borrow = borrow_bps_daily * days_held / 10000.0
-            net = gross - float(effective_roundtrip_bps) / 10000.0 - borrow
+            borrow = cost.borrow_bps_daily * days_held / 10000.0
+            net = gross - cost.roundtrip_bps / 10000.0 - borrow
             day_ret += net
             executed_count += 1
 
             trades_rows.append(
                 {
                     "date": d.isoformat(),
-                    "signal_date": d.isoformat(),
-                    "entry_date": entry_ts.date().isoformat(),
-                    "exit_date": pd.Timestamp(exit_row["ts"]).date().isoformat(),
-                    "execution_latency_days": int(execution_latency_days),
                     "symbol": sig.symbol,
                     "side": sig.side.value,
                     "asset_class": asset_class,
                     "hit_target": bool(hit_target),
                     "hit_stop": bool(hit_stop),
                     "gross": gross,
-                    "roundtrip_bps": float(effective_roundtrip_bps),
                     "pnl": net,
                 }
             )

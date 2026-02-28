@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import re
 from typing import Iterable
 
 import numpy as np
@@ -20,6 +21,7 @@ from lie_engine.signal.trend import score_trend
 
 
 SHORTABLE_ASSET_CLASS = {"future", "option", "hedge"}
+BINANCE_PAIR_RE = re.compile(r"^[A-Z]{2,20}(USDT|USD|BUSD|FDUSD|USDC)$")
 
 
 @dataclass(slots=True)
@@ -128,7 +130,11 @@ def _build_trade_levels(side: Side, close: float, atr: float, stop_mult: float, 
 
 def expand_universe(core_symbols: Iterable[str], bars: pd.DataFrame, max_additions: int) -> list[str]:
     core = list(dict.fromkeys(core_symbols))
-    candidates = ["510300", "510500", "159915", "600519", "000001", "601318", "CU2603", "AU2604"]
+    is_crypto_core = bool(core) and all(BINANCE_PAIR_RE.match(str(s).strip().upper()) for s in core)
+    if is_crypto_core:
+        candidates = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "LTCUSDT"]
+    else:
+        candidates = ["510300", "510500", "159915", "600519", "000001", "601318", "CU2603", "AU2604"]
     if bars.empty:
         return core + candidates[:max_additions]
 

@@ -10,12 +10,18 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lie_engine.models import RegimeLabel, Side, SignalCandidate
-from lie_engine.signal import SignalEngineConfig, scan_signals
+from lie_engine.signal import SignalEngineConfig, expand_universe, scan_signals
 from lie_engine.signal.engine import generate_signal_for_symbol
 from tests.helpers import make_bars
 
 
 class SignalTests(unittest.TestCase):
+    def test_expand_universe_uses_crypto_candidates_for_binance_core(self) -> None:
+        core = ["BTCUSDT", "ETHUSDT"]
+        out = expand_universe(core_symbols=core, bars=pd.DataFrame(), max_additions=3)
+        self.assertTrue(all(x.endswith("USDT") for x in out))
+        self.assertEqual(out[:2], core)
+
     def test_trend_signal_generation(self) -> None:
         bars = make_bars("300750", n=260, trend=0.15, seed=1)
         cfg = SignalEngineConfig(confidence_min=10, convexity_min=1.0)

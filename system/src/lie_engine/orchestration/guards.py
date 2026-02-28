@@ -55,19 +55,7 @@ def loss_cooldown_active(recent_trades: pd.DataFrame, cooldown_losses: int = 3) 
     if recent_trades.empty or "pnl" not in recent_trades.columns:
         return False
     threshold = max(1, int(cooldown_losses))
-    ordered = recent_trades.copy()
-    for ts_col in ("ts", "date", "exit_date", "entry_date"):
-        if ts_col not in ordered.columns:
-            continue
-        ts = pd.to_datetime(ordered[ts_col], errors="coerce")
-        if ts.notna().any():
-            ordered = (
-                ordered.assign(_cooldown_ts=ts)
-                .sort_values("_cooldown_ts", ascending=False, kind="stable")
-                .drop(columns=["_cooldown_ts"])
-            )
-            break
-    pnl = pd.to_numeric(ordered["pnl"], errors="coerce").dropna().astype(float).tolist()
+    pnl = recent_trades["pnl"].astype(float).tolist()
     if not pnl:
         return False
     streak = 0
@@ -179,3 +167,4 @@ def build_guard_assessment(
         cooldown_active=cooldown,
         non_trade_reasons=non_trade_reasons,
     )
+

@@ -53,39 +53,5 @@ def render_mode_stress_matrix(as_of: date, payload: dict[str, Any]) -> str:
     else:
         lines.append("- 无窗口明细")
     lines.append("")
-    lines.append("## 执行摩擦压力网格")
-    friction = payload.get("execution_friction", {}) if isinstance(payload.get("execution_friction", {}), dict) else {}
-    scorecard = friction.get("scorecard", {}) if isinstance(friction.get("scorecard", {}), dict) else {}
-    lines.append(f"- 启用: `{bool(friction.get('enabled', False))}`")
-    lines.append(f"- 参考模式: `{str(friction.get('reference_mode', 'N/A'))}`")
-    lines.append(
-        "- scorecard(active/status/gate_ok): "
-        + f"`{bool(scorecard.get('active', False))}` / "
-        + f"`{str(scorecard.get('status', 'inactive'))}` / "
-        + f"`{bool(scorecard.get('gate_ok', True))}`"
-    )
-    scenario_rows = friction.get("scenario_summary", []) if isinstance(friction.get("scenario_summary", []), list) else []
-    if scenario_rows:
-        for row in scenario_rows:
-            if not isinstance(row, dict):
-                continue
-            lines.append(
-                "- "
-                + f"`{str(row.get('scenario', ''))}`: "
-                + f"annual=`{float(row.get('avg_annual_return', 0.0)):.2%}`, "
-                + f"max_dd=`{float(row.get('worst_drawdown', 0.0)):.2%}`, "
-                + f"pf=`{float(row.get('avg_profit_factor', 0.0)):.3f}`, "
-                + f"pwr=`{float(row.get('avg_positive_window_ratio', 0.0)):.2%}`, "
-                + f"fail_ratio=`{float(row.get('fail_ratio', 0.0)):.2%}`"
-            )
-    else:
-        lines.append("- 无执行摩擦场景汇总")
-    friction_checks = scorecard.get("checks", {}) if isinstance(scorecard.get("checks", {}), dict) else {}
-    if friction_checks:
-        lines.append("- checks:")
-        for k, v in friction_checks.items():
-            lines.append(f"  - `{k}`: `{bool(v)}`")
-    alerts = scorecard.get("alerts", []) if isinstance(scorecard.get("alerts", []), list) else []
-    lines.append(f"- alerts: `{', '.join(str(x) for x in alerts) if alerts else 'NONE'}`")
-    lines.append("")
     return "\n".join(lines) + "\n"
+

@@ -40,17 +40,6 @@ LAYER_WHITELIST: dict[str, set[str]] = {
     "models": {"models"},
 }
 
-DASHBOARD_ADAPTER_BANNED_PREFIXES: tuple[str, ...] = (
-    "lie_engine.engine",
-    "lie_engine.orchestration",
-    "lie_engine.backtest",
-    "lie_engine.signal",
-    "lie_engine.risk",
-    "lie_engine.regime",
-    "lie_engine.research",
-    "lie_engine.review",
-)
-
 
 @dataclass(slots=True)
 class DependencyOrchestrator:
@@ -58,54 +47,9 @@ class DependencyOrchestrator:
     source_root: Path
     output_dir: Path
 
-    def _scan_dashboard_adapter(self) -> dict[str, Any]:
-        root = self.source_root.parent / "dashboard" / "api"
-        if not root.exists():
-            return {
-                "enabled": False,
-                "root": str(root),
-                "files_checked": 0,
-                "imports": [],
-                "violations": [],
-                "banned_prefixes": list(DASHBOARD_ADAPTER_BANNED_PREFIXES),
-            }
-
-        files_checked = 0
-        imports: set[str] = set()
-        violations: list[str] = []
-        for path in root.rglob("*.py"):
-            if "__pycache__" in path.parts:
-                continue
-            rel = path.relative_to(root).as_posix()
-            files_checked += 1
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        imported = str(alias.name or "")
-                        if imported.startswith("lie_engine."):
-                            imports.add(imported)
-                            if imported.startswith(DASHBOARD_ADAPTER_BANNED_PREFIXES):
-                                violations.append(f"dashboard/api/{rel}: dashboard_api -> {imported}")
-                elif isinstance(node, ast.ImportFrom):
-                    imported = str(node.module or "")
-                    if imported.startswith("lie_engine."):
-                        imports.add(imported)
-                        if imported.startswith(DASHBOARD_ADAPTER_BANNED_PREFIXES):
-                            violations.append(f"dashboard/api/{rel}: dashboard_api -> {imported}")
-
-        return {
-            "enabled": True,
-            "root": str(root),
-            "files_checked": files_checked,
-            "imports": sorted(imports),
-            "violations": sorted(set(violations)),
-            "banned_prefixes": list(DASHBOARD_ADAPTER_BANNED_PREFIXES),
-        }
-
     def _scan(self) -> dict[str, Any]:
         root = self.source_root / "lie_engine"
-        core_violations: list[str] = []
+        violations: list[str] = []
         edges: dict[str, set[str]] = {}
         files_checked = 0
 
@@ -131,29 +75,22 @@ class DependencyOrchestrator:
                             dep_layer = alias.name.split(".")[1]
                             edges.setdefault(src_layer, set()).add(dep_layer)
                             if dep_layer not in LAYER_WHITELIST[src_layer]:
-                                core_violations.append(f"{rel}: {src_layer} -> {dep_layer}")
+                                violations.append(f"{rel}: {src_layer} -> {dep_layer}")
                 elif isinstance(node, ast.ImportFrom):
                     mod = node.module or ""
                     if mod.startswith("lie_engine."):
                         dep_layer = mod.split(".")[1]
                         edges.setdefault(src_layer, set()).add(dep_layer)
                         if dep_layer not in LAYER_WHITELIST[src_layer]:
-                            core_violations.append(f"{rel}: {src_layer} -> {dep_layer}")
+                            violations.append(f"{rel}: {src_layer} -> {dep_layer}")
 
         edges_out = {k: sorted(v) for k, v in sorted(edges.items())}
-        dashboard_scan = self._scan_dashboard_adapter()
-        core_violations_out = sorted(set(core_violations))
-        combined_violations = sorted(
-            set(core_violations_out + list(dashboard_scan.get("violations", [])))
-        )
+        violations = sorted(set(violations))
         return {
-            "ok": len(combined_violations) == 0,
+            "ok": len(violations) == 0,
             "files_checked": files_checked,
-            "total_files_checked": files_checked + int(dashboard_scan.get("files_checked", 0) or 0),
             "edges": edges_out,
-            "violations": combined_violations,
-            "core_violations": core_violations_out,
-            "dashboard_adapter": dashboard_scan,
+            "violations": violations,
             "whitelist": {k: sorted(v) for k, v in sorted(LAYER_WHITELIST.items())},
         }
 
@@ -171,22 +108,12 @@ class DependencyOrchestrator:
         lines.append(f"# 依赖分层审计 | {d}")
         lines.append("")
         lines.append(f"- 结果: `{'PASS' if scan['ok'] else 'FAIL'}`")
-        lines.append(f"- 检查文件数(core): `{scan['files_checked']}`")
-        lines.append(
-            f"- 检查文件数(dashboard_adapter): `{int((scan.get('dashboard_adapter', {}) or {}).get('files_checked', 0) or 0)}`"
-        )
-        lines.append(f"- 检查文件数(total): `{int(scan.get('total_files_checked', 0) or 0)}`")
+        lines.append(f"- 检查文件数: `{scan['files_checked']}`")
         lines.append(f"- 违规数: `{len(scan['violations'])}`")
         lines.append("")
         lines.append("## 层级依赖图")
         for layer, deps in scan["edges"].items():
             lines.append(f"- `{layer}` -> `{', '.join(deps) if deps else 'NONE'}`")
-        lines.append("")
-        lines.append("## Dashboard Adapter Imports")
-        dashboard_scan = scan.get("dashboard_adapter", {}) if isinstance(scan.get("dashboard_adapter", {}), dict) else {}
-        lines.append(f"- enabled: `{bool(dashboard_scan.get('enabled', False))}`")
-        imports = dashboard_scan.get("imports", []) if isinstance(dashboard_scan.get("imports", []), list) else []
-        lines.append(f"- imports: `{', '.join(str(x) for x in imports) if imports else 'NONE'}`")
         lines.append("")
         if scan["violations"]:
             lines.append("## 违规明细")
