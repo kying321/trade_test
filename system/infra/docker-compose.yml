@@ -12,4 +12,6 @@ services:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Shanghai
       - MAX_REVIEW_ROUNDS=2
-    command: ["python3", "-m", "lie_engine.cli", "--config", "/app/config.yaml", "run-daemon", "--poll-seconds", "30"]
+      - AUDIT_SOURCE=docker-compose
+      - AUDIT_TAG=run-daemon
+    command: ["/bin/sh", "-lc", "python3 /app/scripts/exec_with_audit.py --root /app --source ${AUDIT_SOURCE} --tag ${AUDIT_TAG} -- PYTHONPATH=/app/src python3 -m lie_engine.cli --config /app/config.yaml run-daemon --poll-seconds 30"]

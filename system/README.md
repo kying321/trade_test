@@ -238,6 +238,9 @@ lie run-daemon --dry-run
 # 本地 cron 安装/卸载
 ./infra/local/install_cron.sh
 ./infra/local/uninstall_cron.sh
+# macOS launchd 安装/卸载（守护 run-daemon）
+./infra/local/install_launchd.sh
+./infra/local/uninstall_launchd.sh
 
 # 健康检查与失败重试
 lie health-check --date 2026-02-13
@@ -259,6 +262,8 @@ lie stress-matrix --date 2026-02-13 --modes ultra_short,swing,long
 python ./scripts/exec_with_audit.py --source manual --tag review-cycle -- lie run-review-cycle --date 2026-02-13 --max-rounds 2
 # 生成近24小时命令白名单（含时间戳/返回码/成功率样本）
 python ./scripts/command_whitelist_24h.py --include-tests-log
+# 入口审计矩阵（manual / cron / launchd / cloud / CI）
+docs/ENTRYPOINT_AUDIT_MATRIX.md
 
 # 审查未通过时会自动生成：
 # output/review/YYYY-MM-DD_defect_plan_roundN.json

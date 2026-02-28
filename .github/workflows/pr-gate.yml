@@ -1,0 +1,50 @@
+name: pr-gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: system
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Validate Config (audited)
+        run: |
+          python scripts/exec_with_audit.py --root "$PWD" --source ci --tag validate-config -- \
+            PYTHONPATH="$PWD/src" python -m lie_engine.cli --config config.yaml validate-config
+
+      - name: Fast Tests (audited)
+        run: |
+          python scripts/exec_with_audit.py --root "$PWD" --source ci --tag test-fast -- \
+            PYTHONPATH="$PWD/src" python -m lie_engine.cli --config config.yaml test-all --fast --fast-ratio 0.10
+
+      - name: Build Command Whitelist 24h
+        run: |
+          python scripts/command_whitelist_24h.py --root "$PWD" --include-tests-log --strict
+
+      - name: Upload Audit Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: command-whitelist-24h
+          path: |
+            system/output/review/*command_whitelist_24h*.json
+            system/output/review/*command_whitelist_24h*.md
+            system/output/logs/command_exec.ndjson
+            system/output/logs/tests_*.json

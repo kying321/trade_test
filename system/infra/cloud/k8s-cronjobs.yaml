@@ -18,6 +18,10 @@ spec:
                   value: "08:40"
                 - name: MAX_RETRY
                   value: "3"
+                - name: AUDIT_SOURCE
+                  value: "k8s-cron"
+                - name: AUDIT_TAG
+                  value: "slot-0840"
               command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
 ---
 apiVersion: batch/v1
@@ -40,6 +44,10 @@ spec:
                   value: "10:30"
                 - name: MAX_RETRY
                   value: "3"
+                - name: AUDIT_SOURCE
+                  value: "k8s-cron"
+                - name: AUDIT_TAG
+                  value: "slot-1030"
               command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
 ---
 apiVersion: batch/v1
@@ -62,6 +70,10 @@ spec:
                   value: "14:30"
                 - name: MAX_RETRY
                   value: "3"
+                - name: AUDIT_SOURCE
+                  value: "k8s-cron"
+                - name: AUDIT_TAG
+                  value: "slot-1430"
               command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
 ---
 apiVersion: batch/v1
@@ -84,6 +96,10 @@ spec:
                   value: "15:10"
                 - name: MAX_RETRY
                   value: "3"
+                - name: AUDIT_SOURCE
+                  value: "k8s-cron"
+                - name: AUDIT_TAG
+                  value: "slot-1510"
               command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
 ---
 apiVersion: batch/v1
@@ -108,6 +124,10 @@ spec:
                   value: "2"
                 - name: MAX_RETRY
                   value: "3"
+                - name: AUDIT_SOURCE
+                  value: "k8s-cron"
+                - name: AUDIT_TAG
+                  value: "slot-2030"
               command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]
 ---
 apiVersion: batch/v1
@@ -130,4 +150,8 @@ spec:
                   value: "ops"
                 - name: MAX_RETRY
                   value: "2"
+                - name: AUDIT_SOURCE
+                  value: "k8s-cron"
+                - name: AUDIT_TAG
+                  value: "slot-ops"
               command: ["/bin/sh", "-lc", "/app/infra/cloud/retry_slot.sh"]

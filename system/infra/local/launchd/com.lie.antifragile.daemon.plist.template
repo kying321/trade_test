@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lie.antifragile.daemon</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>WorkingDirectory</key>
+  <string>__ROOT_DIR__</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd "__ROOT_DIR__" &amp;&amp; python3 "__ROOT_DIR__/scripts/exec_with_audit.py" --root "__ROOT_DIR__" --source launchd --tag run-daemon -- PYTHONPATH="__ROOT_DIR__/src" python3 -m lie_engine.cli --config "__ROOT_DIR__/config.yaml" run-daemon --poll-seconds 30</string>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>__ROOT_DIR__/output/logs/launchd_daemon.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__ROOT_DIR__/output/logs/launchd_daemon.err.log</string>
+</dict>
+</plist>
