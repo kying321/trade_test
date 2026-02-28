@@ -255,6 +255,8 @@ lie stress-matrix --date 2026-02-13 --modes ultra_short,swing,long
 ./scripts/auto_git_sync.sh --branch codex/auto-sync --message "chore(system): periodic sync"
 # 可选：把 tests 日志也纳入提交
 ./scripts/auto_git_sync.sh --include-logs
+# 命令执行审计（建议 launchd/cron/人工执行统一走此入口，产出 output/logs/command_exec.ndjson）
+python ./scripts/exec_with_audit.py --source manual --tag review-cycle -- lie run-review-cycle --date 2026-02-13 --max-rounds 2
 # 生成近24小时命令白名单（含时间戳/返回码/成功率样本）
 python ./scripts/command_whitelist_24h.py --include-tests-log
 

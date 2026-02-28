@@ -12,6 +12,7 @@
 cd system
 PYTHONPATH=src python -m lie_engine.cli --config config.yaml validate-config
 PYTHONPATH=src python -m lie_engine.cli --config config.yaml test-all --fast --fast-ratio 0.10
+python scripts/exec_with_audit.py --source manual --tag gate-check -- lie gate-report --date 2026-02-28
 python scripts/command_whitelist_24h.py --include-tests-log
 ```
 
