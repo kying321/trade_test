@@ -132,6 +132,14 @@ lie review --date 2026-02-13
 # validation.ops_risk_multiplier_drift_max: 0.30
 # validation.ops_source_confidence_floor: 0.75
 # validation.ops_mode_health_fail_days_max: 2
+# validation.ops_micro_capture_multiplier_floor: 0.75
+# validation.ops_micro_capture_degraded_days_max: 3
+# validation.ops_micro_capture_insufficient_days_max: 5
+# validation.ops_micro_capture_quality_fail_days_max: 3
+# validation.ops_micro_capture_pass_ratio_min: 0.70
+# validation.ops_micro_capture_schema_ok_ratio_min: 0.90
+# validation.ops_micro_capture_time_sync_ok_ratio_min: 0.90
+# validation.ops_micro_capture_cross_source_fail_ratio_max: 0.35
 # validation.ops_system_time_sync_monitor_enabled: false
 # validation.ops_system_time_sync_fail_days_max: 2
 # validation.ops_system_time_sync_inactive_days_max: 5

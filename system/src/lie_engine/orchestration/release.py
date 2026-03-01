@@ -1782,6 +1782,11 @@ class ReleaseOrchestrator:
             if not payload:
                 continue
             risk_control = payload.get("risk_control", {}) if isinstance(payload.get("risk_control", {}), dict) else {}
+            micro_capture_stats = (
+                risk_control.get("micro_capture_stats", {})
+                if isinstance(risk_control.get("micro_capture_stats", {}), dict)
+                else {}
+            )
             mode_health = payload.get("mode_health", {}) if isinstance(payload.get("mode_health", {}), dict) else {}
             micro = payload.get("microstructure", {}) if isinstance(payload.get("microstructure", {}), dict) else {}
             cross_audit = (
@@ -1805,6 +1810,25 @@ class ReleaseOrchestrator:
                     "system_time_sync_ok_sources": int(self._safe_float(time_sync.get("ok_sources", 0), 0)),
                     "system_time_sync_available_sources": int(
                         self._safe_float(time_sync.get("available_sources", 0), 0)
+                    ),
+                    "micro_capture_multiplier": self._safe_float(
+                        risk_control.get("micro_capture_multiplier", 1.0),
+                        1.0,
+                    ),
+                    "micro_capture_reason": str(risk_control.get("micro_capture_reason", "")).strip(),
+                    "micro_capture_run_count": int(self._safe_float(micro_capture_stats.get("run_count", 0), 0)),
+                    "micro_capture_pass_ratio": self._safe_float(micro_capture_stats.get("pass_ratio", 0.0), 0.0),
+                    "micro_capture_schema_ok_ratio": self._safe_float(
+                        micro_capture_stats.get("avg_selected_schema_ok_ratio", 0.0),
+                        0.0,
+                    ),
+                    "micro_capture_time_sync_ok_ratio": self._safe_float(
+                        micro_capture_stats.get("avg_selected_time_sync_ok_ratio", 0.0),
+                        0.0,
+                    ),
+                    "micro_capture_cross_source_fail_ratio": self._safe_float(
+                        micro_capture_stats.get("avg_cross_source_fail_ratio", 0.0),
+                        0.0,
                     ),
                 }
             )
@@ -5239,12 +5263,72 @@ class ReleaseOrchestrator:
         system_time_sync_fail_days_max = max(0, int(val.get("ops_system_time_sync_fail_days_max", window_days)))
         system_time_sync_inactive_days_max = max(0, int(val.get("ops_system_time_sync_inactive_days_max", window_days)))
         system_time_sync_min_ok_sources = max(1, int(val.get("ops_system_time_sync_min_ok_sources", 1)))
+        micro_capture_multiplier_floor = self._safe_float(
+            val.get(
+                "ops_micro_capture_multiplier_floor",
+                val.get("execution_micro_capture_risk_multiplier", 0.75),
+            ),
+            0.75,
+        )
+        micro_capture_multiplier_floor = min(1.0, max(0.0, micro_capture_multiplier_floor))
+        micro_capture_degraded_days_max = max(0, int(val.get("ops_micro_capture_degraded_days_max", window_days)))
+        micro_capture_insufficient_days_max = max(
+            0,
+            int(val.get("ops_micro_capture_insufficient_days_max", window_days)),
+        )
+        micro_capture_quality_fail_days_max = max(
+            0,
+            int(val.get("ops_micro_capture_quality_fail_days_max", window_days)),
+        )
+        micro_capture_pass_ratio_min = self._safe_float(
+            val.get(
+                "ops_micro_capture_pass_ratio_min",
+                val.get("execution_micro_capture_pass_ratio_min", 0.70),
+            ),
+            0.70,
+        )
+        micro_capture_pass_ratio_min = min(1.0, max(0.0, micro_capture_pass_ratio_min))
+        micro_capture_schema_ok_ratio_min = self._safe_float(
+            val.get(
+                "ops_micro_capture_schema_ok_ratio_min",
+                val.get("execution_micro_capture_schema_ok_ratio_min", 0.90),
+            ),
+            0.90,
+        )
+        micro_capture_schema_ok_ratio_min = min(1.0, max(0.0, micro_capture_schema_ok_ratio_min))
+        micro_capture_time_sync_ok_ratio_min = self._safe_float(
+            val.get(
+                "ops_micro_capture_time_sync_ok_ratio_min",
+                val.get("execution_micro_capture_time_sync_ok_ratio_min", 0.90),
+            ),
+            0.90,
+        )
+        micro_capture_time_sync_ok_ratio_min = min(1.0, max(0.0, micro_capture_time_sync_ok_ratio_min))
+        micro_capture_cross_source_fail_ratio_max = self._safe_float(
+            val.get(
+                "ops_micro_capture_cross_source_fail_ratio_max",
+                val.get("execution_micro_capture_cross_source_fail_ratio_max", 0.35),
+            ),
+            0.35,
+        )
+        micro_capture_cross_source_fail_ratio_max = min(1.0, max(0.0, micro_capture_cross_source_fail_ratio_max))
 
         rows = self._load_mode_feedback_series(as_of=as_of, window_days=window_days)
         samples = len(rows)
         modes = [str(x.get("runtime_mode", "")).strip() for x in rows if str(x.get("runtime_mode", "")).strip()]
         risk_values = [self._safe_float(x.get("risk_multiplier", 1.0), 1.0) for x in rows]
         source_values = [self._safe_float(x.get("source_confidence_score", 1.0), 1.0) for x in rows]
+        micro_capture_mult_values = [self._safe_float(x.get("micro_capture_multiplier", 1.0), 1.0) for x in rows]
+        micro_capture_pass_ratio_values = [self._safe_float(x.get("micro_capture_pass_ratio", 0.0), 0.0) for x in rows]
+        micro_capture_schema_ok_ratio_values = [
+            self._safe_float(x.get("micro_capture_schema_ok_ratio", 0.0), 0.0) for x in rows
+        ]
+        micro_capture_time_sync_ok_ratio_values = [
+            self._safe_float(x.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0) for x in rows
+        ]
+        micro_capture_cross_source_fail_ratio_values = [
+            self._safe_float(x.get("micro_capture_cross_source_fail_ratio", 0.0), 0.0) for x in rows
+        ]
         mode_health_fail_days = sum(1 for x in rows if not bool(x.get("mode_health_passed", True)))
         micro_schema_fail_days = sum(1 for x in rows if int(x.get("micro_schema_fail_symbols", 0)) > 0)
         cross_source_fail_days = sum(
@@ -5269,6 +5353,24 @@ class ReleaseOrchestrator:
             system_time_sync_inactive_days = sum(
                 1 for x in rows if not bool(x.get("system_time_sync_active", False))
             )
+        micro_capture_degraded_days = sum(1 for x in rows if str(x.get("micro_capture_reason", "")) == "degraded")
+        micro_capture_insufficient_days = sum(
+            1
+            for x in rows
+            if str(x.get("micro_capture_reason", "")) in {"no_samples", "insufficient_samples"}
+        )
+        micro_capture_quality_fail_days = sum(
+            1
+            for x in rows
+            if int(self._safe_float(x.get("micro_capture_run_count", 0), 0)) > 0
+            and (
+                self._safe_float(x.get("micro_capture_pass_ratio", 0.0), 0.0) < micro_capture_pass_ratio_min
+                or self._safe_float(x.get("micro_capture_schema_ok_ratio", 0.0), 0.0) < micro_capture_schema_ok_ratio_min
+                or self._safe_float(x.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0) < micro_capture_time_sync_ok_ratio_min
+                or self._safe_float(x.get("micro_capture_cross_source_fail_ratio", 0.0), 0.0)
+                > micro_capture_cross_source_fail_ratio_max
+            )
+        )
 
         switch_count = 0
         if len(modes) >= 2:
@@ -5279,6 +5381,22 @@ class ReleaseOrchestrator:
         risk_avg = (sum(risk_values) / len(risk_values)) if risk_values else 1.0
         source_min = min(source_values) if source_values else 1.0
         source_avg = (sum(source_values) / len(source_values)) if source_values else 1.0
+        micro_capture_mult_min = min(micro_capture_mult_values) if micro_capture_mult_values else 1.0
+        micro_capture_mult_avg = (
+            sum(micro_capture_mult_values) / len(micro_capture_mult_values)
+        ) if micro_capture_mult_values else 1.0
+        micro_capture_pass_ratio_avg = (
+            sum(micro_capture_pass_ratio_values) / len(micro_capture_pass_ratio_values)
+        ) if micro_capture_pass_ratio_values else 0.0
+        micro_capture_schema_ok_ratio_avg = (
+            sum(micro_capture_schema_ok_ratio_values) / len(micro_capture_schema_ok_ratio_values)
+        ) if micro_capture_schema_ok_ratio_values else 0.0
+        micro_capture_time_sync_ok_ratio_avg = (
+            sum(micro_capture_time_sync_ok_ratio_values) / len(micro_capture_time_sync_ok_ratio_values)
+        ) if micro_capture_time_sync_ok_ratio_values else 0.0
+        micro_capture_cross_source_fail_ratio_avg = (
+            sum(micro_capture_cross_source_fail_ratio_values) / len(micro_capture_cross_source_fail_ratio_values)
+        ) if micro_capture_cross_source_fail_ratio_values else 0.0
 
         risk_drift = 0.0
         if len(risk_values) >= 6:
@@ -5298,6 +5416,10 @@ class ReleaseOrchestrator:
             "cross_source_inactive_days_ok": True,
             "system_time_sync_fail_days_ok": True,
             "system_time_sync_inactive_days_ok": True,
+            "micro_capture_multiplier_floor_ok": True,
+            "micro_capture_degraded_days_ok": True,
+            "micro_capture_insufficient_days_ok": True,
+            "micro_capture_quality_fail_days_ok": True,
         }
         alerts: list[str] = []
         if active:
@@ -5309,6 +5431,18 @@ class ReleaseOrchestrator:
             checks["micro_schema_fail_days_ok"] = bool(micro_schema_fail_days <= micro_schema_fail_days_max)
             checks["cross_source_fail_days_ok"] = bool(cross_source_fail_days <= cross_source_fail_days_max)
             checks["cross_source_inactive_days_ok"] = bool(cross_source_inactive_days <= cross_source_inactive_days_max)
+            checks["micro_capture_multiplier_floor_ok"] = bool(
+                micro_capture_mult_min >= micro_capture_multiplier_floor
+            )
+            checks["micro_capture_degraded_days_ok"] = bool(
+                micro_capture_degraded_days <= micro_capture_degraded_days_max
+            )
+            checks["micro_capture_insufficient_days_ok"] = bool(
+                micro_capture_insufficient_days <= micro_capture_insufficient_days_max
+            )
+            checks["micro_capture_quality_fail_days_ok"] = bool(
+                micro_capture_quality_fail_days <= micro_capture_quality_fail_days_max
+            )
             if system_time_sync_monitor_enabled:
                 checks["system_time_sync_fail_days_ok"] = bool(system_time_sync_fail_days <= system_time_sync_fail_days_max)
                 checks["system_time_sync_inactive_days_ok"] = bool(
@@ -5330,6 +5464,14 @@ class ReleaseOrchestrator:
                 alerts.append("cross_source_fail_days_high")
             if not checks["cross_source_inactive_days_ok"]:
                 alerts.append("cross_source_inactive_days_high")
+            if not checks["micro_capture_multiplier_floor_ok"]:
+                alerts.append("micro_capture_multiplier_too_low")
+            if not checks["micro_capture_degraded_days_ok"]:
+                alerts.append("micro_capture_degraded_days_high")
+            if not checks["micro_capture_insufficient_days_ok"]:
+                alerts.append("micro_capture_insufficient_days_high")
+            if not checks["micro_capture_quality_fail_days_ok"]:
+                alerts.append("micro_capture_quality_fail_days_high")
             if system_time_sync_monitor_enabled and not checks["system_time_sync_fail_days_ok"]:
                 alerts.append("system_time_sync_fail_days_high")
             if system_time_sync_monitor_enabled and not checks["system_time_sync_inactive_days_ok"]:
@@ -5354,6 +5496,15 @@ class ReleaseOrchestrator:
                 "micro_schema_fail_days": micro_schema_fail_days,
                 "cross_source_fail_days": cross_source_fail_days,
                 "cross_source_inactive_days": cross_source_inactive_days,
+                "micro_capture_multiplier_min": micro_capture_mult_min,
+                "micro_capture_multiplier_avg": micro_capture_mult_avg,
+                "micro_capture_degraded_days": micro_capture_degraded_days,
+                "micro_capture_insufficient_days": micro_capture_insufficient_days,
+                "micro_capture_quality_fail_days": micro_capture_quality_fail_days,
+                "micro_capture_pass_ratio_avg": micro_capture_pass_ratio_avg,
+                "micro_capture_schema_ok_ratio_avg": micro_capture_schema_ok_ratio_avg,
+                "micro_capture_time_sync_ok_ratio_avg": micro_capture_time_sync_ok_ratio_avg,
+                "micro_capture_cross_source_fail_ratio_avg": micro_capture_cross_source_fail_ratio_avg,
                 "system_time_sync_fail_days": system_time_sync_fail_days,
                 "system_time_sync_inactive_days": system_time_sync_inactive_days,
             },
@@ -5367,6 +5518,14 @@ class ReleaseOrchestrator:
                 "ops_cross_source_fail_days_max": cross_source_fail_days_max,
                 "ops_cross_source_inactive_days_max": cross_source_inactive_days_max,
                 "ops_cross_source_fail_ratio_max": cross_source_fail_ratio_max,
+                "ops_micro_capture_multiplier_floor": micro_capture_multiplier_floor,
+                "ops_micro_capture_degraded_days_max": micro_capture_degraded_days_max,
+                "ops_micro_capture_insufficient_days_max": micro_capture_insufficient_days_max,
+                "ops_micro_capture_quality_fail_days_max": micro_capture_quality_fail_days_max,
+                "ops_micro_capture_pass_ratio_min": micro_capture_pass_ratio_min,
+                "ops_micro_capture_schema_ok_ratio_min": micro_capture_schema_ok_ratio_min,
+                "ops_micro_capture_time_sync_ok_ratio_min": micro_capture_time_sync_ok_ratio_min,
+                "ops_micro_capture_cross_source_fail_ratio_max": micro_capture_cross_source_fail_ratio_max,
                 "ops_system_time_sync_monitor_enabled": system_time_sync_monitor_enabled,
                 "ops_system_time_sync_fail_days_max": system_time_sync_fail_days_max,
                 "ops_system_time_sync_inactive_days_max": system_time_sync_inactive_days_max,
@@ -5585,6 +5744,14 @@ class ReleaseOrchestrator:
             + f"`{self._safe_float(metrics.get('source_confidence_avg', 1.0), 1.0):.2%}`"
         )
         lines.append(f"- mode_health_fail_days: `{int(metrics.get('mode_health_fail_days', 0))}`")
+        lines.append(
+            "- micro_capture(mult_min/avg,degraded/insufficient/quality_fail): "
+            + f"`{self._safe_float(metrics.get('micro_capture_multiplier_min', 1.0), 1.0):.3f}` / "
+            + f"`{self._safe_float(metrics.get('micro_capture_multiplier_avg', 1.0), 1.0):.3f}`, "
+            + f"`{int(metrics.get('micro_capture_degraded_days', 0))}` / "
+            + f"`{int(metrics.get('micro_capture_insufficient_days', 0))}` / "
+            + f"`{int(metrics.get('micro_capture_quality_fail_days', 0))}`"
+        )
         lines.append(
             "- system_time_sync(fail/inactive): "
             + f"`{int(metrics.get('system_time_sync_fail_days', 0))}` / "
@@ -6404,6 +6571,58 @@ class ReleaseOrchestrator:
                             + f"{int(self._safe_float(state_thresholds.get('ops_mode_health_fail_days_max', 0), 0))}"
                         ),
                         "action": "收敛当前模式参数并补跑对应资产/模式窗口回测，确认恢复后再放开仓位。",
+                    }
+                )
+            if not bool(state_checks.get("micro_capture_multiplier_floor_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STATE_MICRO_CAPTURE_MULT_FLOOR",
+                        "message": (
+                            "micro_capture 风险乘子下穿门槛："
+                            + f"min={self._safe_float(state_metrics.get('micro_capture_multiplier_min', 1.0), 1.0):.3f} < "
+                            + f"floor={self._safe_float(state_thresholds.get('ops_micro_capture_multiplier_floor', 0.0), 0.0):.3f}"
+                        ),
+                        "action": "优先检查微观真值采集链路（schema/time_sync/cross-source），修复后再放开执行风险乘子。",
+                    }
+                )
+            if not bool(state_checks.get("micro_capture_degraded_days_ok", True)):
+                defects.append(
+                    {
+                        "category": "data",
+                        "code": "STATE_MICRO_CAPTURE_DEGRADED_DAYS",
+                        "message": (
+                            "micro_capture 退化天数超限："
+                            + f"{int(self._safe_float(state_metrics.get('micro_capture_degraded_days', 0), 0))} > "
+                            + f"{int(self._safe_float(state_thresholds.get('ops_micro_capture_degraded_days_max', 0), 0))}"
+                        ),
+                        "action": "提高微观链路稳定性并补跑 micro-capture，确认退化天数回落后再恢复常规节奏。",
+                    }
+                )
+            if not bool(state_checks.get("micro_capture_insufficient_days_ok", True)):
+                defects.append(
+                    {
+                        "category": "data",
+                        "code": "STATE_MICRO_CAPTURE_INSUFFICIENT_DAYS",
+                        "message": (
+                            "micro_capture 样本不足天数超限："
+                            + f"{int(self._safe_float(state_metrics.get('micro_capture_insufficient_days', 0), 0))} > "
+                            + f"{int(self._safe_float(state_thresholds.get('ops_micro_capture_insufficient_days_max', 0), 0))}"
+                        ),
+                        "action": "加密 30m 采集回路与补采流程，优先恢复 run_count 连续性。",
+                    }
+                )
+            if not bool(state_checks.get("micro_capture_quality_fail_days_ok", True)):
+                defects.append(
+                    {
+                        "category": "data",
+                        "code": "STATE_MICRO_CAPTURE_QUALITY_DAYS",
+                        "message": (
+                            "micro_capture 质量失败天数超限："
+                            + f"{int(self._safe_float(state_metrics.get('micro_capture_quality_fail_days', 0), 0))} > "
+                            + f"{int(self._safe_float(state_thresholds.get('ops_micro_capture_quality_fail_days_max', 0), 0))}"
+                        ),
+                        "action": "针对 pass/schema/time_sync/cross-source 逐项回溯，先修复最弱项后再扩仓。",
                     }
                 )
             if not bool(state_checks.get("system_time_sync_fail_days_ok", True)):

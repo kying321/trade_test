@@ -996,6 +996,59 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_ops_report.json").exists())
         self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_ops_report.md").exists())
 
+    def test_state_stability_flags_micro_capture_degraded_days(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["mode_switch_window_days"] = 5
+        eng.settings.raw["validation"]["ops_state_min_samples"] = 3
+        eng.settings.raw["validation"]["ops_micro_capture_degraded_days_max"] = 0
+        eng.settings.raw["validation"]["ops_micro_capture_insufficient_days_max"] = 5
+        eng.settings.raw["validation"]["ops_micro_capture_quality_fail_days_max"] = 5
+        eng.settings.raw["validation"]["ops_micro_capture_multiplier_floor"] = 0.70
+        eng.settings.raw["validation"]["ops_micro_capture_pass_ratio_min"] = 0.70
+        eng.settings.raw["validation"]["ops_micro_capture_schema_ok_ratio_min"] = 0.90
+        eng.settings.raw["validation"]["ops_micro_capture_time_sync_ok_ratio_min"] = 0.90
+        eng.settings.raw["validation"]["ops_micro_capture_cross_source_fail_ratio_max"] = 0.35
+        daily_dir = tmp_root / "output" / "daily"
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(3):
+            day = d - timedelta(days=i)
+            payload = {
+                "runtime_mode": "base",
+                "risk_control": {
+                    "risk_multiplier": 0.95,
+                    "source_confidence_score": 0.90,
+                    "micro_capture_multiplier": 0.80,
+                    "micro_capture_reason": "degraded" if i == 0 else "healthy",
+                    "micro_capture_stats": {
+                        "run_count": 5,
+                        "pass_ratio": 0.95,
+                        "avg_cross_source_fail_ratio": 0.10,
+                        "avg_selected_schema_ok_ratio": 0.95,
+                        "avg_selected_time_sync_ok_ratio": 0.95,
+                    },
+                },
+                "mode_health": {"passed": True},
+                "microstructure": {
+                    "symbols_schema_fail": 0,
+                    "gate_reasons": [],
+                    "cross_source_audit": {"active": True, "fail_ratio": 0.0},
+                },
+                "time_sync": {"active": True, "pass": True, "ok_sources": 2, "available_sources": 2},
+            }
+            (daily_dir / f"{day.isoformat()}_mode_feedback.json").write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+        state = eng._release_orchestrator()._state_stability_metrics(as_of=d)
+        checks = state.get("checks", {}) if isinstance(state.get("checks", {}), dict) else {}
+        alerts = state.get("alerts", []) if isinstance(state.get("alerts", []), list) else []
+        self.assertTrue(bool(state.get("active", False)))
+        self.assertFalse(bool(checks.get("micro_capture_degraded_days_ok", True)))
+        self.assertIn("micro_capture_degraded_days_high", alerts)
+
     def test_run_slot_ops(self) -> None:
         eng, _ = self._make_engine()
         d = date(2026, 2, 13)
