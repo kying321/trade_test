@@ -1059,6 +1059,265 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(code_by_field.get("profiles"), "invalid_type")
         self.assertEqual(code_by_field.get("snapshot_path"), "invalid_type")
 
+    def test_baseline_rollback_drill_preflight_lints_anchor_profile_subschema(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        invalid_anchor = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "history" / "invalid_profile_schema_anchor.yaml"
+        invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
+        invalid_anchor.write_text(
+            yaml.safe_dump(
+                {
+                    "as_of": "2026-02-13",
+                    "profiles": {
+                        "temporal_autofix_patch": {
+                            "json_glob": "*_temporal_autofix_patch.json",
+                            "md_glob": "*_temporal_autofix_patch.md",
+                            "checksum_index_filename": "temporal_autofix_patch_checksum_index.json",
+                            "retention_days": "thirty",
+                            "checksum_index_enabled": "yes",
+                        }
+                    },
+                    "snapshot_path": str(invalid_anchor),
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        out = eng.baseline_rollback_drill(as_of=d3, anchor=str(invalid_anchor), dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "rollback_anchor_invalid_payload")
+        preflight = out.get("preflight", {})
+        self.assertFalse(bool(preflight.get("rollback_anchor_schema_ok", True)))
+        errors = preflight.get("errors", [])
+        self.assertTrue(isinstance(errors, list))
+        code_by_field = {
+            str(item.get("field", "")): str(item.get("code", ""))
+            for item in errors
+            if isinstance(item, dict)
+        }
+        self.assertEqual(code_by_field.get("profiles.temporal_autofix_patch.retention_days"), "invalid_type")
+        self.assertEqual(code_by_field.get("profiles.temporal_autofix_patch.checksum_index_enabled"), "invalid_type")
+
+    def test_baseline_rollback_drill_preflight_lints_anchor_profile_path_fields(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        invalid_anchor = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "history" / "invalid_profile_path_fields_anchor.yaml"
+        invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
+        invalid_anchor.write_text(
+            yaml.safe_dump(
+                {
+                    "as_of": "2026-02-13",
+                    "profiles": {
+                        "temporal_autofix_patch": {
+                            "json_glob": "",
+                            "md_glob": 123,
+                            "checksum_index_filename": " ",
+                            "retention_days": 30,
+                            "checksum_index_enabled": True,
+                        }
+                    },
+                    "snapshot_path": str(invalid_anchor),
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        out = eng.baseline_rollback_drill(as_of=d3, anchor=str(invalid_anchor), dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "rollback_anchor_invalid_payload")
+        preflight = out.get("preflight", {})
+        self.assertFalse(bool(preflight.get("rollback_anchor_schema_ok", True)))
+        errors = preflight.get("errors", [])
+        self.assertTrue(isinstance(errors, list))
+        code_by_field = {
+            str(item.get("field", "")): str(item.get("code", ""))
+            for item in errors
+            if isinstance(item, dict)
+        }
+        self.assertEqual(code_by_field.get("profiles.temporal_autofix_patch.json_glob"), "empty_item")
+        self.assertEqual(code_by_field.get("profiles.temporal_autofix_patch.md_glob"), "invalid_type")
+        self.assertEqual(code_by_field.get("profiles.temporal_autofix_patch.checksum_index_filename"), "empty_item")
+
+    def test_baseline_rollback_drill_preflight_lints_active_profile_path_fields(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        active_baseline = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "active_baseline.yaml"
+        )
+        self.assertTrue(active_baseline.exists())
+        active_payload = yaml.safe_load(active_baseline.read_text(encoding="utf-8"))
+        self.assertTrue(isinstance(active_payload, dict))
+        active_payload["profiles"] = {
+            "temporal_autofix_patch": {
+                "json_glob": "",
+                "md_glob": 123,
+                "checksum_index_filename": " ",
+                "retention_days": 30,
+                "checksum_index_enabled": True,
+            }
+        }
+        active_baseline.write_text(
+            yaml.safe_dump(active_payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        out = eng.baseline_rollback_drill(as_of=d3, dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "active_baseline_invalid_payload")
+        preflight = out.get("preflight", {})
+        self.assertFalse(bool(preflight.get("active_baseline_schema_ok", True)))
+        errors = preflight.get("errors", [])
+        self.assertTrue(isinstance(errors, list))
+        code_by_field = {
+            str(item.get("field", "")): str(item.get("code", ""))
+            for item in errors
+            if isinstance(item, dict) and str(item.get("source", "")) == "active_baseline"
+        }
+        self.assertEqual(code_by_field.get("profiles.temporal_autofix_patch.json_glob"), "empty_item")
+        self.assertEqual(code_by_field.get("profiles.temporal_autofix_patch.md_glob"), "invalid_type")
+        self.assertEqual(code_by_field.get("profiles.temporal_autofix_patch.checksum_index_filename"), "empty_item")
+
+    def test_baseline_rollback_drill_preflight_lints_mixed_profile_path_fields_in_stable_order(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        active_baseline = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "active_baseline.yaml"
+        )
+        self.assertTrue(active_baseline.exists())
+        active_payload = yaml.safe_load(active_baseline.read_text(encoding="utf-8"))
+        self.assertTrue(isinstance(active_payload, dict))
+        active_payload["profiles"] = {
+            "temporal_autofix_patch": {
+                "json_glob": "",
+                "md_glob": 123,
+                "checksum_index_filename": " ",
+                "retention_days": 30,
+                "checksum_index_enabled": True,
+            }
+        }
+        active_baseline.write_text(
+            yaml.safe_dump(active_payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        invalid_anchor = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "history"
+            / "invalid_profile_path_fields_anchor_mixed.yaml"
+        )
+        invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
+        invalid_anchor.write_text(
+            yaml.safe_dump(
+                {
+                    "as_of": "2026-02-13",
+                    "profiles": {
+                        "temporal_autofix_patch": {
+                            "json_glob": "",
+                            "md_glob": 123,
+                            "checksum_index_filename": " ",
+                            "retention_days": 30,
+                            "checksum_index_enabled": True,
+                        }
+                    },
+                    "snapshot_path": str(invalid_anchor),
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        out = eng.baseline_rollback_drill(as_of=d3, anchor=str(invalid_anchor), dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "active_baseline_invalid_payload")
+        preflight = out.get("preflight", {})
+        self.assertFalse(bool(preflight.get("active_baseline_schema_ok", True)))
+        self.assertFalse(bool(preflight.get("rollback_anchor_schema_ok", True)))
+
+        errors = preflight.get("errors", [])
+        self.assertTrue(isinstance(errors, list))
+        self.assertEqual(
+            [
+                (
+                    str(item.get("source", "")),
+                    str(item.get("field", "")),
+                    str(item.get("code", "")),
+                )
+                for item in errors
+                if isinstance(item, dict)
+            ],
+            [
+                (
+                    "active_baseline",
+                    "profiles.temporal_autofix_patch.json_glob",
+                    "empty_item",
+                ),
+                (
+                    "active_baseline",
+                    "profiles.temporal_autofix_patch.md_glob",
+                    "invalid_type",
+                ),
+                (
+                    "active_baseline",
+                    "profiles.temporal_autofix_patch.checksum_index_filename",
+                    "empty_item",
+                ),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.json_glob",
+                    "empty_item",
+                ),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.md_glob",
+                    "invalid_type",
+                ),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.checksum_index_filename",
+                    "empty_item",
+                ),
+            ],
+        )
+
     def test_run_review_writes_slot_regime_tuning_artifact(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
