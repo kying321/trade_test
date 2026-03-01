@@ -17,6 +17,7 @@ Options:
   --no-review-files   Do not include `system/output/review/*` files.
   --include-progress  Include `system/docs/PROGRESS.md` (default: excluded).
   --branch NAME       Target git branch (`__PRIMARY_BRANCHES__`).
+  --fallback-branch N Fallback branch when --branch is blocked.
   --message TEXT      Commit message.
   -h, --help          Show this help.
 EOF
@@ -31,6 +32,7 @@ if [[ "${AUTO_GIT_INCLUDE_PROGRESS:-0}" == "1" ]]; then
   include_progress_file=1
 fi
 branch_name="${AUTO_GIT_BRANCH:-lie}"
+fallback_branch_name="${AUTO_GIT_FALLBACK_BRANCH:-}"
 commit_message="${AUTO_GIT_MESSAGE:-chore(system): automated sync $(date '+%Y-%m-%d %H:%M:%S')}"
 
 is_allowed_branch() {
@@ -58,6 +60,10 @@ while [[ $# -gt 0 ]]; do
       shift
       branch_name="${1:-}"
       ;;
+    --fallback-branch)
+      shift
+      fallback_branch_name="${1:-}"
+      ;;
     --message)
       shift
       commit_message="${1:-}"
@@ -78,6 +84,19 @@ done
 if [[ -z "$branch_name" ]]; then
   echo "ERROR: branch name is empty." >&2
   exit 2
+fi
+if ! is_allowed_branch "$branch_name"; then
+  if [[ -n "$fallback_branch_name" ]] && is_allowed_branch "$fallback_branch_name"; then
+    echo "[auto-git-sync] WARNING: branch '$branch_name' is blocked; fallback to '$fallback_branch_name'." >&2
+    branch_name="$fallback_branch_name"
+  else
+    echo "ERROR: branch '$branch_name' is blocked." >&2
+    if [[ -n "$fallback_branch_name" ]] && ! is_allowed_branch "$fallback_branch_name"; then
+      echo "ERROR: fallback branch '$fallback_branch_name' is also blocked." >&2
+    fi
+    echo "Allowed branches: $(gov_primary_branches_join ', ')" >&2
+    exit 2
+  fi
 fi
 if ! is_allowed_branch "$branch_name"; then
   echo "ERROR: branch '$branch_name' is blocked." >&2
