@@ -178,6 +178,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+configure_test_identity() {
+  local wt="$1"
+  git -C "$wt" config user.name "${GOV_TEST_GIT_NAME:-governance-bot}"
+  git -C "$wt" config user.email "${GOV_TEST_GIT_EMAIL:-governance-bot@local.invalid}"
+}
+
 write_string_json_file() {
   local in_file="$1"
   local out_file="$2"
@@ -190,6 +196,7 @@ git_net -C "$repo_root" fetch --all --prune >/dev/null
 wt_a="/tmp/fenlie_gov_a_${ts}"
 git -C "$repo_root" worktree add -d "$wt_a" origin/main >/dev/null 2>&1
 git -C "$wt_a" checkout -b "probe/direct_push_${ts}" >/dev/null 2>&1
+configure_test_identity "$wt_a"
 git -C "$wt_a" commit --allow-empty -m "test(governance): direct push denial probe ${ts}" >/dev/null 2>&1
 
 a_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -211,6 +218,7 @@ exp_b="$(date -u -v+2H +%Y%m%d%H%M)"
 b_branch="hotfix/main/GATE_MISMATCH/${exp_b}"
 
 git -C "$wt_b" checkout -b "$b_branch" >/dev/null 2>&1
+configure_test_identity "$wt_b"
 git -C "$wt_b" commit --allow-empty \
   -m "test(governance): hotfix base mismatch probe ${ts}" \
   -m "HOTFIX-APPROVER: codex" \
@@ -258,6 +266,7 @@ exp_c="$(date -u -v-1H +%Y%m%d%H%M)"
 c_branch="hotfix/lie/REAPER_EXPIRED/${exp_c}"
 
 git -C "$wt_c" checkout -b "$c_branch" >/dev/null 2>&1
+configure_test_identity "$wt_c"
 git -C "$wt_c" commit --allow-empty \
   -m "test(governance): expired hotfix reaper probe ${ts}" \
   -m "HOTFIX-APPROVER: codex" \
