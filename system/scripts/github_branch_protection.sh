@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib_branch_targets.sh"
+
 usage() {
-  cat <<'USAGE'
+  local primary_branches
+  primary_branches="$(gov_primary_branches_join '/')"
+  cat <<'USAGE' | sed -e "s|__PRIMARY_BRANCHES__|${primary_branches}|g"
 Usage:
   scripts/github_branch_protection.sh check [--repo owner/name] [--profile minimal|strict] [--contexts CSV]
   scripts/github_branch_protection.sh apply [--repo owner/name] [--profile minimal|strict] [--contexts CSV]
 
 Behavior:
-  - check: print current protection posture for main/pi/lie, exit non-zero if posture is non-compliant.
-  - apply: enforce policy on main/pi/lie:
+  - check: print current protection posture for __PRIMARY_BRANCHES__, exit non-zero if posture is non-compliant.
+  - apply: enforce policy on __PRIMARY_BRANCHES__:
       * required status checks: enforce-branch-policy + hotfix-pr-gate (strict)
       * required linear history: true
       * allow force pushes: false
@@ -204,7 +209,14 @@ sed -i.bak \
   "$tmp_payload"
 rm -f "${tmp_payload}.bak"
 
-declare -a branches=("main" "pi" "lie")
+declare -a branches=()
+while IFS= read -r branch; do
+  branches+=("$branch")
+done < <(gov_primary_branches_lines)
+if [[ "${#branches[@]}" -eq 0 ]]; then
+  echo "ERROR: no primary branches resolved from GOV_PRIMARY_BRANCHES." >&2
+  exit 2
+fi
 fail=0
 
 printf '%-8s %-10s %-6s %-6s %-6s %-6s %-10s %-24s\n' "branch" "protected" "strict" "linear" "force" "admin" "conv" "contexts"
@@ -263,7 +275,7 @@ if [[ "$mode" == "check" && $fail -ne 0 ]]; then
 fi
 
 if [[ "$mode" == "apply" ]]; then
-  echo "[branch-protection] applied policy to ${repo} (main/pi/lie, profile=${profile}, contexts=${required_contexts_csv})"
+  echo "[branch-protection] applied policy to ${repo} ($(gov_primary_branches_join '/'), profile=${profile}, contexts=${required_contexts_csv})"
 else
   echo "[branch-protection] check complete for ${repo} (profile=${profile}, contexts=${required_contexts_csv})"
 fi
