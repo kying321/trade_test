@@ -10,7 +10,18 @@ jobs:
   enforce-branch-policy:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate branch name
+      - name: Checkout PR head
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+      - name: Checkout Push head
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Validate branch policy
         shell: bash
         run: |
           set -euo pipefail
@@ -21,12 +32,4 @@ jobs:
           fi
 
           branch_name="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          case "${branch_name}" in
-            main|pi|lie)
-              echo "[branch-policy] PASS branch=${branch_name}"
-              ;;
-            *)
-              echo "::error title=Branch Policy::Branch '${branch_name}' is blocked. Allowed: main, pi, lie"
-              exit 1
-              ;;
-          esac
+          ./system/scripts/branch_policy_guard.sh --source ci --branch "${branch_name}"

@@ -257,8 +257,16 @@ lie stress-matrix --date 2026-02-13 --modes ultra_short,swing,long
 ./scripts/auto_git_sync.sh --branch pi --message "chore(system): periodic sync (pi)"
 # 可选：把 tests 日志也纳入提交
 ./scripts/auto_git_sync.sh --include-logs
-# 安装本地 pre-push 分支门禁（仅允许 main/pi/lie）
+# 安装本地 pre-push 分支门禁（允许 main/pi/lie + 受控 hotfix）
 ./scripts/install_branch_guard_hook.sh
+# 紧急分支（最多24小时）：
+# hotfix/<main|pi|lie>/<ticket>/<expires_utc_yyyymmddhhmm>
+# 例如：
+git checkout -b hotfix/lie/INC12345/202603021200
+# hotfix 提交信息必须包含 trailer：
+# HOTFIX-APPROVER: <approver>
+# HOTFIX-REASON: <reason>
+# HOTFIX-EXPIRES: 202603021200
 
 # 审查未通过时会自动生成：
 # output/review/YYYY-MM-DD_defect_plan_roundN.json
