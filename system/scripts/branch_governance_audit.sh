@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib_branch_targets.sh"
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -95,6 +98,23 @@ if [[ -z "$repo_root" ]]; then
   exit 2
 fi
 
+if [[ -z "$repo" ]]; then
+  repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true)"
+fi
+if [[ -z "$repo" ]]; then
+  echo "ERROR: cannot resolve repository. Pass --repo owner/name." >&2
+  exit 2
+fi
+
+declare -a primary_branches=()
+while IFS= read -r branch; do
+  primary_branches+=("$branch")
+done < <(gov_primary_branches_lines)
+if [[ "${#primary_branches[@]}" -eq 0 ]]; then
+  echo "ERROR: no primary branches resolved from GOV_PRIMARY_BRANCHES." >&2
+  exit 2
+fi
+
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "${repo_root}/${output_dir}"
 artifact_json="${repo_root}/${output_dir}/${ts}_branch_governance_audit.json"
@@ -113,7 +133,7 @@ if [[ "$protect_rc" -ne 0 ]]; then
   readonly_fail=0
   printf '%-8s %-10s %-24s\n' "branch" "protected" "contexts" >"${tmpdir}/protection_fallback.out"
   printf '%-8s %-10s %-24s\n' "------" "---------" "--------" >>"${tmpdir}/protection_fallback.out"
-  for branch in main pi lie; do
+  for branch in "${primary_branches[@]}"; do
     set +e
     gh_api "repos/${repo}/branches/${branch}" >"${tmpdir}/branch_${branch}.json" 2>"${tmpdir}/branch_${branch}.err"
     rc=$?

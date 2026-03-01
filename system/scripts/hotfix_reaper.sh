@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly HOTFIX_PATTERN='^hotfix/(main|pi|lie)/([A-Za-z0-9._-]+)/([0-9]{12})$'
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib_branch_targets.sh"
+readonly HOTFIX_PATTERN="$(gov_hotfix_branch_regex)"
 
 usage() {
   cat <<'USAGE'
