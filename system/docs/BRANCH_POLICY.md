@@ -20,18 +20,29 @@
 
 ## Enforcement points
 - Local: `.git/hooks/pre-push` -> `system/scripts/branch_policy_guard.sh`
-- Remote: GitHub Action `.github/workflows/branch-policy.yml`
+- Remote: GitHub Action `.github/workflows/branch-policy.yml` (job: `enforce-branch-policy`)
+- Remote: GitHub Action `.github/workflows/hotfix-pr-gate.yml` (job: `hotfix-pr-gate`)
+- Remote (scheduled): `.github/workflows/hotfix-reaper.yml` (every 30 minutes)
 
 ## GitHub branch protection (main/pi/lie)
 - Script: `system/scripts/github_branch_protection.sh`
 - Check posture:
-  - `bash system/scripts/github_branch_protection.sh check`
+  - `bash system/scripts/github_branch_protection.sh check --profile minimal`
+  - `bash system/scripts/github_branch_protection.sh check --profile strict`
 - Apply posture:
-  - `bash system/scripts/github_branch_protection.sh apply`
+  - `bash system/scripts/github_branch_protection.sh apply --profile minimal`
+  - `bash system/scripts/github_branch_protection.sh apply --profile strict`
 
 Current baseline (applied on 2026-03-01):
 - `required_status_checks.strict = true`
-- `required_status_checks.contexts = ["branch-policy"]`
+- `required_status_checks.contexts = ["enforce-branch-policy"]`
 - `required_linear_history = true`
 - `allow_force_pushes = false`
 - `allow_deletions = false`
+
+## Hotfix lifecycle automation
+- Scanner/reaper script: `system/scripts/hotfix_reaper.sh`
+- Report only:
+  - `bash system/scripts/hotfix_reaper.sh --mode report`
+- Enforce reap:
+  - `bash system/scripts/hotfix_reaper.sh --mode reap`
