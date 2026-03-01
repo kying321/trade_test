@@ -78,6 +78,24 @@ git_net() {
   run_timeout git "$@"
 }
 
+utc_plus_hours_yyyymmddhhmm() {
+  local hours="$1"
+  if date -u -v+"${hours}"H +%Y%m%d%H%M >/dev/null 2>&1; then
+    date -u -v+"${hours}"H +%Y%m%d%H%M
+    return 0
+  fi
+  date -u -d "+${hours} hour" +%Y%m%d%H%M
+}
+
+utc_minus_hours_yyyymmddhhmm() {
+  local hours="$1"
+  if date -u -v-"${hours}"H +%Y%m%d%H%M >/dev/null 2>&1; then
+    date -u -v-"${hours}"H +%Y%m%d%H%M
+    return 0
+  fi
+  date -u -d "-${hours} hour" +%Y%m%d%H%M
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
@@ -214,7 +232,7 @@ wt_a=""
 # ---------- Test B ----------
 wt_b="/tmp/fenlie_gov_b_${ts}"
 git -C "$repo_root" worktree add -d "$wt_b" origin/lie >/dev/null 2>&1
-exp_b="$(date -u -v+2H +%Y%m%d%H%M)"
+exp_b="$(utc_plus_hours_yyyymmddhhmm 2)"
 b_branch="hotfix/main/GATE_MISMATCH/${exp_b}"
 
 git -C "$wt_b" checkout -b "$b_branch" >/dev/null 2>&1
@@ -262,7 +280,7 @@ wt_b=""
 # ---------- Test C ----------
 wt_c="/tmp/fenlie_gov_c_${ts}"
 git -C "$repo_root" worktree add -d "$wt_c" origin/lie >/dev/null 2>&1
-exp_c="$(date -u -v-1H +%Y%m%d%H%M)"
+exp_c="$(utc_minus_hours_yyyymmddhhmm 1)"
 c_branch="hotfix/lie/REAPER_EXPIRED/${exp_c}"
 
 git -C "$wt_c" checkout -b "$c_branch" >/dev/null 2>&1
