@@ -892,7 +892,25 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         issues.append(ValidationIssue("error", "validation.ops_state_min_samples", "必须 >= 1"))
     if "ops_mode_health_fail_days_max" in val and _as_int(val.get("ops_mode_health_fail_days_max", 0)) < 0:
         issues.append(ValidationIssue("error", "validation.ops_mode_health_fail_days_max", "必须 >= 0"))
+    for k in (
+        "ops_micro_capture_degraded_days_max",
+        "ops_micro_capture_insufficient_days_max",
+        "ops_micro_capture_quality_fail_days_max",
+    ):
+        if k in val and _as_int(val.get(k, -1)) < 0:
+            issues.append(ValidationIssue("error", f"validation.{k}", "必须 >= 0"))
     for k in ("mode_switch_max_rate", "ops_risk_multiplier_floor", "ops_risk_multiplier_drift_max", "ops_source_confidence_floor"):
+        if k in val:
+            v = _as_float(val.get(k, 0.0))
+            if not (0.0 <= v <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
+    for k in (
+        "ops_micro_capture_multiplier_floor",
+        "ops_micro_capture_pass_ratio_min",
+        "ops_micro_capture_schema_ok_ratio_min",
+        "ops_micro_capture_time_sync_ok_ratio_min",
+        "ops_micro_capture_cross_source_fail_ratio_max",
+    ):
         if k in val:
             v = _as_float(val.get(k, 0.0))
             if not (0.0 <= v <= 1.0):

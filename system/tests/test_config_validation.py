@@ -211,6 +211,14 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_risk_multiplier_drift_max": 0.30,
                     "ops_source_confidence_floor": 0.75,
                     "ops_mode_health_fail_days_max": 2,
+                    "ops_micro_capture_multiplier_floor": 0.75,
+                    "ops_micro_capture_degraded_days_max": 3,
+                    "ops_micro_capture_insufficient_days_max": 5,
+                    "ops_micro_capture_quality_fail_days_max": 3,
+                    "ops_micro_capture_pass_ratio_min": 0.70,
+                    "ops_micro_capture_schema_ok_ratio_min": 0.90,
+                    "ops_micro_capture_time_sync_ok_ratio_min": 0.90,
+                    "ops_micro_capture_cross_source_fail_ratio_max": 0.35,
                     "broker_snapshot_source_mode": "paper_engine",
                     "broker_snapshot_live_inbox": "output/artifacts/broker_live_inbox",
                     "broker_snapshot_live_fallback_to_paper": True,
@@ -496,6 +504,14 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_system_time_sync_fail_days_max": -1,
                     "ops_system_time_sync_inactive_days_max": -1,
                     "ops_system_time_sync_min_ok_sources": 0,
+                    "ops_micro_capture_multiplier_floor": -0.1,
+                    "ops_micro_capture_degraded_days_max": -1,
+                    "ops_micro_capture_insufficient_days_max": -1,
+                    "ops_micro_capture_quality_fail_days_max": -1,
+                    "ops_micro_capture_pass_ratio_min": -0.1,
+                    "ops_micro_capture_schema_ok_ratio_min": 1.2,
+                    "ops_micro_capture_time_sync_ok_ratio_min": 1.2,
+                    "ops_micro_capture_cross_source_fail_ratio_max": 1.2,
                     "micro_continuous_gap_ms": 80,
                     "micro_min_trade_count": 0,
                     "micro_confidence_boost_max": 101.0,
@@ -561,6 +577,14 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.ops_system_time_sync_fail_days_max", error_paths)
         self.assertIn("validation.ops_system_time_sync_inactive_days_max", error_paths)
         self.assertIn("validation.ops_system_time_sync_min_ok_sources", error_paths)
+        self.assertIn("validation.ops_micro_capture_multiplier_floor", error_paths)
+        self.assertIn("validation.ops_micro_capture_degraded_days_max", error_paths)
+        self.assertIn("validation.ops_micro_capture_insufficient_days_max", error_paths)
+        self.assertIn("validation.ops_micro_capture_quality_fail_days_max", error_paths)
+        self.assertIn("validation.ops_micro_capture_pass_ratio_min", error_paths)
+        self.assertIn("validation.ops_micro_capture_schema_ok_ratio_min", error_paths)
+        self.assertIn("validation.ops_micro_capture_time_sync_ok_ratio_min", error_paths)
+        self.assertIn("validation.ops_micro_capture_cross_source_fail_ratio_max", error_paths)
         self.assertIn("validation.micro_continuous_gap_ms", error_paths)
         self.assertIn("validation.micro_min_trade_count", error_paths)
         self.assertIn("validation.micro_confidence_boost_max", error_paths)
@@ -739,6 +763,14 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_risk_multiplier_drift_max": 1.5,
                     "ops_source_confidence_floor": 2.0,
                     "ops_mode_health_fail_days_max": -1,
+                    "ops_micro_capture_multiplier_floor": -0.1,
+                    "ops_micro_capture_degraded_days_max": -1,
+                    "ops_micro_capture_insufficient_days_max": -1,
+                    "ops_micro_capture_quality_fail_days_max": -1,
+                    "ops_micro_capture_pass_ratio_min": -0.1,
+                    "ops_micro_capture_schema_ok_ratio_min": 1.2,
+                    "ops_micro_capture_time_sync_ok_ratio_min": 1.2,
+                    "ops_micro_capture_cross_source_fail_ratio_max": 1.2,
                     "ops_system_time_sync_monitor_enabled": "yes",
                     "ops_system_time_sync_fail_days_max": -1,
                     "ops_system_time_sync_inactive_days_max": -1,
@@ -950,6 +982,14 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.ops_risk_multiplier_drift_max", paths)
         self.assertIn("validation.ops_source_confidence_floor", paths)
         self.assertIn("validation.ops_mode_health_fail_days_max", paths)
+        self.assertIn("validation.ops_micro_capture_multiplier_floor", paths)
+        self.assertIn("validation.ops_micro_capture_degraded_days_max", paths)
+        self.assertIn("validation.ops_micro_capture_insufficient_days_max", paths)
+        self.assertIn("validation.ops_micro_capture_quality_fail_days_max", paths)
+        self.assertIn("validation.ops_micro_capture_pass_ratio_min", paths)
+        self.assertIn("validation.ops_micro_capture_schema_ok_ratio_min", paths)
+        self.assertIn("validation.ops_micro_capture_time_sync_ok_ratio_min", paths)
+        self.assertIn("validation.ops_micro_capture_cross_source_fail_ratio_max", paths)
         self.assertIn("validation.ops_system_time_sync_monitor_enabled", paths)
         self.assertIn("validation.ops_system_time_sync_fail_days_max", paths)
         self.assertIn("validation.ops_system_time_sync_inactive_days_max", paths)
