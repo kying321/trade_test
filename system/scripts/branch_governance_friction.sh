@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib_branch_targets.sh"
+
 usage() {
-  cat <<'USAGE'
+  local primary_branches
+  primary_branches="$(gov_primary_branches_join ', ')"
+  cat <<'USAGE' | sed -e "s|__PRIMARY_BRANCHES__|${primary_branches}|g"
 Usage:
   scripts/branch_governance_friction.sh [--repo owner/name] [--output-dir PATH] --confirm-destructive
 
 Destructive tests:
-  A) Direct push to protected main must be rejected.
-  B) hotfix/main/* PR to lie must fail hotfix-pr-gate.
+  A) Direct push to protected primary branch must be rejected.
+  B) hotfix/<base> PR to a different primary branch must fail hotfix-pr-gate.
   C) Expired hotfix branch is injected and must be reaped (PR closed + branch deleted).
+
+Primary branches:
+  - __PRIMARY_BRANCHES__
 
 Safety:
   - Requires --confirm-destructive.
@@ -173,6 +181,21 @@ if [[ -z "$repo" ]]; then
   exit 2
 fi
 
+declare -a primary_branches=()
+while IFS= read -r branch; do
+  primary_branches+=("$branch")
+done < <(gov_primary_branches_lines)
+if [[ "${#primary_branches[@]}" -lt 2 ]]; then
+  echo "ERROR: governance friction drill requires at least two primary branches." >&2
+  echo "Configure GOV_PRIMARY_BRANCHES with at least two branches (current: $(gov_primary_branches_join ', '))." >&2
+  exit 2
+fi
+
+direct_push_branch="${primary_branches[0]}"
+mismatch_hotfix_base="${primary_branches[0]}"
+mismatch_pr_base="${primary_branches[1]}"
+c_base_branch="${primary_branches[$((${#primary_branches[@]} - 1))]}"
+
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "${repo_root}/${output_dir}"
 artifact_json="${repo_root}/${output_dir}/${ts}_branch_governance_friction_evidence.json"
@@ -230,14 +253,20 @@ git_net -C "$repo_root" fetch --all --prune >/dev/null
 
 # ---------- Test A ----------
 wt_a="/tmp/fenlie_gov_a_${ts}"
-git -C "$repo_root" worktree add -d "$wt_a" origin/main >/dev/null 2>&1
-git -C "$wt_a" checkout -b "probe/direct_push_${ts}" >/dev/null 2>&1
+git -C "$repo_root" worktree add -d "$wt_a" "origin/${direct_push_branch}" >/dev/null 2>&1
+exp_a="$(utc_plus_hours_yyyymmddhhmm 2)"
+a_probe_branch="hotfix/${direct_push_branch}/DIRECT_PUSH_PROBE/${exp_a}"
+git -C "$wt_a" checkout -b "$a_probe_branch" >/dev/null 2>&1
 configure_test_identity "$wt_a"
-git -C "$wt_a" commit --allow-empty -m "test(governance): direct push denial probe ${ts}" >/dev/null 2>&1
+git -C "$wt_a" commit --allow-empty \
+  -m "test(governance): direct push denial probe ${ts}" \
+  -m "HOTFIX-APPROVER: codex" \
+  -m "HOTFIX-REASON: verify protected branch rejects direct push" \
+  -m "HOTFIX-EXPIRES: ${exp_a}" >/dev/null 2>&1
 
 a_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 set +e
-git_net -C "$wt_a" push --porcelain origin HEAD:main >"${tmpdir}/a_push.out" 2>"${tmpdir}/a_push.err"
+git_net -C "$wt_a" push --no-verify --porcelain origin "HEAD:${direct_push_branch}" >"${tmpdir}/a_push.out" 2>"${tmpdir}/a_push.err"
 a_rc=$?
 set -e
 a_end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -249,9 +278,9 @@ wt_a=""
 
 # ---------- Test B ----------
 wt_b="/tmp/fenlie_gov_b_${ts}"
-git -C "$repo_root" worktree add -d "$wt_b" origin/lie >/dev/null 2>&1
+git -C "$repo_root" worktree add -d "$wt_b" "origin/${mismatch_pr_base}" >/dev/null 2>&1
 exp_b="$(utc_plus_hours_yyyymmddhhmm 2)"
-b_branch="hotfix/main/GATE_MISMATCH/${exp_b}"
+b_branch="hotfix/${mismatch_hotfix_base}/GATE_MISMATCH/${exp_b}"
 
 git -C "$wt_b" checkout -b "$b_branch" >/dev/null 2>&1
 configure_test_identity "$wt_b"
@@ -268,7 +297,7 @@ b_push_rc=$?
 set -e
 b_push_end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-b_pr_url="$(gh_run pr create --repo "$repo" --base lie --head "$b_branch" --title "test: hotfix-pr-gate mismatch ${ts}" --body "intentional mismatch: hotfix/main/* PR to lie for gate verification")"
+b_pr_url="$(gh_run pr create --repo "$repo" --base "$mismatch_pr_base" --head "$b_branch" --title "test: hotfix-pr-gate mismatch ${ts}" --body "intentional mismatch: ${b_branch} PR to ${mismatch_pr_base} for gate verification")"
 b_pr_num="$(gh_run pr view "$b_pr_url" --repo "$repo" --json number --jq '.number')"
 
 sleep 10
@@ -297,9 +326,9 @@ wt_b=""
 
 # ---------- Test C ----------
 wt_c="/tmp/fenlie_gov_c_${ts}"
-git -C "$repo_root" worktree add -d "$wt_c" origin/lie >/dev/null 2>&1
+git -C "$repo_root" worktree add -d "$wt_c" "origin/${c_base_branch}" >/dev/null 2>&1
 exp_c="$(utc_minus_hours_yyyymmddhhmm 1)"
-c_branch="hotfix/lie/REAPER_EXPIRED/${exp_c}"
+c_branch="hotfix/${c_base_branch}/REAPER_EXPIRED/${exp_c}"
 
 git -C "$wt_c" checkout -b "$c_branch" >/dev/null 2>&1
 configure_test_identity "$wt_c"
@@ -316,7 +345,7 @@ c_push_rc=$?
 set -e
 c_push_end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-c_pr_url="$(gh_run pr create --repo "$repo" --base lie --head "$c_branch" --title "test: expired hotfix reaper ${ts}" --body "intentional expired hotfix branch for reaper verification")"
+c_pr_url="$(gh_run pr create --repo "$repo" --base "$c_base_branch" --head "$c_branch" --title "test: expired hotfix reaper ${ts}" --body "intentional expired hotfix branch for reaper verification")"
 c_pr_num="$(gh_run pr view "$c_pr_url" --repo "$repo" --json number --jq '.number')"
 
 sleep 5
@@ -360,11 +389,19 @@ else
   b_gate_fail_detected=false
 fi
 
+a_denial_text="$(cat "${tmpdir}/a_push.out" 2>/dev/null || true)
+$(cat "${tmpdir}/a_push.err" 2>/dev/null || true)"
+if [[ "$a_rc" -ne 0 ]] && printf '%s' "$a_denial_text" | text_matches 'GH006|protected branch|pull request'; then
+  a_remote_deny_detected=true
+else
+  a_remote_deny_detected=false
+fi
+
 a_pass=false
 b_pass=false
 c_pass=false
 
-if [[ "$a_rc" -ne 0 ]]; then
+if [[ "$a_remote_deny_detected" == "true" ]]; then
   a_pass=true
 fi
 if [[ "$b_gate_fail_detected" == "true" && "$b_close_rc" -eq 0 ]]; then
@@ -385,10 +422,13 @@ jq -n \
   --arg repo "$repo" \
   --arg a_start "$a_start" \
   --arg a_end "$a_end" \
+  --arg a_target_branch "$direct_push_branch" \
+  --arg a_source_branch "$a_probe_branch" \
   --argjson a_rc "$a_rc" \
+  --argjson a_remote_deny_detected "$a_remote_deny_detected" \
   --slurpfile a_stdout "${tmpdir}/a_push.out.json" \
   --slurpfile a_stderr "${tmpdir}/a_push.err.json" \
-  --arg b_branch "hotfix/main/GATE_MISMATCH/${exp_b}" \
+  --arg b_branch "$b_branch" \
   --arg b_pr_url "$b_pr_url" \
   --argjson b_pr_num "$b_pr_num" \
   --arg b_push_start "$b_push_start" \
@@ -405,7 +445,7 @@ jq -n \
   --argjson b_final_view "$(cat "${tmpdir}/b_final_view.json")" \
   --slurpfile b_close_stdout "${tmpdir}/b_close.out.json" \
   --slurpfile b_close_stderr "${tmpdir}/b_close.err.json" \
-  --arg c_branch "hotfix/lie/REAPER_EXPIRED/${exp_c}" \
+  --arg c_branch "$c_branch" \
   --arg c_pr_url "$c_pr_url" \
   --argjson c_pr_num "$c_pr_num" \
   --arg c_push_start "$c_push_start" \
@@ -429,8 +469,11 @@ jq -n \
     generated_at_utc: $generated_at,
     repository: $repo,
     results: {
-      test_a_direct_push_deny_main: {
+      test_a_direct_push_deny_primary: {
         pass: $a_pass,
+        target_branch: $a_target_branch,
+        source_branch: $a_source_branch,
+        remote_deny_detected: $a_remote_deny_detected,
         start_utc: $a_start,
         end_utc: $a_end,
         return_code: $a_rc,
@@ -486,21 +529,24 @@ cat > "$artifact_md" <<MD
 - Repository: \`${repo}\`
 - Overall pass: \`${overall_pass}\`
 
-## A. Direct Push Deny (main)
+## A. Direct Push Deny (primary branch)
 - pass: \`${a_pass}\`
+- source_branch: \`${a_probe_branch}\`
+- target_branch: \`${direct_push_branch}\`
+- remote_deny_detected: \`${a_remote_deny_detected}\`
 - return_code: \`${a_rc}\`
 - window: \`${a_start}\` -> \`${a_end}\`
 
 ## B. Hotfix Base Mismatch Gate
 - pass: \`${b_pass}\`
-- branch: \`hotfix/main/GATE_MISMATCH/${exp_b}\`
+- branch: \`${b_branch}\`
 - PR: #${b_pr_num} (${b_pr_url})
 - checks_return_code: \`${b_checks_rc}\`
 - gate_fail_detected: \`${b_gate_fail_detected}\`
 
 ## C. Expired Hotfix Reaper
 - pass: \`${c_pass}\`
-- branch: \`hotfix/lie/REAPER_EXPIRED/${exp_c}\`
+- branch: \`${c_branch}\`
 - PR: #${c_pr_num} (${c_pr_url})
 - reap_return_code: \`${c_reap_rc}\`
 - post_reap_branch_exists_rc: \`${c_branch_exists_rc}\` (non-zero means deleted)

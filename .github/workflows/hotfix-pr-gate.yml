@@ -12,6 +12,9 @@ on:
       - reopened
       - edited
 
+env:
+  GOV_PRIMARY_BRANCHES_REGEX: main|pi|lie
+
 jobs:
   hotfix-pr-gate:
     runs-on: ubuntu-latest
@@ -35,7 +38,8 @@ jobs:
             exit 0
           fi
 
-          if [[ ! "${head_branch}" =~ ^hotfix/(main|pi|lie)/([A-Za-z0-9._-]+)/([0-9]{12})$ ]]; then
+          allowed_primary_regex="${GOV_PRIMARY_BRANCHES_REGEX:-main|pi|lie}"
+          if [[ ! "${head_branch}" =~ ^hotfix/(${allowed_primary_regex})/([A-Za-z0-9._-]+)/([0-9]{12})$ ]]; then
             echo "ERROR: invalid hotfix branch pattern: ${head_branch}" >&2
             exit 2
           fi
