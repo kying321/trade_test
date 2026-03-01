@@ -54,3 +54,5 @@ Current baseline (applied on 2026-03-01):
   - `bash system/scripts/branch_governance_audit.sh`
 - GitHub scheduled audit workflow:
   - `.github/workflows/governance-health-audit.yml` (hourly + manual dispatch)
+- GitHub manual friction workflow (destructive, explicit confirmation required):
+  - `.github/workflows/governance-friction-drill.yml` (`workflow_dispatch`, `confirm_destructive=true`)
