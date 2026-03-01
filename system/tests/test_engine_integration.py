@@ -925,6 +925,37 @@ class EngineIntegrationTests(unittest.TestCase):
         active_payload = yaml.safe_load(active.read_text(encoding="utf-8"))
         self.assertEqual(str(active_payload.get("snapshot_path", "")), str(b2.get("snapshot_path", "")))
 
+    def test_baseline_rollback_drill_restores_rollback_anchor_and_writes_audit(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        p1 = tmp_root / "output" / "review" / "2026-02-13_baseline_promotion.json"
+        p2 = tmp_root / "output" / "review" / "2026-02-14_baseline_promotion.json"
+        b1 = json.loads(p1.read_text(encoding="utf-8"))
+        b2 = json.loads(p2.read_text(encoding="utf-8"))
+
+        out = eng.baseline_rollback_drill(as_of=d3)
+        self.assertTrue(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "ok")
+        self.assertEqual(str(out.get("target_anchor", "")), str(b2.get("rollback_anchor", "")))
+
+        active = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "active_baseline.yaml"
+        self.assertTrue(active.exists())
+        active_payload = yaml.safe_load(active.read_text(encoding="utf-8"))
+        self.assertEqual(str(active_payload.get("snapshot_path", "")), str(b1.get("snapshot_path", "")))
+
+        audit_json = tmp_root / "output" / "review" / "2026-02-15_baseline_rollback_drill.json"
+        audit_md = tmp_root / "output" / "review" / "2026-02-15_baseline_rollback_drill.md"
+        self.assertTrue(audit_json.exists())
+        self.assertTrue(audit_md.exists())
+        audit_payload = json.loads(audit_json.read_text(encoding="utf-8"))
+        self.assertEqual(str(audit_payload.get("active_before", "")), str(b2.get("snapshot_path", "")))
+        self.assertEqual(str(audit_payload.get("active_after", "")), str(b1.get("snapshot_path", "")))
+
     def test_run_review_writes_slot_regime_tuning_artifact(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)

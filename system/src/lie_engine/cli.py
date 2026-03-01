@@ -116,6 +116,10 @@ def main() -> None:
     p_loop.add_argument("--date", required=True)
     p_loop.add_argument("--max-rounds", default="3")
 
+    p_brd = sub.add_parser("baseline-rollback-drill", help="Rollback active artifact-governance baseline to rollback_anchor")
+    p_brd.add_argument("--date", required=True)
+    p_brd.add_argument("--anchor", default=None, help="Optional rollback anchor path override")
+
     args = parser.parse_args()
     if args.cmd == "validate-config":
         settings = load_settings(args.config)
@@ -223,6 +227,11 @@ def main() -> None:
         )
     elif args.cmd == "review-loop":
         out = eng.review_until_pass(as_of=_parse_date(args.date), max_rounds=int(args.max_rounds))
+    elif args.cmd == "baseline-rollback-drill":
+        out = eng.baseline_rollback_drill(
+            as_of=_parse_date(args.date),
+            anchor=str(args.anchor) if args.anchor not in {None, "", "none", "None"} else None,
+        )
     else:
         raise ValueError(f"Unknown command: {args.cmd}")
 

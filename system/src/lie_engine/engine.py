@@ -2311,6 +2311,94 @@ class LieEngine:
         )
         return baseline
 
+    def baseline_rollback_drill(self, *, as_of: date, anchor: str | None = None) -> dict[str, Any]:
+        base_dir = self.ctx.output_dir / "artifacts" / "baselines" / "artifact_governance"
+        history_dir = base_dir / "history"
+        active_path = base_dir / "active_baseline.yaml"
+        review_dir = self.ctx.output_dir / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        audit_json_path = review_dir / f"{as_of.isoformat()}_baseline_rollback_drill.json"
+        audit_md_path = review_dir / f"{as_of.isoformat()}_baseline_rollback_drill.md"
+
+        out: dict[str, Any] = {
+            "as_of": as_of.isoformat(),
+            "executed": False,
+            "reason": "unknown",
+            "active_path": str(active_path),
+            "provided_anchor": str(anchor or ""),
+            "target_anchor": "",
+            "active_before": "",
+            "active_after": "",
+            "backup_path": "",
+            "audit_json": str(audit_json_path),
+            "audit_md": str(audit_md_path),
+        }
+
+        if not active_path.exists():
+            out["reason"] = "active_baseline_missing"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+
+        active_payload = yaml.safe_load(active_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(active_payload, dict):
+            out["reason"] = "active_baseline_invalid"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+
+        active_before = str(active_payload.get("snapshot_path", "") or active_payload.get("history_path", "")).strip()
+        out["active_before"] = active_before
+
+        anchor_raw = str(anchor or active_payload.get("rollback_anchor", "")).strip()
+        if not anchor_raw:
+            out["reason"] = "rollback_anchor_missing"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+
+        anchor_path = Path(anchor_raw)
+        if not anchor_path.is_absolute():
+            anchor_path = (self.ctx.root / anchor_path).resolve()
+        out["target_anchor"] = str(anchor_path)
+        if not anchor_path.exists():
+            out["reason"] = "rollback_anchor_not_found"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+
+        anchor_payload = yaml.safe_load(anchor_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(anchor_payload, dict):
+            out["reason"] = "rollback_anchor_invalid_payload"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+
+        history_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = history_dir / f"{as_of.isoformat()}_rollback_backup_{stamp}.yaml"
+        write_markdown(backup_path, yaml.safe_dump(active_payload, allow_unicode=True, sort_keys=False))
+        out["backup_path"] = str(backup_path)
+
+        # Keep the restored snapshot traceable to this drill run.
+        restored_payload = dict(anchor_payload)
+        restored_payload["restored_at"] = datetime.now().isoformat()
+        restored_payload["restore_source"] = "baseline_rollback_drill"
+        restored_payload["restore_as_of"] = as_of.isoformat()
+        write_markdown(active_path, yaml.safe_dump(restored_payload, allow_unicode=True, sort_keys=False))
+
+        active_after = str(restored_payload.get("snapshot_path", "") or restored_payload.get("history_path", "")).strip()
+        out.update(
+            {
+                "executed": True,
+                "reason": "ok",
+                "active_after": active_after,
+            }
+        )
+        write_json(audit_json_path, out)
+        write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+        return out
+
     def _resolve_review_runtime_mode(self, *, start: date, as_of: date) -> str:
         manifest_path = self.ctx.output_dir / "artifacts" / "manifests" / f"backtest_{start.isoformat()}_{as_of.isoformat()}.json"
         payload = self._load_json_safely(manifest_path)

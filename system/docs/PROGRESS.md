@@ -270,6 +270,14 @@
   - review trace writes
     `output/review/YYYY-MM-DD_baseline_promotion.json`,
     with `rollback_anchor` pointing to previous promoted snapshot when available.
+- Baseline rollback drill CLI is online:
+  - CLI:
+    `lie baseline-rollback-drill --date YYYY-MM-DD [--anchor /abs/path/to/snapshot.yaml]`.
+  - default rollback source is current active baseline's `rollback_anchor`; `--anchor` can override it.
+  - drill writes audit artifacts:
+    `output/review/YYYY-MM-DD_baseline_rollback_drill.json` + `.md`.
+  - active baseline is restored from anchor snapshot and pre-rollback active baseline is backed up to:
+    `output/artifacts/baselines/artifact_governance/history/YYYY-MM-DD_rollback_backup_*.yaml`.
 
 ## Testing Workflow
 - Full suite:
@@ -291,4 +299,4 @@
 - Downstream gate/review reads `failed_tests` first, then falls back to stderr parsing.
 
 ## Next Priorities
-1. Add rollback drill CLI for baseline snapshots（支持按 `rollback_anchor` 一键回退并输出审计记录）。
+1. Add rollback drill dry-run mode and preflight lint（校验 anchor 存在性与 payload 合法性，不改写 active baseline）。
