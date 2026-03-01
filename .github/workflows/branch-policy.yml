@@ -6,6 +6,9 @@ on:
       - "**"
   pull_request:
 
+env:
+  GOV_PRIMARY_BRANCHES: pi,lie
+
 jobs:
   enforce-branch-policy:
     runs-on: ubuntu-latest
