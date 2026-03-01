@@ -85,24 +85,6 @@ if [[ -z "$branch_name" ]]; then
   echo "ERROR: branch name is empty." >&2
   exit 2
 fi
-if ! is_allowed_branch "$branch_name"; then
-  if [[ -n "$fallback_branch_name" ]] && is_allowed_branch "$fallback_branch_name"; then
-    echo "[auto-git-sync] WARNING: branch '$branch_name' is blocked; fallback to '$fallback_branch_name'." >&2
-    branch_name="$fallback_branch_name"
-  else
-    echo "ERROR: branch '$branch_name' is blocked." >&2
-    if [[ -n "$fallback_branch_name" ]] && ! is_allowed_branch "$fallback_branch_name"; then
-      echo "ERROR: fallback branch '$fallback_branch_name' is also blocked." >&2
-    fi
-    echo "Allowed branches: $(gov_primary_branches_join ', ')" >&2
-    exit 2
-  fi
-fi
-if ! is_allowed_branch "$branch_name"; then
-  echo "ERROR: branch '$branch_name' is blocked." >&2
-  echo "Allowed branches: $(gov_primary_branches_join ', ')" >&2
-  exit 2
-fi
 if [[ -z "$commit_message" ]]; then
   echo "ERROR: commit message is empty." >&2
   exit 2
@@ -114,6 +96,31 @@ if [[ -z "$repo_root" ]]; then
   exit 2
 fi
 cd "$repo_root"
+
+current_branch="$(git branch --show-current 2>/dev/null || true)"
+if ! is_allowed_branch "$branch_name"; then
+  if [[ -n "$fallback_branch_name" ]]; then
+    if is_allowed_branch "$fallback_branch_name"; then
+      echo "[auto-git-sync] WARNING: branch '$branch_name' is blocked; fallback to '$fallback_branch_name'." >&2
+      branch_name="$fallback_branch_name"
+    else
+      echo "ERROR: branch '$branch_name' is blocked." >&2
+      echo "ERROR: fallback branch '$fallback_branch_name' is also blocked." >&2
+      echo "Allowed branches: $(gov_primary_branches_join ', ')" >&2
+      exit 2
+    fi
+  elif [[ -n "$current_branch" ]] && is_allowed_branch "$current_branch"; then
+    echo "[auto-git-sync] WARNING: branch '$branch_name' is blocked; auto-fallback to current branch '$current_branch'." >&2
+    branch_name="$current_branch"
+  elif is_allowed_branch "lie"; then
+    echo "[auto-git-sync] WARNING: branch '$branch_name' is blocked; auto-fallback to 'lie'." >&2
+    branch_name="lie"
+  else
+    echo "ERROR: branch '$branch_name' is blocked." >&2
+    echo "Allowed branches: $(gov_primary_branches_join ', ')" >&2
+    exit 2
+  fi
+fi
 
 lock_dir="$repo_root/.git/auto_git_sync.lock.d"
 if ! mkdir "$lock_dir" 2>/dev/null; then
