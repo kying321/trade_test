@@ -8,13 +8,14 @@ usage() {
   local primary_branches
   primary_branches="$(gov_primary_branches_join '/')"
   cat <<'EOF' | sed -e "s|__PRIMARY_BRANCHES__|${primary_branches}|g"
-Usage: scripts/auto_git_sync.sh [options]
+Usage: system/scripts/auto_git_sync.sh [options]
 
 Options:
   --dry-run           Show what would be done, do not commit/push.
   --skip-tests        Skip `lie validate-config` + `lie test-all`.
   --include-logs      Include `system/output/logs/tests_*.json` in commit.
   --no-review-files   Do not include `system/output/review/*` files.
+  --include-progress  Include `system/docs/PROGRESS.md` (default: excluded).
   --branch NAME       Target git branch (`__PRIMARY_BRANCHES__`).
   --message TEXT      Commit message.
   -h, --help          Show this help.
@@ -25,6 +26,10 @@ dry_run=0
 run_tests=1
 include_logs=0
 include_review_files=1
+include_progress_file=0
+if [[ "${AUTO_GIT_INCLUDE_PROGRESS:-0}" == "1" ]]; then
+  include_progress_file=1
+fi
 branch_name="${AUTO_GIT_BRANCH:-lie}"
 commit_message="${AUTO_GIT_MESSAGE:-chore(system): automated sync $(date '+%Y-%m-%d %H:%M:%S')}"
 
@@ -45,6 +50,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-review-files)
       include_review_files=0
+      ;;
+    --include-progress)
+      include_progress_file=1
       ;;
     --branch)
       shift
@@ -88,6 +96,28 @@ if [[ -z "$repo_root" ]]; then
 fi
 cd "$repo_root"
 
+lock_dir="$repo_root/.git/auto_git_sync.lock.d"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+  if [[ -f "$lock_dir/pid" ]]; then
+    lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+    if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -rf "$lock_dir" 2>/dev/null || true
+      mkdir "$lock_dir" 2>/dev/null || true
+    fi
+  fi
+fi
+if [[ ! -d "$lock_dir" ]]; then
+  echo "ERROR: auto_git_sync lock is busy: $lock_dir" >&2
+  exit 3
+fi
+echo "$$" > "$lock_dir/pid"
+trap 'rm -rf "$lock_dir" >/dev/null 2>&1 || true' EXIT
+
+if [[ -e "$repo_root/.git/index.lock" ]]; then
+  echo "ERROR: .git/index.lock exists; git is busy, aborting auto sync." >&2
+  exit 3
+fi
+
 if [[ $dry_run -eq 0 ]]; then
   if ! git remote get-url origin >/dev/null 2>&1; then
     echo "ERROR: origin remote is not configured." >&2
@@ -130,7 +160,12 @@ done < <(
 eligible_files=()
 for f in "${changed_files[@]}"; do
   case "$f" in
-    system/src/lie_engine/*|system/tests/*|system/config.yaml|system/config.daemon.test.yaml|system/README.md|system/docs/PROGRESS.md|system/scripts/*)
+    system/src/lie_engine/*|system/tests/*|system/config.yaml|system/config.daemon.test.yaml|system/README.md|system/scripts/*)
+      ;;
+    system/docs/PROGRESS.md)
+      if [[ $include_progress_file -eq 0 ]]; then
+        continue
+      fi
       ;;
     system/output/review/*)
       if [[ $include_review_files -eq 0 ]]; then
