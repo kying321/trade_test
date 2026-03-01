@@ -21,3 +21,17 @@
 ## Enforcement points
 - Local: `.git/hooks/pre-push` -> `system/scripts/branch_policy_guard.sh`
 - Remote: GitHub Action `.github/workflows/branch-policy.yml`
+
+## GitHub branch protection (main/pi/lie)
+- Script: `system/scripts/github_branch_protection.sh`
+- Check posture:
+  - `bash system/scripts/github_branch_protection.sh check`
+- Apply posture:
+  - `bash system/scripts/github_branch_protection.sh apply`
+
+Current baseline (applied on 2026-03-01):
+- `required_status_checks.strict = true`
+- `required_status_checks.contexts = ["branch-policy"]`
+- `required_linear_history = true`
+- `allow_force_pushes = false`
+- `allow_deletions = false`
