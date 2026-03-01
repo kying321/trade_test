@@ -119,6 +119,7 @@ def main() -> None:
     p_brd = sub.add_parser("baseline-rollback-drill", help="Rollback active artifact-governance baseline to rollback_anchor")
     p_brd.add_argument("--date", required=True)
     p_brd.add_argument("--anchor", default=None, help="Optional rollback anchor path override")
+    p_brd.add_argument("--dry-run", action="store_true", help="Run preflight lint without mutating active baseline")
 
     args = parser.parse_args()
     if args.cmd == "validate-config":
@@ -231,6 +232,7 @@ def main() -> None:
         out = eng.baseline_rollback_drill(
             as_of=_parse_date(args.date),
             anchor=str(args.anchor) if args.anchor not in {None, "", "none", "None"} else None,
+            dry_run=bool(args.dry_run),
         )
     else:
         raise ValueError(f"Unknown command: {args.cmd}")

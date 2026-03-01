@@ -278,6 +278,12 @@
     `output/review/YYYY-MM-DD_baseline_rollback_drill.json` + `.md`.
   - active baseline is restored from anchor snapshot and pre-rollback active baseline is backed up to:
     `output/artifacts/baselines/artifact_governance/history/YYYY-MM-DD_rollback_backup_*.yaml`.
+- Baseline rollback drill dry-run + preflight lint is online:
+  - CLI supports preflight mode:
+    `lie baseline-rollback-drill --date YYYY-MM-DD [--anchor /abs/path] --dry-run`.
+  - preflight checks:
+    `active_baseline_exists_ok / active_baseline_payload_ok / rollback_anchor_present_ok / rollback_anchor_exists_ok / rollback_anchor_payload_ok`.
+  - dry-run only writes audit artifacts and MUST NOT rewrite `active_baseline.yaml` or create rollback backups.
 
 ## Testing Workflow
 - Full suite:
@@ -299,4 +305,4 @@
 - Downstream gate/review reads `failed_tests` first, then falls back to stderr parsing.
 
 ## Next Priorities
-1. Add rollback drill dry-run mode and preflight lint（校验 anchor 存在性与 payload 合法性，不改写 active baseline）。
+1. Extend rollback drill preflight lint to enforce minimal baseline schema keys（如 `as_of/profiles/snapshot_path`）并输出字段级错误明细。

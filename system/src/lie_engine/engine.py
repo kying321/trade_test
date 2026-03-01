@@ -2311,7 +2311,7 @@ class LieEngine:
         )
         return baseline
 
-    def baseline_rollback_drill(self, *, as_of: date, anchor: str | None = None) -> dict[str, Any]:
+    def baseline_rollback_drill(self, *, as_of: date, anchor: str | None = None, dry_run: bool = False) -> dict[str, Any]:
         base_dir = self.ctx.output_dir / "artifacts" / "baselines" / "artifact_governance"
         history_dir = base_dir / "history"
         active_path = base_dir / "active_baseline.yaml"
@@ -2325,6 +2325,7 @@ class LieEngine:
             "as_of": as_of.isoformat(),
             "executed": False,
             "reason": "unknown",
+            "dry_run": bool(dry_run),
             "active_path": str(active_path),
             "provided_anchor": str(anchor or ""),
             "target_anchor": "",
@@ -2333,13 +2334,23 @@ class LieEngine:
             "backup_path": "",
             "audit_json": str(audit_json_path),
             "audit_md": str(audit_md_path),
+            "preflight": {
+                "active_baseline_exists_ok": False,
+                "active_baseline_payload_ok": False,
+                "rollback_anchor_present_ok": False,
+                "rollback_anchor_exists_ok": False,
+                "rollback_anchor_payload_ok": False,
+            },
         }
+
+        preflight = out["preflight"] if isinstance(out.get("preflight"), dict) else {}
 
         if not active_path.exists():
             out["reason"] = "active_baseline_missing"
             write_json(audit_json_path, out)
             write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
             return out
+        preflight["active_baseline_exists_ok"] = True
 
         active_payload = yaml.safe_load(active_path.read_text(encoding="utf-8")) or {}
         if not isinstance(active_payload, dict):
@@ -2347,6 +2358,7 @@ class LieEngine:
             write_json(audit_json_path, out)
             write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
             return out
+        preflight["active_baseline_payload_ok"] = True
 
         active_before = str(active_payload.get("snapshot_path", "") or active_payload.get("history_path", "")).strip()
         out["active_before"] = active_before
@@ -2357,6 +2369,7 @@ class LieEngine:
             write_json(audit_json_path, out)
             write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
             return out
+        preflight["rollback_anchor_present_ok"] = True
 
         anchor_path = Path(anchor_raw)
         if not anchor_path.is_absolute():
@@ -2367,10 +2380,30 @@ class LieEngine:
             write_json(audit_json_path, out)
             write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
             return out
+        preflight["rollback_anchor_exists_ok"] = True
 
         anchor_payload = yaml.safe_load(anchor_path.read_text(encoding="utf-8")) or {}
         if not isinstance(anchor_payload, dict):
             out["reason"] = "rollback_anchor_invalid_payload"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+        anchor_after = str(anchor_payload.get("snapshot_path", "") or anchor_payload.get("history_path", "")).strip()
+        if not anchor_after:
+            out["reason"] = "rollback_anchor_invalid_payload"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+        preflight["rollback_anchor_payload_ok"] = True
+
+        if dry_run:
+            out.update(
+                {
+                    "executed": False,
+                    "reason": "dry_run_ok",
+                    "active_after": anchor_after,
+                }
+            )
             write_json(audit_json_path, out)
             write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
             return out

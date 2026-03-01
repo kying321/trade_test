@@ -956,6 +956,62 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(str(audit_payload.get("active_before", "")), str(b2.get("snapshot_path", "")))
         self.assertEqual(str(audit_payload.get("active_after", "")), str(b1.get("snapshot_path", "")))
 
+    def test_baseline_rollback_drill_dry_run_preflight_only(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        p1 = tmp_root / "output" / "review" / "2026-02-13_baseline_promotion.json"
+        p2 = tmp_root / "output" / "review" / "2026-02-14_baseline_promotion.json"
+        b1 = json.loads(p1.read_text(encoding="utf-8"))
+        b2 = json.loads(p2.read_text(encoding="utf-8"))
+
+        out = eng.baseline_rollback_drill(as_of=d3, dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "dry_run_ok")
+        self.assertEqual(str(out.get("active_after", "")), str(b1.get("snapshot_path", "")))
+
+        preflight = out.get("preflight", {})
+        self.assertTrue(bool(preflight.get("active_baseline_exists_ok", False)))
+        self.assertTrue(bool(preflight.get("active_baseline_payload_ok", False)))
+        self.assertTrue(bool(preflight.get("rollback_anchor_present_ok", False)))
+        self.assertTrue(bool(preflight.get("rollback_anchor_exists_ok", False)))
+        self.assertTrue(bool(preflight.get("rollback_anchor_payload_ok", False)))
+
+        active = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "active_baseline.yaml"
+        self.assertTrue(active.exists())
+        active_payload = yaml.safe_load(active.read_text(encoding="utf-8"))
+        self.assertEqual(str(active_payload.get("snapshot_path", "")), str(b2.get("snapshot_path", "")))
+        self.assertEqual(str(out.get("backup_path", "")), "")
+
+    def test_baseline_rollback_drill_preflight_lints_anchor_payload(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        invalid_anchor = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "history" / "invalid_anchor.yaml"
+        invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
+        invalid_anchor.write_text(
+            yaml.safe_dump({"source": "invalid_payload"}, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        out = eng.baseline_rollback_drill(as_of=d3, anchor=str(invalid_anchor), dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "rollback_anchor_invalid_payload")
+        preflight = out.get("preflight", {})
+        self.assertTrue(bool(preflight.get("active_baseline_exists_ok", False)))
+        self.assertTrue(bool(preflight.get("active_baseline_payload_ok", False)))
+        self.assertTrue(bool(preflight.get("rollback_anchor_present_ok", False)))
+        self.assertTrue(bool(preflight.get("rollback_anchor_exists_ok", False)))
+        self.assertFalse(bool(preflight.get("rollback_anchor_payload_ok", True)))
+
     def test_run_review_writes_slot_regime_tuning_artifact(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
