@@ -2372,6 +2372,90 @@ class LieEngine:
                             "message": f"required baseline field '{key}' is missing or empty",
                         }
                     )
+            as_of_raw = payload.get("as_of")
+            if as_of_raw is not None and not isinstance(as_of_raw, str):
+                errors.append(
+                    {
+                        "source": source,
+                        "field": "as_of",
+                        "code": "invalid_type",
+                        "message": "field 'as_of' must be a string in ISO date format (YYYY-MM-DD)",
+                    }
+                )
+            elif isinstance(as_of_raw, str) and as_of_raw.strip():
+                try:
+                    date.fromisoformat(as_of_raw.strip())
+                except Exception:
+                    errors.append(
+                        {
+                            "source": source,
+                            "field": "as_of",
+                            "code": "invalid_format",
+                            "message": "field 'as_of' must be a valid ISO date string (YYYY-MM-DD)",
+                        }
+                    )
+
+            profiles_raw = payload.get("profiles")
+            if profiles_raw is not None and not isinstance(profiles_raw, (list, dict)):
+                errors.append(
+                    {
+                        "source": source,
+                        "field": "profiles",
+                        "code": "invalid_type",
+                        "message": "field 'profiles' must be a list or object of profile entries",
+                    }
+                )
+            elif isinstance(profiles_raw, list):
+                for idx, profile in enumerate(profiles_raw):
+                    if not isinstance(profile, str):
+                        errors.append(
+                            {
+                                "source": source,
+                                "field": f"profiles[{idx}]",
+                                "code": "invalid_item_type",
+                                "message": "profile entry must be a non-empty string",
+                            }
+                        )
+                    elif not profile.strip():
+                        errors.append(
+                            {
+                                "source": source,
+                                "field": f"profiles[{idx}]",
+                                "code": "empty_item",
+                                "message": "profile entry must be a non-empty string",
+                            }
+                        )
+            elif isinstance(profiles_raw, dict):
+                for profile_name, profile_payload in profiles_raw.items():
+                    if not isinstance(profile_name, str) or not profile_name.strip():
+                        errors.append(
+                            {
+                                "source": source,
+                                "field": "profiles",
+                                "code": "invalid_key",
+                                "message": "profile map keys must be non-empty strings",
+                            }
+                        )
+                    if not isinstance(profile_payload, dict):
+                        errors.append(
+                            {
+                                "source": source,
+                                "field": f"profiles.{profile_name}",
+                                "code": "invalid_item_type",
+                                "message": "profile map values must be objects",
+                            }
+                        )
+
+            snapshot_path_raw = payload.get("snapshot_path")
+            if snapshot_path_raw is not None and not isinstance(snapshot_path_raw, str):
+                errors.append(
+                    {
+                        "source": source,
+                        "field": "snapshot_path",
+                        "code": "invalid_type",
+                        "message": "field 'snapshot_path' must be a non-empty string path",
+                    }
+                )
             return errors
 
         if not active_path.exists():

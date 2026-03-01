@@ -289,6 +289,9 @@
     `as_of / profiles / snapshot_path` for both active baseline and rollback anchor payload.
   - field-level validation errors are emitted in `preflight.errors[]` with
     `source/field/code/message` to speed up rollback payload debugging.
+  - preflight now enforces schema type/format lint:
+    `as_of` must be ISO date (`YYYY-MM-DD`), `profiles` must be list/object payload, and `snapshot_path` must be string path.
+  - errors include fine-grained codes (`invalid_type / invalid_format / invalid_item_type / empty_item / invalid_key`) for quicker rollback payload triage.
 
 ## Testing Workflow
 - Full suite:
@@ -310,4 +313,4 @@
 - Downstream gate/review reads `failed_tests` first, then falls back to stderr parsing.
 
 ## Next Priorities
-1. Extend rollback drill preflight lint with schema type/format checks（如 `as_of` ISO date、`profiles` list 类型）并继续补充字段级错误明细。
+1. Extend rollback drill preflight schema lint to validate profile payload sub-schema keys (e.g., `retention_days` numeric, checksum flags boolean) and keep field-level error granularity.

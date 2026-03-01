@@ -1019,6 +1019,46 @@ class EngineIntegrationTests(unittest.TestCase):
         fields = {str(item.get("field", "")) for item in errors if isinstance(item, dict)}
         self.assertTrue({"as_of", "profiles", "snapshot_path"}.issubset(fields))
 
+    def test_baseline_rollback_drill_preflight_lints_anchor_schema_types_and_formats(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        invalid_anchor = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "history" / "invalid_schema_anchor.yaml"
+        invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
+        invalid_anchor.write_text(
+            yaml.safe_dump(
+                {
+                    "as_of": "2026/02/13",
+                    "profiles": "primary",
+                    "snapshot_path": 123,
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        out = eng.baseline_rollback_drill(as_of=d3, anchor=str(invalid_anchor), dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "rollback_anchor_invalid_payload")
+        preflight = out.get("preflight", {})
+        self.assertFalse(bool(preflight.get("rollback_anchor_schema_ok", True)))
+        self.assertFalse(bool(preflight.get("rollback_anchor_payload_ok", True)))
+        errors = preflight.get("errors", [])
+        self.assertTrue(isinstance(errors, list))
+        code_by_field = {
+            str(item.get("field", "")): str(item.get("code", ""))
+            for item in errors
+            if isinstance(item, dict)
+        }
+        self.assertEqual(code_by_field.get("as_of"), "invalid_format")
+        self.assertEqual(code_by_field.get("profiles"), "invalid_type")
+        self.assertEqual(code_by_field.get("snapshot_path"), "invalid_type")
+
     def test_run_review_writes_slot_regime_tuning_artifact(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
