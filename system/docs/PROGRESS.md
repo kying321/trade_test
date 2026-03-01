@@ -292,6 +292,27 @@
   - preflight now enforces schema type/format lint:
     `as_of` must be ISO date (`YYYY-MM-DD`), `profiles` must be list/object payload, and `snapshot_path` must be string path.
   - errors include fine-grained codes (`invalid_type / invalid_format / invalid_item_type / empty_item / invalid_key`) for quicker rollback payload triage.
+- Baseline rollback drill preflight profile sub-schema lint is online:
+  - when `profiles` is a map, preflight now validates profile payload field types.
+  - enforced sub-schema checks include:
+    `retention_days` numeric (and `>= 1`) plus checksum flags (`*checksum*_enabled`) boolean.
+  - errors remain field-level and source-aware in `preflight.errors[]` for targeted rollback payload fixes.
+- Baseline rollback drill preflight profile string-path lint is online:
+  - when `profiles` is a map, preflight now validates
+    `json_glob / md_glob / checksum_index_filename` as non-empty strings.
+  - field-level errors emit precise codes:
+    `invalid_type` (non-string) / `empty_item` (blank string).
+  - rollback anchor dry-run preflight now has dedicated regression coverage for these path fields.
+- Baseline rollback drill preflight active/anchor path-field parity coverage is online:
+  - dry-run preflight now has dedicated active-baseline negative regression coverage for
+    `json_glob / md_glob / checksum_index_filename`.
+  - parity checks assert source-scoped errors (`source=active_baseline`) with the same
+    path-field error codes used by rollback-anchor validation.
+- Baseline rollback drill mixed-source preflight ordering is online:
+  - dry-run preflight now continues to collect rollback-anchor schema errors even when
+    active baseline schema fails, keeping reason as `active_baseline_invalid_payload`.
+  - integration coverage asserts deterministic `preflight.errors[]` ordering for mixed
+    active+anchor path-field violations (`json_glob / md_glob / checksum_index_filename`).
 
 ## Testing Workflow
 - Full suite:
@@ -313,4 +334,4 @@
 - Downstream gate/review reads `failed_tests` first, then falls back to stderr parsing.
 
 ## Next Priorities
-1. Extend rollback drill preflight schema lint to validate profile payload sub-schema keys (e.g., `retention_days` numeric, checksum flags boolean) and keep field-level error granularity.
+1. Add regression coverage for mixed active/anchor preflight failures that combine path-field violations with non-path schema violations (`as_of/profiles/snapshot_path`) and assert stable source-first ordering.

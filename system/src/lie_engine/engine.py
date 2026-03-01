@@ -2427,6 +2427,7 @@ class LieEngine:
                         )
             elif isinstance(profiles_raw, dict):
                 for profile_name, profile_payload in profiles_raw.items():
+                    profile_label = str(profile_name).strip() if isinstance(profile_name, str) else str(profile_name)
                     if not isinstance(profile_name, str) or not profile_name.strip():
                         errors.append(
                             {
@@ -2440,11 +2441,69 @@ class LieEngine:
                         errors.append(
                             {
                                 "source": source,
-                                "field": f"profiles.{profile_name}",
+                                "field": f"profiles.{profile_label}",
                                 "code": "invalid_item_type",
                                 "message": "profile map values must be objects",
                             }
                         )
+                        continue
+
+                    retention_raw = profile_payload.get("retention_days")
+                    if retention_raw is not None:
+                        if isinstance(retention_raw, bool) or not isinstance(retention_raw, (int, float)):
+                            errors.append(
+                                {
+                                    "source": source,
+                                    "field": f"profiles.{profile_label}.retention_days",
+                                    "code": "invalid_type",
+                                    "message": "profile field 'retention_days' must be numeric",
+                                }
+                            )
+                        elif float(retention_raw) < 1.0:
+                            errors.append(
+                                {
+                                    "source": source,
+                                    "field": f"profiles.{profile_label}.retention_days",
+                                    "code": "invalid_range",
+                                    "message": "profile field 'retention_days' must be >= 1",
+                                }
+                            )
+
+                    for key_text in ("json_glob", "md_glob", "checksum_index_filename"):
+                        path_value = profile_payload.get(key_text)
+                        if path_value is None:
+                            continue
+                        if not isinstance(path_value, str):
+                            errors.append(
+                                {
+                                    "source": source,
+                                    "field": f"profiles.{profile_label}.{key_text}",
+                                    "code": "invalid_type",
+                                    "message": f"profile field '{key_text}' must be a non-empty string",
+                                }
+                            )
+                            continue
+                        if not path_value.strip():
+                            errors.append(
+                                {
+                                    "source": source,
+                                    "field": f"profiles.{profile_label}.{key_text}",
+                                    "code": "empty_item",
+                                    "message": f"profile field '{key_text}' must be a non-empty string",
+                                }
+                            )
+
+                    for profile_key, profile_value in profile_payload.items():
+                        key_text = str(profile_key).strip()
+                        if "checksum" in key_text and key_text.endswith("_enabled") and not isinstance(profile_value, bool):
+                            errors.append(
+                                {
+                                    "source": source,
+                                    "field": f"profiles.{profile_label}.{key_text}",
+                                    "code": "invalid_type",
+                                    "message": "checksum flag fields must be boolean",
+                                }
+                            )
 
             snapshot_path_raw = payload.get("snapshot_path")
             if snapshot_path_raw is not None and not isinstance(snapshot_path_raw, str):
@@ -2473,13 +2532,16 @@ class LieEngine:
             return out
         preflight["active_baseline_payload_ok"] = True
         active_schema_errors = _append_schema_errors(active_payload, "active_baseline")
-        if active_schema_errors:
+        active_schema_has_error = bool(active_schema_errors)
+        if active_schema_has_error:
             preflight_errors.extend(active_schema_errors)
-            out["reason"] = "active_baseline_invalid_payload"
-            write_json(audit_json_path, out)
-            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
-            return out
-        preflight["active_baseline_schema_ok"] = True
+            if not dry_run:
+                out["reason"] = "active_baseline_invalid_payload"
+                write_json(audit_json_path, out)
+                write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+                return out
+        else:
+            preflight["active_baseline_schema_ok"] = True
 
         active_before = str(active_payload.get("snapshot_path", "") or active_payload.get("history_path", "")).strip()
         out["active_before"] = active_before
@@ -2513,6 +2575,8 @@ class LieEngine:
         if anchor_schema_errors:
             preflight_errors.extend(anchor_schema_errors)
             out["reason"] = "rollback_anchor_invalid_payload"
+            if active_schema_has_error:
+                out["reason"] = "active_baseline_invalid_payload"
             write_json(audit_json_path, out)
             write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
             return out
@@ -2527,6 +2591,11 @@ class LieEngine:
         preflight["rollback_anchor_payload_ok"] = True
 
         if dry_run:
+            if active_schema_has_error:
+                out["reason"] = "active_baseline_invalid_payload"
+                write_json(audit_json_path, out)
+                write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+                return out
             out.update(
                 {
                     "executed": False,
