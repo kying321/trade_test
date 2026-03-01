@@ -96,6 +96,24 @@ utc_minus_hours_yyyymmddhhmm() {
   date -u -d "-${hours} hour" +%Y%m%d%H%M
 }
 
+text_matches() {
+  local pattern="$1"
+  if command -v rg >/dev/null 2>&1; then
+    rg -q -e "$pattern"
+    return $?
+  fi
+  grep -Eq "$pattern"
+}
+
+list_contains_exact() {
+  local value="$1"
+  if command -v rg >/dev/null 2>&1; then
+    rg -x -q "$value"
+    return $?
+  fi
+  grep -Fxq "$value"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
@@ -314,7 +332,7 @@ c_final_view="$(gh_run pr view "$c_pr_num" --repo "$repo" --json state,closedAt,
 printf '%s\n' "$c_final_view" >"${tmpdir}/c_final_view.json"
 
 set +e
-gh_run api "repos/${repo}/branches" --paginate --jq '.[].name' | rg -x "$c_branch" >"${tmpdir}/c_branch_exists.out" 2>"${tmpdir}/c_branch_exists.err"
+gh_run api "repos/${repo}/branches" --paginate --jq '.[].name' | list_contains_exact "$c_branch" >"${tmpdir}/c_branch_exists.out" 2>"${tmpdir}/c_branch_exists.err"
 c_branch_exists_rc=$?
 set -e
 
@@ -328,7 +346,7 @@ wt_c=""
 
 # ---------- Verdict ----------
 b_checks_text="$(cat "${tmpdir}/b_checks.out" 2>/dev/null || true)"
-if printf '%s' "$b_checks_text" | rg -q 'hotfix-pr-gate[[:space:]]+fail'; then
+if printf '%s' "$b_checks_text" | text_matches 'hotfix-pr-gate[[:space:]]+fail'; then
   b_gate_fail_detected=true
 else
   b_gate_fail_detected=false
