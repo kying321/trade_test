@@ -870,7 +870,7 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(total), 5.0, places=6)
 
     def test_run_slot_and_session(self) -> None:
-        eng, _ = self._make_engine()
+        eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
 
         slot_out = eng.run_slot(as_of=d, slot="08:40")
@@ -881,6 +881,22 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("steps", session_out)
         self.assertIn("eod", session_out["steps"])
         self.assertTrue(session_out["steps"]["review_cycle"].get("skipped"))
+        lock_path = tmp_root / "output" / "state" / "run-halfhour-pulse.lock"
+        self.assertTrue(lock_path.exists())
+
+    def test_run_slot_micro_capture_alias(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_micro_capture = lambda as_of, symbols=None: {  # type: ignore[method-assign]
+            "as_of": as_of.isoformat(),
+            "symbols": list(symbols or []),
+            "status": "ok",
+            "pass": True,
+        }
+        out = eng.run_slot(as_of=d, slot="micro-capture")
+        self.assertEqual(out["slot"], "micro-capture")
+        result = out.get("result", {})
+        self.assertEqual(str(result.get("as_of", "")), "2026-02-13")
 
     def test_run_premarket_includes_source_confidence(self) -> None:
         eng, _ = self._make_engine()

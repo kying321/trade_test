@@ -58,6 +58,9 @@ lie dependency-audit --date 2026-02-13
 # validation.system_time_sync_max_offset_ms: 5
 # validation.system_time_sync_max_rtt_ms: 120
 # validation.system_time_sync_min_ok_sources: 1
+# validation.micro_capture_daemon_enabled: true
+# validation.micro_capture_daemon_interval_minutes: 30
+# validation.micro_capture_daemon_symbols: [BTCUSDT, ETHUSDT]
 # validation.microstructure_symbols: [BTCUSDT, ETHUSDT]
 # validation.micro_cross_source_hard_fuse_enabled: false
 # validation.micro_cross_source_align_seconds: 120
@@ -279,6 +282,7 @@ lie review --date 2026-02-13
 lie run-slot --date 2026-02-13 --slot 08:40
 lie run-slot --date 2026-02-13 --slot 15:10
 lie run-slot --date 2026-02-13 --slot ops
+lie run-slot --date 2026-02-13 --slot micro-capture
 
 # 单日全流程
 lie run-session --date 2026-02-13
@@ -288,6 +292,8 @@ lie run-review-cycle --date 2026-02-13 --max-rounds 2
 
 # 守护调度（按 config.yaml 固定时段触发）
 lie run-daemon --poll-seconds 30
+# 当 validation.micro_capture_daemon_enabled=true 时，daemon 会按 interval_minutes 自动执行 micro-capture。
+# 调度关键段使用 output/state/run-halfhour-pulse.lock 文件互斥，防止并发重放。
 # 仅预演当前时刻会触发哪些槽位（不执行，不写状态）
 lie run-daemon --dry-run
 

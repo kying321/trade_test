@@ -355,6 +355,9 @@ class ConfigValidationTests(unittest.TestCase):
                     "system_time_sync_max_offset_ms": 5,
                     "system_time_sync_max_rtt_ms": 120,
                     "system_time_sync_min_ok_sources": 1,
+                    "micro_capture_daemon_enabled": True,
+                    "micro_capture_daemon_interval_minutes": 30,
+                    "micro_capture_daemon_symbols": ["BTCUSDT", "ETHUSDT"],
                     "ops_system_time_sync_monitor_enabled": True,
                     "ops_system_time_sync_fail_days_max": 2,
                     "ops_system_time_sync_inactive_days_max": 3,
@@ -468,6 +471,9 @@ class ConfigValidationTests(unittest.TestCase):
                     "system_time_sync_max_offset_ms": 0,
                     "system_time_sync_max_rtt_ms": 6001,
                     "system_time_sync_min_ok_sources": 3,
+                    "micro_capture_daemon_enabled": "yes",
+                    "micro_capture_daemon_interval_minutes": 0,
+                    "micro_capture_daemon_symbols": [],
                     "ops_system_time_sync_monitor_enabled": "yes",
                     "ops_system_time_sync_fail_days_max": -1,
                     "ops_system_time_sync_inactive_days_max": -1,
@@ -521,6 +527,9 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.system_time_sync_max_offset_ms", error_paths)
         self.assertIn("validation.system_time_sync_max_rtt_ms", error_paths)
         self.assertIn("validation.system_time_sync_min_ok_sources", error_paths)
+        self.assertIn("validation.micro_capture_daemon_enabled", error_paths)
+        self.assertIn("validation.micro_capture_daemon_interval_minutes", error_paths)
+        self.assertIn("validation.micro_capture_daemon_symbols", error_paths)
         self.assertIn("validation.ops_system_time_sync_monitor_enabled", error_paths)
         self.assertIn("validation.ops_system_time_sync_fail_days_max", error_paths)
         self.assertIn("validation.ops_system_time_sync_inactive_days_max", error_paths)
@@ -707,6 +716,9 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_system_time_sync_fail_days_max": -1,
                     "ops_system_time_sync_inactive_days_max": -1,
                     "ops_system_time_sync_min_ok_sources": 0,
+                    "micro_capture_daemon_enabled": "yes",
+                    "micro_capture_daemon_interval_minutes": 2,
+                    "micro_capture_daemon_symbols": {"bad": "shape"},
                     "broker_snapshot_source_mode": "bad_mode",
                     "broker_snapshot_live_mapping_profile": "bad_profile",
                     "broker_snapshot_live_mapping_fields": {
@@ -915,6 +927,9 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.ops_system_time_sync_fail_days_max", paths)
         self.assertIn("validation.ops_system_time_sync_inactive_days_max", paths)
         self.assertIn("validation.ops_system_time_sync_min_ok_sources", paths)
+        self.assertIn("validation.micro_capture_daemon_enabled", paths)
+        self.assertIn("validation.micro_capture_daemon_interval_minutes", paths)
+        self.assertIn("validation.micro_capture_daemon_symbols", paths)
         self.assertIn("validation.broker_snapshot_source_mode", paths)
         self.assertIn("validation.broker_snapshot_live_mapping_profile", paths)
         self.assertIn("validation.broker_snapshot_live_mapping_fields.source", paths)

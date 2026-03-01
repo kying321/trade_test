@@ -5215,6 +5215,7 @@ class LieEngine:
             run_eod=lambda d: self.run_eod(d),
             run_review_cycle=lambda d, max_rounds: self.run_review_cycle(as_of=d, max_rounds=max_rounds),
             ops_report=lambda d, window_days: self.ops_report(as_of=d, window_days=window_days),
+            run_micro_capture=lambda d, symbols: self.run_micro_capture(as_of=d, symbols=symbols),
         )
 
     def gate_report(

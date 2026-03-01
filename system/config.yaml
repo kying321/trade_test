@@ -69,6 +69,9 @@ validation:
   system_time_sync_max_offset_ms: 5
   system_time_sync_max_rtt_ms: 120
   system_time_sync_min_ok_sources: 1
+  micro_capture_daemon_enabled: true
+  micro_capture_daemon_interval_minutes: 30
+  micro_capture_daemon_symbols: ["BTCUSDT", "ETHUSDT"]
   microstructure_symbols: ["BTCUSDT", "ETHUSDT"]
   review_use_strategy_lab: true
   strategy_lab_merge_step: 0.18

@@ -1263,6 +1263,33 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                     "不能大于可用授时源数量",
                 )
             )
+    if "micro_capture_daemon_enabled" in val and not isinstance(val.get("micro_capture_daemon_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.micro_capture_daemon_enabled", "必须是布尔值"))
+    if "micro_capture_daemon_interval_minutes" in val:
+        x = _as_int(val.get("micro_capture_daemon_interval_minutes", 0))
+        if not (5 <= x <= 1440):
+            issues.append(ValidationIssue("error", "validation.micro_capture_daemon_interval_minutes", "必须在 [5, 1440]"))
+    if "micro_capture_daemon_symbols" in val:
+        raw = val.get("micro_capture_daemon_symbols")
+        if isinstance(raw, str):
+            parsed = [x.strip() for x in raw.split(",") if x.strip()]
+            if not parsed:
+                issues.append(ValidationIssue("error", "validation.micro_capture_daemon_symbols", "不能为空"))
+        elif isinstance(raw, list):
+            if not raw:
+                issues.append(ValidationIssue("error", "validation.micro_capture_daemon_symbols", "不能为空列表"))
+            for i, item in enumerate(raw):
+                txt = str(item).strip().upper()
+                if txt == "":
+                    issues.append(
+                        ValidationIssue(
+                            "error",
+                            f"validation.micro_capture_daemon_symbols[{i}]",
+                            "元素不能为空",
+                        )
+                    )
+        else:
+            issues.append(ValidationIssue("error", "validation.micro_capture_daemon_symbols", "必须是字符串或列表"))
     if "ops_system_time_sync_monitor_enabled" in val and not isinstance(val.get("ops_system_time_sync_monitor_enabled"), bool):
         issues.append(ValidationIssue("error", "validation.ops_system_time_sync_monitor_enabled", "必须是布尔值"))
     if "ops_system_time_sync_fail_days_max" in val and _as_int(val.get("ops_system_time_sync_fail_days_max", -1)) < 0:
