@@ -161,11 +161,11 @@ if [[ $run_tests -eq 1 ]]; then
   (
     cd "$repo_root/system"
     if command -v lie >/dev/null 2>&1; then
-      lie validate-config
-      lie test-all
+      PYTHONDONTWRITEBYTECODE=1 lie validate-config
+      PYTHONDONTWRITEBYTECODE=1 lie test-all
     else
-      PYTHONPATH=src python3 -m lie_engine.cli validate-config
-      PYTHONPATH=src python3 -m lie_engine.cli test-all
+      PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m lie_engine.cli validate-config
+      PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m lie_engine.cli test-all
     fi
   )
 fi
