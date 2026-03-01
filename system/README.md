@@ -252,9 +252,13 @@ lie stress-matrix --date 2026-02-13 --modes ultra_short,swing,long
 # 干跑（仅预览将提交的文件）
 ./scripts/auto_git_sync.sh --dry-run
 # 正式执行（默认会先跑 validate-config + test-all）
-./scripts/auto_git_sync.sh --branch codex/auto-sync --message "chore(system): periodic sync"
+./scripts/auto_git_sync.sh --branch lie --message "chore(system): periodic sync"
+# 若是 Pi 侧改动，使用：
+./scripts/auto_git_sync.sh --branch pi --message "chore(system): periodic sync (pi)"
 # 可选：把 tests 日志也纳入提交
 ./scripts/auto_git_sync.sh --include-logs
+# 安装本地 pre-push 分支门禁（仅允许 main/pi/lie）
+./scripts/install_branch_guard_hook.sh
 
 # 审查未通过时会自动生成：
 # output/review/YYYY-MM-DD_defect_plan_roundN.json

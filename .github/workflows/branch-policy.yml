@@ -1,0 +1,32 @@
+name: Branch Policy
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  enforce-branch-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch name
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE:-branch}" == "tag" ]]; then
+            echo "[branch-policy] skip tag ref: ${GITHUB_REF_NAME}"
+            exit 0
+          fi
+
+          branch_name="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          case "${branch_name}" in
+            main|pi|lie)
+              echo "[branch-policy] PASS branch=${branch_name}"
+              ;;
+            *)
+              echo "::error title=Branch Policy::Branch '${branch_name}' is blocked. Allowed: main, pi, lie"
+              exit 1
+              ;;
+          esac
