@@ -3,6 +3,7 @@
 ## Stable lanes
 - Default: `main`, `pi`, `lie`
 - Override (dual-project mode): set `GOV_PRIMARY_BRANCHES=pi,lie` for local scripts and workflow env.
+- CI baseline (current): GitHub workflows use `GOV_PRIMARY_BRANCHES=pi,lie`.
 
 ## Emergency lane (time-boxed)
 - Pattern: `hotfix/<base>/<ticket>/<expires_utc_yyyymmddhhmm>` where `<base>` is in `GOV_PRIMARY_BRANCHES`.

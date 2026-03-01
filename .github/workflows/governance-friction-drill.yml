@@ -40,6 +40,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GOV_PRIMARY_BRANCHES: pi,lie
         run: |
           set -euo pipefail
           repo_input="${{ inputs.target_repo }}"
