@@ -35,7 +35,7 @@
 
 Current baseline (applied on 2026-03-01):
 - `required_status_checks.strict = true`
-- `required_status_checks.contexts = ["enforce-branch-policy"]`
+- `required_status_checks.contexts = ["enforce-branch-policy", "hotfix-pr-gate"]`
 - `required_linear_history = true`
 - `allow_force_pushes = false`
 - `allow_deletions = false`
