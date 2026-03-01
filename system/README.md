@@ -340,13 +340,15 @@ python3 system/scripts/validate_term_atoms.py
 
 # 通过测试后自动提交并推送到 GitHub（需先配置 origin 远程）
 # 干跑（仅预览将提交的文件）
-./scripts/auto_git_sync.sh --dry-run
+./system/scripts/auto_git_sync.sh --dry-run
 # 正式执行（默认会先跑 validate-config + test-all）
-./scripts/auto_git_sync.sh --branch lie --message "chore(system): periodic sync"
+./system/scripts/auto_git_sync.sh --branch lie --message "chore(system): periodic sync"
 # 若是 Pi 侧改动，使用：
-./scripts/auto_git_sync.sh --branch pi --message "chore(system): periodic sync (pi)"
+./system/scripts/auto_git_sync.sh --branch pi --message "chore(system): periodic sync (pi)"
 # 可选：把 tests 日志也纳入提交
-./scripts/auto_git_sync.sh --include-logs
+./system/scripts/auto_git_sync.sh --include-logs
+# 可选：显式纳入 PROGRESS（默认不纳入，避免与后台自动化抢占）
+./system/scripts/auto_git_sync.sh --include-progress
 # 安装本地 pre-push 分支门禁（允许 main/pi/lie + 受控 hotfix）
 ./scripts/install_branch_guard_hook.sh
 # 紧急分支（最多24小时）：
