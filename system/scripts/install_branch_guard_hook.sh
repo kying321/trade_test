@@ -19,7 +19,7 @@ if [[ -z "$repo_root" ]]; then
 fi
 
 branch_name="$(git branch --show-current 2>/dev/null || true)"
-"${repo_root}/system/scripts/branch_policy_guard.sh" --source pre-push --branch "${branch_name}"
+bash "${repo_root}/system/scripts/branch_policy_guard.sh" --source pre-push --branch "${branch_name}"
 HOOK
 
 chmod +x "$hook_path"
