@@ -46,3 +46,11 @@ Current baseline (applied on 2026-03-01):
   - `bash system/scripts/hotfix_reaper.sh --mode report`
 - Enforce reap:
   - `bash system/scripts/hotfix_reaper.sh --mode reap`
+
+## Governance drill & audit
+- Friction drill (destructive, creates/cleans probe PRs and branches):
+  - `bash system/scripts/branch_governance_friction.sh --confirm-destructive`
+- Non-destructive audit:
+  - `bash system/scripts/branch_governance_audit.sh`
+- GitHub scheduled audit workflow:
+  - `.github/workflows/governance-health-audit.yml` (hourly + manual dispatch)
