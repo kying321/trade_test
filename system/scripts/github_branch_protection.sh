@@ -4,13 +4,13 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/github_branch_protection.sh check [--repo owner/name] [--profile minimal|strict] [--context NAME]
-  scripts/github_branch_protection.sh apply [--repo owner/name] [--profile minimal|strict] [--context NAME]
+  scripts/github_branch_protection.sh check [--repo owner/name] [--profile minimal|strict] [--contexts CSV]
+  scripts/github_branch_protection.sh apply [--repo owner/name] [--profile minimal|strict] [--contexts CSV]
 
 Behavior:
   - check: print current protection posture for main/pi/lie, exit non-zero if posture is non-compliant.
   - apply: enforce policy on main/pi/lie:
-      * required status checks: enforce-branch-policy (strict)
+      * required status checks: enforce-branch-policy + hotfix-pr-gate (strict)
       * required linear history: true
       * allow force pushes: false
       * allow deletions: false
@@ -18,13 +18,16 @@ Behavior:
 Profiles:
   - minimal: keeps admin bypass enabled.
   - strict:  disables admin bypass and requires conversation resolution.
+
+Defaults:
+  - contexts=enforce-branch-policy,hotfix-pr-gate
 USAGE
 }
 
 mode="check"
 repo=""
 profile="minimal"
-required_context="enforce-branch-policy"
+required_contexts_csv="enforce-branch-policy,hotfix-pr-gate"
 
 # Simple token bucket for outbound API traffic.
 bucket_capacity=5
@@ -103,7 +106,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --context)
       shift
-      required_context="${1:-}"
+      required_contexts_csv="${1:-}"
+      ;;
+    --contexts)
+      shift
+      required_contexts_csv="${1:-}"
       ;;
     -h|--help)
       usage
@@ -149,6 +156,17 @@ case "$profile" in
     ;;
 esac
 
+if [[ -z "${required_contexts_csv}" ]]; then
+  echo "ERROR: contexts cannot be empty. Use --contexts check1,check2." >&2
+  exit 2
+fi
+
+required_contexts_json="$(printf '%s' "${required_contexts_csv}" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length>0))')"
+if [[ "$(printf '%s' "${required_contexts_json}" | jq 'length')" -eq 0 ]]; then
+  echo "ERROR: contexts list is empty after parsing." >&2
+  exit 2
+fi
+
 tmp_payload="$(mktemp)"
 tmp_resp="$(mktemp -d)"
 trap 'rm -f "$tmp_payload"; rm -rf "$tmp_resp"' EXIT
@@ -164,7 +182,7 @@ cat >"$tmp_payload" <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["__REQUIRED_CONTEXT__"]
+    "contexts": __REQUIRED_CONTEXTS_JSON__
   },
   "enforce_admins": __ENFORCE_ADMINS__,
   "required_pull_request_reviews": null,
@@ -180,7 +198,7 @@ cat >"$tmp_payload" <<'JSON'
 JSON
 
 sed -i.bak \
-  -e "s/__REQUIRED_CONTEXT__/${required_context}/g" \
+  -e "s|__REQUIRED_CONTEXTS_JSON__|${required_contexts_json}|g" \
   -e "s/__ENFORCE_ADMINS__/${enforce_admins}/g" \
   -e "s/__REQUIRED_CONVERSATION_RESOLUTION__/${required_conversation_resolution}/g" \
   "$tmp_payload"
@@ -219,6 +237,7 @@ for branch in "${branches[@]}"; do
   force="$(jq -r '.allow_force_pushes.enabled' <"${tmp_resp}/branch_${branch}.json")"
   admins="$(jq -r '.enforce_admins.enabled' <"${tmp_resp}/branch_${branch}.json")"
   conv="$(jq -r '.required_conversation_resolution.enabled' <"${tmp_resp}/branch_${branch}.json")"
+  contexts_json="$(jq -c '.required_status_checks.contexts' <"${tmp_resp}/branch_${branch}.json")"
   contexts="$(jq -r '.required_status_checks.contexts | join(",")' <"${tmp_resp}/branch_${branch}.json")"
 
   printf '%-8s %-10s %-6s %-6s %-6s %-6s %-10s %-24s\n' "$branch" "YES" "$strict" "$linear" "$force" "$admins" "$conv" "${contexts:-none}"
@@ -226,7 +245,11 @@ for branch in "${branches[@]}"; do
   if [[ "$strict" != "true" || "$linear" != "true" || "$force" != "false" ]]; then
     fail=1
   fi
-  if [[ "$contexts" != *"${required_context}"* ]]; then
+  missing_count="$(jq -n \
+    --argjson required "${required_contexts_json}" \
+    --argjson actual "${contexts_json}" \
+    '$required - $actual | length')"
+  if [[ "${missing_count}" -ne 0 ]]; then
     fail=1
   fi
   if [[ "$profile" == "strict" && ( "$admins" != "true" || "$conv" != "true" ) ]]; then
@@ -235,12 +258,12 @@ for branch in "${branches[@]}"; do
 done
 
 if [[ "$mode" == "check" && $fail -ne 0 ]]; then
-  echo "ERROR: branch protection posture not compliant (profile=${profile}, context=${required_context})." >&2
+  echo "ERROR: branch protection posture not compliant (profile=${profile}, contexts=${required_contexts_csv})." >&2
   exit 2
 fi
 
 if [[ "$mode" == "apply" ]]; then
-  echo "[branch-protection] applied policy to ${repo} (main/pi/lie, profile=${profile}, context=${required_context})"
+  echo "[branch-protection] applied policy to ${repo} (main/pi/lie, profile=${profile}, contexts=${required_contexts_csv})"
 else
-  echo "[branch-protection] check complete for ${repo} (profile=${profile}, context=${required_context})"
+  echo "[branch-protection] check complete for ${repo} (profile=${profile}, contexts=${required_contexts_csv})"
 fi
