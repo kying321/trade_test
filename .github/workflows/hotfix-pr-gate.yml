@@ -1,0 +1,50 @@
+name: Hotfix PR Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+      - pi
+      - lie
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+jobs:
+  hotfix-pr-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      - name: Validate hotfix branch to base mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          head_branch="${{ github.event.pull_request.head.ref }}"
+          base_branch="${{ github.event.pull_request.base.ref }}"
+
+          if [[ ! "${head_branch}" =~ ^hotfix/ ]]; then
+            echo "[hotfix-pr-gate] skip non-hotfix PR head=${head_branch} base=${base_branch}"
+            exit 0
+          fi
+
+          if [[ ! "${head_branch}" =~ ^hotfix/(main|pi|lie)/([A-Za-z0-9._-]+)/([0-9]{12})$ ]]; then
+            echo "ERROR: invalid hotfix branch pattern: ${head_branch}" >&2
+            exit 2
+          fi
+
+          expected_base="${BASH_REMATCH[1]}"
+          if [[ "${base_branch}" != "${expected_base}" ]]; then
+            echo "ERROR: hotfix base mismatch. head=${head_branch} expects base=${expected_base} but PR targets ${base_branch}." >&2
+            exit 2
+          fi
+
+          ./system/scripts/branch_policy_guard.sh --source hotfix-pr-gate --branch "${head_branch}"
+          echo "[hotfix-pr-gate] PASS head=${head_branch} base=${base_branch}"
