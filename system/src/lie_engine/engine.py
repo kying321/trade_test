@@ -1660,6 +1660,7 @@ class LieEngine:
         *,
         as_of: date,
         symbols: list[str],
+        override_symbols: list[str] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
         val = self.settings.validation
         enabled = bool(val.get("microstructure_signal_enabled", True))
@@ -1669,7 +1670,8 @@ class LieEngine:
             target_symbols = [str(x).strip() for x in raw_targets if str(x).strip()]
         elif isinstance(raw_targets, str):
             target_symbols = [x.strip() for x in raw_targets.split(",") if x.strip()]
-        scan_symbols = target_symbols if target_symbols else symbols
+        explicit_symbols = self._normalize_symbols(list(override_symbols)) if isinstance(override_symbols, list) else []
+        scan_symbols = explicit_symbols if explicit_symbols else (target_symbols if target_symbols else symbols)
         if not enabled or not scan_symbols:
             return {}, []
 
@@ -1686,12 +1688,39 @@ class LieEngine:
         end_ts = self._sampling_window_end_ts(as_of)
         start_ts = end_ts - timedelta(minutes=lookback_minutes)
 
+        provider_pool: list[Any] = []
+        provider_names: set[str] = set()
+        for provider in self.providers:
+            source_name = str(getattr(provider, "name", "")).strip().lower()
+            key = source_name if source_name else f"provider_{id(provider)}"
+            if key in provider_names:
+                continue
+            provider_names.add(key)
+            provider_pool.append(provider)
+
+        # Keep micro snapshots available on default opensource profiles by hot-loading
+        # configured exchange providers (same behavior as cross-source audit path).
+        build_missing = bool(val.get("micro_cross_source_build_missing_provider", False))
+        if build_missing:
+            for raw_name in (
+                val.get("micro_cross_source_primary", "binance_spot_public"),
+                val.get("micro_cross_source_secondary", "bybit_spot_public"),
+            ):
+                provider_name = str(raw_name).strip().lower()
+                if not provider_name or provider_name in provider_names:
+                    continue
+                built = self._build_provider_by_name(provider_name)
+                if built is None:
+                    continue
+                provider_names.add(provider_name)
+                provider_pool.append(built)
+
         out: dict[str, dict[str, Any]] = {}
         source_rows: list[dict[str, Any]] = []
         for symbol in scan_symbols:
             best_state: dict[str, Any] | None = None
             best_rank = -1e9
-            for provider in self.providers:
+            for provider in provider_pool:
                 source_name = str(getattr(provider, "name", ""))
                 try:
                     l2 = provider.fetch_l2(symbol=symbol, start_ts=start_ts, end_ts=end_ts, depth=depth)
@@ -2332,6 +2361,265 @@ class LieEngine:
             "hard_fuse_enabled": bool(probe.get("hard_fuse_enabled", False)),
             "artifact": str(probe.get("artifact_path", "")),
             "sources": list(probe.get("sources", [])),
+        }
+
+    @staticmethod
+    def _normalize_symbols(raw_symbols: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in raw_symbols:
+            sym = re.sub(r"[^A-Za-z0-9]", "", str(raw or "").upper()).strip()
+            if (not sym) or (sym in seen):
+                continue
+            seen.add(sym)
+            out.append(sym)
+        return out
+
+    def _resolve_micro_capture_symbols(self, *, symbols: list[str] | None = None) -> list[str]:
+        if isinstance(symbols, list) and symbols:
+            return self._normalize_symbols(symbols)
+
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        candidates: list[str] = []
+        raw_cross = val.get("micro_cross_source_symbols", [])
+        if isinstance(raw_cross, (list, tuple)):
+            candidates.extend(str(x) for x in raw_cross)
+        elif isinstance(raw_cross, str):
+            candidates.extend(x.strip() for x in raw_cross.split(","))
+
+        if not candidates:
+            raw_micro = val.get("microstructure_symbols", [])
+            if isinstance(raw_micro, (list, tuple)):
+                candidates.extend(str(x) for x in raw_micro)
+            elif isinstance(raw_micro, str):
+                candidates.extend(x.strip() for x in raw_micro.split(","))
+
+        if not candidates:
+            candidates.extend(self._core_symbols())
+        return self._normalize_symbols(candidates)
+
+    def _micro_capture_rolling_stats(self, *, as_of: date, lookback_days: int = 7) -> dict[str, Any]:
+        if not self.ctx.sqlite_path.exists():
+            return {
+                "lookback_days": int(max(1, lookback_days)),
+                "run_count": 0,
+                "pass_ratio": 0.0,
+                "avg_cross_source_fail_ratio": 0.0,
+                "avg_selected_schema_ok_ratio": 0.0,
+                "avg_selected_time_sync_ok_ratio": 0.0,
+            }
+        cutoff = (as_of - timedelta(days=max(1, int(lookback_days)))).isoformat()
+        try:
+            with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+                df = pd.read_sql_query(
+                    (
+                        "SELECT pass, cross_source_fail_ratio, selected_schema_ok_ratio, "
+                        "selected_time_sync_ok_ratio FROM micro_capture_runs WHERE as_of >= ?"
+                    ),
+                    conn,
+                    params=(cutoff,),
+                )
+        except Exception:
+            df = pd.DataFrame()
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return {
+                "lookback_days": int(max(1, lookback_days)),
+                "run_count": 0,
+                "pass_ratio": 0.0,
+                "avg_cross_source_fail_ratio": 0.0,
+                "avg_selected_schema_ok_ratio": 0.0,
+                "avg_selected_time_sync_ok_ratio": 0.0,
+            }
+        pass_vals = pd.to_numeric(df.get("pass", 0), errors="coerce").fillna(0.0)
+        fail_vals = pd.to_numeric(df.get("cross_source_fail_ratio", 0.0), errors="coerce").fillna(0.0)
+        schema_vals = pd.to_numeric(df.get("selected_schema_ok_ratio", 0.0), errors="coerce").fillna(0.0)
+        time_vals = pd.to_numeric(df.get("selected_time_sync_ok_ratio", 0.0), errors="coerce").fillna(0.0)
+        return {
+            "lookback_days": int(max(1, lookback_days)),
+            "run_count": int(len(df)),
+            "pass_ratio": float(np.clip(pass_vals.mean(), 0.0, 1.0)),
+            "avg_cross_source_fail_ratio": float(np.clip(fail_vals.mean(), 0.0, 1.0)),
+            "avg_selected_schema_ok_ratio": float(np.clip(schema_vals.mean(), 0.0, 1.0)),
+            "avg_selected_time_sync_ok_ratio": float(np.clip(time_vals.mean(), 0.0, 1.0)),
+        }
+
+    def run_micro_capture(self, *, as_of: date, symbols: list[str] | None = None) -> dict[str, Any]:
+        target_symbols = self._resolve_micro_capture_symbols(symbols=symbols)
+        micro_factor_map, micro_source_rows = self._collect_micro_factor_map_with_rows(
+            as_of=as_of,
+            symbols=target_symbols,
+            override_symbols=target_symbols,
+        )
+        cross_source_audit = self._collect_cross_source_audit(as_of=as_of, symbols=target_symbols)
+        system_time_sync_probe = self._collect_system_time_sync_probe(as_of=as_of)
+        self._persist_system_time_sync_probe(as_of=as_of, probe=system_time_sync_probe)
+
+        run_ts = datetime.now(tz=timezone.utc).replace(microsecond=0)
+        run_ts_utc = run_ts.isoformat()
+        stamp = run_ts.strftime("%Y%m%dT%H%M%SZ")
+
+        selected_rows: list[dict[str, Any]] = []
+        for symbol, state in micro_factor_map.items():
+            if not isinstance(state, dict):
+                continue
+            selected_rows.append(
+                {
+                    "symbol": str(symbol),
+                    "source": str(state.get("source", "")),
+                    "has_data": bool(state.get("has_data", False)),
+                    "schema_ok": bool(state.get("schema_ok", False)),
+                    "sync_ok": bool(state.get("sync_ok", False)),
+                    "gap_ok": bool(state.get("gap_ok", False)),
+                    "trade_count": int(state.get("trade_count", 0)),
+                    "evidence_score": float(state.get("evidence_score", 0.0)),
+                    "queue_imbalance": float(state.get("queue_imbalance", 0.0)),
+                    "ofi_norm": float(state.get("ofi_norm", 0.0)),
+                    "micro_alignment": float(state.get("micro_alignment", 0.0)),
+                    "max_trade_gap_ms": int(state.get("max_trade_gap_ms", 0)),
+                    "sync_skew_ms": float(state.get("sync_skew_ms", 0.0)),
+                    "time_sync_available": bool(state.get("time_sync_available", False)),
+                    "time_sync_ok": bool(state.get("time_sync_ok", False)),
+                    "time_sync_offset_ms": int(state.get("time_sync_offset_ms", -1)),
+                    "time_sync_rtt_ms": int(state.get("time_sync_rtt_ms", -1)),
+                    "time_sync_max_offset_ms": int(state.get("time_sync_max_offset_ms", 0)),
+                    "time_sync_max_rtt_ms": int(state.get("time_sync_max_rtt_ms", 0)),
+                }
+            )
+
+        selected_count = int(len(selected_rows))
+        schema_ok_ratio = float(
+            sum(1 for r in selected_rows if bool(r.get("schema_ok", False))) / max(1, selected_count)
+        )
+        time_sync_ok_ratio = float(
+            sum(1 for r in selected_rows if bool(r.get("time_sync_ok", False))) / max(1, selected_count)
+        )
+        sync_ok_ratio = float(sum(1 for r in selected_rows if bool(r.get("sync_ok", False))) / max(1, selected_count))
+
+        cross_active = bool(cross_source_audit.get("active", False))
+        cross_status = str(cross_source_audit.get("status", ""))
+        cross_fail_ratio = float(cross_source_audit.get("fail_ratio", 0.0))
+        max_fail_ratio = self._clamp_float(float(self.settings.validation.get("micro_cross_source_max_fail_ratio", 0.50)), 0.0, 1.0)
+        cross_ok = (not cross_active) or (cross_status == "insufficient_samples") or (cross_fail_ratio <= max_fail_ratio)
+        system_time_ok = (not bool(system_time_sync_probe.get("enabled", False))) or bool(system_time_sync_probe.get("pass", False))
+        capture_pass = bool(cross_ok and system_time_ok)
+        status = "ok" if capture_pass else "degraded"
+        if selected_count == 0 and (not cross_active):
+            status = "no_micro_data"
+
+        capture_payload = {
+            "captured_at_utc": run_ts_utc,
+            "as_of": as_of.isoformat(),
+            "symbols_requested": int(len(target_symbols)),
+            "symbols_selected": int(selected_count),
+            "status": status,
+            "pass": bool(capture_pass),
+            "summary": {
+                "selected_schema_ok_ratio": float(schema_ok_ratio),
+                "selected_time_sync_ok_ratio": float(time_sync_ok_ratio),
+                "selected_sync_ok_ratio": float(sync_ok_ratio),
+                "cross_source_active": bool(cross_active),
+                "cross_source_status": cross_status,
+                "cross_source_fail_ratio": float(cross_fail_ratio),
+                "cross_source_fail_ratio_limit": float(max_fail_ratio),
+                "cross_source_symbols_audited": int(cross_source_audit.get("symbols_audited", 0)),
+                "cross_source_symbols_insufficient": int(cross_source_audit.get("symbols_insufficient", 0)),
+                "system_time_sync_enabled": bool(system_time_sync_probe.get("enabled", False)),
+                "system_time_sync_pass": bool(system_time_sync_probe.get("pass", False)),
+                "system_time_sync_ok_sources": int(system_time_sync_probe.get("ok_sources", 0)),
+                "system_time_sync_available_sources": int(system_time_sync_probe.get("available_sources", 0)),
+            },
+            "selected_micro": selected_rows,
+            "source_rows": list(micro_source_rows),
+            "cross_source_audit": cross_source_audit,
+            "system_time_sync": system_time_sync_probe,
+        }
+
+        artifact_dir = self.ctx.output_dir / "artifacts" / "micro_capture"
+        artifact_path = artifact_dir / f"{stamp}_micro_capture.json"
+        write_json(artifact_path, capture_payload)
+
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "micro_capture_runs",
+            pd.DataFrame(
+                [
+                    {
+                        "run_ts_utc": run_ts_utc,
+                        "as_of": as_of.isoformat(),
+                        "status": status,
+                        "pass": int(1 if capture_pass else 0),
+                        "symbols_requested": int(len(target_symbols)),
+                        "symbols_selected": int(selected_count),
+                        "source_rows": int(len(micro_source_rows)),
+                        "cross_source_active": bool(cross_active),
+                        "cross_source_status": cross_status,
+                        "cross_source_fail_ratio": float(cross_fail_ratio),
+                        "cross_source_fail_ratio_limit": float(max_fail_ratio),
+                        "cross_source_symbols_audited": int(cross_source_audit.get("symbols_audited", 0)),
+                        "cross_source_symbols_insufficient": int(cross_source_audit.get("symbols_insufficient", 0)),
+                        "system_time_sync_enabled": bool(system_time_sync_probe.get("enabled", False)),
+                        "system_time_sync_pass": bool(system_time_sync_probe.get("pass", False)),
+                        "system_time_sync_ok_sources": int(system_time_sync_probe.get("ok_sources", 0)),
+                        "system_time_sync_available_sources": int(system_time_sync_probe.get("available_sources", 0)),
+                        "selected_schema_ok_ratio": float(schema_ok_ratio),
+                        "selected_time_sync_ok_ratio": float(time_sync_ok_ratio),
+                        "selected_sync_ok_ratio": float(sync_ok_ratio),
+                        "artifact_path": str(artifact_path),
+                    }
+                ]
+            ),
+        )
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "micro_capture_source_state",
+            (
+                pd.DataFrame([{"run_ts_utc": run_ts_utc, "as_of": as_of.isoformat()} | row for row in micro_source_rows])
+                if micro_source_rows
+                else pd.DataFrame()
+            ),
+        )
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "micro_capture_symbol_state",
+            (
+                pd.DataFrame([{"run_ts_utc": run_ts_utc, "as_of": as_of.isoformat()} | row for row in selected_rows])
+                if selected_rows
+                else pd.DataFrame()
+            ),
+        )
+        cross_rows = cross_source_audit.get("rows", []) if isinstance(cross_source_audit.get("rows", []), list) else []
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "micro_capture_cross_source",
+            (
+                pd.DataFrame(
+                    [
+                        {
+                            "run_ts_utc": run_ts_utc,
+                            "as_of": as_of.isoformat(),
+                            "primary_source": str(cross_source_audit.get("primary_source", "")),
+                            "secondary_source": str(cross_source_audit.get("secondary_source", "")),
+                            "audit_status": str(cross_source_audit.get("status", "")),
+                        }
+                        | (row if isinstance(row, dict) else {})
+                        for row in cross_rows
+                    ]
+                )
+                if cross_rows
+                else pd.DataFrame()
+            ),
+        )
+
+        rolling = self._micro_capture_rolling_stats(as_of=as_of, lookback_days=7)
+        return {
+            "as_of": as_of.isoformat(),
+            "captured_at_utc": run_ts_utc,
+            "status": status,
+            "pass": bool(capture_pass),
+            "symbols": list(target_symbols),
+            "summary": dict(capture_payload.get("summary", {})),
+            "rolling_7d": rolling,
+            "artifact": str(artifact_path),
         }
 
     def run_eod(self, as_of: date) -> dict[str, Any]:

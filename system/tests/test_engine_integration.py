@@ -125,6 +125,178 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertFalse(daily.empty)
         self.assertFalse(rows.empty)
 
+    def test_collect_micro_factor_map_builds_missing_cross_source_providers(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.providers = []
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["micro_cross_source_build_missing_provider"] = True
+        eng.settings.raw["validation"]["micro_cross_source_primary"] = "binance_spot_public"
+        eng.settings.raw["validation"]["micro_cross_source_secondary"] = "bybit_spot_public"
+        eng.settings.raw["validation"]["microstructure_symbols"] = ["BTCUSDT"]
+        eng.settings.raw["validation"]["micro_min_trade_count"] = 1
+
+        def _mk_provider(name: str):
+            class _P:
+                def __init__(self, n: str) -> None:
+                    self.name = n
+
+                def fetch_l2(self, symbol, start_ts, end_ts, depth=20):  # noqa: ANN001
+                    now_ms = int(datetime(2026, 2, 13, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+                    return pd.DataFrame(
+                        [
+                            {
+                                "exchange": n,
+                                "symbol": symbol,
+                                "event_ts_ms": now_ms,
+                                "recv_ts_ms": now_ms,
+                                "seq": 100,
+                                "prev_seq": 99,
+                                "bids": [[100.0, 1.0]],
+                                "asks": [[100.2, 1.2]],
+                                "source": n,
+                            }
+                        ]
+                    )
+
+                def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # noqa: ANN001
+                    base_ms = int(datetime(2026, 2, 13, 11, 59, 0, tzinfo=timezone.utc).timestamp() * 1000)
+                    return pd.DataFrame(
+                        [
+                            {
+                                "exchange": n,
+                                "symbol": symbol,
+                                "trade_id": f"{n}-1",
+                                "event_ts_ms": base_ms,
+                                "recv_ts_ms": base_ms + 10,
+                                "price": 100.1,
+                                "qty": 0.5,
+                                "side": "BUY",
+                                "source": n,
+                            },
+                            {
+                                "exchange": n,
+                                "symbol": symbol,
+                                "trade_id": f"{n}-2",
+                                "event_ts_ms": base_ms + 200,
+                                "recv_ts_ms": base_ms + 210,
+                                "price": 100.2,
+                                "qty": 0.4,
+                                "side": "SELL",
+                                "source": n,
+                            },
+                        ]
+                    )
+
+                def fetch_time_sync_sample(self):  # noqa: ANN001
+                    return {"source": n, "offset_ms": 1, "rtt_ms": 50}
+
+            n = str(name)
+            return _P(n)
+
+        provider_map = {
+            "binance_spot_public": _mk_provider("binance_spot_public"),
+            "bybit_spot_public": _mk_provider("bybit_spot_public"),
+        }
+        eng._build_provider_by_name = lambda name: provider_map.get(str(name))  # type: ignore[method-assign]
+
+        out, source_rows = eng._collect_micro_factor_map_with_rows(as_of=d, symbols=["BTCUSDT"])
+        self.assertIn("BTCUSDT", out)
+        sources = {str(x.get("source", "")) for x in source_rows}
+        self.assertIn("binance_spot_public", sources)
+        self.assertIn("bybit_spot_public", sources)
+
+    def test_run_micro_capture_writes_artifact_and_sqlite_rows(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+
+        eng._collect_micro_factor_map_with_rows = lambda as_of, symbols, override_symbols=None: (  # type: ignore[method-assign]
+            {
+                "BTCUSDT": {
+                    "source": "binance_spot_public",
+                    "has_data": True,
+                    "schema_ok": True,
+                    "sync_ok": True,
+                    "gap_ok": True,
+                    "trade_count": 120,
+                    "evidence_score": 0.9,
+                    "queue_imbalance": 0.2,
+                    "ofi_norm": 0.1,
+                    "micro_alignment": 0.15,
+                    "max_trade_gap_ms": 200,
+                    "sync_skew_ms": 8.0,
+                    "time_sync_available": True,
+                    "time_sync_ok": True,
+                    "time_sync_offset_ms": 1,
+                    "time_sync_rtt_ms": 40,
+                    "time_sync_max_offset_ms": 5,
+                    "time_sync_max_rtt_ms": 120,
+                }
+            },
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "source": "binance_spot_public",
+                    "has_data": True,
+                    "schema_ok": True,
+                    "sync_ok": True,
+                    "gap_ok": True,
+                    "trade_count": 120,
+                    "evidence_score": 0.9,
+                    "time_sync_available": True,
+                    "time_sync_ok": True,
+                    "time_sync_offset_ms": 1,
+                    "time_sync_rtt_ms": 40,
+                    "time_sync_max_offset_ms": 5,
+                    "time_sync_max_rtt_ms": 120,
+                }
+            ],
+        )
+        eng._collect_cross_source_audit = lambda as_of, symbols: {  # type: ignore[method-assign]
+            "enabled": True,
+            "active": True,
+            "status": "ok",
+            "primary_source": "binance_spot_public",
+            "secondary_source": "bybit_spot_public",
+            "symbols_selected": 1,
+            "symbols_audited": 1,
+            "symbols_insufficient": 0,
+            "fail_ratio": 0.0,
+            "rows": [
+                {
+                    "symbol": "BTCUSDT",
+                    "auditable": True,
+                    "row_status": "audited_pass",
+                    "sync_ok": True,
+                    "gap_ok": True,
+                }
+            ],
+        }
+        eng._collect_system_time_sync_probe = lambda as_of: {  # type: ignore[method-assign]
+            "enabled": True,
+            "active": True,
+            "status": "ok",
+            "pass": True,
+            "ok_sources": 1,
+            "available_sources": 2,
+            "sources": [{"source": "time.google.com", "available": True, "ok": True}],
+            "artifact_path": "",
+        }
+
+        out = eng.run_micro_capture(as_of=d, symbols=["BTCUSDT"])
+        self.assertEqual(str(out.get("status", "")), "ok")
+        artifact_path = Path(str(out.get("artifact", "")))
+        self.assertTrue(artifact_path.exists())
+        with closing(sqlite3.connect(tmp_root / "output" / "artifacts" / "lie_engine.db")) as conn:
+            runs = pd.read_sql_query("SELECT status, pass, symbols_selected FROM micro_capture_runs", conn)
+            src = pd.read_sql_query("SELECT symbol, source FROM micro_capture_source_state", conn)
+            sel = pd.read_sql_query("SELECT symbol, source FROM micro_capture_symbol_state", conn)
+            cross = pd.read_sql_query("SELECT symbol, audit_status FROM micro_capture_cross_source", conn)
+        self.assertFalse(runs.empty)
+        self.assertFalse(src.empty)
+        self.assertFalse(sel.empty)
+        self.assertFalse(cross.empty)
+
     def test_market_factor_state_includes_cross_section_style(self) -> None:
         eng, _ = self._make_engine()
         bars = make_multi_symbol_bars()

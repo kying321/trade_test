@@ -2,6 +2,13 @@
 
 ## Current State (2026-02-15)
 - Architecture loop is active: data -> regime -> signal -> risk -> backtest -> review -> gate.
+- Continuous micro truth capture is online:
+  - CLI: `lie micro-capture --date YYYY-MM-DD [--symbols BTCUSDT,ETHUSDT]`.
+  - writes run artifact: `output/artifacts/micro_capture/*_micro_capture.json`.
+  - writes sqlite tables: `micro_capture_runs / micro_capture_source_state / micro_capture_symbol_state / micro_capture_cross_source`.
+  - returns rolling 7-day quality snapshot (`pass_ratio`, `avg_cross_source_fail_ratio`, `schema/time_sync ratios`).
+- Micro factor collection now supports hot-loading configured cross-source providers when
+  `validation.micro_cross_source_build_missing_provider=true`, even if `data.provider_profile` is opensource-only.
 - Mode feedback artifact is online: `output/daily/YYYY-MM-DD_mode_feedback.json`.
 - Mode health gate is online: `gate_report.checks.mode_health_ok`.
 - Execution risk throttle is online:

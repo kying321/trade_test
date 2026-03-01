@@ -15,6 +15,7 @@ docs/TIME_SYNC_RUNBOOK.md
 ```bash
 python3 -m pip install -e .
 lie run-eod --date 2026-02-13
+lie micro-capture --date 2026-02-13 --symbols BTCUSDT,ETHUSDT
 lie test-all
 # 快速子样本测试（确定性）
 lie test-all --fast --fast-ratio 0.10
