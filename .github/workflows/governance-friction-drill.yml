@@ -1,0 +1,59 @@
+name: Governance Friction Drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_destructive:
+        description: "Set true to run destructive governance drill"
+        required: true
+        type: boolean
+        default: false
+      target_repo:
+        description: "owner/name (optional, defaults to current repository)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  governance-friction-drill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Require explicit destructive confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.confirm_destructive }}" != "true" ]]; then
+            echo "ERROR: confirm_destructive must be true." >&2
+            exit 2
+          fi
+
+      - name: Run governance friction drill
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_input="${{ inputs.target_repo }}"
+          target_repo="${repo_input:-${GITHUB_REPOSITORY}}"
+          chmod +x ./system/scripts/branch_governance_friction.sh
+          ./system/scripts/branch_governance_friction.sh \
+            --repo "${target_repo}" \
+            --confirm-destructive
+
+      - name: Upload governance friction artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: governance-friction-drill
+          path: |
+            system/output/review/*_branch_governance_friction_evidence.json
+            system/output/review/*_branch_governance_friction_evidence.md
