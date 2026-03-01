@@ -347,6 +347,7 @@ python3 system/scripts/validate_term_atoms.py
 ./system/scripts/auto_git_sync.sh --branch pi --message "chore(system): periodic sync (pi)"
 # 若请求分支被策略拒绝，可显式回退到主分支（例如 lie）：
 ./system/scripts/auto_git_sync.sh --branch codex/auto-sync --fallback-branch lie --message "chore(system): periodic sync"
+# 若未传 --fallback-branch，脚本会自动回退到“当前允许分支（优先）/lie（兜底）”
 # 可选：把 tests 日志也纳入提交
 ./system/scripts/auto_git_sync.sh --include-logs
 # 可选：显式纳入 PROGRESS（默认不纳入，避免与后台自动化抢占）
