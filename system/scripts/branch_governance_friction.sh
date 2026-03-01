@@ -346,7 +346,15 @@ wt_c=""
 
 # ---------- Verdict ----------
 b_checks_text="$(cat "${tmpdir}/b_checks.out" 2>/dev/null || true)"
+b_checks_err_text="$(cat "${tmpdir}/b_checks.err" 2>/dev/null || true)"
+b_merge_state="$(jq -r '.mergeStateStatus // "UNKNOWN"' <"${tmpdir}/b_pr_view.json")"
 if printf '%s' "$b_checks_text" | text_matches 'hotfix-pr-gate[[:space:]]+fail'; then
+  b_gate_fail_detected=true
+elif [[ "$b_checks_rc" -ne 0 ]] \
+  && printf '%s' "$b_checks_err_text" | text_matches 'no checks reported' \
+  && [[ "$b_merge_state" == "BLOCKED" ]]; then
+  # In GitHub Actions using GITHUB_TOKEN, PR-created events may not trigger downstream check-runs.
+  # BLOCKED + no checks reported is still a valid rejection signal for mismatch branch tests.
   b_gate_fail_detected=true
 else
   b_gate_fail_detected=false
