@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib_branch_targets.sh"
+
 usage() {
-  cat <<'EOF'
+  local primary_branches
+  primary_branches="$(gov_primary_branches_join '/')"
+  cat <<'EOF' | sed -e "s|__PRIMARY_BRANCHES__|${primary_branches}|g"
 Usage: scripts/auto_git_sync.sh [options]
 
 Options:
@@ -10,7 +15,7 @@ Options:
   --skip-tests        Skip `lie validate-config` + `lie test-all`.
   --include-logs      Include `system/output/logs/tests_*.json` in commit.
   --no-review-files   Do not include `system/output/review/*` files.
-  --branch NAME       Target git branch (`main`/`pi`/`lie`).
+  --branch NAME       Target git branch (`__PRIMARY_BRANCHES__`).
   --message TEXT      Commit message.
   -h, --help          Show this help.
 EOF
@@ -24,10 +29,7 @@ branch_name="${AUTO_GIT_BRANCH:-lie}"
 commit_message="${AUTO_GIT_MESSAGE:-chore(system): automated sync $(date '+%Y-%m-%d %H:%M:%S')}"
 
 is_allowed_branch() {
-  case "$1" in
-    main|pi|lie) return 0 ;;
-    *) return 1 ;;
-  esac
+  gov_is_primary_branch "$1"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -71,7 +73,7 @@ if [[ -z "$branch_name" ]]; then
 fi
 if ! is_allowed_branch "$branch_name"; then
   echo "ERROR: branch '$branch_name' is blocked." >&2
-  echo "Allowed branches: main, pi, lie" >&2
+  echo "Allowed branches: $(gov_primary_branches_join ', ')" >&2
   exit 2
 fi
 if [[ -z "$commit_message" ]]; then
