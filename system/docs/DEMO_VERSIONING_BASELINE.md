@@ -150,7 +150,7 @@ graph LR
   - `main`：稳定基线。
   - `pi`：Pi/OpenClaw 主线。
   - `lie`：LiE 交易引擎主线。
-  - `hotfix/<main|pi|lie>/<ticket>/<expires_utc_yyyymmddhhmm>`：紧急修复分支（最长 24 小时，必须带审批 trailer）。
+  - `hotfix/<base>/<ticket>/<expires_utc_yyyymmddhhmm>`：紧急修复分支（最长 24 小时，必须带审批 trailer；`<base>` 必须在 `GOV_PRIMARY_BRANCHES` 中，默认 `main,pi,lie`）。
 - 提交粒度：一个模块一个意图，避免“代码+大量输出文件”混提。
 - 提交信息模板：
   - `feat(module): ...`

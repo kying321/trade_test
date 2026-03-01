@@ -2,18 +2,21 @@
 set -euo pipefail
 
 readonly HOTFIX_MAX_HOURS=24
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib_branch_targets.sh"
 
 usage() {
-  cat <<'USAGE'
+  local primary_branches hotfix_pattern
+  primary_branches="$(gov_primary_branches_join ', ')"
+  hotfix_pattern="$(gov_hotfix_pattern_human)"
+  cat <<USAGE
 Usage: scripts/branch_policy_guard.sh [--branch NAME] [--source NAME]
 
 Valid branches:
-  - main
-  - pi
-  - lie
+  - ${primary_branches}
 
 Emergency branch (time-boxed):
-  - hotfix/<main|pi|lie>/<ticket>/<expires_utc_yyyymmddhhmm>
+  - ${hotfix_pattern}
 
 Hotfix requirements:
   - Expires within 24 hours from now.
@@ -25,15 +28,14 @@ USAGE
 }
 
 is_primary_branch() {
-  case "$1" in
-    main|pi|lie) return 0 ;;
-    *) return 1 ;;
-  esac
+  gov_is_primary_branch "$1"
 }
 
 parse_hotfix_branch() {
   local b="$1"
-  if [[ "$b" =~ ^hotfix/(main|pi|lie)/([A-Za-z0-9._-]+)/([0-9]{12})$ ]]; then
+  local hotfix_regex
+  hotfix_regex="$(gov_hotfix_branch_regex)"
+  if [[ "$b" =~ $hotfix_regex ]]; then
     HOTFIX_BASE="${BASH_REMATCH[1]}"
     HOTFIX_TICKET="${BASH_REMATCH[2]}"
     HOTFIX_EXPIRES="${BASH_REMATCH[3]}"
@@ -149,5 +151,5 @@ if parse_hotfix_branch "$branch_name"; then
 fi
 
 echo "ERROR: branch '${branch_name}' is blocked by policy (source=${source_name})." >&2
-echo "Allowed branches: main, pi, lie, hotfix/<main|pi|lie>/<ticket>/<yyyymmddhhmm>" >&2
+echo "Allowed branches: $(gov_primary_branches_join ', '), $(gov_hotfix_pattern_human)" >&2
 exit 2
