@@ -295,6 +295,15 @@ validation:
   execution_crypto_stress_full_scale: 1.00
   execution_cross_source_stress_risk_multiplier: 0.70
   execution_cross_source_stress_full_scale: 1.00
+  execution_micro_capture_risk_enabled: true
+  execution_micro_capture_risk_multiplier: 0.75
+  execution_micro_capture_insufficient_sample_risk_multiplier: 0.90
+  execution_micro_capture_lookback_days: 7
+  execution_micro_capture_min_runs: 4
+  execution_micro_capture_pass_ratio_min: 0.70
+  execution_micro_capture_schema_ok_ratio_min: 0.90
+  execution_micro_capture_time_sync_ok_ratio_min: 0.90
+  execution_micro_capture_cross_source_fail_ratio_max: 0.35
   test_all_timeout_seconds: 1800
   review_loop_fast_test_enabled: true
   review_loop_fast_ratio: 0.10

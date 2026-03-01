@@ -115,6 +115,15 @@ lie review --date 2026-02-13
 # validation.execution_crypto_stress_full_scale: 1.00
 # validation.execution_cross_source_stress_risk_multiplier: 0.70
 # validation.execution_cross_source_stress_full_scale: 1.00
+# validation.execution_micro_capture_risk_enabled: true
+# validation.execution_micro_capture_risk_multiplier: 0.75
+# validation.execution_micro_capture_insufficient_sample_risk_multiplier: 0.90
+# validation.execution_micro_capture_lookback_days: 7
+# validation.execution_micro_capture_min_runs: 4
+# validation.execution_micro_capture_pass_ratio_min: 0.70
+# validation.execution_micro_capture_schema_ok_ratio_min: 0.90
+# validation.execution_micro_capture_time_sync_ok_ratio_min: 0.90
+# validation.execution_micro_capture_cross_source_fail_ratio_max: 0.35
 # 状态稳定性与相变预警（ops-report）：
 # validation.mode_switch_window_days: 20
 # validation.mode_switch_max_rate: 0.45

@@ -155,6 +155,18 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
     execution_crypto_stress_full_scale = _as_float(val.get("execution_crypto_stress_full_scale", 1.0))
     execution_cross_source_stress_risk_multiplier = _as_float(val.get("execution_cross_source_stress_risk_multiplier", 0.70))
     execution_cross_source_stress_full_scale = _as_float(val.get("execution_cross_source_stress_full_scale", 1.0))
+    execution_micro_capture_risk_multiplier = _as_float(val.get("execution_micro_capture_risk_multiplier", 0.75))
+    execution_micro_capture_insufficient_sample_risk_multiplier = _as_float(
+        val.get("execution_micro_capture_insufficient_sample_risk_multiplier", 0.90)
+    )
+    execution_micro_capture_pass_ratio_min = _as_float(val.get("execution_micro_capture_pass_ratio_min", 0.70))
+    execution_micro_capture_schema_ok_ratio_min = _as_float(val.get("execution_micro_capture_schema_ok_ratio_min", 0.90))
+    execution_micro_capture_time_sync_ok_ratio_min = _as_float(val.get("execution_micro_capture_time_sync_ok_ratio_min", 0.90))
+    execution_micro_capture_cross_source_fail_ratio_max = _as_float(
+        val.get("execution_micro_capture_cross_source_fail_ratio_max", 0.35)
+    )
+    execution_micro_capture_lookback_days = _as_int(val.get("execution_micro_capture_lookback_days", 7))
+    execution_micro_capture_min_runs = _as_int(val.get("execution_micro_capture_min_runs", 4))
     for k, v in (
         ("execution_min_risk_multiplier", execution_min_risk_multiplier),
         ("source_confidence_floor_risk_multiplier", source_confidence_floor_risk_multiplier),
@@ -162,13 +174,28 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         ("mode_health_insufficient_sample_risk_multiplier", mode_health_insufficient_sample_risk_multiplier),
         ("execution_crypto_stress_risk_multiplier", execution_crypto_stress_risk_multiplier),
         ("execution_cross_source_stress_risk_multiplier", execution_cross_source_stress_risk_multiplier),
+        ("execution_micro_capture_risk_multiplier", execution_micro_capture_risk_multiplier),
+        (
+            "execution_micro_capture_insufficient_sample_risk_multiplier",
+            execution_micro_capture_insufficient_sample_risk_multiplier,
+        ),
+        ("execution_micro_capture_pass_ratio_min", execution_micro_capture_pass_ratio_min),
+        ("execution_micro_capture_schema_ok_ratio_min", execution_micro_capture_schema_ok_ratio_min),
+        ("execution_micro_capture_time_sync_ok_ratio_min", execution_micro_capture_time_sync_ok_ratio_min),
+        ("execution_micro_capture_cross_source_fail_ratio_max", execution_micro_capture_cross_source_fail_ratio_max),
     ):
         if not (0.0 <= v <= 1.0):
             issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
+    if "execution_micro_capture_risk_enabled" in val and not isinstance(val.get("execution_micro_capture_risk_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.execution_micro_capture_risk_enabled", "必须是布尔值"))
     if not (0.20 <= execution_crypto_stress_full_scale <= 3.0):
         issues.append(ValidationIssue("error", "validation.execution_crypto_stress_full_scale", "必须在 [0.2, 3.0]"))
     if not (0.20 <= execution_cross_source_stress_full_scale <= 3.0):
         issues.append(ValidationIssue("error", "validation.execution_cross_source_stress_full_scale", "必须在 [0.2, 3.0]"))
+    if not (1 <= execution_micro_capture_lookback_days <= 90):
+        issues.append(ValidationIssue("error", "validation.execution_micro_capture_lookback_days", "必须在 [1, 90]"))
+    if not (1 <= execution_micro_capture_min_runs <= 200):
+        issues.append(ValidationIssue("error", "validation.execution_micro_capture_min_runs", "必须在 [1, 200]"))
     if source_confidence_floor_risk_multiplier < execution_min_risk_multiplier:
         issues.append(
             ValidationIssue(
@@ -214,6 +241,22 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
             ValidationIssue(
                 "error",
                 "validation.execution_cross_source_stress_risk_multiplier",
+                "不能低于 validation.execution_min_risk_multiplier",
+            )
+        )
+    if execution_micro_capture_risk_multiplier < execution_min_risk_multiplier:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.execution_micro_capture_risk_multiplier",
+                "不能低于 validation.execution_min_risk_multiplier",
+            )
+        )
+    if execution_micro_capture_insufficient_sample_risk_multiplier < execution_min_risk_multiplier:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.execution_micro_capture_insufficient_sample_risk_multiplier",
                 "不能低于 validation.execution_min_risk_multiplier",
             )
         )

@@ -2723,6 +2723,7 @@ class LieEngine:
             source_confidence_score=float(ingest.quality.source_confidence_score),
             mode_health=mode_health,
             market_factor_state=market_factor_state,
+            as_of=as_of,
         )
 
         by_symbol, by_theme, used_exposure = self._symbol_exposure_snapshot()
@@ -3165,6 +3166,7 @@ class LieEngine:
             source_confidence_score=float(ingest.quality.source_confidence_score),
             mode_health=mode_health,
             market_factor_state=market_factor_state,
+            as_of=as_of,
         )
         recent_trades = self._load_recent_trades(300)
         guard = self._evaluate_guards(
@@ -3230,6 +3232,7 @@ class LieEngine:
             source_confidence_score=float(ingest.quality.source_confidence_score),
             mode_health=mode_health,
             market_factor_state=market_factor_state,
+            as_of=as_of,
         )
         recent_trades = self._load_recent_trades(300)
         guard = self._evaluate_guards(
@@ -4341,6 +4344,7 @@ class LieEngine:
         source_confidence_score: float,
         mode_health: dict[str, Any],
         market_factor_state: dict[str, Any] | None = None,
+        as_of: date | None = None,
     ) -> dict[str, Any]:
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         min_mult = self._clamp_float(float(val.get("execution_min_risk_multiplier", 0.2)), 0.0, 1.0)
@@ -4352,6 +4356,31 @@ class LieEngine:
         crypto_full_scale = self._clamp_float(float(val.get("execution_crypto_stress_full_scale", 1.0)), 0.20, 3.0)
         cross_floor = self._clamp_float(float(val.get("execution_cross_source_stress_risk_multiplier", 0.70)), min_mult, 1.0)
         cross_full_scale = self._clamp_float(float(val.get("execution_cross_source_stress_full_scale", 1.0)), 0.20, 3.0)
+        micro_enabled = bool(val.get("execution_micro_capture_risk_enabled", True))
+        micro_floor = self._clamp_float(float(val.get("execution_micro_capture_risk_multiplier", 0.75)), min_mult, 1.0)
+        micro_insufficient = self._clamp_float(
+            float(val.get("execution_micro_capture_insufficient_sample_risk_multiplier", 0.90)),
+            min_mult,
+            1.0,
+        )
+        micro_lookback_days = max(1, int(val.get("execution_micro_capture_lookback_days", 7)))
+        micro_min_runs = max(1, int(val.get("execution_micro_capture_min_runs", 4)))
+        micro_pass_ratio_min = self._clamp_float(float(val.get("execution_micro_capture_pass_ratio_min", 0.70)), 0.0, 1.0)
+        micro_schema_ok_ratio_min = self._clamp_float(
+            float(val.get("execution_micro_capture_schema_ok_ratio_min", 0.90)),
+            0.0,
+            1.0,
+        )
+        micro_time_sync_ok_ratio_min = self._clamp_float(
+            float(val.get("execution_micro_capture_time_sync_ok_ratio_min", 0.90)),
+            0.0,
+            1.0,
+        )
+        micro_cross_source_fail_ratio_max = self._clamp_float(
+            float(val.get("execution_micro_capture_cross_source_fail_ratio_max", 0.35)),
+            0.0,
+            1.0,
+        )
 
         score = self._clamp_float(float(source_confidence_score), 0.0, 1.0)
         source_mult = 1.0
@@ -4375,17 +4404,70 @@ class LieEngine:
         cross_stress = self._clamp_float(float(state.get("cross_source_stress", 0.0)), 0.0, 1.5)
         cross_ratio = self._clamp_float(cross_stress / max(1e-9, cross_full_scale), 0.0, 1.0)
         cross_mult = self._clamp_float(1.0 - (1.0 - cross_floor) * cross_ratio, min_mult, 1.0)
+        micro_mult = 1.0
+        micro_reason = "disabled"
+        micro_stats = {
+            "lookback_days": int(micro_lookback_days),
+            "run_count": 0,
+            "pass_ratio": 0.0,
+            "avg_cross_source_fail_ratio": 0.0,
+            "avg_selected_schema_ok_ratio": 0.0,
+            "avg_selected_time_sync_ok_ratio": 0.0,
+        }
+        if micro_enabled and isinstance(as_of, date):
+            micro_stats = self._micro_capture_rolling_stats(as_of=as_of, lookback_days=micro_lookback_days)
+            run_count = int(micro_stats.get("run_count", 0))
+            if run_count <= 0:
+                micro_mult = micro_insufficient
+                micro_reason = "no_samples"
+            elif run_count < micro_min_runs:
+                micro_mult = micro_insufficient
+                micro_reason = "insufficient_samples"
+            else:
+                quality_components: list[float] = []
+                pass_ratio = self._clamp_float(float(micro_stats.get("pass_ratio", 0.0)), 0.0, 1.0)
+                schema_ok_ratio = self._clamp_float(float(micro_stats.get("avg_selected_schema_ok_ratio", 0.0)), 0.0, 1.0)
+                time_sync_ok_ratio = self._clamp_float(
+                    float(micro_stats.get("avg_selected_time_sync_ok_ratio", 0.0)),
+                    0.0,
+                    1.0,
+                )
+                cross_fail_ratio = self._clamp_float(
+                    float(micro_stats.get("avg_cross_source_fail_ratio", 1.0)),
+                    0.0,
+                    1.0,
+                )
+                if micro_pass_ratio_min > 0.0:
+                    quality_components.append(self._clamp_float(pass_ratio / micro_pass_ratio_min, 0.0, 1.0))
+                if micro_schema_ok_ratio_min > 0.0:
+                    quality_components.append(self._clamp_float(schema_ok_ratio / micro_schema_ok_ratio_min, 0.0, 1.0))
+                if micro_time_sync_ok_ratio_min > 0.0:
+                    quality_components.append(
+                        self._clamp_float(time_sync_ok_ratio / micro_time_sync_ok_ratio_min, 0.0, 1.0)
+                    )
+                cross_ok_ratio = self._clamp_float(1.0 - cross_fail_ratio, 0.0, 1.0)
+                cross_ok_floor = max(1e-9, 1.0 - micro_cross_source_fail_ratio_max)
+                quality_components.append(self._clamp_float(cross_ok_ratio / cross_ok_floor, 0.0, 1.0))
+                quality_ratio = float(min(quality_components)) if quality_components else 1.0
+                micro_mult = self._clamp_float(micro_floor + (1.0 - micro_floor) * quality_ratio, min_mult, 1.0)
+                micro_reason = "healthy" if quality_ratio >= 0.999 else "degraded"
+        elif micro_enabled:
+            micro_reason = "as_of_missing"
+            micro_mult = 1.0
 
-        final_mult = self._clamp_float(source_mult * mode_mult * crypto_mult * cross_mult, min_mult, 1.0)
+        final_mult = self._clamp_float(source_mult * mode_mult * crypto_mult * cross_mult * micro_mult, min_mult, 1.0)
         return {
             "risk_multiplier": final_mult,
             "source_multiplier": source_mult,
             "mode_multiplier": mode_mult,
             "crypto_multiplier": crypto_mult,
             "cross_source_multiplier": cross_mult,
+            "micro_capture_multiplier": micro_mult,
             "crypto_stress": crypto_stress,
             "cross_source_stress": cross_stress,
             "mode_reason": mode_reason,
+            "micro_capture_reason": micro_reason,
+            "micro_capture_stats": micro_stats,
             "source_confidence_score": score,
         }
 

@@ -2589,6 +2589,85 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(out.get("cross_source_multiplier", 0.0)), 0.7, places=6)
         self.assertAlmostEqual(float(out.get("risk_multiplier", 0.0)), 0.7, places=6)
 
+    def test_execution_risk_control_applies_micro_capture_degraded_multiplier(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["execution_min_risk_multiplier"] = 0.2
+        eng.settings.raw["validation"]["execution_micro_capture_risk_enabled"] = True
+        eng.settings.raw["validation"]["execution_micro_capture_risk_multiplier"] = 0.6
+        eng.settings.raw["validation"]["execution_micro_capture_insufficient_sample_risk_multiplier"] = 0.9
+        eng.settings.raw["validation"]["execution_micro_capture_lookback_days"] = 7
+        eng.settings.raw["validation"]["execution_micro_capture_min_runs"] = 2
+        eng.settings.raw["validation"]["execution_micro_capture_pass_ratio_min"] = 0.7
+        eng.settings.raw["validation"]["execution_micro_capture_schema_ok_ratio_min"] = 0.9
+        eng.settings.raw["validation"]["execution_micro_capture_time_sync_ok_ratio_min"] = 0.9
+        eng.settings.raw["validation"]["execution_micro_capture_cross_source_fail_ratio_max"] = 0.35
+        rows = pd.DataFrame(
+            [
+                {
+                    "as_of": "2026-02-12",
+                    "pass": 0,
+                    "cross_source_fail_ratio": 0.9,
+                    "selected_schema_ok_ratio": 0.2,
+                    "selected_time_sync_ok_ratio": 0.3,
+                },
+                {
+                    "as_of": "2026-02-13",
+                    "pass": 0,
+                    "cross_source_fail_ratio": 0.95,
+                    "selected_schema_ok_ratio": 0.1,
+                    "selected_time_sync_ok_ratio": 0.2,
+                },
+            ]
+        )
+        eng.ctx.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(eng.ctx.sqlite_path)) as conn:
+            rows.to_sql("micro_capture_runs", conn, if_exists="replace", index=False)
+        out = eng._execution_risk_control(
+            source_confidence_score=0.95,
+            mode_health={"passed": True, "active": True},
+            market_factor_state={"crypto_stress": 0.0, "cross_source_stress": 0.0},
+            as_of=date(2026, 2, 13),
+        )
+        self.assertEqual(str(out.get("micro_capture_reason", "")), "degraded")
+        self.assertAlmostEqual(float(out.get("micro_capture_multiplier", 0.0)), 0.6, places=6)
+        self.assertAlmostEqual(float(out.get("risk_multiplier", 0.0)), 0.6, places=6)
+        stats = out.get("micro_capture_stats", {})
+        self.assertEqual(int(stats.get("run_count", -1)), 2)
+
+    def test_execution_risk_control_applies_micro_capture_insufficient_sample_multiplier(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["execution_min_risk_multiplier"] = 0.2
+        eng.settings.raw["validation"]["execution_micro_capture_risk_enabled"] = True
+        eng.settings.raw["validation"]["execution_micro_capture_risk_multiplier"] = 0.6
+        eng.settings.raw["validation"]["execution_micro_capture_insufficient_sample_risk_multiplier"] = 0.85
+        eng.settings.raw["validation"]["execution_micro_capture_lookback_days"] = 7
+        eng.settings.raw["validation"]["execution_micro_capture_min_runs"] = 3
+        rows = pd.DataFrame(
+            [
+                {
+                    "as_of": "2026-02-13",
+                    "pass": 1,
+                    "cross_source_fail_ratio": 0.0,
+                    "selected_schema_ok_ratio": 1.0,
+                    "selected_time_sync_ok_ratio": 1.0,
+                }
+            ]
+        )
+        eng.ctx.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(eng.ctx.sqlite_path)) as conn:
+            rows.to_sql("micro_capture_runs", conn, if_exists="replace", index=False)
+        out = eng._execution_risk_control(
+            source_confidence_score=0.95,
+            mode_health={"passed": True, "active": True},
+            market_factor_state={"crypto_stress": 0.0, "cross_source_stress": 0.0},
+            as_of=date(2026, 2, 13),
+        )
+        self.assertEqual(str(out.get("micro_capture_reason", "")), "insufficient_samples")
+        self.assertAlmostEqual(float(out.get("micro_capture_multiplier", 0.0)), 0.85, places=6)
+        self.assertAlmostEqual(float(out.get("risk_multiplier", 0.0)), 0.85, places=6)
+
     def test_microstructure_gate_reasons_on_schema_fail(self) -> None:
         eng, _ = self._make_engine()
         eng.settings.raw.setdefault("validation", {})

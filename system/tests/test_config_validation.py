@@ -358,6 +358,15 @@ class ConfigValidationTests(unittest.TestCase):
                     "micro_capture_daemon_enabled": True,
                     "micro_capture_daemon_interval_minutes": 30,
                     "micro_capture_daemon_symbols": ["BTCUSDT", "ETHUSDT"],
+                    "execution_micro_capture_risk_enabled": True,
+                    "execution_micro_capture_risk_multiplier": 0.75,
+                    "execution_micro_capture_insufficient_sample_risk_multiplier": 0.90,
+                    "execution_micro_capture_lookback_days": 7,
+                    "execution_micro_capture_min_runs": 4,
+                    "execution_micro_capture_pass_ratio_min": 0.70,
+                    "execution_micro_capture_schema_ok_ratio_min": 0.90,
+                    "execution_micro_capture_time_sync_ok_ratio_min": 0.90,
+                    "execution_micro_capture_cross_source_fail_ratio_max": 0.35,
                     "ops_system_time_sync_monitor_enabled": True,
                     "ops_system_time_sync_fail_days_max": 2,
                     "ops_system_time_sync_inactive_days_max": 3,
@@ -474,6 +483,15 @@ class ConfigValidationTests(unittest.TestCase):
                     "micro_capture_daemon_enabled": "yes",
                     "micro_capture_daemon_interval_minutes": 0,
                     "micro_capture_daemon_symbols": [],
+                    "execution_micro_capture_risk_enabled": "yes",
+                    "execution_micro_capture_risk_multiplier": -0.1,
+                    "execution_micro_capture_insufficient_sample_risk_multiplier": 1.2,
+                    "execution_micro_capture_lookback_days": 0,
+                    "execution_micro_capture_min_runs": 0,
+                    "execution_micro_capture_pass_ratio_min": -0.1,
+                    "execution_micro_capture_schema_ok_ratio_min": 1.2,
+                    "execution_micro_capture_time_sync_ok_ratio_min": 1.2,
+                    "execution_micro_capture_cross_source_fail_ratio_max": 1.2,
                     "ops_system_time_sync_monitor_enabled": "yes",
                     "ops_system_time_sync_fail_days_max": -1,
                     "ops_system_time_sync_inactive_days_max": -1,
@@ -530,6 +548,15 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.micro_capture_daemon_enabled", error_paths)
         self.assertIn("validation.micro_capture_daemon_interval_minutes", error_paths)
         self.assertIn("validation.micro_capture_daemon_symbols", error_paths)
+        self.assertIn("validation.execution_micro_capture_risk_enabled", error_paths)
+        self.assertIn("validation.execution_micro_capture_risk_multiplier", error_paths)
+        self.assertIn("validation.execution_micro_capture_insufficient_sample_risk_multiplier", error_paths)
+        self.assertIn("validation.execution_micro_capture_lookback_days", error_paths)
+        self.assertIn("validation.execution_micro_capture_min_runs", error_paths)
+        self.assertIn("validation.execution_micro_capture_pass_ratio_min", error_paths)
+        self.assertIn("validation.execution_micro_capture_schema_ok_ratio_min", error_paths)
+        self.assertIn("validation.execution_micro_capture_time_sync_ok_ratio_min", error_paths)
+        self.assertIn("validation.execution_micro_capture_cross_source_fail_ratio_max", error_paths)
         self.assertIn("validation.ops_system_time_sync_monitor_enabled", error_paths)
         self.assertIn("validation.ops_system_time_sync_fail_days_max", error_paths)
         self.assertIn("validation.ops_system_time_sync_inactive_days_max", error_paths)
