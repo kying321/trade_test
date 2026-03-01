@@ -38,7 +38,7 @@ class SignalTests(unittest.TestCase):
         )
         cfg = SignalEngineConfig(confidence_min=1, convexity_min=0.5)
 
-        def _fake_candidate(symbol_df, regime, cfg, market_factor_state=None):  # type: ignore[no-untyped-def]
+        def _fake_candidate(symbol_df, regime, cfg, market_factor_state=None, micro_factor_state=None):  # type: ignore[no-untyped-def]
             cur = symbol_df.iloc[-1]
             return SignalCandidate(
                 symbol=str(cur["symbol"]),
@@ -136,6 +136,97 @@ class SignalTests(unittest.TestCase):
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertIn("low_dividend_headwind", signal.factor_flags)
+
+    def test_cross_source_quality_headwind_penalizes_signal(self) -> None:
+        bars = make_bars("300750", n=300, trend=0.18, seed=45)
+        cfg = SignalEngineConfig(
+            confidence_min=0,
+            convexity_min=0.0,
+            factor_penalty_max=45.0,
+            factor_drop_threshold=2.0,
+        )
+        baseline = generate_signal_for_symbol(
+            bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            market_factor_state={
+                "valuation_pressure": 0.8,
+                "momentum_preference": 0.6,
+                "crowding_aversion": 0.5,
+                "small_cap_pressure": 0.5,
+                "dividend_preference": 0.5,
+            },
+        )
+        stressed = generate_signal_for_symbol(
+            bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            market_factor_state={
+                "valuation_pressure": 0.8,
+                "momentum_preference": 0.6,
+                "crowding_aversion": 0.5,
+                "small_cap_pressure": 0.5,
+                "dividend_preference": 0.5,
+                "cross_source_quality_score_7d": 0.20,
+                "cross_source_fail_ratio_7d": 0.80,
+                "cross_source_stress": 1.20,
+            },
+        )
+        self.assertIsNotNone(baseline)
+        self.assertIsNotNone(stressed)
+        assert baseline is not None
+        assert stressed is not None
+        self.assertGreater(float(stressed.factor_penalty), float(baseline.factor_penalty))
+        self.assertLess(float(stressed.confidence), float(baseline.confidence))
+        self.assertIn("data_quality_headwind", stressed.factor_flags)
+
+    def test_micro_time_sync_risk_penalizes_signal(self) -> None:
+        bars = make_bars("BTCUSDT", n=280, trend=0.12, seed=46, asset_class="future")
+        cfg = SignalEngineConfig(
+            confidence_min=0.0,
+            convexity_min=0.0,
+            factor_filter_enabled=False,
+            microstructure_enabled=True,
+            micro_confidence_boost_max=8.0,
+            micro_penalty_max=10.0,
+            micro_min_trade_count=10,
+        )
+        aligned = generate_signal_for_symbol(
+            bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            micro_factor_state={
+                "has_data": True,
+                "schema_ok": True,
+                "sync_ok": True,
+                "gap_ok": True,
+                "time_sync_ok": True,
+                "micro_alignment": 0.8,
+                "evidence_score": 1.0,
+                "trade_count": 120,
+            },
+        )
+        drifted = generate_signal_for_symbol(
+            bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            micro_factor_state={
+                "has_data": True,
+                "schema_ok": True,
+                "sync_ok": True,
+                "gap_ok": True,
+                "time_sync_ok": False,
+                "micro_alignment": 0.8,
+                "evidence_score": 1.0,
+                "trade_count": 120,
+            },
+        )
+        self.assertIsNotNone(aligned)
+        self.assertIsNotNone(drifted)
+        assert aligned is not None
+        assert drifted is not None
+        self.assertLess(float(drifted.confidence), float(aligned.confidence))
+        self.assertIn("micro_time_sync_risk", drifted.factor_flags)
 
 
 if __name__ == "__main__":

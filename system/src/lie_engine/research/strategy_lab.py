@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +68,7 @@ class StrategyLabSummary:
     best_candidate: dict[str, Any] = field(default_factory=dict)
     output_dir: str = ""
     data_fetch_stats: dict[str, Any] = field(default_factory=dict)
+    term_registry: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -75,6 +78,52 @@ class StrategyLabSummary:
 
 def _clip(v: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, v)))
+
+
+def _term_registry_snapshot() -> dict[str, Any]:
+    system_root = Path(__file__).resolve().parents[3]
+    path = system_root / "config" / "term_atoms.yaml"
+    out: dict[str, Any] = {
+        "path": str(path),
+        "exists": bool(path.exists()),
+        "version": "",
+        "checksum_sha256": "",
+        "atoms_total": 0,
+        "l2_atoms": 0,
+        "families": {},
+    }
+    if not path.exists():
+        return out
+
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return out
+    if not isinstance(payload, dict):
+        return out
+
+    atoms_raw = payload.get("atoms", [])
+    atoms = atoms_raw if isinstance(atoms_raw, list) else []
+    families: dict[str, int] = {}
+    l2_atoms = 0
+    for atom in atoms:
+        if not isinstance(atom, dict):
+            continue
+        family = str(atom.get("family", "")).strip()
+        if family:
+            families[family] = families.get(family, 0) + 1
+        if str(atom.get("formula_type", "")).strip() == "l2_native":
+            l2_atoms += 1
+
+    checksum = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    out["version"] = str(payload.get("version", ""))
+    out["checksum_sha256"] = checksum
+    out["atoms_total"] = int(len(atoms))
+    out["l2_atoms"] = int(l2_atoms)
+    out["families"] = families
+    return out
 
 
 def _safe_z(v: float, mean: float, std: float) -> float:
@@ -320,6 +369,14 @@ def _render_report(summary: StrategyLabSummary) -> str:
     for k, v in summary.report_insights.items():
         lines.append(f"- `{k}`: `{float(v):.4f}`")
     lines.append("")
+    lines.append("## 术语原子注册")
+    term_registry = summary.term_registry if isinstance(summary.term_registry, dict) else {}
+    lines.append(f"- registry_exists: `{bool(term_registry.get('exists', False))}`")
+    lines.append(f"- registry_version: `{term_registry.get('version', '')}`")
+    lines.append(f"- registry_checksum_sha256: `{term_registry.get('checksum_sha256', '')}`")
+    lines.append(f"- atoms_total: `{int(term_registry.get('atoms_total', 0))}`")
+    lines.append(f"- l2_atoms: `{int(term_registry.get('l2_atoms', 0))}`")
+    lines.append("")
     lines.append("## 候选策略评分")
     for c in summary.candidates:
         lines.append(f"### {c.name}")
@@ -359,6 +416,7 @@ def run_strategy_lab(
     run_dir = output_root / "research" / f"strategy_lab_{t0:%Y%m%d_%H%M%S}"
     run_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = output_root / "artifacts" / "research_cache"
+    term_registry = _term_registry_snapshot()
 
     bundle = load_real_data_bundle(
         core_symbols=core_symbols,
@@ -411,6 +469,7 @@ def run_strategy_lab(
             best_candidate={},
             output_dir=str(run_dir),
             data_fetch_stats=bundle.fetch_stats,
+            term_registry=term_registry,
         )
         write_json(run_dir / "summary.json", summary.to_dict())
         write_markdown(run_dir / "report.md", _render_report(summary))
@@ -586,6 +645,7 @@ def run_strategy_lab(
         best_candidate=best,
         output_dir=str(run_dir),
         data_fetch_stats=bundle.fetch_stats,
+        term_registry=term_registry,
     )
 
     write_json(run_dir / "summary.json", summary.to_dict())

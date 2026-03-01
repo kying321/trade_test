@@ -6,6 +6,8 @@
 docs/ARCHITECTURE_REVIEW.md
 docs/PROGRESS.md
 docs/DEMO_VERSIONING_BASELINE.md
+docs/TERM_ATOM_REGISTRY.md
+docs/TIME_SYNC_RUNBOOK.md
 ```
 
 运行：
@@ -13,6 +15,7 @@ docs/DEMO_VERSIONING_BASELINE.md
 ```bash
 python3 -m pip install -e .
 lie run-eod --date 2026-02-13
+lie micro-capture --date 2026-02-13 --symbols BTCUSDT,ETHUSDT
 lie test-all
 # 快速子样本测试（确定性）
 lie test-all --fast --fast-ratio 0.10
@@ -22,7 +25,55 @@ lie validate-config
 lie architecture-audit --date 2026-02-13
 lie dependency-audit --date 2026-02-13
 # 数据源 profile（config.yaml: data.provider_profile）
-# 可选: opensource_dual | opensource_primary | hybrid_with_paid_placeholder | paid_placeholder
+# 可选: opensource_dual | opensource_primary | binance_spot_public | bybit_spot_public | dual_binance_bybit_public | hybrid_opensource_binance | hybrid_opensource_binance_bybit | hybrid_with_paid_placeholder | paid_placeholder
+# 微观信号调制（run-eod；L2/逐笔）
+# validation.microstructure_signal_enabled: true
+# validation.microstructure_lookback_minutes: 10
+# validation.microstructure_depth_levels: 20
+# validation.microstructure_trade_limit: 500
+# validation.micro_schema_hard_fuse_enabled: true
+# validation.micro_schema_max_fail_symbols: 0
+# validation.micro_cross_source_audit_enabled: true
+# validation.micro_cross_source_build_missing_provider: true
+# validation.micro_cross_source_primary: binance_spot_public
+# validation.micro_cross_source_secondary: bybit_spot_public
+# validation.micro_cross_source_symbols: [BTCUSDT, ETHUSDT]
+# validation.micro_cross_source_min_rows_per_side: 1
+# validation.micro_cross_source_adaptive_gap_enabled: true
+# validation.micro_cross_source_gap_freq_multiplier: 2.0
+# validation.micro_cross_source_gap_hist_window_days: 30
+# validation.micro_cross_source_gap_hist_quantile: 0.90
+# validation.micro_cross_source_gap_hist_multiplier: 1.10
+# validation.micro_cross_source_gap_limit_cap_ms: 60000
+# validation.micro_cross_source_quality_lookback_days: 7
+# validation.micro_time_sync_hard_fuse_enabled: false
+# validation.micro_time_sync_max_offset_ms: 5
+# validation.micro_time_sync_max_rtt_ms: 120
+# validation.micro_time_sync_min_samples: 1
+# validation.system_time_sync_probe_enabled: false
+# validation.system_time_sync_hard_fuse_enabled: false
+# validation.system_time_sync_primary_source: time.google.com
+# validation.system_time_sync_secondary_source: time.cloudflare.com
+# validation.system_time_sync_probe_timeout_seconds: 5.0
+# validation.system_time_sync_max_offset_ms: 5
+# validation.system_time_sync_max_rtt_ms: 120
+# validation.system_time_sync_min_ok_sources: 1
+# validation.micro_capture_daemon_enabled: true
+# validation.micro_capture_daemon_interval_minutes: 30
+# validation.micro_capture_daemon_symbols: [BTCUSDT, ETHUSDT]
+# validation.microstructure_symbols: [BTCUSDT, ETHUSDT]
+# validation.micro_cross_source_hard_fuse_enabled: false
+# validation.micro_cross_source_align_seconds: 120
+# validation.micro_cross_source_window_ms: 200
+# validation.micro_cross_source_trade_limit: 300
+# validation.micro_cross_source_audit_symbol_cap: 3
+# validation.micro_cross_source_min_samples: 1
+# validation.micro_cross_source_max_fail_ratio: 0.50
+# validation.micro_cross_source_tolerance_ms: 80
+# validation.micro_continuous_gap_ms: 2500
+# validation.micro_min_trade_count: 30
+# validation.micro_confidence_boost_max: 8.0
+# validation.micro_penalty_max: 10.0
 # 10小时预算的实盘多模式研究回测（新闻+研报因子）
 lie research-backtest --start 2015-01-01 --end 2026-02-13 --hours 10 --max-symbols 120 --max-trials-per-mode 500 --review-days 5
 # 单模式定向诊断（可选：ultra_short,swing,long）
@@ -60,6 +111,19 @@ lie review --date 2026-02-13
 # validation.source_confidence_floor_risk_multiplier: 0.35
 # validation.mode_health_risk_multiplier: 0.50
 # validation.mode_health_insufficient_sample_risk_multiplier: 0.85
+# validation.execution_crypto_stress_risk_multiplier: 0.65
+# validation.execution_crypto_stress_full_scale: 1.00
+# validation.execution_cross_source_stress_risk_multiplier: 0.70
+# validation.execution_cross_source_stress_full_scale: 1.00
+# validation.execution_micro_capture_risk_enabled: true
+# validation.execution_micro_capture_risk_multiplier: 0.75
+# validation.execution_micro_capture_insufficient_sample_risk_multiplier: 0.90
+# validation.execution_micro_capture_lookback_days: 7
+# validation.execution_micro_capture_min_runs: 4
+# validation.execution_micro_capture_pass_ratio_min: 0.70
+# validation.execution_micro_capture_schema_ok_ratio_min: 0.90
+# validation.execution_micro_capture_time_sync_ok_ratio_min: 0.90
+# validation.execution_micro_capture_cross_source_fail_ratio_max: 0.35
 # 状态稳定性与相变预警（ops-report）：
 # validation.mode_switch_window_days: 20
 # validation.mode_switch_max_rate: 0.45
@@ -68,6 +132,10 @@ lie review --date 2026-02-13
 # validation.ops_risk_multiplier_drift_max: 0.30
 # validation.ops_source_confidence_floor: 0.75
 # validation.ops_mode_health_fail_days_max: 2
+# validation.ops_system_time_sync_monitor_enabled: false
+# validation.ops_system_time_sync_fail_days_max: 2
+# validation.ops_system_time_sync_inactive_days_max: 5
+# validation.ops_system_time_sync_min_ok_sources: 1
 # 实盘/回测模式漂移门控（gate/ops/defect-plan）：
 # validation.mode_drift_window_days: 120
 # validation.mode_drift_min_live_trades: 30
@@ -223,6 +291,7 @@ lie review --date 2026-02-13
 lie run-slot --date 2026-02-13 --slot 08:40
 lie run-slot --date 2026-02-13 --slot 15:10
 lie run-slot --date 2026-02-13 --slot ops
+lie run-slot --date 2026-02-13 --slot micro-capture
 
 # 单日全流程
 lie run-session --date 2026-02-13
@@ -232,6 +301,8 @@ lie run-review-cycle --date 2026-02-13 --max-rounds 2
 
 # 守护调度（按 config.yaml 固定时段触发）
 lie run-daemon --poll-seconds 30
+# 当 validation.micro_capture_daemon_enabled=true 时，daemon 会按 interval_minutes 自动执行 micro-capture。
+# 调度关键段使用 output/state/run-halfhour-pulse.lock 文件互斥，防止并发重放。
 # 仅预演当前时刻会触发哪些槽位（不执行，不写状态）
 lie run-daemon --dry-run
 
@@ -247,6 +318,17 @@ lie ops-report --date 2026-02-13 --window-days 7
 lie stress-matrix --date 2026-02-13 --modes ultra_short,swing,long
 ./infra/local/healthcheck.sh 2026-02-13
 ./infra/local/retry_slot.sh 2026-02-13 15:10
+# NewAPI 路由抽样（默认使用替代名 gemini-3.1-pro-preview-bs，兼容映射 gemini-pro-3.1）
+# 需要设置 NEWAPI_API_KEY 或 X666_API_KEY
+bash system/scripts/newapi_model_probe.sh --samples 2 --models gpt-5.3-codex,gemini-3.1-pro-preview-bs
+# Binance 公共市场数据抽样（L2 + aggTrades）
+python3 system/scripts/binance_micro_sample.py --symbol BTCUSDT --minutes 10 --depth 20 --limit 500
+# Binance + Bybit 同窗对齐抽样（跨源 L2 / 逐笔）
+python3 system/scripts/cross_exchange_micro_sample.py --symbol BTCUSDT --minutes 10 --align-seconds 120 --window-ms 200 --tolerance-ms 80 --continuous-gap-ms 2500
+# 查看 EOD 自动生成的跨源质量7日周报
+cat system/output/reports/cross_source/2026-03-02_quality_7d.md
+# 术语原子注册校验（ICT / Al Brooks / LiE-PDF -> 可计算信号）
+python3 system/scripts/validate_term_atoms.py
 
 # 通过测试后自动提交并推送到 GitHub（需先配置 origin 远程）
 # 干跑（仅预览将提交的文件）

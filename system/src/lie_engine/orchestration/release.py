@@ -1783,6 +1783,12 @@ class ReleaseOrchestrator:
                 continue
             risk_control = payload.get("risk_control", {}) if isinstance(payload.get("risk_control", {}), dict) else {}
             mode_health = payload.get("mode_health", {}) if isinstance(payload.get("mode_health", {}), dict) else {}
+            micro = payload.get("microstructure", {}) if isinstance(payload.get("microstructure", {}), dict) else {}
+            cross_audit = (
+                micro.get("cross_source_audit", {}) if isinstance(micro.get("cross_source_audit", {}), dict) else {}
+            )
+            time_sync = payload.get("time_sync", {}) if isinstance(payload.get("time_sync", {}), dict) else {}
+            gate_reasons = micro.get("gate_reasons", []) if isinstance(micro.get("gate_reasons", []), list) else []
             out.append(
                 {
                     "date": day.isoformat(),
@@ -1790,6 +1796,16 @@ class ReleaseOrchestrator:
                     "risk_multiplier": self._safe_float(risk_control.get("risk_multiplier", 1.0), 1.0),
                     "source_confidence_score": self._safe_float(risk_control.get("source_confidence_score", 1.0), 1.0),
                     "mode_health_passed": bool(mode_health.get("passed", True)),
+                    "micro_schema_fail_symbols": int(micro.get("symbols_schema_fail", 0)),
+                    "micro_gate_triggered": bool(gate_reasons),
+                    "cross_source_active": bool(cross_audit.get("active", False)),
+                    "cross_source_fail_ratio": self._safe_float(cross_audit.get("fail_ratio", 0.0), 0.0),
+                    "system_time_sync_active": bool(time_sync.get("active", False)),
+                    "system_time_sync_pass": bool(time_sync.get("pass", False)),
+                    "system_time_sync_ok_sources": int(self._safe_float(time_sync.get("ok_sources", 0), 0)),
+                    "system_time_sync_available_sources": int(
+                        self._safe_float(time_sync.get("available_sources", 0), 0)
+                    ),
                 }
             )
         out.reverse()
@@ -5214,6 +5230,15 @@ class ReleaseOrchestrator:
             0.75,
         )
         mode_health_fail_days_max = max(0, int(val.get("ops_mode_health_fail_days_max", 2)))
+        micro_schema_fail_days_max = max(0, int(val.get("ops_micro_schema_fail_days_max", window_days)))
+        cross_source_fail_days_max = max(0, int(val.get("ops_cross_source_fail_days_max", window_days)))
+        cross_source_inactive_days_max = max(0, int(val.get("ops_cross_source_inactive_days_max", window_days)))
+        cross_source_fail_ratio_max = self._safe_float(val.get("ops_cross_source_fail_ratio_max", 1.0), 1.0)
+        cross_source_fail_ratio_max = min(1.0, max(0.0, cross_source_fail_ratio_max))
+        system_time_sync_monitor_enabled = bool(val.get("ops_system_time_sync_monitor_enabled", False))
+        system_time_sync_fail_days_max = max(0, int(val.get("ops_system_time_sync_fail_days_max", window_days)))
+        system_time_sync_inactive_days_max = max(0, int(val.get("ops_system_time_sync_inactive_days_max", window_days)))
+        system_time_sync_min_ok_sources = max(1, int(val.get("ops_system_time_sync_min_ok_sources", 1)))
 
         rows = self._load_mode_feedback_series(as_of=as_of, window_days=window_days)
         samples = len(rows)
@@ -5221,6 +5246,29 @@ class ReleaseOrchestrator:
         risk_values = [self._safe_float(x.get("risk_multiplier", 1.0), 1.0) for x in rows]
         source_values = [self._safe_float(x.get("source_confidence_score", 1.0), 1.0) for x in rows]
         mode_health_fail_days = sum(1 for x in rows if not bool(x.get("mode_health_passed", True)))
+        micro_schema_fail_days = sum(1 for x in rows if int(x.get("micro_schema_fail_symbols", 0)) > 0)
+        cross_source_fail_days = sum(
+            1
+            for x in rows
+            if bool(x.get("cross_source_active", False))
+            and self._safe_float(x.get("cross_source_fail_ratio", 0.0), 0.0) > cross_source_fail_ratio_max
+        )
+        cross_source_inactive_days = sum(1 for x in rows if not bool(x.get("cross_source_active", False)))
+        system_time_sync_fail_days = 0
+        system_time_sync_inactive_days = 0
+        if system_time_sync_monitor_enabled:
+            system_time_sync_fail_days = sum(
+                1
+                for x in rows
+                if bool(x.get("system_time_sync_active", False))
+                and (
+                    (not bool(x.get("system_time_sync_pass", False)))
+                    or int(self._safe_float(x.get("system_time_sync_ok_sources", 0), 0)) < system_time_sync_min_ok_sources
+                )
+            )
+            system_time_sync_inactive_days = sum(
+                1 for x in rows if not bool(x.get("system_time_sync_active", False))
+            )
 
         switch_count = 0
         if len(modes) >= 2:
@@ -5245,6 +5293,11 @@ class ReleaseOrchestrator:
             "risk_multiplier_drift_ok": True,
             "source_confidence_floor_ok": True,
             "mode_health_fail_days_ok": True,
+            "micro_schema_fail_days_ok": True,
+            "cross_source_fail_days_ok": True,
+            "cross_source_inactive_days_ok": True,
+            "system_time_sync_fail_days_ok": True,
+            "system_time_sync_inactive_days_ok": True,
         }
         alerts: list[str] = []
         if active:
@@ -5253,6 +5306,14 @@ class ReleaseOrchestrator:
             checks["risk_multiplier_drift_ok"] = bool(abs(risk_drift) <= risk_drift_max)
             checks["source_confidence_floor_ok"] = bool(source_min >= source_floor)
             checks["mode_health_fail_days_ok"] = bool(mode_health_fail_days <= mode_health_fail_days_max)
+            checks["micro_schema_fail_days_ok"] = bool(micro_schema_fail_days <= micro_schema_fail_days_max)
+            checks["cross_source_fail_days_ok"] = bool(cross_source_fail_days <= cross_source_fail_days_max)
+            checks["cross_source_inactive_days_ok"] = bool(cross_source_inactive_days <= cross_source_inactive_days_max)
+            if system_time_sync_monitor_enabled:
+                checks["system_time_sync_fail_days_ok"] = bool(system_time_sync_fail_days <= system_time_sync_fail_days_max)
+                checks["system_time_sync_inactive_days_ok"] = bool(
+                    system_time_sync_inactive_days <= system_time_sync_inactive_days_max
+                )
             if not checks["switch_rate_ok"]:
                 alerts.append("mode_switch_rate_high")
             if not checks["risk_multiplier_floor_ok"]:
@@ -5263,6 +5324,16 @@ class ReleaseOrchestrator:
                 alerts.append("source_confidence_too_low")
             if not checks["mode_health_fail_days_ok"]:
                 alerts.append("mode_health_fail_days_high")
+            if not checks["micro_schema_fail_days_ok"]:
+                alerts.append("micro_schema_fail_days_high")
+            if not checks["cross_source_fail_days_ok"]:
+                alerts.append("cross_source_fail_days_high")
+            if not checks["cross_source_inactive_days_ok"]:
+                alerts.append("cross_source_inactive_days_high")
+            if system_time_sync_monitor_enabled and not checks["system_time_sync_fail_days_ok"]:
+                alerts.append("system_time_sync_fail_days_high")
+            if system_time_sync_monitor_enabled and not checks["system_time_sync_inactive_days_ok"]:
+                alerts.append("system_time_sync_inactive_days_high")
         else:
             alerts.append("insufficient_mode_feedback_samples")
 
@@ -5280,6 +5351,11 @@ class ReleaseOrchestrator:
                 "source_confidence_min": source_min,
                 "source_confidence_avg": source_avg,
                 "mode_health_fail_days": mode_health_fail_days,
+                "micro_schema_fail_days": micro_schema_fail_days,
+                "cross_source_fail_days": cross_source_fail_days,
+                "cross_source_inactive_days": cross_source_inactive_days,
+                "system_time_sync_fail_days": system_time_sync_fail_days,
+                "system_time_sync_inactive_days": system_time_sync_inactive_days,
             },
             "thresholds": {
                 "mode_switch_max_rate": switch_rate_max,
@@ -5287,6 +5363,14 @@ class ReleaseOrchestrator:
                 "ops_risk_multiplier_drift_max": risk_drift_max,
                 "ops_source_confidence_floor": source_floor,
                 "ops_mode_health_fail_days_max": mode_health_fail_days_max,
+                "ops_micro_schema_fail_days_max": micro_schema_fail_days_max,
+                "ops_cross_source_fail_days_max": cross_source_fail_days_max,
+                "ops_cross_source_inactive_days_max": cross_source_inactive_days_max,
+                "ops_cross_source_fail_ratio_max": cross_source_fail_ratio_max,
+                "ops_system_time_sync_monitor_enabled": system_time_sync_monitor_enabled,
+                "ops_system_time_sync_fail_days_max": system_time_sync_fail_days_max,
+                "ops_system_time_sync_inactive_days_max": system_time_sync_inactive_days_max,
+                "ops_system_time_sync_min_ok_sources": system_time_sync_min_ok_sources,
             },
             "checks": checks,
             "alerts": alerts,
@@ -5501,6 +5585,11 @@ class ReleaseOrchestrator:
             + f"`{self._safe_float(metrics.get('source_confidence_avg', 1.0), 1.0):.2%}`"
         )
         lines.append(f"- mode_health_fail_days: `{int(metrics.get('mode_health_fail_days', 0))}`")
+        lines.append(
+            "- system_time_sync(fail/inactive): "
+            + f"`{int(metrics.get('system_time_sync_fail_days', 0))}` / "
+            + f"`{int(metrics.get('system_time_sync_inactive_days', 0))}`"
+        )
         lines.append(f"- alerts: `{', '.join(state_stability.get('alerts', [])) if state_stability.get('alerts') else 'NONE'}`")
         for k, v in state_checks.items():
             lines.append(f"- `{k}`: `{v}`")
@@ -6315,6 +6404,32 @@ class ReleaseOrchestrator:
                             + f"{int(self._safe_float(state_thresholds.get('ops_mode_health_fail_days_max', 0), 0))}"
                         ),
                         "action": "收敛当前模式参数并补跑对应资产/模式窗口回测，确认恢复后再放开仓位。",
+                    }
+                )
+            if not bool(state_checks.get("system_time_sync_fail_days_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STATE_SYSTEM_TIME_SYNC_DAYS",
+                        "message": (
+                            "系统授时失败天数超限："
+                            + f"{int(self._safe_float(state_metrics.get('system_time_sync_fail_days', 0), 0))} > "
+                            + f"{int(self._safe_float(state_thresholds.get('ops_system_time_sync_fail_days_max', 0), 0))}"
+                        ),
+                        "action": "优先修复授时平面（chrony/ptp 或宿主时钟）并确认 offset/rtt 回到阈值内。",
+                    }
+                )
+            if not bool(state_checks.get("system_time_sync_inactive_days_ok", True)):
+                defects.append(
+                    {
+                        "category": "risk",
+                        "code": "STATE_SYSTEM_TIME_SYNC_INACTIVE",
+                        "message": (
+                            "系统授时探针失活天数超限："
+                            + f"{int(self._safe_float(state_metrics.get('system_time_sync_inactive_days', 0), 0))} > "
+                            + f"{int(self._safe_float(state_thresholds.get('ops_system_time_sync_inactive_days_max', 0), 0))}"
+                        ),
+                        "action": "恢复 time-sync-probe 定时执行并检查 sntp 可用性与网络出口策略。",
                     }
                 )
 

@@ -37,6 +37,7 @@ class SchedulerOrchestratorTests(unittest.TestCase):
             "eod": 0,
             "review": [],
             "ops": [],
+            "micro_capture": [],
         }
 
         def run_premarket(as_of: date) -> dict[str, object]:
@@ -65,6 +66,12 @@ class SchedulerOrchestratorTests(unittest.TestCase):
             ops_calls.append({"date": as_of.isoformat(), "window_days": window_days})
             return {"phase": "ops", "date": as_of.isoformat(), "window_days": window_days}
 
+        def run_micro_capture(as_of: date, symbols: list[str] | None = None) -> dict[str, object]:
+            mc_calls = calls["micro_capture"]
+            assert isinstance(mc_calls, list)
+            mc_calls.append({"date": as_of.isoformat(), "symbols": list(symbols or [])})
+            return {"phase": "micro_capture", "date": as_of.isoformat(), "symbols": list(symbols or [])}
+
         orchestrator = SchedulerOrchestrator(
             settings=settings or self._make_settings(),
             output_dir=output_dir,
@@ -73,6 +80,7 @@ class SchedulerOrchestratorTests(unittest.TestCase):
             run_eod=run_eod,
             run_review_cycle=run_review_cycle,
             ops_report=run_ops_report,
+            run_micro_capture=run_micro_capture,
         )
         return orchestrator, calls
 
@@ -102,6 +110,19 @@ class SchedulerOrchestratorTests(unittest.TestCase):
         self.assertEqual(out1["slot"], "intraday:10:30")
         self.assertEqual(out2["slot"], "intraday:14:30")
         self.assertEqual(calls["intraday"], ["10:30", "14:30"])
+
+    def test_run_slot_micro_capture_alias(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        orch, calls = self._make_orchestrator(td)
+        d = date(2026, 2, 13)
+
+        out = orch.run_slot(as_of=d, slot="micro-capture")
+        self.assertEqual(out["slot"], "micro-capture")
+        mc_calls = calls["micro_capture"]
+        assert isinstance(mc_calls, list)
+        self.assertEqual(len(mc_calls), 1)
+        self.assertEqual(mc_calls[0]["date"], "2026-02-13")
 
     def test_run_session_respects_review_flag(self) -> None:
         td = Path(tempfile.mkdtemp())
@@ -180,6 +201,59 @@ class SchedulerOrchestratorTests(unittest.TestCase):
         self.assertEqual(calls["eod"], 0)
         self.assertEqual(calls["review"], [])
         self.assertEqual(set(out["would_execute"]), {"premarket", "intraday:00:00", "eod", "review"})
+
+    def test_run_daemon_executes_micro_capture_interval_task(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        schedule = {
+            "premarket": "23:59",
+            "intraday_slots": [],
+            "eod": "23:59",
+            "nightly_review": "23:59",
+        }
+        settings = self._make_settings(schedule=schedule)
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"]["micro_capture_daemon_enabled"] = True
+        settings.raw["validation"]["micro_capture_daemon_interval_minutes"] = 30
+        settings.raw["validation"]["micro_capture_daemon_symbols"] = ["BTCUSDT"]
+        orch, calls = self._make_orchestrator(td, settings=settings)
+
+        state = orch.run_daemon(poll_seconds=1, max_cycles=0, max_review_rounds=1)
+        mc_calls = calls["micro_capture"]
+        assert isinstance(mc_calls, list)
+        self.assertEqual(len(mc_calls), 1)
+        self.assertEqual(mc_calls[0]["symbols"], ["BTCUSDT"])
+        interval_tasks = state.get("interval_tasks", {})
+        self.assertIsInstance(interval_tasks, dict)
+        self.assertIn("micro_capture", interval_tasks)
+        last_run_ts = str((interval_tasks.get("micro_capture", {}) or {}).get("last_run_ts", ""))
+        self.assertTrue(bool(last_run_ts))
+        history = state.get("history", [])
+        self.assertTrue(any(str(x.get("slot_id", "")) == "interval:micro_capture" for x in history))
+
+    def test_run_daemon_dry_run_exposes_micro_capture_interval_due(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        schedule = {
+            "premarket": "23:59",
+            "intraday_slots": [],
+            "eod": "23:59",
+            "nightly_review": "23:59",
+        }
+        settings = self._make_settings(schedule=schedule)
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"]["micro_capture_daemon_enabled"] = True
+        settings.raw["validation"]["micro_capture_daemon_interval_minutes"] = 30
+        orch, calls = self._make_orchestrator(td, settings=settings)
+
+        out = orch.run_daemon(poll_seconds=1, max_cycles=0, max_review_rounds=1, dry_run=True)
+        self.assertTrue(out["dry_run"])
+        slot_ids = [str(x.get("slot_id", "")) for x in out.get("slots", [])]
+        self.assertIn("interval:micro_capture", slot_ids)
+        self.assertIn("interval:micro_capture", set(out.get("would_execute", [])))
+        mc_calls = calls["micro_capture"]
+        assert isinstance(mc_calls, list)
+        self.assertEqual(len(mc_calls), 0)
 
 
 if __name__ == "__main__":

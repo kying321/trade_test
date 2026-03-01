@@ -202,6 +202,8 @@ class ResearchTests(unittest.TestCase):
                 self.assertEqual(summary.bar_max_ts, "")
                 self.assertEqual(summary.news_max_ts, "")
                 self.assertEqual(summary.report_max_ts, "")
+                self.assertTrue(bool(summary.term_registry.get("exists", False)))
+                self.assertGreaterEqual(int(summary.term_registry.get("atoms_total", 0)), 1)
         finally:
             sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from contextlib import closing
 import json
 from pathlib import Path
 import re
+import shutil
 import sqlite3
+import subprocess
 from typing import Any
 
 import numpy as np
@@ -35,7 +37,13 @@ from lie_engine.research import run_strategy_lab as run_strategy_lab_pipeline
 from lie_engine.reporting import render_daily_briefing, render_mode_stress_matrix, render_review_report, write_run_manifest
 from lie_engine.review import ReviewThresholds, bounded_bayesian_update, build_review_delta
 from lie_engine.risk import RiskManager, infer_edge_from_trades
-from lie_engine.signal import SignalEngineConfig, expand_universe, scan_signals
+from lie_engine.signal import (
+    SignalEngineConfig,
+    align_trade_windows,
+    expand_universe,
+    scan_signals,
+    summarize_microstructure_snapshot,
+)
 
 
 @dataclass(slots=True)
@@ -137,6 +145,163 @@ class LieEngine:
             return date.fromisoformat(m.group(1)), date.fromisoformat(m.group(2))
         except Exception:
             return None, None
+
+    @staticmethod
+    def _parse_sntp_debug_output(text: str) -> dict[str, Any]:
+        payload = {
+            "offset_ms": None,
+            "uncertainty_ms": None,
+            "delay_ms": None,
+            "server_addr": "",
+        }
+        txt = str(text or "")
+        if not txt.strip():
+            return payload
+
+        final_re = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s+\+/-\s+([+-]?\d+(?:\.\d+)?)\s+\S+\s+(\S+)\s*$")
+        for line in reversed(txt.splitlines()):
+            m = final_re.match(line.strip())
+            if m:
+                try:
+                    payload["offset_ms"] = float(m.group(1)) * 1000.0
+                    payload["uncertainty_ms"] = float(m.group(2)) * 1000.0
+                    payload["server_addr"] = str(m.group(3))
+                except Exception:
+                    pass
+                break
+
+        if payload["offset_ms"] is None:
+            fallback = re.findall(r"\boffset:\s+[0-9A-Fa-f.]+\s+\(([+-]?\d+(?:\.\d+)?)\)", txt)
+            if fallback:
+                try:
+                    payload["offset_ms"] = float(fallback[-1]) * 1000.0
+                except Exception:
+                    pass
+
+        delay = re.findall(r"\bdelay:\s+[0-9A-Fa-f.]+\s+\(([+-]?\d+(?:\.\d+)?)\)", txt)
+        if delay:
+            try:
+                payload["delay_ms"] = float(delay[-1]) * 1000.0
+            except Exception:
+                pass
+        return payload
+
+    def _probe_system_time_source_sntp(self, *, source: str, timeout_seconds: float) -> dict[str, Any]:
+        cmd_path = shutil.which("sntp")
+        if not cmd_path:
+            return {
+                "source": str(source),
+                "backend": "sntp",
+                "available": False,
+                "ok": False,
+                "error": "sntp_not_found",
+            }
+        cmd = [cmd_path, "-d", str(source)]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=self.ctx.root,
+                text=True,
+                capture_output=True,
+                timeout=max(0.5, min(5.0, float(timeout_seconds))),
+            )
+            stdout = str(proc.stdout or "")
+            stderr = str(proc.stderr or "")
+            parsed = self._parse_sntp_debug_output(stdout + "\n" + stderr)
+            offset_ms = parsed.get("offset_ms")
+            uncertainty_ms = parsed.get("uncertainty_ms")
+            delay_ms = parsed.get("delay_ms")
+            rtt_ms = delay_ms if isinstance(delay_ms, (int, float)) else uncertainty_ms
+            available = bool(isinstance(offset_ms, (int, float)) and np.isfinite(float(offset_ms)))
+            return {
+                "source": str(source),
+                "backend": "sntp",
+                "available": bool(available),
+                "ok": False,
+                "offset_ms": float(offset_ms) if available else None,
+                "offset_abs_ms": float(abs(float(offset_ms))) if available else None,
+                "rtt_ms": float(rtt_ms) if isinstance(rtt_ms, (int, float)) and np.isfinite(float(rtt_ms)) else None,
+                "uncertainty_ms": float(uncertainty_ms)
+                if isinstance(uncertainty_ms, (int, float)) and np.isfinite(float(uncertainty_ms))
+                else None,
+                "server_addr": str(parsed.get("server_addr", "")),
+                "returncode": int(proc.returncode),
+                "error": "" if int(proc.returncode) == 0 else f"sntp_returncode_{int(proc.returncode)}",
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "source": str(source),
+                "backend": "sntp",
+                "available": False,
+                "ok": False,
+                "error": "sntp_timeout",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "source": str(source),
+                "backend": "sntp",
+                "available": False,
+                "ok": False,
+                "error": f"sntp_error:{exc}",
+            }
+
+    def _collect_system_time_sync_probe(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        enabled = bool(val.get("system_time_sync_probe_enabled", False))
+        if not enabled:
+            return {"enabled": False, "active": False, "status": "disabled", "sources": []}
+
+        primary = str(val.get("system_time_sync_primary_source", "time.google.com")).strip()
+        secondary = str(val.get("system_time_sync_secondary_source", "time.cloudflare.com")).strip()
+        timeout_seconds = self._clamp_float(float(val.get("system_time_sync_probe_timeout_seconds", 5.0)), 0.5, 5.0)
+        max_offset_ms = max(1, int(val.get("system_time_sync_max_offset_ms", 5)))
+        max_rtt_ms = max(1, int(val.get("system_time_sync_max_rtt_ms", 120)))
+        min_ok_sources = max(1, int(val.get("system_time_sync_min_ok_sources", 1)))
+        hard_fuse_enabled = bool(val.get("system_time_sync_hard_fuse_enabled", False))
+
+        ordered: list[str] = []
+        for host in (primary, secondary):
+            if host and host not in ordered:
+                ordered.append(host)
+        rows: list[dict[str, Any]] = []
+        for host in ordered:
+            row = self._probe_system_time_source_sntp(source=host, timeout_seconds=timeout_seconds)
+            available = bool(row.get("available", False))
+            offset_abs = float(row.get("offset_abs_ms", np.nan)) if available else np.nan
+            rtt_ms = float(row.get("rtt_ms", np.nan)) if available else np.nan
+            ok = bool(available and np.isfinite(offset_abs) and offset_abs <= max_offset_ms and np.isfinite(rtt_ms) and rtt_ms <= max_rtt_ms)
+            row["ok"] = bool(ok)
+            row["offset_limit_ms"] = int(max_offset_ms)
+            row["rtt_limit_ms"] = int(max_rtt_ms)
+            rows.append(row)
+
+        available_count = int(sum(1 for r in rows if bool(r.get("available", False))))
+        ok_count = int(sum(1 for r in rows if bool(r.get("ok", False))))
+        status = "ok" if ok_count >= min_ok_sources else "degraded"
+        if available_count == 0:
+            status = "unavailable"
+        payload = {
+            "enabled": True,
+            "active": True,
+            "status": str(status),
+            "primary_source": primary,
+            "secondary_source": secondary,
+            "probe_backend": "sntp",
+            "probe_timeout_seconds": float(timeout_seconds),
+            "max_offset_ms": int(max_offset_ms),
+            "max_rtt_ms": int(max_rtt_ms),
+            "min_ok_sources": int(min_ok_sources),
+            "hard_fuse_enabled": bool(hard_fuse_enabled),
+            "sources": rows,
+            "available_sources": int(available_count),
+            "ok_sources": int(ok_count),
+            "pass": bool(ok_count >= min_ok_sources),
+        }
+        artifact_dir = self.ctx.output_dir / "artifacts" / "time_sync"
+        artifact_path = artifact_dir / f"{as_of.isoformat()}_probe.json"
+        write_json(artifact_path, payload)
+        payload["artifact_path"] = str(artifact_path)
+        return payload
 
     def _mode_history_stats(self, *, as_of: date, lookback_days: int | None = None) -> dict[str, Any]:
         lb = int(lookback_days) if isinstance(lookback_days, int) and lookback_days > 0 else int(self.settings.validation.get("mode_stats_lookback_days", 365))
@@ -1461,6 +1626,1002 @@ class LieEngine:
         total = float(sum(by_symbol.values()))
         return by_symbol, by_theme, total
 
+    @staticmethod
+    def _sampling_window_end_ts(as_of: date) -> datetime:
+        end_ts = datetime.combine(as_of, time(23, 59, 59))
+        now_utc = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+        if end_ts > now_utc:
+            end_ts = now_utc
+        return end_ts
+
+    def _provider_time_sync_sample(self, *, provider: Any) -> dict[str, Any]:
+        fetch_fn = getattr(provider, "fetch_time_sync_sample", None)
+        if not callable(fetch_fn):
+            return {}
+        try:
+            sample = fetch_fn()
+        except NotImplementedError:
+            return {}
+        except Exception:
+            return {}
+        if not isinstance(sample, dict):
+            return {}
+        out: dict[str, Any] = {}
+        out["source"] = str(sample.get("source", getattr(provider, "name", "")))
+        for key in ("server_ts_ms", "local_send_ts_ms", "local_recv_ts_ms", "local_mid_ts_ms", "rtt_ms", "offset_ms", "offset_abs_ms"):
+            try:
+                out[key] = int(sample.get(key, 0))
+            except Exception:
+                out[key] = 0
+        return out
+
+    def _collect_micro_factor_map_with_rows(
+        self,
+        *,
+        as_of: date,
+        symbols: list[str],
+        override_symbols: list[str] | None = None,
+    ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+        val = self.settings.validation
+        enabled = bool(val.get("microstructure_signal_enabled", True))
+        raw_targets = val.get("microstructure_symbols", [])
+        target_symbols: list[str] = []
+        if isinstance(raw_targets, (list, tuple)):
+            target_symbols = [str(x).strip() for x in raw_targets if str(x).strip()]
+        elif isinstance(raw_targets, str):
+            target_symbols = [x.strip() for x in raw_targets.split(",") if x.strip()]
+        explicit_symbols = self._normalize_symbols(list(override_symbols)) if isinstance(override_symbols, list) else []
+        scan_symbols = explicit_symbols if explicit_symbols else (target_symbols if target_symbols else symbols)
+        if not enabled or not scan_symbols:
+            return {}, []
+
+        lookback_minutes = max(1, int(val.get("microstructure_lookback_minutes", 10)))
+        depth = max(5, int(val.get("microstructure_depth_levels", 20)))
+        trade_limit = max(20, int(val.get("microstructure_trade_limit", 500)))
+        cross_tolerance_ms = max(1, int(val.get("micro_cross_source_tolerance_ms", 80)))
+        continuous_gap_ms = max(100, int(val.get("micro_continuous_gap_ms", 2500)))
+        min_trade_count = max(1, int(val.get("micro_min_trade_count", 30)))
+        time_sync_hard_fuse = bool(val.get("micro_time_sync_hard_fuse_enabled", False))
+        time_sync_max_offset_ms = max(1, int(val.get("micro_time_sync_max_offset_ms", 5)))
+        time_sync_max_rtt_ms = max(1, int(val.get("micro_time_sync_max_rtt_ms", 120)))
+
+        end_ts = self._sampling_window_end_ts(as_of)
+        start_ts = end_ts - timedelta(minutes=lookback_minutes)
+
+        provider_pool: list[Any] = []
+        provider_names: set[str] = set()
+        for provider in self.providers:
+            source_name = str(getattr(provider, "name", "")).strip().lower()
+            key = source_name if source_name else f"provider_{id(provider)}"
+            if key in provider_names:
+                continue
+            provider_names.add(key)
+            provider_pool.append(provider)
+
+        # Keep micro snapshots available on default opensource profiles by hot-loading
+        # configured exchange providers (same behavior as cross-source audit path).
+        build_missing = bool(val.get("micro_cross_source_build_missing_provider", False))
+        if build_missing:
+            for raw_name in (
+                val.get("micro_cross_source_primary", "binance_spot_public"),
+                val.get("micro_cross_source_secondary", "bybit_spot_public"),
+            ):
+                provider_name = str(raw_name).strip().lower()
+                if not provider_name or provider_name in provider_names:
+                    continue
+                built = self._build_provider_by_name(provider_name)
+                if built is None:
+                    continue
+                provider_names.add(provider_name)
+                provider_pool.append(built)
+
+        out: dict[str, dict[str, Any]] = {}
+        source_rows: list[dict[str, Any]] = []
+        for symbol in scan_symbols:
+            best_state: dict[str, Any] | None = None
+            best_rank = -1e9
+            for provider in provider_pool:
+                source_name = str(getattr(provider, "name", ""))
+                try:
+                    l2 = provider.fetch_l2(symbol=symbol, start_ts=start_ts, end_ts=end_ts, depth=depth)
+                    trades = provider.fetch_trades(symbol=symbol, start_ts=start_ts, end_ts=end_ts, limit=trade_limit)
+                except NotImplementedError:
+                    continue
+                except Exception:
+                    continue
+                time_sync = self._provider_time_sync_sample(provider=provider)
+                sync_available = bool(time_sync)
+                time_offset_ms = int(abs(int(time_sync.get("offset_ms", 0)))) if sync_available else -1
+                time_rtt_ms = int(max(0, int(time_sync.get("rtt_ms", 0)))) if sync_available else -1
+                time_sync_ok = bool(
+                    sync_available
+                    and time_offset_ms <= time_sync_max_offset_ms
+                    and time_rtt_ms <= time_sync_max_rtt_ms
+                )
+                if time_sync_hard_fuse and not sync_available:
+                    time_sync_ok = False
+
+                state = summarize_microstructure_snapshot(
+                    l2=l2,
+                    trades=trades,
+                    cross_source_tolerance_ms=cross_tolerance_ms,
+                    continuous_gap_ms=continuous_gap_ms,
+                    min_trade_count=min_trade_count,
+                )
+                has_data = bool(state.get("has_data", False))
+                schema_ok = bool(state.get("schema_ok", True))
+                sync_ok = bool(state.get("sync_ok", False))
+                gap_ok = bool(state.get("gap_ok", False))
+                source_row = {
+                    "symbol": str(symbol),
+                    "source": source_name,
+                    "has_data": bool(has_data),
+                    "schema_ok": bool(schema_ok),
+                    "sync_ok": bool(sync_ok),
+                    "gap_ok": bool(gap_ok),
+                    "trade_count": int(state.get("trade_count", 0)),
+                    "evidence_score": float(state.get("evidence_score", 0.0)),
+                    "time_sync_available": bool(sync_available),
+                    "time_sync_ok": bool(time_sync_ok),
+                    "time_sync_offset_ms": int(time_offset_ms),
+                    "time_sync_rtt_ms": int(time_rtt_ms),
+                    "time_sync_max_offset_ms": int(time_sync_max_offset_ms),
+                    "time_sync_max_rtt_ms": int(time_sync_max_rtt_ms),
+                }
+                source_rows.append(source_row)
+                if not has_data and schema_ok:
+                    continue
+                state["source"] = source_name
+                state["time_sync_available"] = bool(sync_available)
+                state["time_sync_ok"] = bool(time_sync_ok)
+                state["time_sync_offset_ms"] = int(time_offset_ms)
+                state["time_sync_rtt_ms"] = int(time_rtt_ms)
+                state["time_sync_max_offset_ms"] = int(time_sync_max_offset_ms)
+                state["time_sync_max_rtt_ms"] = int(time_sync_max_rtt_ms)
+                state["time_sync_hard_fuse_enabled"] = bool(time_sync_hard_fuse)
+                rank = float(state.get("evidence_score", 0.0))
+                rank += 0.10 if schema_ok else -0.20
+                rank += 0.10 if sync_ok else -0.10
+                rank += 0.05 if gap_ok else -0.05
+                rank += 0.05 if time_sync_ok else (-0.10 if time_sync_hard_fuse else 0.0)
+                if rank > best_rank:
+                    best_rank = rank
+                    best_state = dict(state)
+            if isinstance(best_state, dict):
+                out[str(symbol)] = best_state
+        return out, source_rows
+
+    def _collect_micro_factor_map(self, *, as_of: date, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        out, _ = self._collect_micro_factor_map_with_rows(as_of=as_of, symbols=symbols)
+        return out
+
+    def _provider_by_name(self, name: str) -> Any | None:
+        target = str(name or "").strip().lower()
+        if not target:
+            return None
+        for provider in self.providers:
+            provider_name = str(getattr(provider, "name", "")).strip().lower()
+            if provider_name == target:
+                return provider
+        return None
+
+    @staticmethod
+    def _build_provider_by_name(name: str) -> Any | None:
+        target = str(name or "").strip().lower()
+        if not target:
+            return None
+        try:
+            stack = build_provider_stack(target)
+        except Exception:
+            return None
+        if not stack:
+            return None
+        return stack[0]
+
+    @staticmethod
+    def _median_trade_gap_ms(trades: pd.DataFrame) -> int:
+        if not isinstance(trades, pd.DataFrame) or trades.empty:
+            return 0
+        if "event_ts_ms" not in trades.columns:
+            return 0
+        ts = pd.to_numeric(trades["event_ts_ms"], errors="coerce").dropna()
+        if len(ts) < 2:
+            return 0
+        vals = ts.astype("int64").sort_values().to_numpy()
+        if len(vals) < 2:
+            return 0
+        diffs = np.diff(vals)
+        diffs = diffs[np.isfinite(diffs)]
+        diffs = diffs[diffs > 0]
+        if len(diffs) == 0:
+            return 0
+        return int(max(0, np.median(diffs)))
+
+    def _historical_gap_quantile_ms(
+        self,
+        *,
+        as_of: date,
+        symbol: str,
+        primary_source: str,
+        secondary_source: str,
+        lookback_days: int,
+        quantile: float,
+        scale: float,
+        cap_ms: int,
+    ) -> int:
+        if not self.ctx.sqlite_path.exists():
+            return 0
+        lb = max(1, int(lookback_days))
+        q = self._clamp_float(float(quantile), 0.50, 0.99)
+        mul = self._clamp_float(float(scale), 1.0, 3.0)
+        cap = max(100, int(cap_ms))
+        cutoff = (as_of - timedelta(days=lb)).isoformat()
+        try:
+            with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+                df = pd.read_sql_query(
+                    (
+                        "SELECT max_missing_left_ms, max_missing_right_ms "
+                        "FROM cross_source_alignment "
+                        "WHERE as_of >= ? AND symbol = ? AND primary_source = ? AND secondary_source = ? "
+                        "AND auditable = 1"
+                    ),
+                    conn,
+                    params=(cutoff, str(symbol), str(primary_source), str(secondary_source)),
+                )
+        except Exception:
+            return 0
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return 0
+        vals: list[float] = []
+        for c in ("max_missing_left_ms", "max_missing_right_ms"):
+            if c not in df.columns:
+                continue
+            arr = pd.to_numeric(df[c], errors="coerce").dropna()
+            if arr.empty:
+                continue
+            vals.extend(float(x) for x in arr.tolist())
+        if not vals:
+            return 0
+        base = float(np.quantile(np.asarray(vals, dtype=float), q))
+        if not np.isfinite(base) or base <= 0.0:
+            return 0
+        return int(min(cap, max(0.0, base * mul)))
+
+    def _collect_cross_source_audit(self, *, as_of: date, symbols: list[str]) -> dict[str, Any]:
+        val = self.settings.validation
+        enabled = bool(val.get("micro_cross_source_audit_enabled", True))
+        if (not enabled) or (not symbols):
+            return {"enabled": bool(enabled), "active": False, "status": "skipped"}
+        build_missing = bool(val.get("micro_cross_source_build_missing_provider", False))
+
+        primary_name = str(val.get("micro_cross_source_primary", "binance_spot_public")).strip().lower()
+        secondary_name = str(val.get("micro_cross_source_secondary", "bybit_spot_public")).strip().lower()
+        if (not primary_name) or (not secondary_name) or primary_name == secondary_name:
+            return {
+                "enabled": True,
+                "active": False,
+                "status": "skipped_bad_provider_pair",
+                "primary_source": primary_name,
+                "secondary_source": secondary_name,
+            }
+
+        primary = self._provider_by_name(primary_name)
+        secondary = self._provider_by_name(secondary_name)
+        if build_missing and primary is None:
+            primary = self._build_provider_by_name(primary_name)
+        if build_missing and secondary is None:
+            secondary = self._build_provider_by_name(secondary_name)
+        if primary is None or secondary is None:
+            return {
+                "enabled": True,
+                "active": False,
+                "status": "skipped_missing_provider",
+                "primary_source": primary_name,
+                "secondary_source": secondary_name,
+                "build_missing_provider": bool(build_missing),
+            }
+
+        align_seconds = max(30, int(val.get("micro_cross_source_align_seconds", 120)))
+        window_ms = max(50, int(val.get("micro_cross_source_window_ms", 200)))
+        tolerance_ms = max(1, int(val.get("micro_cross_source_tolerance_ms", 80)))
+        continuous_gap_ms = max(100, int(val.get("micro_continuous_gap_ms", 2500)))
+        trade_limit = max(20, int(val.get("micro_cross_source_trade_limit", 300)))
+        min_rows_per_side = max(1, int(val.get("micro_cross_source_min_rows_per_side", 1)))
+        adaptive_gap_enabled = bool(val.get("micro_cross_source_adaptive_gap_enabled", True))
+        gap_freq_multiplier = self._clamp_float(float(val.get("micro_cross_source_gap_freq_multiplier", 2.0)), 1.0, 10.0)
+        gap_hist_window_days = max(1, int(val.get("micro_cross_source_gap_hist_window_days", 30)))
+        gap_hist_quantile = self._clamp_float(float(val.get("micro_cross_source_gap_hist_quantile", 0.90)), 0.50, 0.99)
+        gap_hist_multiplier = self._clamp_float(float(val.get("micro_cross_source_gap_hist_multiplier", 1.10)), 1.0, 3.0)
+        gap_limit_cap_ms = max(100, int(val.get("micro_cross_source_gap_limit_cap_ms", 60000)))
+        symbol_cap = max(1, int(val.get("micro_cross_source_audit_symbol_cap", min(3, len(symbols)))))
+        raw_targets = val.get("micro_cross_source_symbols", [])
+        target_symbols: list[str] = []
+        if isinstance(raw_targets, (list, tuple)):
+            target_symbols = [str(x).strip() for x in raw_targets if str(x).strip()]
+        elif isinstance(raw_targets, str):
+            target_symbols = [x.strip() for x in raw_targets.split(",") if x.strip()]
+        selected_src = target_symbols if target_symbols else symbols
+        selected = [str(x) for x in selected_src[:symbol_cap] if str(x).strip()]
+        end_ts = datetime.utcnow() if as_of == date.today() else datetime.combine(as_of, time(23, 59, 59))
+        start_ts = end_ts - timedelta(seconds=align_seconds)
+
+        rows: list[dict[str, Any]] = []
+        samples: dict[str, list[dict[str, Any]]] = {}
+        for symbol in selected:
+            try:
+                left = primary.fetch_trades(symbol=symbol, start_ts=start_ts, end_ts=end_ts, limit=trade_limit)
+            except Exception:
+                left = pd.DataFrame()
+            try:
+                right = secondary.fetch_trades(symbol=symbol, start_ts=start_ts, end_ts=end_ts, limit=trade_limit)
+            except Exception:
+                right = pd.DataFrame()
+            left_gap_ms = self._median_trade_gap_ms(left)
+            right_gap_ms = self._median_trade_gap_ms(right)
+            gap_freq_ms = int(max(window_ms, left_gap_ms, right_gap_ms) * gap_freq_multiplier)
+            gap_hist_ms = self._historical_gap_quantile_ms(
+                as_of=as_of,
+                symbol=str(symbol),
+                primary_source=primary_name,
+                secondary_source=secondary_name,
+                lookback_days=gap_hist_window_days,
+                quantile=gap_hist_quantile,
+                scale=gap_hist_multiplier,
+                cap_ms=gap_limit_cap_ms,
+            )
+            effective_gap_ms = int(continuous_gap_ms)
+            if adaptive_gap_enabled:
+                effective_gap_ms = int(min(gap_limit_cap_ms, max(continuous_gap_ms, gap_freq_ms, gap_hist_ms)))
+
+            aligned = align_trade_windows(
+                left=left,
+                right=right,
+                window_ms=window_ms,
+                tolerance_ms=tolerance_ms,
+                continuous_gap_ms=effective_gap_ms,
+            )
+            summary = aligned.summary
+            primary_rows = int(len(left))
+            secondary_rows = int(len(right))
+            bucket_total = int(summary.get("bucket_total", 0))
+            auditable = bool(primary_rows >= min_rows_per_side and secondary_rows >= min_rows_per_side and bucket_total > 0)
+            row = {
+                "symbol": symbol,
+                "primary_trade_rows": primary_rows,
+                "secondary_trade_rows": secondary_rows,
+                "bucket_total": bucket_total,
+                "overlap_buckets": int(summary.get("overlap_buckets", 0)),
+                "missing_left_pct": float(summary.get("missing_left_pct", 0.0)),
+                "missing_right_pct": float(summary.get("missing_right_pct", 0.0)),
+                "max_missing_left_ms": int(summary.get("max_missing_left_ms", 0)),
+                "max_missing_right_ms": int(summary.get("max_missing_right_ms", 0)),
+                "median_bucket_skew_ms": float(summary.get("median_bucket_skew_ms", 0.0)),
+                "sync_ok": bool(summary.get("sync_ok", False)),
+                "gap_ok": bool(summary.get("gap_ok", False)),
+                "auditable": auditable,
+                "left_median_trade_gap_ms": int(left_gap_ms),
+                "right_median_trade_gap_ms": int(right_gap_ms),
+                "gap_limit_base_ms": int(continuous_gap_ms),
+                "gap_limit_from_freq_ms": int(gap_freq_ms if adaptive_gap_enabled else 0),
+                "gap_limit_from_hist_ms": int(gap_hist_ms if adaptive_gap_enabled else 0),
+                "effective_gap_limit_ms": int(effective_gap_ms),
+            }
+            if auditable:
+                row["pass"] = bool(row["sync_ok"] and row["gap_ok"])
+                row["row_status"] = "audited_pass" if bool(row["pass"]) else "audited_fail"
+            else:
+                row["pass"] = None
+                row["row_status"] = "insufficient_samples"
+            rows.append(row)
+            samples[symbol] = aligned.windows.head(20).to_dict(orient="records")
+
+        audited_rows = [r for r in rows if bool(r.get("auditable", False))]
+        fail_symbols = sorted(
+            [
+                str(r["symbol"])
+                for r in audited_rows
+                if str(r.get("row_status", "")).strip().lower() == "audited_fail"
+            ]
+        )
+        fail_ratio = float(len(fail_symbols) / max(1, len(audited_rows)))
+        status = "ok"
+        if len(rows) == 0:
+            status = "no_symbols"
+        elif len(audited_rows) == 0:
+            status = "insufficient_samples"
+        audit_payload = {
+            "enabled": True,
+            "active": True,
+            "status": status,
+            "primary_source": primary_name,
+            "secondary_source": secondary_name,
+            "window": {
+                "start_utc": start_ts.isoformat(),
+                "end_utc": end_ts.isoformat(),
+                "align_seconds": int(align_seconds),
+                "window_ms": int(window_ms),
+                "tolerance_ms": int(tolerance_ms),
+                "continuous_gap_ms": int(continuous_gap_ms),
+                "trade_limit": int(trade_limit),
+                "min_rows_per_side": int(min_rows_per_side),
+                "adaptive_gap_enabled": bool(adaptive_gap_enabled),
+                "gap_freq_multiplier": float(gap_freq_multiplier),
+                "gap_hist_window_days": int(gap_hist_window_days),
+                "gap_hist_quantile": float(gap_hist_quantile),
+                "gap_hist_multiplier": float(gap_hist_multiplier),
+                "gap_limit_cap_ms": int(gap_limit_cap_ms),
+            },
+            "symbols_selected": int(len(rows)),
+            "symbols_audited": int(len(audited_rows)),
+            "symbols_insufficient": int(max(0, len(rows) - len(audited_rows))),
+            "fail_symbols": fail_symbols,
+            "fail_ratio": fail_ratio,
+            "effective_gap_limit_ms_median": int(
+                pd.Series([int(r.get("effective_gap_limit_ms", 0)) for r in rows], dtype=float).median()
+                if rows
+                else 0
+            ),
+            "rows": rows,
+            "samples": samples,
+        }
+
+        artifact_dir = self.ctx.output_dir / "artifacts" / "micro_alignment"
+        artifact_path = artifact_dir / f"{as_of.isoformat()}_cross_source_alignment.json"
+        write_json(artifact_path, audit_payload)
+        audit_payload["artifact_path"] = str(artifact_path)
+        return audit_payload
+
+    def _microstructure_gate_reasons(
+        self,
+        *,
+        symbols: list[str],
+        micro_factor_map: dict[str, dict[str, Any]],
+        cross_source_audit: dict[str, Any],
+    ) -> list[str]:
+        val = self.settings.validation
+        reasons: list[str] = []
+
+        schema_hard_fuse = bool(val.get("micro_schema_hard_fuse_enabled", True))
+        max_schema_fail_symbols = max(0, int(val.get("micro_schema_max_fail_symbols", 0)))
+        schema_fail_symbols = sorted(
+            [str(sym) for sym in symbols if sym in micro_factor_map and not bool(micro_factor_map[sym].get("schema_ok", True))]
+        )
+        if schema_hard_fuse and len(schema_fail_symbols) > max_schema_fail_symbols:
+            head = ",".join(schema_fail_symbols[:5])
+            reasons.append(
+                "微观结构字段完整性熔断："
+                + f"schema_fail={len(schema_fail_symbols)} > max={max_schema_fail_symbols}; symbols={head}"
+            )
+
+        cross_hard_fuse = bool(val.get("micro_cross_source_hard_fuse_enabled", False))
+        max_fail_ratio = self._clamp_float(float(val.get("micro_cross_source_max_fail_ratio", 0.50)), 0.0, 1.0)
+        min_samples = max(1, int(val.get("micro_cross_source_min_samples", 1)))
+        if cross_hard_fuse and bool(cross_source_audit.get("active", False)):
+            samples = int(cross_source_audit.get("symbols_audited", 0))
+            fail_ratio = float(cross_source_audit.get("fail_ratio", 0.0))
+            if samples >= min_samples and fail_ratio > max_fail_ratio:
+                reasons.append(
+                    "跨源对齐熔断："
+                    + f"fail_ratio={fail_ratio:.3f} > max={max_fail_ratio:.3f}; "
+                    + f"fail_symbols={','.join(cross_source_audit.get('fail_symbols', [])[:5])}"
+                )
+
+        time_hard_fuse = bool(val.get("micro_time_sync_hard_fuse_enabled", False))
+        time_min_samples = max(1, int(val.get("micro_time_sync_min_samples", 1)))
+        time_max_offset_ms = max(1, int(val.get("micro_time_sync_max_offset_ms", 5)))
+        time_max_rtt_ms = max(1, int(val.get("micro_time_sync_max_rtt_ms", 120)))
+        time_bad_symbols: list[str] = []
+        for sym in symbols:
+            if sym not in micro_factor_map:
+                continue
+            row = micro_factor_map[sym] if isinstance(micro_factor_map.get(sym, {}), dict) else {}
+            if not bool(row.get("has_data", False)):
+                continue
+            available = bool(row.get("time_sync_available", False))
+            if not available:
+                time_bad_symbols.append(str(sym))
+                continue
+            offset_ms = int(max(0, self._clamp_float(float(row.get("time_sync_offset_ms", -1)), 0.0, 1e9)))
+            rtt_ms = int(max(0, self._clamp_float(float(row.get("time_sync_rtt_ms", -1)), 0.0, 1e9)))
+            if offset_ms > time_max_offset_ms or rtt_ms > time_max_rtt_ms:
+                time_bad_symbols.append(str(sym))
+        if time_hard_fuse and len(time_bad_symbols) >= time_min_samples:
+            reasons.append(
+                "时钟同步熔断："
+                + f"bad_symbols={len(time_bad_symbols)} >= min_samples={time_min_samples}; "
+                + f"offset_thr={time_max_offset_ms}ms; rtt_thr={time_max_rtt_ms}ms; "
+                + f"symbols={','.join(sorted(time_bad_symbols)[:5])}"
+            )
+        return reasons
+
+    def _system_time_sync_gate_reasons(self, *, probe: dict[str, Any]) -> list[str]:
+        if not isinstance(probe, dict):
+            return []
+        if not bool(probe.get("active", False)):
+            return []
+        if not bool(probe.get("hard_fuse_enabled", False)):
+            return []
+        if bool(probe.get("pass", False)):
+            return []
+        ok_sources = int(probe.get("ok_sources", 0))
+        min_ok_sources = int(probe.get("min_ok_sources", 1))
+        status = str(probe.get("status", "unknown"))
+        return [
+            "系统授时熔断："
+            + f"ok_sources={ok_sources} < min_ok_sources={min_ok_sources}; status={status}; "
+            + f"offset_thr={int(probe.get('max_offset_ms', 0))}ms; "
+            + f"rtt_thr={int(probe.get('max_rtt_ms', 0))}ms"
+        ]
+
+    def _cross_source_stress_from_audit(self, *, audit: dict[str, Any]) -> float:
+        if not isinstance(audit, dict) or not bool(audit.get("active", False)):
+            return 0.0
+        fail_ratio = self._clamp_float(float(audit.get("fail_ratio", 0.0)), 0.0, 1.0)
+        selected = max(0, int(audit.get("symbols_selected", 0)))
+        audited = max(0, int(audit.get("symbols_audited", 0)))
+        insufficient_ratio = self._clamp_float((selected - audited) / max(1, selected), 0.0, 1.0)
+        status = str(audit.get("status", "")).strip().lower()
+        status_penalty = 0.0
+        if status == "insufficient_samples":
+            status_penalty = 0.12
+        elif status not in {"", "ok"}:
+            status_penalty = 0.25
+        stress = self._clamp_float(fail_ratio * 1.05 + insufficient_ratio * 0.35 + status_penalty, 0.0, 1.5)
+        return float(stress)
+
+    def _cross_source_quality_stats(
+        self,
+        *,
+        as_of: date,
+        lookback_days: int,
+        current_audit: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        lb = max(1, int(lookback_days))
+        rows: list[dict[str, Any]] = []
+        if self.ctx.sqlite_path.exists():
+            cutoff = (as_of - timedelta(days=lb)).isoformat()
+            try:
+                with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+                    hist = pd.read_sql_query(
+                        "SELECT * FROM cross_source_audit_daily WHERE as_of >= ? ORDER BY as_of ASC",
+                        conn,
+                        params=(cutoff,),
+                    )
+                if isinstance(hist, pd.DataFrame) and not hist.empty:
+                    rows.extend(hist.to_dict(orient="records"))
+            except Exception:
+                pass
+        if isinstance(current_audit, dict) and current_audit:
+            rows.append(
+                {
+                    "as_of": as_of.isoformat(),
+                    "active": bool(current_audit.get("active", False)),
+                    "status": str(current_audit.get("status", "")),
+                    "symbols_selected": int(current_audit.get("symbols_selected", 0)),
+                    "symbols_audited": int(current_audit.get("symbols_audited", 0)),
+                    "fail_ratio": float(current_audit.get("fail_ratio", 0.0)),
+                    "effective_gap_limit_ms_median": int(current_audit.get("effective_gap_limit_ms_median", 0)),
+                }
+            )
+
+        out = {
+            "lookback_days": int(lb),
+            "sample_days": 0,
+            "active_days": 0,
+            "avg_fail_ratio": 0.0,
+            "p90_fail_ratio": 0.0,
+            "avg_insufficient_ratio": 0.0,
+            "avg_effective_gap_limit_ms": 0.0,
+            "quality_score": 1.0,
+        }
+        if not rows:
+            return out
+
+        frame = pd.DataFrame(rows)
+        if "as_of" in frame.columns:
+            frame["as_of"] = frame["as_of"].astype(str)
+            frame = frame.sort_values("as_of", kind="mergesort").drop_duplicates(subset=["as_of"], keep="last")
+        active = pd.to_numeric(frame.get("active", 0), errors="coerce").fillna(0.0) > 0.5
+        selected = pd.to_numeric(frame.get("symbols_selected", frame.get("symbols_audited", 0)), errors="coerce").fillna(0.0)
+        audited = pd.to_numeric(frame.get("symbols_audited", 0), errors="coerce").fillna(0.0)
+        fail_ratio = pd.to_numeric(frame.get("fail_ratio", 0.0), errors="coerce").fillna(0.0).clip(0.0, 1.0)
+        effective_gap = pd.to_numeric(frame.get("effective_gap_limit_ms_median", 0.0), errors="coerce").fillna(0.0)
+        insufficient_ratio = ((selected - audited).clip(lower=0.0) / selected.replace(0.0, np.nan)).fillna(0.0).clip(0.0, 1.0)
+
+        use = active if bool(active.any()) else pd.Series(np.ones(len(frame), dtype=bool), index=frame.index)
+        fail_use = fail_ratio[use]
+        insuff_use = insufficient_ratio[use]
+        gap_use = effective_gap[use]
+
+        avg_fail = float(fail_use.mean()) if not fail_use.empty else 0.0
+        p90_fail = float(fail_use.quantile(0.90)) if not fail_use.empty else 0.0
+        avg_insuff = float(insuff_use.mean()) if not insuff_use.empty else 0.0
+        avg_gap = float(gap_use.mean()) if not gap_use.empty else 0.0
+        quality_score = self._clamp_float(1.0 - (avg_fail * 0.70 + avg_insuff * 0.30), 0.0, 1.0)
+
+        out.update(
+            {
+                "sample_days": int(len(frame)),
+                "active_days": int(active.sum()),
+                "avg_fail_ratio": float(avg_fail),
+                "p90_fail_ratio": float(p90_fail),
+                "avg_insufficient_ratio": float(avg_insuff),
+                "avg_effective_gap_limit_ms": float(avg_gap),
+                "quality_score": float(quality_score),
+            }
+        )
+        return out
+
+    def _write_cross_source_quality_report(
+        self,
+        *,
+        as_of: date,
+        audit: dict[str, Any],
+        stats_7d: dict[str, Any],
+    ) -> Path:
+        report_dir = self.ctx.output_dir / "reports" / "cross_source"
+        path = report_dir / f"{as_of.isoformat()}_quality_7d.md"
+        lines: list[str] = []
+        lines.append(f"# Cross-Source Quality 7D | {as_of.isoformat()}")
+        lines.append("")
+        lines.append("## Current Audit")
+        lines.append(f"- status: `{str(audit.get('status', ''))}`")
+        lines.append(f"- primary: `{str(audit.get('primary_source', ''))}`")
+        lines.append(f"- secondary: `{str(audit.get('secondary_source', ''))}`")
+        lines.append(f"- selected/audited/insufficient: `{int(audit.get('symbols_selected', 0))}/{int(audit.get('symbols_audited', 0))}/{int(audit.get('symbols_insufficient', 0))}`")
+        lines.append(f"- fail_ratio: `{float(audit.get('fail_ratio', 0.0)):.4f}`")
+        lines.append(f"- effective_gap_limit_ms_median: `{int(audit.get('effective_gap_limit_ms_median', 0))}`")
+        lines.append("")
+        lines.append("## Rolling 7D")
+        lines.append(f"- sample_days: `{int(stats_7d.get('sample_days', 0))}`")
+        lines.append(f"- active_days: `{int(stats_7d.get('active_days', 0))}`")
+        lines.append(f"- avg_fail_ratio: `{float(stats_7d.get('avg_fail_ratio', 0.0)):.4f}`")
+        lines.append(f"- p90_fail_ratio: `{float(stats_7d.get('p90_fail_ratio', 0.0)):.4f}`")
+        lines.append(f"- avg_insufficient_ratio: `{float(stats_7d.get('avg_insufficient_ratio', 0.0)):.4f}`")
+        lines.append(f"- avg_effective_gap_limit_ms: `{float(stats_7d.get('avg_effective_gap_limit_ms', 0.0)):.1f}`")
+        lines.append(f"- quality_score: `{float(stats_7d.get('quality_score', 1.0)):.4f}`")
+        lines.append("")
+        lines.append("## Fail Symbols")
+        fail_symbols = audit.get("fail_symbols", []) if isinstance(audit.get("fail_symbols", []), list) else []
+        if fail_symbols:
+            for sym in fail_symbols:
+                lines.append(f"- {sym}")
+        else:
+            lines.append("- NONE")
+        write_markdown(path, "\n".join(lines) + "\n")
+        return path
+
+    def _persist_system_time_sync_probe(self, *, as_of: date, probe: dict[str, Any]) -> None:
+        rows = probe.get("sources", []) if isinstance(probe.get("sources", []), list) else []
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "system_time_sync_source_state",
+            (
+                pd.DataFrame(
+                    [
+                        {"as_of": as_of.isoformat()} | (row if isinstance(row, dict) else {})
+                        for row in rows
+                    ]
+                )
+                if rows
+                else pd.DataFrame(
+                    columns=[
+                        "as_of",
+                        "source",
+                        "backend",
+                        "available",
+                        "ok",
+                        "offset_ms",
+                        "offset_abs_ms",
+                        "rtt_ms",
+                        "uncertainty_ms",
+                        "server_addr",
+                        "returncode",
+                        "error",
+                        "offset_limit_ms",
+                        "rtt_limit_ms",
+                    ]
+                )
+            ),
+        )
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "system_time_sync_daily",
+            pd.DataFrame(
+                [
+                    {
+                        "as_of": as_of.isoformat(),
+                        "enabled": bool(probe.get("enabled", False)),
+                        "active": bool(probe.get("active", False)),
+                        "status": str(probe.get("status", "")),
+                        "primary_source": str(probe.get("primary_source", "")),
+                        "secondary_source": str(probe.get("secondary_source", "")),
+                        "max_offset_ms": int(probe.get("max_offset_ms", 0)),
+                        "max_rtt_ms": int(probe.get("max_rtt_ms", 0)),
+                        "min_ok_sources": int(probe.get("min_ok_sources", 0)),
+                        "ok_sources": int(probe.get("ok_sources", 0)),
+                        "available_sources": int(probe.get("available_sources", 0)),
+                        "pass": bool(probe.get("pass", False)),
+                        "hard_fuse_enabled": bool(probe.get("hard_fuse_enabled", False)),
+                        "artifact_path": str(probe.get("artifact_path", "")),
+                    }
+                ]
+            ),
+        )
+
+    def run_time_sync_probe(self, as_of: date) -> dict[str, Any]:
+        probe = self._collect_system_time_sync_probe(as_of=as_of)
+        self._persist_system_time_sync_probe(as_of=as_of, probe=probe)
+        return {
+            "date": as_of.isoformat(),
+            "status": str(probe.get("status", "")),
+            "pass": bool(probe.get("pass", False)),
+            "ok_sources": int(probe.get("ok_sources", 0)),
+            "available_sources": int(probe.get("available_sources", 0)),
+            "hard_fuse_enabled": bool(probe.get("hard_fuse_enabled", False)),
+            "artifact": str(probe.get("artifact_path", "")),
+            "sources": list(probe.get("sources", [])),
+        }
+
+    @staticmethod
+    def _normalize_symbols(raw_symbols: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in raw_symbols:
+            sym = re.sub(r"[^A-Za-z0-9]", "", str(raw or "").upper()).strip()
+            if (not sym) or (sym in seen):
+                continue
+            seen.add(sym)
+            out.append(sym)
+        return out
+
+    def _resolve_micro_capture_symbols(self, *, symbols: list[str] | None = None) -> list[str]:
+        if isinstance(symbols, list) and symbols:
+            return self._normalize_symbols(symbols)
+
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        candidates: list[str] = []
+        raw_cross = val.get("micro_cross_source_symbols", [])
+        if isinstance(raw_cross, (list, tuple)):
+            candidates.extend(str(x) for x in raw_cross)
+        elif isinstance(raw_cross, str):
+            candidates.extend(x.strip() for x in raw_cross.split(","))
+
+        if not candidates:
+            raw_micro = val.get("microstructure_symbols", [])
+            if isinstance(raw_micro, (list, tuple)):
+                candidates.extend(str(x) for x in raw_micro)
+            elif isinstance(raw_micro, str):
+                candidates.extend(x.strip() for x in raw_micro.split(","))
+
+        if not candidates:
+            candidates.extend(self._core_symbols())
+        return self._normalize_symbols(candidates)
+
+    def _micro_capture_rolling_stats(self, *, as_of: date, lookback_days: int = 7) -> dict[str, Any]:
+        if not self.ctx.sqlite_path.exists():
+            return {
+                "lookback_days": int(max(1, lookback_days)),
+                "run_count": 0,
+                "pass_ratio": 0.0,
+                "avg_cross_source_fail_ratio": 0.0,
+                "avg_selected_schema_ok_ratio": 0.0,
+                "avg_selected_time_sync_ok_ratio": 0.0,
+            }
+        cutoff = (as_of - timedelta(days=max(1, int(lookback_days)))).isoformat()
+        try:
+            with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+                df = pd.read_sql_query(
+                    (
+                        "SELECT pass, cross_source_fail_ratio, selected_schema_ok_ratio, "
+                        "selected_time_sync_ok_ratio FROM micro_capture_runs WHERE as_of >= ?"
+                    ),
+                    conn,
+                    params=(cutoff,),
+                )
+        except Exception:
+            df = pd.DataFrame()
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return {
+                "lookback_days": int(max(1, lookback_days)),
+                "run_count": 0,
+                "pass_ratio": 0.0,
+                "avg_cross_source_fail_ratio": 0.0,
+                "avg_selected_schema_ok_ratio": 0.0,
+                "avg_selected_time_sync_ok_ratio": 0.0,
+            }
+        pass_vals = pd.to_numeric(df.get("pass", 0), errors="coerce").fillna(0.0)
+        fail_vals = pd.to_numeric(df.get("cross_source_fail_ratio", 0.0), errors="coerce").fillna(0.0)
+        schema_vals = pd.to_numeric(df.get("selected_schema_ok_ratio", 0.0), errors="coerce").fillna(0.0)
+        time_vals = pd.to_numeric(df.get("selected_time_sync_ok_ratio", 0.0), errors="coerce").fillna(0.0)
+        return {
+            "lookback_days": int(max(1, lookback_days)),
+            "run_count": int(len(df)),
+            "pass_ratio": float(np.clip(pass_vals.mean(), 0.0, 1.0)),
+            "avg_cross_source_fail_ratio": float(np.clip(fail_vals.mean(), 0.0, 1.0)),
+            "avg_selected_schema_ok_ratio": float(np.clip(schema_vals.mean(), 0.0, 1.0)),
+            "avg_selected_time_sync_ok_ratio": float(np.clip(time_vals.mean(), 0.0, 1.0)),
+        }
+
+    def run_micro_capture(self, *, as_of: date, symbols: list[str] | None = None) -> dict[str, Any]:
+        target_symbols = self._resolve_micro_capture_symbols(symbols=symbols)
+        micro_factor_map, micro_source_rows = self._collect_micro_factor_map_with_rows(
+            as_of=as_of,
+            symbols=target_symbols,
+            override_symbols=target_symbols,
+        )
+        cross_source_audit = self._collect_cross_source_audit(as_of=as_of, symbols=target_symbols)
+        system_time_sync_probe = self._collect_system_time_sync_probe(as_of=as_of)
+        self._persist_system_time_sync_probe(as_of=as_of, probe=system_time_sync_probe)
+
+        run_ts = datetime.now(tz=timezone.utc).replace(microsecond=0)
+        run_ts_utc = run_ts.isoformat()
+        stamp = run_ts.strftime("%Y%m%dT%H%M%SZ")
+
+        selected_rows: list[dict[str, Any]] = []
+        for symbol, state in micro_factor_map.items():
+            if not isinstance(state, dict):
+                continue
+            selected_rows.append(
+                {
+                    "symbol": str(symbol),
+                    "source": str(state.get("source", "")),
+                    "has_data": bool(state.get("has_data", False)),
+                    "schema_ok": bool(state.get("schema_ok", False)),
+                    "sync_ok": bool(state.get("sync_ok", False)),
+                    "gap_ok": bool(state.get("gap_ok", False)),
+                    "trade_count": int(state.get("trade_count", 0)),
+                    "evidence_score": float(state.get("evidence_score", 0.0)),
+                    "queue_imbalance": float(state.get("queue_imbalance", 0.0)),
+                    "ofi_norm": float(state.get("ofi_norm", 0.0)),
+                    "micro_alignment": float(state.get("micro_alignment", 0.0)),
+                    "max_trade_gap_ms": int(state.get("max_trade_gap_ms", 0)),
+                    "sync_skew_ms": float(state.get("sync_skew_ms", 0.0)),
+                    "time_sync_available": bool(state.get("time_sync_available", False)),
+                    "time_sync_ok": bool(state.get("time_sync_ok", False)),
+                    "time_sync_offset_ms": int(state.get("time_sync_offset_ms", -1)),
+                    "time_sync_rtt_ms": int(state.get("time_sync_rtt_ms", -1)),
+                    "time_sync_max_offset_ms": int(state.get("time_sync_max_offset_ms", 0)),
+                    "time_sync_max_rtt_ms": int(state.get("time_sync_max_rtt_ms", 0)),
+                }
+            )
+
+        selected_count = int(len(selected_rows))
+        schema_ok_ratio = float(
+            sum(1 for r in selected_rows if bool(r.get("schema_ok", False))) / max(1, selected_count)
+        )
+        time_sync_ok_ratio = float(
+            sum(1 for r in selected_rows if bool(r.get("time_sync_ok", False))) / max(1, selected_count)
+        )
+        sync_ok_ratio = float(sum(1 for r in selected_rows if bool(r.get("sync_ok", False))) / max(1, selected_count))
+
+        cross_active = bool(cross_source_audit.get("active", False))
+        cross_status = str(cross_source_audit.get("status", ""))
+        cross_fail_ratio = float(cross_source_audit.get("fail_ratio", 0.0))
+        max_fail_ratio = self._clamp_float(float(self.settings.validation.get("micro_cross_source_max_fail_ratio", 0.50)), 0.0, 1.0)
+        cross_ok = (not cross_active) or (cross_status == "insufficient_samples") or (cross_fail_ratio <= max_fail_ratio)
+        system_time_ok = (not bool(system_time_sync_probe.get("enabled", False))) or bool(system_time_sync_probe.get("pass", False))
+        capture_pass = bool(cross_ok and system_time_ok)
+        status = "ok" if capture_pass else "degraded"
+        if selected_count == 0 and (not cross_active):
+            status = "no_micro_data"
+
+        capture_payload = {
+            "captured_at_utc": run_ts_utc,
+            "as_of": as_of.isoformat(),
+            "symbols_requested": int(len(target_symbols)),
+            "symbols_selected": int(selected_count),
+            "status": status,
+            "pass": bool(capture_pass),
+            "summary": {
+                "selected_schema_ok_ratio": float(schema_ok_ratio),
+                "selected_time_sync_ok_ratio": float(time_sync_ok_ratio),
+                "selected_sync_ok_ratio": float(sync_ok_ratio),
+                "cross_source_active": bool(cross_active),
+                "cross_source_status": cross_status,
+                "cross_source_fail_ratio": float(cross_fail_ratio),
+                "cross_source_fail_ratio_limit": float(max_fail_ratio),
+                "cross_source_symbols_audited": int(cross_source_audit.get("symbols_audited", 0)),
+                "cross_source_symbols_insufficient": int(cross_source_audit.get("symbols_insufficient", 0)),
+                "system_time_sync_enabled": bool(system_time_sync_probe.get("enabled", False)),
+                "system_time_sync_pass": bool(system_time_sync_probe.get("pass", False)),
+                "system_time_sync_ok_sources": int(system_time_sync_probe.get("ok_sources", 0)),
+                "system_time_sync_available_sources": int(system_time_sync_probe.get("available_sources", 0)),
+            },
+            "selected_micro": selected_rows,
+            "source_rows": list(micro_source_rows),
+            "cross_source_audit": cross_source_audit,
+            "system_time_sync": system_time_sync_probe,
+        }
+
+        artifact_dir = self.ctx.output_dir / "artifacts" / "micro_capture"
+        artifact_path = artifact_dir / f"{stamp}_micro_capture.json"
+        write_json(artifact_path, capture_payload)
+
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "micro_capture_runs",
+            pd.DataFrame(
+                [
+                    {
+                        "run_ts_utc": run_ts_utc,
+                        "as_of": as_of.isoformat(),
+                        "status": status,
+                        "pass": int(1 if capture_pass else 0),
+                        "symbols_requested": int(len(target_symbols)),
+                        "symbols_selected": int(selected_count),
+                        "source_rows": int(len(micro_source_rows)),
+                        "cross_source_active": bool(cross_active),
+                        "cross_source_status": cross_status,
+                        "cross_source_fail_ratio": float(cross_fail_ratio),
+                        "cross_source_fail_ratio_limit": float(max_fail_ratio),
+                        "cross_source_symbols_audited": int(cross_source_audit.get("symbols_audited", 0)),
+                        "cross_source_symbols_insufficient": int(cross_source_audit.get("symbols_insufficient", 0)),
+                        "system_time_sync_enabled": bool(system_time_sync_probe.get("enabled", False)),
+                        "system_time_sync_pass": bool(system_time_sync_probe.get("pass", False)),
+                        "system_time_sync_ok_sources": int(system_time_sync_probe.get("ok_sources", 0)),
+                        "system_time_sync_available_sources": int(system_time_sync_probe.get("available_sources", 0)),
+                        "selected_schema_ok_ratio": float(schema_ok_ratio),
+                        "selected_time_sync_ok_ratio": float(time_sync_ok_ratio),
+                        "selected_sync_ok_ratio": float(sync_ok_ratio),
+                        "artifact_path": str(artifact_path),
+                    }
+                ]
+            ),
+        )
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "micro_capture_source_state",
+            (
+                pd.DataFrame([{"run_ts_utc": run_ts_utc, "as_of": as_of.isoformat()} | row for row in micro_source_rows])
+                if micro_source_rows
+                else pd.DataFrame()
+            ),
+        )
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "micro_capture_symbol_state",
+            (
+                pd.DataFrame([{"run_ts_utc": run_ts_utc, "as_of": as_of.isoformat()} | row for row in selected_rows])
+                if selected_rows
+                else pd.DataFrame()
+            ),
+        )
+        cross_rows = cross_source_audit.get("rows", []) if isinstance(cross_source_audit.get("rows", []), list) else []
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "micro_capture_cross_source",
+            (
+                pd.DataFrame(
+                    [
+                        {
+                            "run_ts_utc": run_ts_utc,
+                            "as_of": as_of.isoformat(),
+                            "primary_source": str(cross_source_audit.get("primary_source", "")),
+                            "secondary_source": str(cross_source_audit.get("secondary_source", "")),
+                            "audit_status": str(cross_source_audit.get("status", "")),
+                        }
+                        | (row if isinstance(row, dict) else {})
+                        for row in cross_rows
+                    ]
+                )
+                if cross_rows
+                else pd.DataFrame()
+            ),
+        )
+
+        rolling = self._micro_capture_rolling_stats(as_of=as_of, lookback_days=7)
+        return {
+            "as_of": as_of.isoformat(),
+            "captured_at_utc": run_ts_utc,
+            "status": status,
+            "pass": bool(capture_pass),
+            "symbols": list(target_symbols),
+            "summary": dict(capture_payload.get("summary", {})),
+            "rolling_7d": rolling,
+            "artifact": str(artifact_path),
+        }
+
     def run_eod(self, as_of: date) -> dict[str, Any]:
         symbols = self._core_symbols()
         bars, ingest = self._run_ingestion(as_of, symbols)
@@ -1472,13 +2633,65 @@ class LieEngine:
         signal_cfg = SignalEngineConfig(
             confidence_min=float(runtime_params["signal_confidence_min"]),
             convexity_min=float(runtime_params["convexity_min"]),
+            microstructure_enabled=bool(self.settings.validation.get("microstructure_signal_enabled", True)),
+            micro_confidence_boost_max=float(self.settings.validation.get("micro_confidence_boost_max", 8.0)),
+            micro_penalty_max=float(self.settings.validation.get("micro_penalty_max", 10.0)),
+            micro_min_trade_count=max(1, int(self.settings.validation.get("micro_min_trade_count", 30))),
         )
         market_factor_state = self._market_factor_state(sentiment=ingest.sentiment, regime=regime, bars=bars)
+        micro_factor_map, micro_source_rows = self._collect_micro_factor_map_with_rows(as_of=as_of, symbols=symbols)
+        cross_source_audit = self._collect_cross_source_audit(as_of=as_of, symbols=symbols)
+        quality_lookback_days = max(1, int(self.settings.validation.get("micro_cross_source_quality_lookback_days", 7)))
+        cross_source_quality_7d = self._cross_source_quality_stats(
+            as_of=as_of,
+            lookback_days=quality_lookback_days,
+            current_audit=cross_source_audit,
+        )
+        cross_source_report_path = self._write_cross_source_quality_report(
+            as_of=as_of,
+            audit=cross_source_audit,
+            stats_7d=cross_source_quality_7d,
+        )
+        cross_source_stress = self._cross_source_stress_from_audit(audit=cross_source_audit)
+        hist_fail = float(cross_source_quality_7d.get("avg_fail_ratio", 0.0))
+        hist_insuff = float(cross_source_quality_7d.get("avg_insufficient_ratio", 0.0))
+        hist_stress = self._clamp_float(hist_fail * 1.00 + hist_insuff * 0.30, 0.0, 1.5)
+        cross_source_stress = self._clamp_float(0.75 * cross_source_stress + 0.25 * hist_stress, 0.0, 1.5)
+        market_factor_state["cross_source_stress"] = float(cross_source_stress)
+        market_factor_state["cross_source_fail_ratio"] = float(cross_source_audit.get("fail_ratio", 0.0))
+        market_factor_state["cross_source_symbols_audited"] = float(cross_source_audit.get("symbols_audited", 0))
+        market_factor_state["cross_source_fail_ratio_7d"] = float(cross_source_quality_7d.get("avg_fail_ratio", 0.0))
+        market_factor_state["cross_source_insufficient_ratio_7d"] = float(cross_source_quality_7d.get("avg_insufficient_ratio", 0.0))
+        market_factor_state["cross_source_quality_score_7d"] = float(cross_source_quality_7d.get("quality_score", 1.0))
+        system_time_sync_probe = self._collect_system_time_sync_probe(as_of=as_of)
+        market_factor_state["system_time_sync_ok_sources"] = float(system_time_sync_probe.get("ok_sources", 0))
+        market_factor_state["system_time_sync_available_sources"] = float(system_time_sync_probe.get("available_sources", 0))
+        time_sync_offset_max = max(1, int(self.settings.validation.get("micro_time_sync_max_offset_ms", 5)))
+        time_sync_rtt_max = max(1, int(self.settings.validation.get("micro_time_sync_max_rtt_ms", 120)))
+        symbols_time_sync_available = int(
+            sum(1 for v in micro_factor_map.values() if bool(v.get("has_data", False)) and bool(v.get("time_sync_available", False)))
+        )
+        symbols_time_sync_ok = int(
+            sum(1 for v in micro_factor_map.values() if bool(v.get("has_data", False)) and bool(v.get("time_sync_ok", False)))
+        )
+        symbols_time_sync_breach = int(
+            sum(
+                1
+                for v in micro_factor_map.values()
+                if bool(v.get("has_data", False))
+                and (
+                    not bool(v.get("time_sync_available", False))
+                    or int(max(0, self._clamp_float(float(v.get("time_sync_offset_ms", -1)), 0.0, 1e9))) > time_sync_offset_max
+                    or int(max(0, self._clamp_float(float(v.get("time_sync_rtt_ms", -1)), 0.0, 1e9))) > time_sync_rtt_max
+                )
+            )
+        )
         signals = scan_signals(
             bars=bars,
             regime=regime.consensus,
             cfg=signal_cfg,
             market_factor_state=market_factor_state,
+            micro_factor_map=micro_factor_map,
         )
 
         recent_trades = self._load_recent_trades(300)
@@ -1491,12 +2704,26 @@ class LieEngine:
             news=ingest.news,
             recent_trades=recent_trades,
         )
+        micro_gate_reasons = self._microstructure_gate_reasons(
+            symbols=symbols,
+            micro_factor_map=micro_factor_map,
+            cross_source_audit=cross_source_audit,
+        )
+        system_time_sync_gate_reasons = self._system_time_sync_gate_reasons(probe=system_time_sync_probe)
+        for reason in micro_gate_reasons:
+            if reason not in guard.non_trade_reasons:
+                guard.non_trade_reasons.append(reason)
+        for reason in system_time_sync_gate_reasons:
+            if reason not in guard.non_trade_reasons:
+                guard.non_trade_reasons.append(reason)
         runtime_mode = str(runtime_params.get("mode", "base"))
         mode_history = self._mode_history_stats(as_of=as_of)
         mode_health = self._evaluate_mode_health(runtime_mode=runtime_mode, mode_history=mode_history)
         risk_control = self._execution_risk_control(
             source_confidence_score=float(ingest.quality.source_confidence_score),
             mode_health=mode_health,
+            market_factor_state=market_factor_state,
+            as_of=as_of,
         )
 
         by_symbol, by_theme, used_exposure = self._symbol_exposure_snapshot()
@@ -1551,6 +2778,57 @@ class LieEngine:
             "mode_health": mode_health,
             "risk_control": risk_control,
             "market_factor_state": market_factor_state,
+            "microstructure": {
+                "enabled": bool(signal_cfg.microstructure_enabled),
+                "symbols_total": int(len(symbols)),
+                "symbols_with_state": int(len(micro_factor_map)),
+                "symbols_with_data": int(sum(1 for v in micro_factor_map.values() if bool(v.get("has_data", False)))),
+                "symbols_schema_ok": int(sum(1 for v in micro_factor_map.values() if bool(v.get("schema_ok", True)))),
+                "symbols_schema_fail": int(sum(1 for v in micro_factor_map.values() if not bool(v.get("schema_ok", True)))),
+                "symbols_time_sync_available": int(symbols_time_sync_available),
+                "symbols_time_sync_ok": int(symbols_time_sync_ok),
+                "symbols_time_sync_breach": int(symbols_time_sync_breach),
+                "time_sync_max_offset_ms": int(time_sync_offset_max),
+                "time_sync_max_rtt_ms": int(time_sync_rtt_max),
+                "coverage": float(
+                    sum(1 for v in micro_factor_map.values() if bool(v.get("has_data", False))) / max(1, len(symbols))
+                ),
+                "sources": sorted({str(v.get("source", "")) for v in micro_factor_map.values() if str(v.get("source", ""))}),
+                "schema_fail_symbols": sorted([str(k) for k, v in micro_factor_map.items() if not bool(v.get("schema_ok", True))]),
+                "gate_reasons": micro_gate_reasons + system_time_sync_gate_reasons,
+                "cross_source_audit": {
+                    "enabled": bool(cross_source_audit.get("enabled", False)),
+                    "active": bool(cross_source_audit.get("active", False)),
+                    "status": str(cross_source_audit.get("status", "")),
+                    "primary_source": str(cross_source_audit.get("primary_source", "")),
+                    "secondary_source": str(cross_source_audit.get("secondary_source", "")),
+                    "symbols_audited": int(cross_source_audit.get("symbols_audited", 0)),
+                    "symbols_selected": int(cross_source_audit.get("symbols_selected", 0)),
+                    "symbols_insufficient": int(cross_source_audit.get("symbols_insufficient", 0)),
+                    "fail_ratio": float(cross_source_audit.get("fail_ratio", 0.0)),
+                    "fail_symbols": list(cross_source_audit.get("fail_symbols", [])),
+                    "effective_gap_limit_ms_median": int(cross_source_audit.get("effective_gap_limit_ms_median", 0)),
+                    "quality_7d": dict(cross_source_quality_7d),
+                    "quality_report_path": str(cross_source_report_path),
+                    "artifact_path": str(cross_source_audit.get("artifact_path", "")),
+                },
+            },
+            "time_sync": {
+                "enabled": bool(system_time_sync_probe.get("enabled", False)),
+                "active": bool(system_time_sync_probe.get("active", False)),
+                "status": str(system_time_sync_probe.get("status", "")),
+                "primary_source": str(system_time_sync_probe.get("primary_source", "")),
+                "secondary_source": str(system_time_sync_probe.get("secondary_source", "")),
+                "max_offset_ms": int(system_time_sync_probe.get("max_offset_ms", 0)),
+                "max_rtt_ms": int(system_time_sync_probe.get("max_rtt_ms", 0)),
+                "min_ok_sources": int(system_time_sync_probe.get("min_ok_sources", 0)),
+                "ok_sources": int(system_time_sync_probe.get("ok_sources", 0)),
+                "available_sources": int(system_time_sync_probe.get("available_sources", 0)),
+                "pass": bool(system_time_sync_probe.get("pass", False)),
+                "hard_fuse_enabled": bool(system_time_sync_probe.get("hard_fuse_enabled", False)),
+                "artifact_path": str(system_time_sync_probe.get("artifact_path", "")),
+                "sources": list(system_time_sync_probe.get("sources", [])),
+            },
         }
 
         daily_md = render_daily_briefing(
@@ -1617,6 +2895,185 @@ class LieEngine:
             )
         append_sqlite(self.ctx.sqlite_path, "signals", signals_df)
         append_sqlite(self.ctx.sqlite_path, "trade_plans", plans_df.assign(date=as_of.isoformat()))
+        micro_rows = [
+            {"as_of": as_of.isoformat(), "symbol": str(sym)} | (state if isinstance(state, dict) else {})
+            for sym, state in micro_factor_map.items()
+        ]
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "microstructure_state",
+            (
+                pd.DataFrame(micro_rows)
+                if micro_rows
+                else pd.DataFrame(
+                    columns=[
+                        "as_of",
+                        "symbol",
+                        "has_data",
+                        "schema_ok",
+                        "schema_issues",
+                        "queue_imbalance",
+                        "ofi_norm",
+                        "micro_alignment",
+                        "trade_count",
+                        "max_trade_gap_ms",
+                        "sync_skew_ms",
+                        "sync_ok",
+                        "gap_ok",
+                        "evidence_score",
+                        "latest_seq",
+                        "time_sync_available",
+                        "time_sync_ok",
+                        "time_sync_offset_ms",
+                        "time_sync_rtt_ms",
+                        "time_sync_max_offset_ms",
+                        "time_sync_max_rtt_ms",
+                        "source",
+                    ]
+                )
+            ),
+        )
+        source_rows = [
+            {"as_of": as_of.isoformat()} | (row if isinstance(row, dict) else {})
+            for row in micro_source_rows
+        ]
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "microstructure_source_state",
+            (
+                pd.DataFrame(source_rows)
+                if source_rows
+                else pd.DataFrame(
+                    columns=[
+                        "as_of",
+                        "symbol",
+                        "source",
+                        "has_data",
+                        "schema_ok",
+                        "sync_ok",
+                        "gap_ok",
+                        "trade_count",
+                        "evidence_score",
+                        "time_sync_available",
+                        "time_sync_ok",
+                        "time_sync_offset_ms",
+                        "time_sync_rtt_ms",
+                        "time_sync_max_offset_ms",
+                        "time_sync_max_rtt_ms",
+                    ]
+                )
+            ),
+        )
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "microstructure_daily",
+            pd.DataFrame(
+                [
+                    {
+                        "as_of": as_of.isoformat(),
+                        "symbols_total": int(len(symbols)),
+                        "symbols_with_state": int(len(micro_factor_map)),
+                        "symbols_with_data": int(sum(1 for v in micro_factor_map.values() if bool(v.get("has_data", False)))),
+                        "symbols_schema_fail": int(sum(1 for v in micro_factor_map.values() if not bool(v.get("schema_ok", True)))),
+                        "symbols_time_sync_available": int(symbols_time_sync_available),
+                        "symbols_time_sync_ok": int(symbols_time_sync_ok),
+                        "symbols_time_sync_breach": int(symbols_time_sync_breach),
+                        "time_sync_max_offset_ms": int(time_sync_offset_max),
+                        "time_sync_max_rtt_ms": int(time_sync_rtt_max),
+                        "coverage": float(
+                            sum(1 for v in micro_factor_map.values() if bool(v.get("has_data", False))) / max(1, len(symbols))
+                        ),
+                        "schema_hard_fuse_triggered": bool(any("字段完整性熔断" in x for x in micro_gate_reasons)),
+                        "time_sync_hard_fuse_triggered": bool(any("时钟同步熔断" in x for x in micro_gate_reasons)),
+                    }
+                ]
+            ),
+        )
+        self._persist_system_time_sync_probe(as_of=as_of, probe=system_time_sync_probe)
+        cross_rows = cross_source_audit.get("rows", []) if isinstance(cross_source_audit.get("rows", []), list) else []
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "cross_source_alignment",
+            (
+                pd.DataFrame(
+                    [
+                        {
+                            "as_of": as_of.isoformat(),
+                            "primary_source": str(cross_source_audit.get("primary_source", "")),
+                            "secondary_source": str(cross_source_audit.get("secondary_source", "")),
+                            "status": str(cross_source_audit.get("status", "")),
+                            "fail_ratio": float(cross_source_audit.get("fail_ratio", 0.0)),
+                        }
+                        | (row if isinstance(row, dict) else {})
+                        for row in cross_rows
+                    ]
+                )
+                if cross_rows
+                else pd.DataFrame(
+                    columns=[
+                        "as_of",
+                        "primary_source",
+                        "secondary_source",
+                        "status",
+                        "fail_ratio",
+                        "symbol",
+                        "primary_trade_rows",
+                        "secondary_trade_rows",
+                        "bucket_total",
+                        "overlap_buckets",
+                        "missing_left_pct",
+                        "missing_right_pct",
+                        "max_missing_left_ms",
+                        "max_missing_right_ms",
+                        "median_bucket_skew_ms",
+                        "sync_ok",
+                        "gap_ok",
+                        "auditable",
+                        "left_median_trade_gap_ms",
+                        "right_median_trade_gap_ms",
+                        "gap_limit_base_ms",
+                        "gap_limit_from_freq_ms",
+                        "gap_limit_from_hist_ms",
+                        "effective_gap_limit_ms",
+                        "pass",
+                        "row_status",
+                    ]
+                )
+            ),
+        )
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "cross_source_audit_daily",
+            pd.DataFrame(
+                [
+                    {
+                        "as_of": as_of.isoformat(),
+                        "enabled": bool(cross_source_audit.get("enabled", False)),
+                        "active": bool(cross_source_audit.get("active", False)),
+                        "status": str(cross_source_audit.get("status", "")),
+                        "primary_source": str(cross_source_audit.get("primary_source", "")),
+                        "secondary_source": str(cross_source_audit.get("secondary_source", "")),
+                        "symbols_audited": int(cross_source_audit.get("symbols_audited", 0)),
+                        "symbols_selected": int(cross_source_audit.get("symbols_selected", 0)),
+                        "symbols_insufficient": int(cross_source_audit.get("symbols_insufficient", 0)),
+                        "fail_ratio": float(cross_source_audit.get("fail_ratio", 0.0)),
+                        "adaptive_gap_enabled": bool(cross_source_audit.get("window", {}).get("adaptive_gap_enabled", False)),
+                        "gap_freq_multiplier": float(cross_source_audit.get("window", {}).get("gap_freq_multiplier", 0.0)),
+                        "gap_hist_window_days": int(cross_source_audit.get("window", {}).get("gap_hist_window_days", 0)),
+                        "gap_hist_quantile": float(cross_source_audit.get("window", {}).get("gap_hist_quantile", 0.0)),
+                        "gap_hist_multiplier": float(cross_source_audit.get("window", {}).get("gap_hist_multiplier", 0.0)),
+                        "gap_limit_base_ms": int(cross_source_audit.get("window", {}).get("continuous_gap_ms", 0)),
+                        "effective_gap_limit_ms_median": int(cross_source_audit.get("effective_gap_limit_ms_median", 0)),
+                        "quality_score_7d": float(cross_source_quality_7d.get("quality_score", 1.0)),
+                        "avg_fail_ratio_7d": float(cross_source_quality_7d.get("avg_fail_ratio", 0.0)),
+                        "avg_insufficient_ratio_7d": float(cross_source_quality_7d.get("avg_insufficient_ratio", 0.0)),
+                        "quality_report_path": str(cross_source_report_path),
+                        "fail_symbols": list(cross_source_audit.get("fail_symbols", [])),
+                        "artifact_path": str(cross_source_audit.get("artifact_path", "")),
+                    }
+                ]
+            ),
+        )
 
         # latest positions snapshot for risk budgeting
         append_sqlite(
@@ -1648,6 +3105,9 @@ class LieEngine:
                 "positions": str(positions_path),
                 "mode_feedback": str(mode_feedback_path),
                 "broker_snapshot": broker_snapshot_ref,
+                "cross_source_alignment": str(cross_source_audit.get("artifact_path", "")),
+                "cross_source_quality_report": str(cross_source_report_path),
+                "system_time_sync_probe": str(system_time_sync_probe.get("artifact_path", "")),
             },
             metrics={
                 "signals": int(len(signals)),
@@ -1656,6 +3116,8 @@ class LieEngine:
                 "regime": str(regime.consensus.value),
                 "runtime_mode": runtime_mode,
                 "risk_multiplier": float(risk_control.get("risk_multiplier", 1.0)),
+                "cross_source_quality_score_7d": float(cross_source_quality_7d.get("quality_score", 1.0)),
+                "system_time_sync_ok_sources": int(system_time_sync_probe.get("ok_sources", 0)),
                 "closed_trades": int((paper_exec.get("summary", {}) or {}).get("closed_count", 0)),
                 "closed_pnl": float((paper_exec.get("summary", {}) or {}).get("closed_pnl", 0.0)),
                 "open_positions": int(len(active_positions)),
@@ -1686,6 +3148,8 @@ class LieEngine:
             "closed_pnl": float((paper_exec.get("summary", {}) or {}).get("closed_pnl", 0.0)),
             "open_positions": int(len(active_positions)),
             "broker_snapshot": broker_snapshot_ref,
+            "cross_source_quality_report": str(cross_source_report_path),
+            "system_time_sync_probe": str(system_time_sync_probe.get("artifact_path", "")),
         }
 
     def run_premarket(self, as_of: date) -> dict[str, Any]:
@@ -1701,6 +3165,8 @@ class LieEngine:
         risk_control = self._execution_risk_control(
             source_confidence_score=float(ingest.quality.source_confidence_score),
             mode_health=mode_health,
+            market_factor_state=market_factor_state,
+            as_of=as_of,
         )
         recent_trades = self._load_recent_trades(300)
         guard = self._evaluate_guards(
@@ -1765,6 +3231,8 @@ class LieEngine:
         risk_control = self._execution_risk_control(
             source_confidence_score=float(ingest.quality.source_confidence_score),
             mode_health=mode_health,
+            market_factor_state=market_factor_state,
+            as_of=as_of,
         )
         recent_trades = self._load_recent_trades(300)
         guard = self._evaluate_guards(
@@ -2151,6 +3619,10 @@ class LieEngine:
                 "review_news_max_ts": str(payload.get("review_news_max_ts", "")),
                 "review_report_max_ts": str(payload.get("review_report_max_ts", "")),
                 "review_days": int(payload.get("review_days", 0)),
+                "term_registry_version": str(payload.get("term_registry", {}).get("version", "")),
+                "term_registry_checksum_sha256": str(payload.get("term_registry", {}).get("checksum_sha256", "")),
+                "term_registry_atoms_total": int(payload.get("term_registry", {}).get("atoms_total", 0)),
+                "term_registry_l2_atoms": int(payload.get("term_registry", {}).get("l2_atoms", 0)),
             },
         )
         payload["manifest"] = str(manifest_path)
@@ -2207,6 +3679,10 @@ class LieEngine:
                 "review_news_max_ts": str(payload.get("review_news_max_ts", "")),
                 "review_report_max_ts": str(payload.get("review_report_max_ts", "")),
                 "review_days": int(payload.get("review_days", 0)),
+                "term_registry_version": str(payload.get("term_registry", {}).get("version", "")),
+                "term_registry_checksum_sha256": str(payload.get("term_registry", {}).get("checksum_sha256", "")),
+                "term_registry_atoms_total": int(payload.get("term_registry", {}).get("atoms_total", 0)),
+                "term_registry_l2_atoms": int(payload.get("term_registry", {}).get("l2_atoms", 0)),
             },
         )
         payload["manifest"] = str(manifest_path)
@@ -2867,6 +4343,8 @@ class LieEngine:
         *,
         source_confidence_score: float,
         mode_health: dict[str, Any],
+        market_factor_state: dict[str, Any] | None = None,
+        as_of: date | None = None,
     ) -> dict[str, Any]:
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         min_mult = self._clamp_float(float(val.get("execution_min_risk_multiplier", 0.2)), 0.0, 1.0)
@@ -2874,6 +4352,35 @@ class LieEngine:
         mode_degraded_mult = self._clamp_float(float(val.get("mode_health_risk_multiplier", 0.5)), min_mult, 1.0)
         mode_unknown_mult = self._clamp_float(float(val.get("mode_health_insufficient_sample_risk_multiplier", 0.85)), min_mult, 1.0)
         source_min = self._clamp_float(float(val.get("source_confidence_min", 0.75)), 0.01, 1.0)
+        crypto_floor = self._clamp_float(float(val.get("execution_crypto_stress_risk_multiplier", 0.65)), min_mult, 1.0)
+        crypto_full_scale = self._clamp_float(float(val.get("execution_crypto_stress_full_scale", 1.0)), 0.20, 3.0)
+        cross_floor = self._clamp_float(float(val.get("execution_cross_source_stress_risk_multiplier", 0.70)), min_mult, 1.0)
+        cross_full_scale = self._clamp_float(float(val.get("execution_cross_source_stress_full_scale", 1.0)), 0.20, 3.0)
+        micro_enabled = bool(val.get("execution_micro_capture_risk_enabled", True))
+        micro_floor = self._clamp_float(float(val.get("execution_micro_capture_risk_multiplier", 0.75)), min_mult, 1.0)
+        micro_insufficient = self._clamp_float(
+            float(val.get("execution_micro_capture_insufficient_sample_risk_multiplier", 0.90)),
+            min_mult,
+            1.0,
+        )
+        micro_lookback_days = max(1, int(val.get("execution_micro_capture_lookback_days", 7)))
+        micro_min_runs = max(1, int(val.get("execution_micro_capture_min_runs", 4)))
+        micro_pass_ratio_min = self._clamp_float(float(val.get("execution_micro_capture_pass_ratio_min", 0.70)), 0.0, 1.0)
+        micro_schema_ok_ratio_min = self._clamp_float(
+            float(val.get("execution_micro_capture_schema_ok_ratio_min", 0.90)),
+            0.0,
+            1.0,
+        )
+        micro_time_sync_ok_ratio_min = self._clamp_float(
+            float(val.get("execution_micro_capture_time_sync_ok_ratio_min", 0.90)),
+            0.0,
+            1.0,
+        )
+        micro_cross_source_fail_ratio_max = self._clamp_float(
+            float(val.get("execution_micro_capture_cross_source_fail_ratio_max", 0.35)),
+            0.0,
+            1.0,
+        )
 
         score = self._clamp_float(float(source_confidence_score), 0.0, 1.0)
         source_mult = 1.0
@@ -2890,12 +4397,77 @@ class LieEngine:
             mode_mult = mode_unknown_mult
             mode_reason = "insufficient_samples"
 
-        final_mult = self._clamp_float(source_mult * mode_mult, min_mult, 1.0)
+        state = market_factor_state if isinstance(market_factor_state, dict) else {}
+        crypto_stress = self._clamp_float(float(state.get("crypto_stress", 0.0)), 0.0, 1.5)
+        stress_ratio = self._clamp_float(crypto_stress / max(1e-9, crypto_full_scale), 0.0, 1.0)
+        crypto_mult = self._clamp_float(1.0 - (1.0 - crypto_floor) * stress_ratio, min_mult, 1.0)
+        cross_stress = self._clamp_float(float(state.get("cross_source_stress", 0.0)), 0.0, 1.5)
+        cross_ratio = self._clamp_float(cross_stress / max(1e-9, cross_full_scale), 0.0, 1.0)
+        cross_mult = self._clamp_float(1.0 - (1.0 - cross_floor) * cross_ratio, min_mult, 1.0)
+        micro_mult = 1.0
+        micro_reason = "disabled"
+        micro_stats = {
+            "lookback_days": int(micro_lookback_days),
+            "run_count": 0,
+            "pass_ratio": 0.0,
+            "avg_cross_source_fail_ratio": 0.0,
+            "avg_selected_schema_ok_ratio": 0.0,
+            "avg_selected_time_sync_ok_ratio": 0.0,
+        }
+        if micro_enabled and isinstance(as_of, date):
+            micro_stats = self._micro_capture_rolling_stats(as_of=as_of, lookback_days=micro_lookback_days)
+            run_count = int(micro_stats.get("run_count", 0))
+            if run_count <= 0:
+                micro_mult = micro_insufficient
+                micro_reason = "no_samples"
+            elif run_count < micro_min_runs:
+                micro_mult = micro_insufficient
+                micro_reason = "insufficient_samples"
+            else:
+                quality_components: list[float] = []
+                pass_ratio = self._clamp_float(float(micro_stats.get("pass_ratio", 0.0)), 0.0, 1.0)
+                schema_ok_ratio = self._clamp_float(float(micro_stats.get("avg_selected_schema_ok_ratio", 0.0)), 0.0, 1.0)
+                time_sync_ok_ratio = self._clamp_float(
+                    float(micro_stats.get("avg_selected_time_sync_ok_ratio", 0.0)),
+                    0.0,
+                    1.0,
+                )
+                cross_fail_ratio = self._clamp_float(
+                    float(micro_stats.get("avg_cross_source_fail_ratio", 1.0)),
+                    0.0,
+                    1.0,
+                )
+                if micro_pass_ratio_min > 0.0:
+                    quality_components.append(self._clamp_float(pass_ratio / micro_pass_ratio_min, 0.0, 1.0))
+                if micro_schema_ok_ratio_min > 0.0:
+                    quality_components.append(self._clamp_float(schema_ok_ratio / micro_schema_ok_ratio_min, 0.0, 1.0))
+                if micro_time_sync_ok_ratio_min > 0.0:
+                    quality_components.append(
+                        self._clamp_float(time_sync_ok_ratio / micro_time_sync_ok_ratio_min, 0.0, 1.0)
+                    )
+                cross_ok_ratio = self._clamp_float(1.0 - cross_fail_ratio, 0.0, 1.0)
+                cross_ok_floor = max(1e-9, 1.0 - micro_cross_source_fail_ratio_max)
+                quality_components.append(self._clamp_float(cross_ok_ratio / cross_ok_floor, 0.0, 1.0))
+                quality_ratio = float(min(quality_components)) if quality_components else 1.0
+                micro_mult = self._clamp_float(micro_floor + (1.0 - micro_floor) * quality_ratio, min_mult, 1.0)
+                micro_reason = "healthy" if quality_ratio >= 0.999 else "degraded"
+        elif micro_enabled:
+            micro_reason = "as_of_missing"
+            micro_mult = 1.0
+
+        final_mult = self._clamp_float(source_mult * mode_mult * crypto_mult * cross_mult * micro_mult, min_mult, 1.0)
         return {
             "risk_multiplier": final_mult,
             "source_multiplier": source_mult,
             "mode_multiplier": mode_mult,
+            "crypto_multiplier": crypto_mult,
+            "cross_source_multiplier": cross_mult,
+            "micro_capture_multiplier": micro_mult,
+            "crypto_stress": crypto_stress,
+            "cross_source_stress": cross_stress,
             "mode_reason": mode_reason,
+            "micro_capture_reason": micro_reason,
+            "micro_capture_stats": micro_stats,
             "source_confidence_score": score,
         }
 
@@ -3369,10 +4941,22 @@ class LieEngine:
         iv = _f("iv_50etf", 0.22)
         north = _f("northbound_netflow", 0.0)
         margin = _f("margin_balance_chg", 0.0)
+        btc_ret_24h = _f("btc_return_24h", 0.0)
+        btc_rv_24h = _f("btc_realized_vol_24h", 0.0)
+        btc_funding_abs = _f("btc_funding_abs_8h", abs(_f("btc_funding_rate_8h", 0.0)))
+        btc_spread_bps = _f("btc_book_spread_bps", 0.0)
         atr_z = float(max(0.0, regime.atr_z))
         style_state = self._cross_section_style_state(bars if isinstance(bars, pd.DataFrame) else pd.DataFrame())
         style_strength = self._clamp_float(float(style_state.get("style_signal_strength", 0.0)), 0.0, 1.0)
         style_weight = self._clamp_float(0.20 + 0.35 * style_strength, 0.20, 0.55)
+        crypto_stress = self._clamp_float(
+            max(0.0, -btc_ret_24h) * 6.0
+            + max(0.0, btc_rv_24h - 0.05) * 4.0
+            + max(0.0, btc_funding_abs - 0.0002) * 2000.0
+            + max(0.0, btc_spread_bps - 2.0) / 20.0,
+            0.0,
+            1.5,
+        )
 
         valuation_pressure = self._clamp_float(
             0.40 + max(0.0, pcr - 1.0) * 0.45 + max(0.0, iv - 0.24) * 1.10 + max(0.0, atr_z - 1.0) * 0.15,
@@ -3399,6 +4983,10 @@ class LieEngine:
             0.0,
             1.5,
         )
+        valuation_pressure = self._clamp_float(valuation_pressure + 0.20 * crypto_stress, 0.0, 1.5)
+        momentum_preference = self._clamp_float(momentum_preference - 0.10 * crypto_stress, 0.0, 1.5)
+        crowding_aversion = self._clamp_float(crowding_aversion + 0.35 * crypto_stress, 0.0, 1.5)
+        small_cap_pressure = self._clamp_float(small_cap_pressure + 0.22 * crypto_stress, 0.0, 1.5)
 
         if regime.consensus in {RegimeLabel.RANGE, RegimeLabel.UNCERTAIN, RegimeLabel.DOWNTREND}:
             valuation_pressure = self._clamp_float(valuation_pressure + 0.12, 0.0, 1.5)
@@ -3452,6 +5040,11 @@ class LieEngine:
             "style_sample_size": float(style_state.get("style_sample_size", 0.0)),
             "value_preference": float(style_state.get("value_preference", 0.50)),
             "size_preference": float(style_state.get("size_preference", 0.50)),
+            "crypto_stress": float(crypto_stress),
+            "btc_return_24h": float(btc_ret_24h),
+            "btc_realized_vol_24h": float(btc_rv_24h),
+            "btc_funding_abs_8h": float(btc_funding_abs),
+            "btc_book_spread_bps": float(btc_spread_bps),
         }
 
     def run_review(self, as_of: date) -> ReviewDelta:
@@ -3704,6 +5297,7 @@ class LieEngine:
             run_eod=lambda d: self.run_eod(d),
             run_review_cycle=lambda d, max_rounds: self.run_review_cycle(as_of=d, max_rounds=max_rounds),
             ops_report=lambda d, window_days: self.ops_report(as_of=d, window_days=window_days),
+            run_micro_capture=lambda d, symbols: self.run_micro_capture(as_of=d, symbols=symbols),
         )
 
     def gate_report(

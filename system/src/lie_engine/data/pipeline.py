@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from lie_engine.data.protocols import DataProviderProtocol
@@ -57,6 +58,8 @@ class DataBus:
                 try:
                     frame = provider.fetch_ohlcv(symbol=symbol, start=start, end=end, freq=freq)
                 except NotImplementedError:
+                    continue
+                if not isinstance(frame, pd.DataFrame) or frame.empty:
                     continue
                 frames.append(frame)
         if not frames:
@@ -352,7 +355,7 @@ class DataBus:
         normalized_bars, conflicts = self._resolve_prices(raw_bars)
 
         macro_frames = []
-        sentiment: dict[str, float] = {}
+        sentiment_snapshots: list[tuple[str, dict[str, float]]] = []
         sentiment_factor_count: dict[str, int] = {}
         news_events: list[NewsEvent] = []
         for provider in self.providers:
@@ -364,10 +367,20 @@ class DataBus:
                 snap = provider.fetch_sentiment_factors(as_of=end)
                 if not isinstance(snap, dict):
                     snap = {}
-                sentiment = {**sentiment, **snap}
                 src_name = str(getattr(provider, "name", "")).strip()
-                if src_name:
-                    sentiment_factor_count[src_name] = int(len(snap))
+                if src_name and snap:
+                    clean_snap: dict[str, float] = {}
+                    for key, value in snap.items():
+                        try:
+                            val = float(value)
+                        except (TypeError, ValueError):
+                            continue
+                        if not np.isfinite(val):
+                            continue
+                        clean_snap[str(key)] = float(val)
+                    if clean_snap:
+                        sentiment_snapshots.append((src_name, clean_snap))
+                        sentiment_factor_count[src_name] = int(len(clean_snap))
             except NotImplementedError:
                 pass
             for lang in langs:
@@ -377,6 +390,23 @@ class DataBus:
                     continue
 
         macro = pd.concat(macro_frames, ignore_index=True) if macro_frames else pd.DataFrame()
+        sentiment: dict[str, float] = {}
+        if sentiment_snapshots:
+            seen_sources = sorted({src for src, _ in sentiment_snapshots})
+            sentiment["sentiment_source_count"] = float(len(seen_sources))
+            by_key: dict[str, list[float]] = {}
+            for src_name, snap in sentiment_snapshots:
+                for key, val in snap.items():
+                    sentiment[f"{src_name}.{key}"] = float(val)
+                    by_key.setdefault(str(key), []).append(float(val))
+            for key, vals in by_key.items():
+                if not vals:
+                    continue
+                arr = np.asarray(vals, dtype=float)
+                sentiment[key] = float(arr.mean())
+                sentiment[f"{key}__median"] = float(np.median(arr))
+                sentiment[f"{key}__std"] = float(arr.std(ddof=0))
+
         news = self._dedupe_news(self._normalize_news(news_events))
         source_conf = self._evaluate_source_confidence(
             raw_bars=raw_bars,
@@ -414,6 +444,7 @@ class DataBus:
         macro_path = self.output_dir / "artifacts" / "raw" / f"{dstr}_macro.csv"
         news_path = self.output_dir / "artifacts" / "raw" / f"{dstr}_news.json"
         source_conf_path = self.output_dir / "artifacts" / "normalized" / f"{dstr}_source_confidence.json"
+        sentiment_path = self.output_dir / "artifacts" / "normalized" / f"{dstr}_sentiment.json"
         quality_path = self.output_dir / "artifacts" / f"{dstr}_quality.json"
 
         write_csv(raw_path, result.raw_bars)
@@ -422,6 +453,7 @@ class DataBus:
         write_csv(macro_path, result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"]))
         write_json(news_path, [n.to_dict() for n in result.news])
         write_json(source_conf_path, result.source_confidence.to_dict())
+        write_json(sentiment_path, {k: float(v) for k, v in result.sentiment.items()})
         write_json(quality_path, result.quality.to_dict())
 
         feature_df = result.normalized_bars.copy()
@@ -432,6 +464,48 @@ class DataBus:
 
         append_sqlite(self.sqlite_path, "bars_normalized", result.normalized_bars)
         append_sqlite(self.sqlite_path, "macro", result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"]))
+        news_rows = [n.to_dict() | {"as_of": dstr} for n in result.news]
+        append_sqlite(
+            self.sqlite_path,
+            "news_events",
+            (
+                pd.DataFrame(news_rows)
+                if news_rows
+                else pd.DataFrame(
+                    columns=[
+                        "event_id",
+                        "ts",
+                        "title",
+                        "content",
+                        "lang",
+                        "source",
+                        "category",
+                        "confidence",
+                        "entities",
+                        "importance",
+                        "as_of",
+                    ]
+                )
+            ),
+        )
+        sentiment_rows = []
+        for key, value in result.sentiment.items():
+            try:
+                val = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(val):
+                continue
+            sentiment_rows.append({"as_of": dstr, "key": str(key), "value": float(val)})
+        append_sqlite(
+            self.sqlite_path,
+            "sentiment_snapshot",
+            (
+                pd.DataFrame(sentiment_rows)
+                if sentiment_rows
+                else pd.DataFrame(columns=["as_of", "key", "value"])
+            ),
+        )
         source_conf_df = pd.DataFrame([d.to_dict() | {"as_of": dstr} for d in result.source_confidence.details])
         if source_conf_df.empty:
             source_conf_df = pd.DataFrame(columns=["source", "score", "base_reliability", "bar_consistency", "bar_coverage", "macro_consistency", "macro_coverage", "news_confidence", "sentiment_coverage", "bars_rows", "macro_rows", "news_events", "sentiment_factors", "as_of"])
