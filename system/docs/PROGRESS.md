@@ -261,6 +261,15 @@
   - defect plan emits:
     `ARTIFACT_GOVERNANCE_BASELINE_DRIFT` /
     `ARTIFACT_GOVERNANCE_STRICT_BLOCKED`.
+- Baseline snapshot promotion workflow is online:
+  - `run_review` now auto-promotes artifact governance baseline when review gate passes.
+  - snapshot is written to
+    `output/artifacts/baselines/artifact_governance/history/YYYY-MM-DD_rXX_*.yaml`,
+    and active pointer is refreshed at
+    `output/artifacts/baselines/artifact_governance/active_baseline.yaml`.
+  - review trace writes
+    `output/review/YYYY-MM-DD_baseline_promotion.json`,
+    with `rollback_anchor` pointing to previous promoted snapshot when available.
 
 ## Testing Workflow
 - Full suite:
@@ -282,4 +291,4 @@
 - Downstream gate/review reads `failed_tests` first, then falls back to stderr parsing.
 
 ## Next Priorities
-1. Add baseline snapshot promotion workflow（从“手工 baseline”升级为“review 通过后自动固化 baseline”，并支持回滚锚点）。
+1. Add rollback drill CLI for baseline snapshots（支持按 `rollback_anchor` 一键回退并输出审计记录）。

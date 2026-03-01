@@ -2234,6 +2234,83 @@ class LieEngine:
         write_markdown(backup, p.read_text(encoding="utf-8"))
         return str(backup)
 
+    def _promote_artifact_governance_baseline(
+        self,
+        *,
+        as_of: date,
+        round_no: int = 1,
+        review_passed: bool,
+    ) -> dict[str, Any]:
+        baseline: dict[str, Any] = {
+            "enabled": True,
+            "promoted": False,
+            "reason": "review_gate_failed",
+            "active_path": "",
+            "history_path": "",
+            "snapshot_path": "",
+            "rollback_anchor": "",
+            "profiles_count": 0,
+            "promoted_at": "",
+            "as_of": as_of.isoformat(),
+            "round": int(max(1, round_no)),
+        }
+        if not review_passed:
+            return baseline
+
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        profiles = (
+            val.get("ops_artifact_governance_profiles", {})
+            if isinstance(val.get("ops_artifact_governance_profiles", {}), dict)
+            else {}
+        )
+        baseline["profiles_count"] = int(len(profiles))
+        if not profiles:
+            baseline["reason"] = "profiles_missing"
+            return baseline
+
+        promoted_at = datetime.now().isoformat()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_dir = self.ctx.output_dir / "artifacts" / "baselines" / "artifact_governance"
+        history_dir = base_dir / "history"
+        active_path = base_dir / "active_baseline.yaml"
+        history_path = history_dir / f"{as_of.isoformat()}_r{int(max(1, round_no)):02d}_{stamp}.yaml"
+        history_dir.mkdir(parents=True, exist_ok=True)
+
+        rollback_anchor = ""
+        if active_path.exists():
+            prior = yaml.safe_load(active_path.read_text(encoding="utf-8")) or {}
+            if isinstance(prior, dict):
+                candidate = str(prior.get("snapshot_path", "") or prior.get("history_path", "")).strip()
+                if candidate and Path(candidate).exists():
+                    rollback_anchor = candidate
+                else:
+                    rollback_anchor = str(active_path)
+
+        payload = {
+            "as_of": as_of.isoformat(),
+            "round": int(max(1, round_no)),
+            "promoted_at": promoted_at,
+            "profiles": profiles,
+            "rollback_anchor": rollback_anchor,
+            "source": "run_review_auto_promotion",
+            "snapshot_path": str(history_path),
+        }
+        write_markdown(history_path, yaml.safe_dump(payload, allow_unicode=True, sort_keys=False))
+        write_markdown(active_path, yaml.safe_dump(payload, allow_unicode=True, sort_keys=False))
+
+        baseline.update(
+            {
+                "promoted": True,
+                "reason": "ok",
+                "active_path": str(active_path),
+                "history_path": str(history_path),
+                "snapshot_path": str(history_path),
+                "rollback_anchor": rollback_anchor,
+                "promoted_at": promoted_at,
+            }
+        )
+        return baseline
+
     def _resolve_review_runtime_mode(self, *, start: date, as_of: date) -> str:
         manifest_path = self.ctx.output_dir / "artifacts" / "manifests" / f"backtest_{start.isoformat()}_{as_of.isoformat()}.json"
         payload = self._load_json_safely(manifest_path)
@@ -3176,10 +3253,25 @@ class LieEngine:
         audit_payload["slot_regime_tuning"] = slot_regime_tuning
         audit_payload["style_diagnostics"] = style_diag
         audit_payload["generated_at"] = datetime.now().isoformat()
-        write_markdown(delta_path, yaml.safe_dump(audit_payload, allow_unicode=True, sort_keys=False))
 
         live_params_path = self.ctx.output_dir / "artifacts" / "params_live.yaml"
         write_markdown(live_params_path, yaml.safe_dump(review.parameter_changes, allow_unicode=True, sort_keys=False))
+
+        baseline_promotion = self._promote_artifact_governance_baseline(
+            as_of=as_of,
+            round_no=1,
+            review_passed=bool(review.pass_gate),
+        )
+        baseline_promotion_path = review_dir / f"{as_of.isoformat()}_baseline_promotion.json"
+        write_json(baseline_promotion_path, baseline_promotion)
+        audit_payload["baseline_promotion"] = baseline_promotion
+        write_markdown(delta_path, yaml.safe_dump(audit_payload, allow_unicode=True, sort_keys=False))
+        review.notes.append(
+            "baseline_promotion="
+            + f"promoted={bool(baseline_promotion.get('promoted', False))}; "
+            + f"reason={str(baseline_promotion.get('reason', ''))}; "
+            + f"snapshot={str(baseline_promotion.get('snapshot_path', ''))}"
+        )
 
         append_sqlite(self.ctx.sqlite_path, "review_runs", pd.DataFrame([audit_payload]))
         manifest_path = write_run_manifest(
@@ -3190,6 +3282,7 @@ class LieEngine:
                 "review_report": str(review_path),
                 "param_delta": str(delta_path),
                 "live_params": str(live_params_path),
+                "baseline_promotion": str(baseline_promotion_path),
             },
             metrics={
                 "pass_gate": bool(review.pass_gate),

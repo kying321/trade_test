@@ -900,6 +900,31 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("rollback_anchor", data)
         self.assertIn("factor_contrib_120d", data)
 
+    def test_run_review_promotes_artifact_governance_baseline_with_rollback_anchor(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        p1 = tmp_root / "output" / "review" / "2026-02-13_baseline_promotion.json"
+        p2 = tmp_root / "output" / "review" / "2026-02-14_baseline_promotion.json"
+        self.assertTrue(p1.exists())
+        self.assertTrue(p2.exists())
+
+        b1 = json.loads(p1.read_text(encoding="utf-8"))
+        b2 = json.loads(p2.read_text(encoding="utf-8"))
+        self.assertTrue(bool(b1.get("promoted", False)))
+        self.assertTrue(bool(b2.get("promoted", False)))
+        self.assertTrue(str(b1.get("snapshot_path", "")).endswith(".yaml"))
+        self.assertTrue(str(b2.get("snapshot_path", "")).endswith(".yaml"))
+        self.assertEqual(str(b2.get("rollback_anchor", "")), str(b1.get("snapshot_path", "")))
+
+        active = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "active_baseline.yaml"
+        self.assertTrue(active.exists())
+        active_payload = yaml.safe_load(active.read_text(encoding="utf-8"))
+        self.assertEqual(str(active_payload.get("snapshot_path", "")), str(b2.get("snapshot_path", "")))
+
     def test_run_review_writes_slot_regime_tuning_artifact(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
