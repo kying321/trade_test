@@ -284,6 +284,11 @@
   - preflight checks:
     `active_baseline_exists_ok / active_baseline_payload_ok / rollback_anchor_present_ok / rollback_anchor_exists_ok / rollback_anchor_payload_ok`.
   - dry-run only writes audit artifacts and MUST NOT rewrite `active_baseline.yaml` or create rollback backups.
+- Baseline rollback drill preflight schema lint is online:
+  - preflight now enforces minimal baseline schema keys:
+    `as_of / profiles / snapshot_path` for both active baseline and rollback anchor payload.
+  - field-level validation errors are emitted in `preflight.errors[]` with
+    `source/field/code/message` to speed up rollback payload debugging.
 
 ## Testing Workflow
 - Full suite:
@@ -305,4 +310,4 @@
 - Downstream gate/review reads `failed_tests` first, then falls back to stderr parsing.
 
 ## Next Priorities
-1. Extend rollback drill preflight lint to enforce minimal baseline schema keys（如 `as_of/profiles/snapshot_path`）并输出字段级错误明细。
+1. Extend rollback drill preflight lint with schema type/format checks（如 `as_of` ISO date、`profiles` list 类型）并继续补充字段级错误明细。

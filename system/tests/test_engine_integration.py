@@ -980,6 +980,9 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue(bool(preflight.get("rollback_anchor_present_ok", False)))
         self.assertTrue(bool(preflight.get("rollback_anchor_exists_ok", False)))
         self.assertTrue(bool(preflight.get("rollback_anchor_payload_ok", False)))
+        self.assertTrue(bool(preflight.get("active_baseline_schema_ok", False)))
+        self.assertTrue(bool(preflight.get("rollback_anchor_schema_ok", False)))
+        self.assertEqual(preflight.get("errors", []), [])
 
         active = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "active_baseline.yaml"
         self.assertTrue(active.exists())
@@ -1011,6 +1014,10 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue(bool(preflight.get("rollback_anchor_present_ok", False)))
         self.assertTrue(bool(preflight.get("rollback_anchor_exists_ok", False)))
         self.assertFalse(bool(preflight.get("rollback_anchor_payload_ok", True)))
+        errors = preflight.get("errors", [])
+        self.assertTrue(isinstance(errors, list))
+        fields = {str(item.get("field", "")) for item in errors if isinstance(item, dict)}
+        self.assertTrue({"as_of", "profiles", "snapshot_path"}.issubset(fields))
 
     def test_run_review_writes_slot_regime_tuning_artifact(self) -> None:
         eng, tmp_root = self._make_engine()

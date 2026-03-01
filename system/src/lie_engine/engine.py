@@ -2337,13 +2337,42 @@ class LieEngine:
             "preflight": {
                 "active_baseline_exists_ok": False,
                 "active_baseline_payload_ok": False,
+                "active_baseline_schema_ok": False,
                 "rollback_anchor_present_ok": False,
                 "rollback_anchor_exists_ok": False,
                 "rollback_anchor_payload_ok": False,
+                "rollback_anchor_schema_ok": False,
+                "errors": [],
             },
         }
 
         preflight = out["preflight"] if isinstance(out.get("preflight"), dict) else {}
+        preflight_errors = preflight.setdefault("errors", [])
+        if not isinstance(preflight_errors, list):
+            preflight_errors = []
+            preflight["errors"] = preflight_errors
+
+        required_schema_keys = ("as_of", "profiles", "snapshot_path")
+
+        def _append_schema_errors(payload: dict[str, Any], source: str) -> list[dict[str, str]]:
+            errors: list[dict[str, str]] = []
+            for key in required_schema_keys:
+                val = payload.get(key)
+                missing = val is None
+                if isinstance(val, str):
+                    missing = not val.strip()
+                elif isinstance(val, (list, dict)):
+                    missing = len(val) == 0
+                if missing:
+                    errors.append(
+                        {
+                            "source": source,
+                            "field": key,
+                            "code": "missing_required_field",
+                            "message": f"required baseline field '{key}' is missing or empty",
+                        }
+                    )
+            return errors
 
         if not active_path.exists():
             out["reason"] = "active_baseline_missing"
@@ -2359,6 +2388,14 @@ class LieEngine:
             write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
             return out
         preflight["active_baseline_payload_ok"] = True
+        active_schema_errors = _append_schema_errors(active_payload, "active_baseline")
+        if active_schema_errors:
+            preflight_errors.extend(active_schema_errors)
+            out["reason"] = "active_baseline_invalid_payload"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+        preflight["active_baseline_schema_ok"] = True
 
         active_before = str(active_payload.get("snapshot_path", "") or active_payload.get("history_path", "")).strip()
         out["active_before"] = active_before
@@ -2388,6 +2425,15 @@ class LieEngine:
             write_json(audit_json_path, out)
             write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
             return out
+        anchor_schema_errors = _append_schema_errors(anchor_payload, "rollback_anchor")
+        if anchor_schema_errors:
+            preflight_errors.extend(anchor_schema_errors)
+            out["reason"] = "rollback_anchor_invalid_payload"
+            write_json(audit_json_path, out)
+            write_markdown(audit_md_path, "\n".join([f"- {k}: `{v}`" for k, v in out.items()]))
+            return out
+        preflight["rollback_anchor_schema_ok"] = True
+
         anchor_after = str(anchor_payload.get("snapshot_path", "") or anchor_payload.get("history_path", "")).strip()
         if not anchor_after:
             out["reason"] = "rollback_anchor_invalid_payload"
