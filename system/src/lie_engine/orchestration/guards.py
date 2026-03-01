@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+import math
 from typing import Sequence
 
 import pandas as pd
@@ -75,6 +76,15 @@ def black_swan_assessment(
     news: Sequence[NewsEvent],
     threshold: float = 70.0,
 ) -> tuple[float, list[str], bool]:
+    def _f(key: str, default: float = 0.0) -> float:
+        try:
+            out = float(sentiment.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+        if (not pd.notna(out)) or (not math.isfinite(out)):
+            return float(default)
+        return float(out)
+
     score = 0.0
     items: list[str] = []
 
@@ -85,31 +95,60 @@ def black_swan_assessment(
         score += 20.0
         items.append("ATR_Z高位，波动扩张加速")
 
-    pcr = float(sentiment.get("pcr_50etf", 0.9))
+    pcr = _f("pcr_50etf", 0.9)
     if pcr > 1.2:
         score += 20.0
         items.append("PCR>1.2，期权恐慌对冲升温")
     elif pcr > 1.0:
         score += 10.0
 
-    iv = float(sentiment.get("iv_50etf", 0.22))
+    iv = _f("iv_50etf", 0.22)
     if iv > 0.35:
         score += 15.0
         items.append("隐含波动率快速上行")
     elif iv > 0.28:
         score += 8.0
 
-    northbound = float(sentiment.get("northbound_netflow", 0.0))
+    northbound = _f("northbound_netflow", 0.0)
     if northbound < -1e9:
         score += 20.0
         items.append("北向净流出超过10亿，流动性显著收缩")
     elif northbound < -5e8:
         score += 10.0
 
-    margin_chg = float(sentiment.get("margin_balance_chg", 0.0))
+    margin_chg = _f("margin_balance_chg", 0.0)
     if margin_chg < -0.02:
         score += 10.0
         items.append("融资余额收缩过快，杠杆偏好下降")
+
+    btc_ret_24h = _f("btc_return_24h", 0.0)
+    if btc_ret_24h < -0.04:
+        score += 20.0
+        items.append("BTC 24h 跌幅超过4%，风险资产去杠杆加速")
+    elif btc_ret_24h < -0.02:
+        score += 10.0
+        items.append("BTC 24h 跌幅超过2%，风险偏好走弱")
+
+    btc_rv_24h = _f("btc_realized_vol_24h", 0.0)
+    if btc_rv_24h > 0.12:
+        score += 15.0
+        items.append("BTC 24h 实现波动率显著抬升")
+    elif btc_rv_24h > 0.08:
+        score += 8.0
+
+    btc_funding_abs = _f("btc_funding_abs_8h", abs(_f("btc_funding_rate_8h", 0.0)))
+    if btc_funding_abs > 0.0005:
+        score += 10.0
+        items.append("BTC 资金费率绝对值过高，衍生品拥挤度上升")
+    elif btc_funding_abs > 0.0002:
+        score += 6.0
+
+    btc_spread_bps = _f("btc_book_spread_bps", 0.0)
+    if btc_spread_bps > 8.0:
+        score += 8.0
+        items.append("BTC 盘口价差显著扩大，流动性恶化")
+    elif btc_spread_bps > 3.0:
+        score += 4.0
 
     geo_events = sum(
         1
@@ -167,4 +206,3 @@ def build_guard_assessment(
         cooldown_active=cooldown,
         non_trade_reasons=non_trade_reasons,
     )
-

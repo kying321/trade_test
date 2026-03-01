@@ -70,6 +70,8 @@ def render_daily_briefing(
                 + f"risk_mult={float(risk_control.get('risk_multiplier', 1.0)):.3f}, "
                 + f"source_mult={float(risk_control.get('source_multiplier', 1.0)):.3f}, "
                 + f"mode_mult={float(risk_control.get('mode_multiplier', 1.0)):.3f}, "
+                + f"crypto_mult={float(risk_control.get('crypto_multiplier', 1.0)):.3f}, "
+                + f"cross_mult={float(risk_control.get('cross_source_multiplier', 1.0)):.3f}, "
                 + f"mode_reason={str(risk_control.get('mode_reason', 'healthy'))}"
             )
         history = mode_feedback.get("history", {})

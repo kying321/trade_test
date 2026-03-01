@@ -28,6 +28,9 @@ def main() -> None:
     p_ic.add_argument("--date", required=True)
     p_ic.add_argument("--slot", required=True, help="HH:MM")
 
+    p_tsp = sub.add_parser("time-sync-probe", help="Run system time sync probe")
+    p_tsp.add_argument("--date", required=True)
+
     p_bt = sub.add_parser("backtest", help="Run walk-forward backtest")
     p_bt.add_argument("--start", required=True)
     p_bt.add_argument("--end", required=True)
@@ -136,6 +139,8 @@ def main() -> None:
         out = eng.run_premarket(as_of=_parse_date(args.date))
     elif args.cmd == "run-intraday-check":
         out = eng.run_intraday_check(as_of=_parse_date(args.date), slot=args.slot)
+    elif args.cmd == "time-sync-probe":
+        out = eng.run_time_sync_probe(as_of=_parse_date(args.date))
     elif args.cmd == "backtest":
         result: BacktestResult = eng.run_backtest(start=_parse_date(args.start), end=_parse_date(args.end))
         out = result.to_dict()

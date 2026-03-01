@@ -12,9 +12,15 @@ from lie_engine.config.settings import SystemSettings
 HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
 EQUITY_RE = re.compile(r"^\d{6}$")
 FUTURE_RE = re.compile(r"^[A-Z]{1,3}\d{4}$")
+CRYPTO_RE = re.compile(r"^[A-Z0-9]{5,20}$")
 SUPPORTED_PROVIDER_PROFILES = {
     "opensource_dual",
     "opensource_primary",
+    "binance_spot_public",
+    "bybit_spot_public",
+    "dual_binance_bybit_public",
+    "hybrid_opensource_binance",
+    "hybrid_opensource_binance_bybit",
     "hybrid_with_paid_placeholder",
     "paid_placeholder",
 }
@@ -145,14 +151,24 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
     mode_health_insufficient_sample_risk_multiplier = _as_float(
         val.get("mode_health_insufficient_sample_risk_multiplier", 0.85)
     )
+    execution_crypto_stress_risk_multiplier = _as_float(val.get("execution_crypto_stress_risk_multiplier", 0.65))
+    execution_crypto_stress_full_scale = _as_float(val.get("execution_crypto_stress_full_scale", 1.0))
+    execution_cross_source_stress_risk_multiplier = _as_float(val.get("execution_cross_source_stress_risk_multiplier", 0.70))
+    execution_cross_source_stress_full_scale = _as_float(val.get("execution_cross_source_stress_full_scale", 1.0))
     for k, v in (
         ("execution_min_risk_multiplier", execution_min_risk_multiplier),
         ("source_confidence_floor_risk_multiplier", source_confidence_floor_risk_multiplier),
         ("mode_health_risk_multiplier", mode_health_risk_multiplier),
         ("mode_health_insufficient_sample_risk_multiplier", mode_health_insufficient_sample_risk_multiplier),
+        ("execution_crypto_stress_risk_multiplier", execution_crypto_stress_risk_multiplier),
+        ("execution_cross_source_stress_risk_multiplier", execution_cross_source_stress_risk_multiplier),
     ):
         if not (0.0 <= v <= 1.0):
             issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
+    if not (0.20 <= execution_crypto_stress_full_scale <= 3.0):
+        issues.append(ValidationIssue("error", "validation.execution_crypto_stress_full_scale", "必须在 [0.2, 3.0]"))
+    if not (0.20 <= execution_cross_source_stress_full_scale <= 3.0):
+        issues.append(ValidationIssue("error", "validation.execution_cross_source_stress_full_scale", "必须在 [0.2, 3.0]"))
     if source_confidence_floor_risk_multiplier < execution_min_risk_multiplier:
         issues.append(
             ValidationIssue(
@@ -183,6 +199,22 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                 "warning",
                 "validation.mode_health_risk_multiplier",
                 "建议不高于 validation.mode_health_insufficient_sample_risk_multiplier",
+            )
+        )
+    if execution_crypto_stress_risk_multiplier < execution_min_risk_multiplier:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.execution_crypto_stress_risk_multiplier",
+                "不能低于 validation.execution_min_risk_multiplier",
+            )
+        )
+    if execution_cross_source_stress_risk_multiplier < execution_min_risk_multiplier:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.execution_cross_source_stress_risk_multiplier",
+                "不能低于 validation.execution_min_risk_multiplier",
             )
         )
     for k in ("strategy_lab_merge_step", "mode_profile_blend_with_live"):
@@ -1032,6 +1064,215 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                             "不能为空字符串",
                         )
                     )
+    if "microstructure_signal_enabled" in val and not isinstance(val.get("microstructure_signal_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.microstructure_signal_enabled", "必须是布尔值"))
+    if "micro_schema_hard_fuse_enabled" in val and not isinstance(val.get("micro_schema_hard_fuse_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.micro_schema_hard_fuse_enabled", "必须是布尔值"))
+    if "micro_cross_source_audit_enabled" in val and not isinstance(val.get("micro_cross_source_audit_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.micro_cross_source_audit_enabled", "必须是布尔值"))
+    if "micro_cross_source_build_missing_provider" in val and not isinstance(
+        val.get("micro_cross_source_build_missing_provider"), bool
+    ):
+        issues.append(ValidationIssue("error", "validation.micro_cross_source_build_missing_provider", "必须是布尔值"))
+    if "micro_cross_source_adaptive_gap_enabled" in val and not isinstance(
+        val.get("micro_cross_source_adaptive_gap_enabled"), bool
+    ):
+        issues.append(ValidationIssue("error", "validation.micro_cross_source_adaptive_gap_enabled", "必须是布尔值"))
+    if "micro_cross_source_hard_fuse_enabled" in val and not isinstance(val.get("micro_cross_source_hard_fuse_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.micro_cross_source_hard_fuse_enabled", "必须是布尔值"))
+    if "micro_time_sync_hard_fuse_enabled" in val and not isinstance(val.get("micro_time_sync_hard_fuse_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.micro_time_sync_hard_fuse_enabled", "必须是布尔值"))
+    if "micro_cross_source_symbols" in val:
+        raw_symbols = val.get("micro_cross_source_symbols")
+        if isinstance(raw_symbols, str):
+            if str(raw_symbols).strip() == "":
+                issues.append(ValidationIssue("error", "validation.micro_cross_source_symbols", "字符串不能为空"))
+        elif isinstance(raw_symbols, (list, tuple)):
+            if len(raw_symbols) == 0:
+                issues.append(ValidationIssue("error", "validation.micro_cross_source_symbols", "至少需要 1 个标的"))
+            for idx, item in enumerate(raw_symbols):
+                if str(item).strip() == "":
+                    issues.append(
+                        ValidationIssue(
+                            "error",
+                            f"validation.micro_cross_source_symbols[{idx}]",
+                            "不能为空字符串",
+                        )
+                    )
+        else:
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_symbols", "必须是字符串或字符串列表"))
+    if "microstructure_symbols" in val:
+        raw_symbols = val.get("microstructure_symbols")
+        if isinstance(raw_symbols, str):
+            if str(raw_symbols).strip() == "":
+                issues.append(ValidationIssue("error", "validation.microstructure_symbols", "字符串不能为空"))
+        elif isinstance(raw_symbols, (list, tuple)):
+            if len(raw_symbols) == 0:
+                issues.append(ValidationIssue("error", "validation.microstructure_symbols", "至少需要 1 个标的"))
+            for idx, item in enumerate(raw_symbols):
+                if str(item).strip() == "":
+                    issues.append(
+                        ValidationIssue(
+                            "error",
+                            f"validation.microstructure_symbols[{idx}]",
+                            "不能为空字符串",
+                        )
+                    )
+        else:
+            issues.append(ValidationIssue("error", "validation.microstructure_symbols", "必须是字符串或字符串列表"))
+    if "microstructure_lookback_minutes" in val:
+        lookback_minutes = _as_int(val.get("microstructure_lookback_minutes", 0))
+        if not (1 <= lookback_minutes <= 1440):
+            issues.append(ValidationIssue("error", "validation.microstructure_lookback_minutes", "必须在 [1, 1440]"))
+    if "micro_schema_max_fail_symbols" in val and _as_int(val.get("micro_schema_max_fail_symbols", -1)) < 0:
+        issues.append(ValidationIssue("error", "validation.micro_schema_max_fail_symbols", "必须 >= 0"))
+    if "micro_cross_source_tolerance_ms" in val:
+        tol_ms = _as_int(val.get("micro_cross_source_tolerance_ms", 0))
+        if not (1 <= tol_ms <= 5000):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_tolerance_ms", "必须在 [1, 5000]"))
+    if "micro_time_sync_max_offset_ms" in val:
+        x = _as_int(val.get("micro_time_sync_max_offset_ms", 0))
+        if not (1 <= x <= 5000):
+            issues.append(ValidationIssue("error", "validation.micro_time_sync_max_offset_ms", "必须在 [1, 5000]"))
+    if "micro_time_sync_max_rtt_ms" in val:
+        x = _as_int(val.get("micro_time_sync_max_rtt_ms", 0))
+        if not (1 <= x <= 5000):
+            issues.append(ValidationIssue("error", "validation.micro_time_sync_max_rtt_ms", "必须在 [1, 5000]"))
+    if "micro_time_sync_min_samples" in val and _as_int(val.get("micro_time_sync_min_samples", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.micro_time_sync_min_samples", "必须 >= 1"))
+    if "micro_cross_source_window_ms" in val:
+        window_ms = _as_int(val.get("micro_cross_source_window_ms", 0))
+        if not (50 <= window_ms <= 5000):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_window_ms", "必须在 [50, 5000]"))
+    if "micro_cross_source_align_seconds" in val:
+        align_seconds = _as_int(val.get("micro_cross_source_align_seconds", 0))
+        if not (30 <= align_seconds <= 86400):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_align_seconds", "必须在 [30, 86400]"))
+    if "micro_cross_source_trade_limit" in val:
+        trade_limit = _as_int(val.get("micro_cross_source_trade_limit", 0))
+        if not (20 <= trade_limit <= 1000):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_trade_limit", "必须在 [20, 1000]"))
+    if "micro_cross_source_gap_freq_multiplier" in val:
+        x = _as_float(val.get("micro_cross_source_gap_freq_multiplier", 0.0))
+        if not (1.0 <= x <= 10.0):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_gap_freq_multiplier", "必须在 [1.0, 10.0]"))
+    if "micro_cross_source_gap_hist_window_days" in val and _as_int(val.get("micro_cross_source_gap_hist_window_days", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.micro_cross_source_gap_hist_window_days", "必须 >= 1"))
+    if "micro_cross_source_gap_hist_quantile" in val:
+        x = _as_float(val.get("micro_cross_source_gap_hist_quantile", 0.0))
+        if not (0.50 <= x <= 0.99):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_gap_hist_quantile", "必须在 [0.5, 0.99]"))
+    if "micro_cross_source_gap_hist_multiplier" in val:
+        x = _as_float(val.get("micro_cross_source_gap_hist_multiplier", 0.0))
+        if not (1.0 <= x <= 3.0):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_gap_hist_multiplier", "必须在 [1.0, 3.0]"))
+    if "micro_cross_source_gap_limit_cap_ms" in val:
+        x = _as_int(val.get("micro_cross_source_gap_limit_cap_ms", 0))
+        if not (100 <= x <= 600000):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_gap_limit_cap_ms", "必须在 [100, 600000]"))
+    if "micro_cross_source_quality_lookback_days" in val:
+        x = _as_int(val.get("micro_cross_source_quality_lookback_days", 0))
+        if not (1 <= x <= 365):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_quality_lookback_days", "必须在 [1, 365]"))
+    if "micro_cross_source_min_rows_per_side" in val and _as_int(val.get("micro_cross_source_min_rows_per_side", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.micro_cross_source_min_rows_per_side", "必须 >= 1"))
+    if "micro_cross_source_audit_symbol_cap" in val and _as_int(val.get("micro_cross_source_audit_symbol_cap", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.micro_cross_source_audit_symbol_cap", "必须 >= 1"))
+    if "micro_cross_source_min_samples" in val and _as_int(val.get("micro_cross_source_min_samples", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.micro_cross_source_min_samples", "必须 >= 1"))
+    if "micro_cross_source_max_fail_ratio" in val:
+        fail_ratio = _as_float(val.get("micro_cross_source_max_fail_ratio", -1.0))
+        if not (0.0 <= fail_ratio <= 1.0):
+            issues.append(ValidationIssue("error", "validation.micro_cross_source_max_fail_ratio", "必须在 [0, 1]"))
+    if "micro_continuous_gap_ms" in val:
+        gap_ms = _as_int(val.get("micro_continuous_gap_ms", 0))
+        if not (100 <= gap_ms <= 60000):
+            issues.append(ValidationIssue("error", "validation.micro_continuous_gap_ms", "必须在 [100, 60000]"))
+    if "micro_cross_source_tolerance_ms" in val and "micro_continuous_gap_ms" in val:
+        tol_ms = _as_int(val.get("micro_cross_source_tolerance_ms", 0))
+        gap_ms = _as_int(val.get("micro_continuous_gap_ms", 0))
+        if tol_ms > gap_ms:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.micro_cross_source_tolerance_ms",
+                    "不能大于 validation.micro_continuous_gap_ms",
+                )
+            )
+    if "micro_min_trade_count" in val and _as_int(val.get("micro_min_trade_count", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.micro_min_trade_count", "必须 >= 1"))
+    if "micro_confidence_boost_max" in val:
+        boost_max = _as_float(val.get("micro_confidence_boost_max", 0.0))
+        if not (0.0 <= boost_max <= 100.0):
+            issues.append(ValidationIssue("error", "validation.micro_confidence_boost_max", "必须在 [0, 100]"))
+    if "micro_penalty_max" in val:
+        penalty_max = _as_float(val.get("micro_penalty_max", 0.0))
+        if not (0.0 <= penalty_max <= 100.0):
+            issues.append(ValidationIssue("error", "validation.micro_penalty_max", "必须在 [0, 100]"))
+    if "micro_confidence_boost_max" in val and "micro_penalty_max" in val:
+        boost_max = _as_float(val.get("micro_confidence_boost_max", 0.0))
+        penalty_max = _as_float(val.get("micro_penalty_max", 0.0))
+        if penalty_max < boost_max:
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "validation.micro_penalty_max",
+                    "建议 >= validation.micro_confidence_boost_max",
+                )
+            )
+    if "system_time_sync_probe_enabled" in val and not isinstance(val.get("system_time_sync_probe_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.system_time_sync_probe_enabled", "必须是布尔值"))
+    if "system_time_sync_hard_fuse_enabled" in val and not isinstance(val.get("system_time_sync_hard_fuse_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.system_time_sync_hard_fuse_enabled", "必须是布尔值"))
+    if "system_time_sync_primary_source" in val and str(val.get("system_time_sync_primary_source", "")).strip() == "":
+        issues.append(ValidationIssue("error", "validation.system_time_sync_primary_source", "不能为空"))
+    if "system_time_sync_secondary_source" in val and not isinstance(val.get("system_time_sync_secondary_source"), str):
+        issues.append(ValidationIssue("error", "validation.system_time_sync_secondary_source", "必须是字符串"))
+    if "system_time_sync_probe_timeout_seconds" in val:
+        x = _as_float(val.get("system_time_sync_probe_timeout_seconds", 0.0))
+        if not (0.5 <= x <= 5.0):
+            issues.append(ValidationIssue("error", "validation.system_time_sync_probe_timeout_seconds", "必须在 [0.5, 5.0]"))
+    if "system_time_sync_max_offset_ms" in val:
+        x = _as_int(val.get("system_time_sync_max_offset_ms", 0))
+        if not (1 <= x <= 5000):
+            issues.append(ValidationIssue("error", "validation.system_time_sync_max_offset_ms", "必须在 [1, 5000]"))
+    if "system_time_sync_max_rtt_ms" in val:
+        x = _as_int(val.get("system_time_sync_max_rtt_ms", 0))
+        if not (1 <= x <= 5000):
+            issues.append(ValidationIssue("error", "validation.system_time_sync_max_rtt_ms", "必须在 [1, 5000]"))
+    if "system_time_sync_min_ok_sources" in val:
+        x = _as_int(val.get("system_time_sync_min_ok_sources", 0))
+        if not (1 <= x <= 4):
+            issues.append(ValidationIssue("error", "validation.system_time_sync_min_ok_sources", "必须在 [1, 4]"))
+    if (
+        "system_time_sync_min_ok_sources" in val
+        or "system_time_sync_primary_source" in val
+        or "system_time_sync_secondary_source" in val
+    ):
+        primary = str(val.get("system_time_sync_primary_source", "time.google.com")).strip()
+        secondary = str(val.get("system_time_sync_secondary_source", "time.cloudflare.com")).strip()
+        source_count = len({x for x in [primary, secondary] if x})
+        min_ok = _as_int(val.get("system_time_sync_min_ok_sources", 1))
+        if source_count <= 0:
+            issues.append(ValidationIssue("error", "validation.system_time_sync_primary_source", "至少需要一个有效授时源"))
+        elif min_ok > source_count:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.system_time_sync_min_ok_sources",
+                    "不能大于可用授时源数量",
+                )
+            )
+    if "ops_system_time_sync_monitor_enabled" in val and not isinstance(val.get("ops_system_time_sync_monitor_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.ops_system_time_sync_monitor_enabled", "必须是布尔值"))
+    if "ops_system_time_sync_fail_days_max" in val and _as_int(val.get("ops_system_time_sync_fail_days_max", -1)) < 0:
+        issues.append(ValidationIssue("error", "validation.ops_system_time_sync_fail_days_max", "必须 >= 0"))
+    if "ops_system_time_sync_inactive_days_max" in val and _as_int(val.get("ops_system_time_sync_inactive_days_max", -1)) < 0:
+        issues.append(ValidationIssue("error", "validation.ops_system_time_sync_inactive_days_max", "必须 >= 0"))
+    if "ops_system_time_sync_min_ok_sources" in val:
+        x = _as_int(val.get("ops_system_time_sync_min_ok_sources", 0))
+        if not (1 <= x <= 4):
+            issues.append(ValidationIssue("error", "validation.ops_system_time_sync_min_ok_sources", "必须在 [1, 4]"))
     if "review_backtest_lookback_days" in val and _as_int(val.get("review_backtest_lookback_days", 0)) < 30:
         issues.append(ValidationIssue("error", "validation.review_backtest_lookback_days", "必须 >= 30"))
     if "review_backtest_start_date" in val:
@@ -1051,7 +1292,12 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                 issues.append(ValidationIssue("error", f"universe.core[{i}]", "必须是对象"))
                 continue
             sym = str(item.get("symbol", "")).strip()
-            if not (EQUITY_RE.match(sym) or FUTURE_RE.match(sym)):
+            asset_class = str(item.get("asset_class", "")).strip().lower()
+            is_equity = bool(EQUITY_RE.match(sym))
+            is_future = bool(FUTURE_RE.match(sym))
+            is_crypto = bool(CRYPTO_RE.match(sym) and re.search(r"[A-Z]", sym))
+            allow_crypto = asset_class in {"crypto", "spot", "perp", "perpetual"}
+            if not (is_equity or is_future or (allow_crypto and is_crypto)):
                 issues.append(ValidationIssue("error", f"universe.core[{i}].symbol", f"无效标的格式: {sym!r}"))
             if str(item.get("asset_class", "")).strip() == "":
                 issues.append(ValidationIssue("warning", f"universe.core[{i}].asset_class", "建议显式配置 asset_class"))

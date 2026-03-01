@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -37,6 +37,10 @@ class SignalEngineConfig:
     factor_filter_enabled: bool = True
     factor_penalty_max: float = 22.0
     factor_drop_threshold: float = 0.92
+    microstructure_enabled: bool = True
+    micro_confidence_boost_max: float = 8.0
+    micro_penalty_max: float = 10.0
+    micro_min_trade_count: int = 30
 
 
 def _bounded(value: float, low: float, high: float) -> float:
@@ -187,6 +191,7 @@ def _default_market_factor_state(regime: RegimeLabel) -> dict[str, float]:
             "crowding_aversion": 0.30,
             "small_cap_pressure": 0.25,
             "dividend_preference": 0.35,
+            "data_quality_pressure": 0.0,
         }
     if regime == RegimeLabel.WEAK_TREND:
         return {
@@ -195,6 +200,7 @@ def _default_market_factor_state(regime: RegimeLabel) -> dict[str, float]:
             "crowding_aversion": 0.45,
             "small_cap_pressure": 0.35,
             "dividend_preference": 0.50,
+            "data_quality_pressure": 0.0,
         }
     if regime == RegimeLabel.RANGE:
         return {
@@ -203,6 +209,7 @@ def _default_market_factor_state(regime: RegimeLabel) -> dict[str, float]:
             "crowding_aversion": 0.55,
             "small_cap_pressure": 0.55,
             "dividend_preference": 0.65,
+            "data_quality_pressure": 0.0,
         }
     return {
         "valuation_pressure": 0.65,
@@ -210,6 +217,7 @@ def _default_market_factor_state(regime: RegimeLabel) -> dict[str, float]:
         "crowding_aversion": 0.60,
         "small_cap_pressure": 0.65,
         "dividend_preference": 0.70,
+        "data_quality_pressure": 0.0,
     }
 
 
@@ -227,6 +235,22 @@ def _merge_market_factor_state(regime: RegimeLabel, market_factor_state: dict[st
     ):
         if key in market_factor_state:
             merged[key] = _bounded(_safe_float(market_factor_state.get(key), merged[key]), 0.0, 1.5)
+    if "data_quality_pressure" in market_factor_state:
+        merged["data_quality_pressure"] = _bounded(_safe_float(market_factor_state.get("data_quality_pressure"), 0.0), 0.0, 1.5)
+
+    quality_score_7d = _bounded(_safe_float(market_factor_state.get("cross_source_quality_score_7d"), 1.0), 0.0, 1.0)
+    fail_ratio_7d = _bounded(_safe_float(market_factor_state.get("cross_source_fail_ratio_7d"), 0.0), 0.0, 1.0)
+    cross_stress = _bounded(_safe_float(market_factor_state.get("cross_source_stress"), 0.0), 0.0, 1.5)
+    derived_quality_pressure = _bounded(
+        (1.0 - quality_score_7d) * 0.55 + fail_ratio_7d * 0.75 + (cross_stress / 1.5) * 0.35,
+        0.0,
+        1.5,
+    )
+    merged["data_quality_pressure"] = _bounded(
+        max(float(merged.get("data_quality_pressure", 0.0)), derived_quality_pressure),
+        0.0,
+        1.5,
+    )
     return merged
 
 
@@ -299,6 +323,7 @@ def _factor_risk_score(
     size = max(0.0, exposure.get("size", 0.0))
     volatility = max(0.0, exposure.get("volatility", 0.0))
     dividend = max(0.0, exposure.get("dividend", 0.0))
+    data_quality_pressure = max(0.0, _safe_float(market_factor_state.get("data_quality_pressure"), 0.0))
 
     if side == Side.SHORT:
         valuation *= 0.35
@@ -314,6 +339,7 @@ def _factor_risk_score(
         + size * market_factor_state["small_cap_pressure"] * 0.6
         + volatility * 0.45
         + dividend_mismatch * 0.55
+        + data_quality_pressure * 0.65
     )
     score = _bounded(raw / 3.0, 0.0, 1.5)
 
@@ -334,7 +360,60 @@ def _factor_risk_score(
         flags.append("short_valuation_tailwind")
     if side == Side.LONG and exposure.get("valuation", 0.0) < -0.6:
         flags.append("value_tailwind")
+    if data_quality_pressure > 0.35:
+        flags.append("data_quality_headwind")
     return score, flags
+
+
+def _microstructure_adjustment(
+    *,
+    side: Side,
+    cfg: SignalEngineConfig,
+    micro_factor_state: dict[str, float] | None,
+) -> tuple[float, float, list[str], float]:
+    if not bool(cfg.microstructure_enabled):
+        return 0.0, 0.0, [], 0.0
+    if not isinstance(micro_factor_state, dict):
+        return 0.0, 0.0, [], 0.0
+    has_data = bool(micro_factor_state.get("has_data", False))
+
+    micro_alignment = _bounded(_safe_float(micro_factor_state.get("micro_alignment"), 0.0), -1.0, 1.0)
+    if side == Side.SHORT:
+        micro_alignment = -micro_alignment
+    evidence_score = _bounded(_safe_float(micro_factor_state.get("evidence_score"), 0.0), 0.0, 1.0)
+    signed_signal = _bounded(micro_alignment * evidence_score, -1.0, 1.0)
+
+    boost = max(0.0, signed_signal) * float(cfg.micro_confidence_boost_max)
+    penalty = max(0.0, -signed_signal) * float(cfg.micro_penalty_max)
+    flags: list[str] = []
+
+    sync_ok = bool(micro_factor_state.get("sync_ok", True))
+    gap_ok = bool(micro_factor_state.get("gap_ok", True))
+    schema_ok = bool(micro_factor_state.get("schema_ok", True))
+    time_sync_ok = bool(micro_factor_state.get("time_sync_ok", True))
+    trade_count = int(max(0, _safe_float(micro_factor_state.get("trade_count"), 0.0)))
+
+    if not schema_ok:
+        penalty += 0.50 * float(cfg.micro_penalty_max)
+        flags.append("micro_schema_risk")
+    if not has_data:
+        penalty = min(float(cfg.micro_penalty_max) * 1.5, penalty)
+        return 0.0, penalty, flags, 0.0
+    if not sync_ok:
+        penalty += 0.35 * float(cfg.micro_penalty_max)
+        flags.append("micro_sync_risk")
+    if not gap_ok:
+        penalty += 0.25 * float(cfg.micro_penalty_max)
+        flags.append("micro_gap_risk")
+    if not time_sync_ok:
+        penalty += 0.20 * float(cfg.micro_penalty_max)
+        flags.append("micro_time_sync_risk")
+    if trade_count < int(max(1, cfg.micro_min_trade_count)):
+        penalty += 0.15 * float(cfg.micro_penalty_max)
+        flags.append("micro_low_samples")
+
+    penalty = min(float(cfg.micro_penalty_max) * 1.5, penalty)
+    return boost, penalty, flags, signed_signal
 
 
 def generate_signal_for_symbol(
@@ -342,6 +421,7 @@ def generate_signal_for_symbol(
     regime: RegimeLabel,
     cfg: SignalEngineConfig,
     market_factor_state: dict[str, float] | None = None,
+    micro_factor_state: dict[str, float] | None = None,
 ) -> SignalCandidate | None:
     if symbol_df.empty or len(symbol_df) < 30:
         return None
@@ -386,7 +466,12 @@ def generate_signal_for_symbol(
         return None
 
     factor_penalty = min(float(cfg.factor_penalty_max), factor_risk_score * float(cfg.factor_penalty_max))
-    confidence = _bounded(raw_confidence - factor_penalty, 0.0, 100.0)
+    micro_boost, micro_penalty, micro_flags, micro_signed = _microstructure_adjustment(
+        side=side,
+        cfg=cfg,
+        micro_factor_state=micro_factor_state,
+    )
+    confidence = _bounded(raw_confidence - factor_penalty + micro_boost - micro_penalty, 0.0, 100.0)
     close = float(cur["close"])
     atr = float(cur["atr14"])
     atr_pct = atr / max(close, 1e-9)
@@ -413,6 +498,20 @@ def generate_signal_for_symbol(
         note = f"Regime: {regime.value}; target_mult={reward_mult:.2f}"
     if factor_flags:
         note += " | factor=" + ",".join(factor_flags)
+    if micro_flags:
+        note += " | micro_flags=" + ",".join(micro_flags)
+    if isinstance(micro_factor_state, dict) and bool(micro_factor_state.get("has_data", False)):
+        note += (
+            " | micro="
+            + f"align={_safe_float(micro_factor_state.get('micro_alignment'), 0.0):.3f},"
+            + f"signed={micro_signed:.3f},"
+            + f"obi={_safe_float(micro_factor_state.get('queue_imbalance'), 0.0):.3f},"
+            + f"ofi={_safe_float(micro_factor_state.get('ofi_norm'), 0.0):.3f}"
+        )
+    if isinstance(micro_factor_state, dict) and not bool(micro_factor_state.get("schema_ok", True)):
+        issues = micro_factor_state.get("schema_issues", [])
+        if isinstance(issues, list) and issues:
+            note += " | micro_schema=" + ",".join(str(x) for x in issues[:2])
 
     if confidence < cfg.confidence_min:
         return None
@@ -433,8 +532,8 @@ def generate_signal_for_symbol(
         target_price=target,
         can_short=can_short,
         factor_exposure_score=float(factor_risk_score),
-        factor_penalty=float(factor_penalty),
-        factor_flags=factor_flags,
+        factor_penalty=float(factor_penalty + micro_penalty),
+        factor_flags=factor_flags + micro_flags,
         notes=note,
     )
 
@@ -444,6 +543,7 @@ def scan_signals(
     regime: RegimeLabel,
     cfg: SignalEngineConfig,
     market_factor_state: dict[str, float] | None = None,
+    micro_factor_map: dict[str, dict[str, Any]] | None = None,
 ) -> list[SignalCandidate]:
     if bars.empty:
         return []
@@ -462,6 +562,7 @@ def scan_signals(
             regime=local_regime,
             cfg=cfg,
             market_factor_state=market_factor_state,
+            micro_factor_state=(micro_factor_map or {}).get(str(sorted_df.iloc[-1].get("symbol", ""))),
         )
         if candidate is not None:
             out.append(candidate)

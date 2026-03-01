@@ -260,6 +260,276 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(out["summary"]["errors"], 0)
 
+    def test_validate_settings_ok_binance_crypto_profile(self) -> None:
+        settings = SystemSettings(
+            raw={
+                "timezone": "Asia/Shanghai",
+                "schedule": {
+                    "premarket": "08:40",
+                    "intraday_slots": ["10:30"],
+                    "eod": "15:10",
+                    "nightly_review": "20:30",
+                },
+                "thresholds": {
+                    "hurst_trend": 0.6,
+                    "hurst_mean_revert": 0.4,
+                    "atr_extreme": 2.0,
+                    "signal_confidence_min": 60.0,
+                    "convexity_min": 3.0,
+                },
+                "risk": {
+                    "max_single_risk_pct": 2.0,
+                    "max_total_exposure_pct": 50.0,
+                    "max_symbol_pct": 15.0,
+                    "max_theme_pct": 25.0,
+                    "safety_bucket_pct": 85.0,
+                    "convexity_bucket_pct": 15.0,
+                },
+                "universe": {"core": [{"symbol": "BTCUSDT", "asset_class": "crypto"}]},
+                "data": {"provider_profile": "binance_spot_public"},
+                "paths": {"output": "output", "sqlite": "output/artifacts/lie_engine.db"},
+            }
+        )
+        out = validate_settings(settings)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["summary"]["errors"], 0)
+
+    def test_validate_settings_ok_with_microstructure_knobs(self) -> None:
+        settings = SystemSettings(
+            raw={
+                "timezone": "Asia/Shanghai",
+                "schedule": {
+                    "premarket": "08:40",
+                    "intraday_slots": ["10:30"],
+                    "eod": "15:10",
+                    "nightly_review": "20:30",
+                },
+                "thresholds": {
+                    "hurst_trend": 0.6,
+                    "hurst_mean_revert": 0.4,
+                    "atr_extreme": 2.0,
+                    "signal_confidence_min": 60.0,
+                    "convexity_min": 3.0,
+                },
+                "risk": {
+                    "max_single_risk_pct": 2.0,
+                    "max_total_exposure_pct": 50.0,
+                    "max_symbol_pct": 15.0,
+                    "max_theme_pct": 25.0,
+                    "safety_bucket_pct": 85.0,
+                    "convexity_bucket_pct": 15.0,
+                },
+                "validation": {
+                    "microstructure_signal_enabled": True,
+                    "microstructure_symbols": ["BTCUSDT", "ETHUSDT"],
+                    "microstructure_lookback_minutes": 10,
+                    "micro_schema_hard_fuse_enabled": True,
+                    "micro_schema_max_fail_symbols": 0,
+                    "micro_cross_source_audit_enabled": True,
+                    "micro_cross_source_build_missing_provider": False,
+                    "micro_cross_source_adaptive_gap_enabled": True,
+                    "micro_cross_source_hard_fuse_enabled": True,
+                    "micro_time_sync_hard_fuse_enabled": True,
+                    "micro_cross_source_align_seconds": 120,
+                    "micro_cross_source_window_ms": 200,
+                    "micro_cross_source_trade_limit": 300,
+                    "micro_cross_source_gap_freq_multiplier": 2.0,
+                    "micro_cross_source_gap_hist_window_days": 30,
+                    "micro_cross_source_gap_hist_quantile": 0.9,
+                    "micro_cross_source_gap_hist_multiplier": 1.1,
+                    "micro_cross_source_gap_limit_cap_ms": 60000,
+                    "micro_cross_source_quality_lookback_days": 7,
+                    "micro_cross_source_min_rows_per_side": 1,
+                    "micro_cross_source_audit_symbol_cap": 3,
+                    "micro_cross_source_min_samples": 1,
+                    "micro_cross_source_max_fail_ratio": 0.5,
+                    "micro_cross_source_tolerance_ms": 80,
+                    "micro_time_sync_max_offset_ms": 5,
+                    "micro_time_sync_max_rtt_ms": 120,
+                    "micro_time_sync_min_samples": 1,
+                    "system_time_sync_probe_enabled": True,
+                    "system_time_sync_hard_fuse_enabled": True,
+                    "system_time_sync_primary_source": "time.google.com",
+                    "system_time_sync_secondary_source": "time.cloudflare.com",
+                    "system_time_sync_probe_timeout_seconds": 5.0,
+                    "system_time_sync_max_offset_ms": 5,
+                    "system_time_sync_max_rtt_ms": 120,
+                    "system_time_sync_min_ok_sources": 1,
+                    "ops_system_time_sync_monitor_enabled": True,
+                    "ops_system_time_sync_fail_days_max": 2,
+                    "ops_system_time_sync_inactive_days_max": 3,
+                    "ops_system_time_sync_min_ok_sources": 1,
+                    "micro_continuous_gap_ms": 2500,
+                    "micro_min_trade_count": 30,
+                    "micro_confidence_boost_max": 8.0,
+                    "micro_penalty_max": 10.0,
+                },
+                "universe": {"core": [{"symbol": "BTCUSDT", "asset_class": "crypto"}]},
+                "data": {"provider_profile": "binance_spot_public"},
+                "paths": {"output": "output", "sqlite": "output/artifacts/lie_engine.db"},
+            }
+        )
+        out = validate_settings(settings)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["summary"]["errors"], 0)
+
+    def test_validate_settings_ok_dual_binance_bybit_profile(self) -> None:
+        settings = SystemSettings(
+            raw={
+                "timezone": "Asia/Shanghai",
+                "schedule": {
+                    "premarket": "08:40",
+                    "intraday_slots": ["10:30"],
+                    "eod": "15:10",
+                    "nightly_review": "20:30",
+                },
+                "thresholds": {
+                    "hurst_trend": 0.6,
+                    "hurst_mean_revert": 0.4,
+                    "atr_extreme": 2.0,
+                    "signal_confidence_min": 60.0,
+                    "convexity_min": 3.0,
+                },
+                "risk": {
+                    "max_single_risk_pct": 2.0,
+                    "max_total_exposure_pct": 50.0,
+                    "max_symbol_pct": 15.0,
+                    "max_theme_pct": 25.0,
+                    "safety_bucket_pct": 85.0,
+                    "convexity_bucket_pct": 15.0,
+                },
+                "universe": {"core": [{"symbol": "BTCUSDT", "asset_class": "crypto"}]},
+                "data": {"provider_profile": "dual_binance_bybit_public"},
+                "paths": {"output": "output", "sqlite": "output/artifacts/lie_engine.db"},
+            }
+        )
+        out = validate_settings(settings)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["summary"]["errors"], 0)
+
+    def test_validate_settings_detects_invalid_microstructure_knobs(self) -> None:
+        settings = SystemSettings(
+            raw={
+                "timezone": "Asia/Shanghai",
+                "schedule": {
+                    "premarket": "08:40",
+                    "intraday_slots": ["10:30"],
+                    "eod": "15:10",
+                    "nightly_review": "20:30",
+                },
+                "thresholds": {
+                    "hurst_trend": 0.6,
+                    "hurst_mean_revert": 0.4,
+                    "atr_extreme": 2.0,
+                    "signal_confidence_min": 60.0,
+                    "convexity_min": 3.0,
+                },
+                "risk": {
+                    "max_single_risk_pct": 2.0,
+                    "max_total_exposure_pct": 50.0,
+                    "max_symbol_pct": 15.0,
+                    "max_theme_pct": 25.0,
+                    "safety_bucket_pct": 85.0,
+                    "convexity_bucket_pct": 15.0,
+                },
+                "validation": {
+                    "microstructure_signal_enabled": "yes",
+                    "microstructure_symbols": [],
+                    "microstructure_lookback_minutes": 0,
+                    "micro_schema_hard_fuse_enabled": "yes",
+                    "micro_schema_max_fail_symbols": -1,
+                    "micro_cross_source_audit_enabled": "yes",
+                    "micro_cross_source_build_missing_provider": "yes",
+                    "micro_cross_source_adaptive_gap_enabled": "yes",
+                    "micro_cross_source_hard_fuse_enabled": "yes",
+                    "micro_time_sync_hard_fuse_enabled": "yes",
+                    "micro_cross_source_align_seconds": 20,
+                    "micro_cross_source_window_ms": 10,
+                    "micro_cross_source_trade_limit": 10,
+                    "micro_cross_source_gap_freq_multiplier": 0.5,
+                    "micro_cross_source_gap_hist_window_days": 0,
+                    "micro_cross_source_gap_hist_quantile": 0.1,
+                    "micro_cross_source_gap_hist_multiplier": 0.5,
+                    "micro_cross_source_gap_limit_cap_ms": 50,
+                    "micro_cross_source_quality_lookback_days": 0,
+                    "micro_cross_source_min_rows_per_side": 0,
+                    "micro_cross_source_audit_symbol_cap": 0,
+                    "micro_cross_source_min_samples": 0,
+                    "micro_cross_source_max_fail_ratio": 1.5,
+                    "micro_cross_source_tolerance_ms": 6000,
+                    "micro_time_sync_max_offset_ms": 0,
+                    "micro_time_sync_max_rtt_ms": 6001,
+                    "micro_time_sync_min_samples": 0,
+                    "system_time_sync_probe_enabled": "yes",
+                    "system_time_sync_hard_fuse_enabled": "yes",
+                    "system_time_sync_primary_source": "",
+                    "system_time_sync_secondary_source": 1,
+                    "system_time_sync_probe_timeout_seconds": 6.0,
+                    "system_time_sync_max_offset_ms": 0,
+                    "system_time_sync_max_rtt_ms": 6001,
+                    "system_time_sync_min_ok_sources": 3,
+                    "ops_system_time_sync_monitor_enabled": "yes",
+                    "ops_system_time_sync_fail_days_max": -1,
+                    "ops_system_time_sync_inactive_days_max": -1,
+                    "ops_system_time_sync_min_ok_sources": 0,
+                    "micro_continuous_gap_ms": 80,
+                    "micro_min_trade_count": 0,
+                    "micro_confidence_boost_max": 101.0,
+                    "micro_penalty_max": 8.0,
+                },
+                "universe": {"core": [{"symbol": "BTCUSDT", "asset_class": "crypto"}]},
+                "data": {"provider_profile": "binance_spot_public"},
+                "paths": {"output": "output", "sqlite": "output/artifacts/lie_engine.db"},
+            }
+        )
+        out = validate_settings(settings)
+        self.assertFalse(out["ok"])
+        error_paths = {x["path"] for x in out.get("errors", [])}
+        warning_paths = {x["path"] for x in out.get("warnings", [])}
+        self.assertIn("validation.microstructure_signal_enabled", error_paths)
+        self.assertIn("validation.microstructure_symbols", error_paths)
+        self.assertIn("validation.microstructure_lookback_minutes", error_paths)
+        self.assertIn("validation.micro_schema_hard_fuse_enabled", error_paths)
+        self.assertIn("validation.micro_schema_max_fail_symbols", error_paths)
+        self.assertIn("validation.micro_cross_source_audit_enabled", error_paths)
+        self.assertIn("validation.micro_cross_source_build_missing_provider", error_paths)
+        self.assertIn("validation.micro_cross_source_adaptive_gap_enabled", error_paths)
+        self.assertIn("validation.micro_cross_source_hard_fuse_enabled", error_paths)
+        self.assertIn("validation.micro_time_sync_hard_fuse_enabled", error_paths)
+        self.assertIn("validation.micro_cross_source_align_seconds", error_paths)
+        self.assertIn("validation.micro_cross_source_window_ms", error_paths)
+        self.assertIn("validation.micro_cross_source_trade_limit", error_paths)
+        self.assertIn("validation.micro_cross_source_gap_freq_multiplier", error_paths)
+        self.assertIn("validation.micro_cross_source_gap_hist_window_days", error_paths)
+        self.assertIn("validation.micro_cross_source_gap_hist_quantile", error_paths)
+        self.assertIn("validation.micro_cross_source_gap_hist_multiplier", error_paths)
+        self.assertIn("validation.micro_cross_source_gap_limit_cap_ms", error_paths)
+        self.assertIn("validation.micro_cross_source_quality_lookback_days", error_paths)
+        self.assertIn("validation.micro_cross_source_min_rows_per_side", error_paths)
+        self.assertIn("validation.micro_cross_source_audit_symbol_cap", error_paths)
+        self.assertIn("validation.micro_cross_source_min_samples", error_paths)
+        self.assertIn("validation.micro_cross_source_max_fail_ratio", error_paths)
+        self.assertIn("validation.micro_cross_source_tolerance_ms", error_paths)
+        self.assertIn("validation.micro_time_sync_max_offset_ms", error_paths)
+        self.assertIn("validation.micro_time_sync_max_rtt_ms", error_paths)
+        self.assertIn("validation.micro_time_sync_min_samples", error_paths)
+        self.assertIn("validation.system_time_sync_probe_enabled", error_paths)
+        self.assertIn("validation.system_time_sync_hard_fuse_enabled", error_paths)
+        self.assertIn("validation.system_time_sync_primary_source", error_paths)
+        self.assertIn("validation.system_time_sync_secondary_source", error_paths)
+        self.assertIn("validation.system_time_sync_probe_timeout_seconds", error_paths)
+        self.assertIn("validation.system_time_sync_max_offset_ms", error_paths)
+        self.assertIn("validation.system_time_sync_max_rtt_ms", error_paths)
+        self.assertIn("validation.system_time_sync_min_ok_sources", error_paths)
+        self.assertIn("validation.ops_system_time_sync_monitor_enabled", error_paths)
+        self.assertIn("validation.ops_system_time_sync_fail_days_max", error_paths)
+        self.assertIn("validation.ops_system_time_sync_inactive_days_max", error_paths)
+        self.assertIn("validation.ops_system_time_sync_min_ok_sources", error_paths)
+        self.assertIn("validation.micro_continuous_gap_ms", error_paths)
+        self.assertIn("validation.micro_min_trade_count", error_paths)
+        self.assertIn("validation.micro_confidence_boost_max", error_paths)
+        self.assertIn("validation.micro_penalty_max", warning_paths)
+
     def test_validate_settings_detects_errors(self) -> None:
         settings = SystemSettings(
             raw={
@@ -433,6 +703,10 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_risk_multiplier_drift_max": 1.5,
                     "ops_source_confidence_floor": 2.0,
                     "ops_mode_health_fail_days_max": -1,
+                    "ops_system_time_sync_monitor_enabled": "yes",
+                    "ops_system_time_sync_fail_days_max": -1,
+                    "ops_system_time_sync_inactive_days_max": -1,
+                    "ops_system_time_sync_min_ok_sources": 0,
                     "broker_snapshot_source_mode": "bad_mode",
                     "broker_snapshot_live_mapping_profile": "bad_profile",
                     "broker_snapshot_live_mapping_fields": {
@@ -637,6 +911,10 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.ops_risk_multiplier_drift_max", paths)
         self.assertIn("validation.ops_source_confidence_floor", paths)
         self.assertIn("validation.ops_mode_health_fail_days_max", paths)
+        self.assertIn("validation.ops_system_time_sync_monitor_enabled", paths)
+        self.assertIn("validation.ops_system_time_sync_fail_days_max", paths)
+        self.assertIn("validation.ops_system_time_sync_inactive_days_max", paths)
+        self.assertIn("validation.ops_system_time_sync_min_ok_sources", paths)
         self.assertIn("validation.broker_snapshot_source_mode", paths)
         self.assertIn("validation.broker_snapshot_live_mapping_profile", paths)
         self.assertIn("validation.broker_snapshot_live_mapping_fields.source", paths)

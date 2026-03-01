@@ -1,0 +1,287 @@
+version: "1.0"
+registry: "lie_term_atoms"
+scope: "ict_albrooks_liepdf"
+truth_baseline:
+  l2_min_fields:
+    - exchange
+    - symbol
+    - event_ts_ms
+    - recv_ts_ms
+    - seq
+    - prev_seq
+    - bids
+    - asks
+  trade_min_fields:
+    - exchange
+    - symbol
+    - trade_id
+    - event_ts_ms
+    - recv_ts_ms
+    - price
+    - qty
+    - side
+  time_sync:
+    ntp_max_offset_ms: 5
+    cross_source_tolerance_ms: 80
+    max_acceptable_rtt_ms: 120
+  gap_fuse:
+    continuous_gap_ms: 2500
+    consecutive_gaps: 3
+    stale_stream_ms: 1500
+  drop_rate:
+    warn_pct: 0.2
+    fuse_pct: 1.0
+  retention_days:
+    l2: 90
+    trades: 90
+    news_labels: 90
+atoms:
+  - id: "ICT_PD_ARRAY_PROXY"
+    family: "ict"
+    aliases: ["pd-array", "discount-premium-array"]
+    objective: "Detect pullback zone alignment in directional move."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "Long: 0.618<=((close-roll_low20)/(roll_high20-roll_low20))<=0.786; Short symmetric 0.214~0.382."
+    invalidation:
+      - "Range span <= 0."
+      - "roll_high20/roll_low20 unavailable."
+      - "Regime is not trend-like."
+    metrics:
+      - name: "forward_10bar_hit_rate"
+        direction: "higher_better"
+        eval_window: "10bars"
+      - name: "expectancy_r"
+        direction: "higher_better"
+        eval_window: "trades"
+    input_fields: ["close", "roll_low20", "roll_high20"]
+    status: "active"
+
+  - id: "ICT_BOS_PROXY"
+    family: "ict"
+    aliases: ["bos", "break_of_structure"]
+    objective: "Confirm directional structure break."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "Long: close>roll_high10_prev; Short: close<roll_low10_prev."
+    invalidation:
+      - "lookback < 10 bars."
+      - "Break happens without volume context for 3 consecutive signals."
+    metrics:
+      - name: "signal_to_entry_conversion"
+        direction: "higher_better"
+        eval_window: "daily"
+      - name: "post_break_drawdown_r"
+        direction: "lower_better"
+        eval_window: "5bars"
+    input_fields: ["close", "roll_high10_prev", "roll_low10_prev"]
+    status: "active"
+
+  - id: "ICT_LIQ_SWEEP_PROXY"
+    family: "ict"
+    aliases: ["liquidity_sweep", "stop_hunt"]
+    objective: "Capture failed break and reclaim in range."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "high>roll_high10_prev and close<roll_high10_prev OR low<roll_low10_prev and close>roll_low10_prev."
+    invalidation:
+      - "No boundary touch in previous 20 bars."
+      - "Body and wick both near zero."
+    metrics:
+      - name: "reversion_success_rate"
+        direction: "higher_better"
+        eval_window: "8bars"
+      - name: "false_sweep_ratio"
+        direction: "lower_better"
+        eval_window: "daily"
+    input_fields: ["high", "low", "close", "roll_high10_prev", "roll_low10_prev"]
+    status: "active"
+
+  - id: "ICT_FVG_PROXY"
+    family: "ict"
+    aliases: ["fvg", "fair_value_gap"]
+    objective: "Track displacement proxy until native L2 implementation is ready."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "Gap proxy: cur.low>prev.high OR cur.high<prev.low; boosted by volume>=1.5*vol_ma20."
+    invalidation:
+      - "Gap exists but is fully filled within 1 bar."
+      - "No directional structure support."
+    metrics:
+      - name: "gap_followthrough_rate"
+        direction: "higher_better"
+        eval_window: "6bars"
+      - name: "gap_fill_latency"
+        direction: "higher_better"
+        eval_window: "bars"
+    input_fields: ["low", "high", "volume", "vol_ma20"]
+    status: "proxy"
+
+  - id: "BROOKS_FAILED_BREAKOUT"
+    family: "al_brooks"
+    aliases: ["failed_breakout", "fb"]
+    objective: "Encode failed breakout context in trading range."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "Reuse liquidity sweep condition + wick/body>2 threshold."
+    invalidation:
+      - "Wick/body <= 2."
+      - "No nearby range boundary."
+    metrics:
+      - name: "fb_reversal_rate"
+        direction: "higher_better"
+        eval_window: "5bars"
+      - name: "fb_stopout_ratio"
+        direction: "lower_better"
+        eval_window: "daily"
+    input_fields: ["open", "high", "low", "close", "roll_high20", "roll_low20"]
+    status: "active"
+
+  - id: "BROOKS_BREAKOUT_PULLBACK"
+    family: "al_brooks"
+    aliases: ["bp", "breakout_pullback"]
+    objective: "Track breakout continuation after first pullback."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "close near 20-bar boundary (>=0.995 high or <=1.005 low) and trend score remains >= threshold."
+    invalidation:
+      - "Second pullback exceeds ATR stop budget."
+      - "Trend structure score drops below half."
+    metrics:
+      - name: "bp_follow_rate"
+        direction: "higher_better"
+        eval_window: "10bars"
+      - name: "bp_mfe_over_mae"
+        direction: "higher_better"
+        eval_window: "trades"
+    input_fields: ["close", "roll_high20", "roll_low20", "atr14"]
+    status: "active"
+
+  - id: "BROOKS_H1_H2_PROXY"
+    family: "al_brooks"
+    aliases: ["h1", "h2", "l1", "l2"]
+    objective: "Approximate first/second entry attempts."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "Consecutive reversal attempts detected by engulf+candle pattern score with local highs/lows sequence."
+    invalidation:
+      - "Attempt count cannot be sequenced on lookback window."
+      - "Signal appears during extreme volatility protection mode."
+    metrics:
+      - name: "attempt2_edge_minus_attempt1"
+        direction: "higher_better"
+        eval_window: "trades"
+      - name: "entry_efficiency"
+        direction: "higher_better"
+        eval_window: "3bars"
+    input_fields: ["open", "high", "low", "close", "atr14"]
+    status: "proxy"
+
+  - id: "BROOKS_TRADING_RANGE_REVERSAL"
+    family: "al_brooks"
+    aliases: ["tr", "range_reversal"]
+    objective: "Model range edge fade with confirmation."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "near_upper/near_lower + RSI extreme + wick dominance."
+    invalidation:
+      - "No RSI extreme and no wick dominance."
+      - "Boundary penetration persists > 2 bars."
+    metrics:
+      - name: "tr_reversal_hit_rate"
+        direction: "higher_better"
+        eval_window: "8bars"
+      - name: "tr_whipsaw_ratio"
+        direction: "lower_better"
+        eval_window: "daily"
+    input_fields: ["close", "rsi14", "roll_high20", "roll_low20", "open", "high", "low"]
+    status: "active"
+
+  - id: "LIE_MODEL1_TREND_SCORE"
+    family: "lie_pdf"
+    aliases: ["model1", "trend_model"]
+    objective: "Trend engine confidence from position/structure/momentum."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "confidence=((position[0..5]+structure[0..7]+momentum[0..5])/17)*100 plus regime boost for strong trend."
+    invalidation:
+      - "Any component missing."
+      - "Convexity below runtime floor."
+    metrics:
+      - name: "confidence_calibration_error"
+        direction: "lower_better"
+        eval_window: "weekly"
+      - name: "trend_profit_factor"
+        direction: "higher_better"
+        eval_window: "trades"
+    input_fields: ["position", "structure", "momentum", "regime"]
+    status: "active"
+
+  - id: "LIE_MODEL2_RANGE_SCORE"
+    family: "lie_pdf"
+    aliases: ["model2", "range_model"]
+    objective: "Range engine confidence from ls/mr/vc."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "confidence=((ls[0..5]+mr[0..5]+vc[0..4])/14)*100."
+    invalidation:
+      - "Regime no longer range-like."
+      - "Volume condition unavailable."
+    metrics:
+      - name: "range_expectancy"
+        direction: "higher_better"
+        eval_window: "trades"
+      - name: "range_max_adverse_excursion"
+        direction: "lower_better"
+        eval_window: "5bars"
+    input_fields: ["ls", "mr", "vc", "regime"]
+    status: "active"
+
+  - id: "LIE_FACTOR_RISK_GATE"
+    family: "lie_pdf"
+    aliases: ["factor_gate", "risk_gate"]
+    objective: "Drop/penalize trades when factor crowding risk is too high."
+    formula_type: "hybrid"
+    feature_formula: "Drop if factor_risk_score>=factor_drop_threshold; confidence penalty=min(penalty_max, score*penalty_max)."
+    invalidation:
+      - "Factor state unavailable."
+      - "Exposure estimation missing key fields."
+    metrics:
+      - name: "tail_loss_reduction"
+        direction: "higher_better"
+        eval_window: "monthly"
+      - name: "opportunity_cost_ratio"
+        direction: "lower_better"
+        eval_window: "monthly"
+    input_fields: ["factor_risk_score", "factor_drop_threshold", "factor_penalty_max"]
+    status: "active"
+
+  - id: "L2_QUEUE_IMBALANCE"
+    family: "lie_pdf"
+    aliases: ["obi", "queue_imbalance"]
+    objective: "Native microstructure edge from top-level queue imbalance."
+    formula_type: "l2_native"
+    feature_formula: "(sum_bid_qty_l1_3 - sum_ask_qty_l1_3) / (sum_bid_qty_l1_3 + sum_ask_qty_l1_3)."
+    invalidation:
+      - "Missing recv_ts_ms or event_ts_ms."
+      - "Cross-source skew exceeds tolerance."
+      - "Continuous stream gap fuse triggered."
+    metrics:
+      - name: "next_1s_mid_move_auc"
+        direction: "higher_better"
+        eval_window: "1s"
+      - name: "queue_flip_precision"
+        direction: "higher_better"
+        eval_window: "1s"
+    input_fields: ["event_ts_ms", "recv_ts_ms", "bids", "asks", "seq", "prev_seq"]
+    status: "pending"
+
+  - id: "L2_OFI_IMPACT"
+    family: "lie_pdf"
+    aliases: ["ofi", "order_flow_imbalance"]
+    objective: "Estimate short-horizon impact from signed depth/trade flow."
+    formula_type: "l2_native"
+    feature_formula: "OFI_t = dBidSize_at_best - dAskSize_at_best with price-level transitions aggregated in fixed event buckets."
+    invalidation:
+      - "Trade tick stream missing side or qty."
+      - "Clock offset exceeds ntp_max_offset_ms."
+      - "Drop rate above fuse threshold."
+    metrics:
+      - name: "midprice_impact_beta"
+        direction: "higher_better"
+        eval_window: "5s"
+      - name: "impact_sign_accuracy"
+        direction: "higher_better"
+        eval_window: "1s"
+    input_fields: ["event_ts_ms", "recv_ts_ms", "price", "qty", "side", "bids", "asks"]
+    status: "pending"

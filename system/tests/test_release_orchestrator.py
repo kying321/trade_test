@@ -676,6 +676,278 @@ class ReleaseOrchestratorTests(unittest.TestCase):
         self.assertTrue(next_actions)
         self.assertIn("state_stability", next_actions[0])
 
+    def test_ops_report_flags_microstructure_state_breaches(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        daily_dir = td / "daily"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text(
+            "pass_gate: true\nmode_health:\n  passed: true\n",
+            encoding="utf-8",
+        )
+
+        for i in range(3):
+            day = date.fromordinal(d.toordinal() - (2 - i))
+            payload = {
+                "runtime_mode": "swing",
+                "mode_health": {"passed": True},
+                "risk_control": {
+                    "risk_multiplier": 1.0,
+                    "source_confidence_score": 0.90,
+                },
+                "microstructure": {
+                    "symbols_schema_fail": 1 if i == 0 else 0,
+                    "cross_source_audit": {"active": True, "fail_ratio": 0.60 if i == 0 else 0.0},
+                },
+            }
+            (daily_dir / f"{day.isoformat()}_mode_feedback.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "mode_switch_window_days": 3,
+                "ops_state_min_samples": 3,
+                "mode_switch_max_rate": 1.0,
+                "ops_risk_multiplier_floor": 0.20,
+                "ops_risk_multiplier_drift_max": 1.0,
+                "ops_source_confidence_floor": 0.50,
+                "ops_mode_health_fail_days_max": 3,
+                "ops_micro_schema_fail_days_max": 0,
+                "ops_cross_source_fail_days_max": 0,
+                "ops_cross_source_inactive_days_max": 3,
+                "ops_cross_source_fail_ratio_max": 0.20,
+            }
+        )
+
+        def _load_json(path: Path) -> dict[str, object]:
+            if not path.exists():
+                return {}
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=_load_json,
+        )
+        out = orch.ops_report(as_of=d, window_days=3)
+        self.assertEqual(out["status"], "red")
+        state = out["state_stability"]
+        checks = state.get("checks", {})
+        self.assertFalse(bool(checks.get("micro_schema_fail_days_ok", True)))
+        self.assertFalse(bool(checks.get("cross_source_fail_days_ok", True)))
+        self.assertTrue(bool(checks.get("cross_source_inactive_days_ok", False)))
+        alerts = set(state.get("alerts", []))
+        self.assertIn("micro_schema_fail_days_high", alerts)
+        self.assertIn("cross_source_fail_days_high", alerts)
+
+    def test_ops_report_flags_system_time_sync_state_breaches(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        daily_dir = td / "daily"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text(
+            "pass_gate: true\nmode_health:\n  passed: true\n",
+            encoding="utf-8",
+        )
+
+        samples = [
+            {"active": True, "pass": False, "ok_sources": 0},
+            {"active": False, "pass": False, "ok_sources": 0},
+            {"active": True, "pass": True, "ok_sources": 1},
+        ]
+        for i, ts in enumerate(samples):
+            day = date.fromordinal(d.toordinal() - (2 - i))
+            payload = {
+                "runtime_mode": "swing",
+                "mode_health": {"passed": True},
+                "risk_control": {
+                    "risk_multiplier": 1.0,
+                    "source_confidence_score": 0.90,
+                },
+                "microstructure": {
+                    "symbols_schema_fail": 0,
+                    "cross_source_audit": {"active": True, "fail_ratio": 0.0},
+                },
+                "time_sync": {
+                    "active": bool(ts["active"]),
+                    "pass": bool(ts["pass"]),
+                    "ok_sources": int(ts["ok_sources"]),
+                    "available_sources": 2,
+                },
+            }
+            (daily_dir / f"{day.isoformat()}_mode_feedback.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "mode_switch_window_days": 3,
+                "ops_state_min_samples": 3,
+                "mode_switch_max_rate": 1.0,
+                "ops_risk_multiplier_floor": 0.20,
+                "ops_risk_multiplier_drift_max": 1.0,
+                "ops_source_confidence_floor": 0.50,
+                "ops_mode_health_fail_days_max": 3,
+                "ops_micro_schema_fail_days_max": 3,
+                "ops_cross_source_fail_days_max": 3,
+                "ops_cross_source_inactive_days_max": 3,
+                "ops_cross_source_fail_ratio_max": 1.0,
+                "ops_system_time_sync_monitor_enabled": True,
+                "ops_system_time_sync_fail_days_max": 0,
+                "ops_system_time_sync_inactive_days_max": 0,
+                "ops_system_time_sync_min_ok_sources": 1,
+            }
+        )
+
+        def _load_json(path: Path) -> dict[str, object]:
+            if not path.exists():
+                return {}
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=_load_json,
+        )
+        out = orch.ops_report(as_of=d, window_days=3)
+        self.assertEqual(out["status"], "red")
+        state = out["state_stability"]
+        checks = state.get("checks", {})
+        self.assertFalse(bool(checks.get("system_time_sync_fail_days_ok", True)))
+        self.assertFalse(bool(checks.get("system_time_sync_inactive_days_ok", True)))
+        metrics = state.get("metrics", {})
+        self.assertEqual(int(metrics.get("system_time_sync_fail_days", 0)), 1)
+        self.assertEqual(int(metrics.get("system_time_sync_inactive_days", 0)), 1)
+        alerts = set(state.get("alerts", []))
+        self.assertIn("system_time_sync_fail_days_high", alerts)
+        self.assertIn("system_time_sync_inactive_days_high", alerts)
+
+    def test_review_until_pass_defect_plan_includes_system_time_sync_breaches(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        daily_dir = td / "daily"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text(
+            "pass_gate: true\nmode_health:\n  passed: true\n",
+            encoding="utf-8",
+        )
+
+        samples = [
+            {"active": True, "pass": False, "ok_sources": 0},
+            {"active": False, "pass": False, "ok_sources": 0},
+            {"active": True, "pass": True, "ok_sources": 1},
+        ]
+        for i, ts in enumerate(samples):
+            day = date.fromordinal(d.toordinal() - (2 - i))
+            payload = {
+                "runtime_mode": "swing",
+                "mode_health": {"passed": True},
+                "risk_control": {
+                    "risk_multiplier": 1.0,
+                    "source_confidence_score": 0.90,
+                },
+                "microstructure": {
+                    "symbols_schema_fail": 0,
+                    "cross_source_audit": {"active": True, "fail_ratio": 0.0},
+                },
+                "time_sync": {
+                    "active": bool(ts["active"]),
+                    "pass": bool(ts["pass"]),
+                    "ok_sources": int(ts["ok_sources"]),
+                    "available_sources": 2,
+                },
+            }
+            (daily_dir / f"{day.isoformat()}_mode_feedback.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "mode_switch_window_days": 3,
+                "ops_state_min_samples": 3,
+                "mode_switch_max_rate": 1.0,
+                "ops_risk_multiplier_floor": 0.20,
+                "ops_risk_multiplier_drift_max": 1.0,
+                "ops_source_confidence_floor": 0.50,
+                "ops_mode_health_fail_days_max": 3,
+                "ops_micro_schema_fail_days_max": 3,
+                "ops_cross_source_fail_days_max": 3,
+                "ops_cross_source_inactive_days_max": 3,
+                "ops_cross_source_fail_ratio_max": 1.0,
+                "ops_system_time_sync_monitor_enabled": True,
+                "ops_system_time_sync_fail_days_max": 0,
+                "ops_system_time_sync_inactive_days_max": 0,
+                "ops_system_time_sync_min_ok_sources": 1,
+            }
+        )
+
+        def _load_json(path: Path) -> dict[str, object]:
+            if not path.exists():
+                return {}
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(as_of=as_of, parameter_changes={}, factor_weights={}, defects=[], pass_gate=True),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda **kwargs: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=_load_json,
+        )
+        out = orch.review_until_pass(as_of=d, max_rounds=1)
+        self.assertFalse(out["passed"])
+        round0 = out["rounds"][0]
+        self.assertTrue(bool(round0.get("state_stability_active", False)))
+        self.assertFalse(bool(round0.get("state_stability_ok", True)))
+        plan_json = Path(str(round0["defect_plan"]["json"]))
+        plan = json.loads(plan_json.read_text(encoding="utf-8"))
+        codes = {str(x.get("code", "")) for x in plan.get("defects", [])}
+        self.assertIn("STATE_SYSTEM_TIME_SYNC_DAYS", codes)
+        self.assertIn("STATE_SYSTEM_TIME_SYNC_INACTIVE", codes)
+
     def test_gate_report_fails_on_slot_anomaly(self) -> None:
         td = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))

@@ -313,6 +313,11 @@
     active baseline schema fails, keeping reason as `active_baseline_invalid_payload`.
   - integration coverage asserts deterministic `preflight.errors[]` ordering for mixed
     active+anchor path-field violations (`json_glob / md_glob / checksum_index_filename`).
+- Baseline rollback drill mixed path/non-path preflight ordering coverage is online:
+  - dry-run preflight regression now combines non-path schema violations
+    (`as_of` format + `snapshot_path` type) with profile path-field violations.
+  - integration coverage asserts deterministic source-first ordering remains stable:
+    all `active_baseline` errors are emitted before `rollback_anchor` errors.
 
 ## Testing Workflow
 - Full suite:
@@ -334,4 +339,15 @@
 - Downstream gate/review reads `failed_tests` first, then falls back to stderr parsing.
 
 ## Next Priorities
-1. Add regression coverage for mixed active/anchor preflight failures that combine path-field violations with non-path schema violations (`as_of/profiles/snapshot_path`) and assert stable source-first ordering.
+1. [DONE 2026-03-01] Add regression coverage for mixed active/anchor preflight failures that combine missing-required-field errors (`as_of/profiles/snapshot_path`) with profile path-field violations and assert stable source-first ordering.
+   - [VERIFIED 2026-03-01 20:36 +0800] Re-ran mixed preflight ordering regressions + `validate-config` + `test-all --fast --fast-ratio 0.10` under unattended automation constraints; all passed.
+   - [VERIFIED 2026-03-01 21:03 +0800] No pending `Next Priorities` beyond the completed item; reran `validate-config` and `test-all --fast --fast-ratio 0.10` to confirm green baseline before unattended sync.
+   - [VERIFIED 2026-03-01 21:36 +0800] Re-ran source-first mixed preflight ordering regressions plus `validate-config` and `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=18`, `failed=0`).
+   - [VERIFIED 2026-03-01 22:04 +0800] Re-ran source-first mixed missing-required/profile-path ordering regression (`EngineIntegrationTests.test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order`) + `validate-config` + `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=19`, `failed=0`).
+   - [VERIFIED 2026-03-01 22:34 +0800] Re-ran source-first mixed missing-required/profile-path ordering regression via `unittest` (`EngineIntegrationTests.test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order`) + `validate-config` + `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=20`, `failed=0`).
+   - [VERIFIED 2026-03-01 23:04 +0800] Unattended run revalidated first-priority regression via `unittest` (`EngineIntegrationTests.test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order`) + `validate-config` + `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=20`, `failed=0`). `docs/WORKFLOW_AUTO.md` is currently missing in-repo, so execution followed automation prompt constraints directly.
+   - [VERIFIED 2026-03-01 23:36 +0800] Re-ran first-priority source-first mixed missing-required/profile-path ordering regression via `unittest` (`EngineIntegrationTests.test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order`) + `validate-config` + `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=20`, `failed=0`). `docs/WORKFLOW_AUTO.md` is still missing in-repo, so execution followed automation prompt constraints directly.
+   - [VERIFIED 2026-03-02 00:05 +0800] Unattended run revalidated first-priority regression via `unittest` (`EngineIntegrationTests.test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order`) + `validate-config` + `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=20`, `failed=0`). `docs/WORKFLOW_AUTO.md` remains missing in-repo, so execution followed automation prompt constraints directly.
+   - [VERIFIED 2026-03-02 00:33 +0800] Unattended run revalidated first-priority regression via `unittest` (`EngineIntegrationTests.test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order`) + `validate-config` + `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=20`, `failed=0`). `docs/WORKFLOW_AUTO.md` remains missing in-repo, so execution followed automation prompt constraints directly.
+   - [VERIFIED 2026-03-02 01:05 +0800] Unattended run revalidated first-priority regression via `unittest` (`EngineIntegrationTests.test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order`) + `validate-config` + `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=21`, `failed=0`). `docs/WORKFLOW_AUTO.md` remains missing in-repo, so execution followed automation prompt constraints directly.
+   - [VERIFIED 2026-03-02 01:34 +0800] Unattended run revalidated first-priority regression via `unittest` (`EngineIntegrationTests.test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order`) + `validate-config` + `test-all --fast --fast-ratio 0.10`; all green (`tests_selected=21`, `failed=0`). `docs/WORKFLOW_AUTO.md` remains missing in-repo, so execution followed automation prompt constraints directly.

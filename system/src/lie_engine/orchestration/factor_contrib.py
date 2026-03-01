@@ -52,7 +52,18 @@ def estimate_factor_contrib_120d(
         iv = float(snap.get("iv_50etf", 0.22))
         north = float(snap.get("northbound_netflow", 0.0))
         margin = float(snap.get("margin_balance_chg", 0.0))
-        senti_series[d] = (-pcr) + (-2.0 * iv) + (north / 1e9) + (20.0 * margin)
+        btc_ret = float(snap.get("btc_return_24h", 0.0))
+        btc_rv = float(snap.get("btc_realized_vol_24h", 0.0))
+        btc_funding_abs = float(snap.get("btc_funding_abs_8h", abs(float(snap.get("btc_funding_rate_8h", 0.0)))))
+        senti_series[d] = (
+            (-pcr)
+            + (-2.0 * iv)
+            + (north / 1e9)
+            + (20.0 * margin)
+            + (4.0 * btc_ret)
+            + (-2.5 * btc_rv)
+            + (-1200.0 * btc_funding_abs)
+        )
     sentiment_daily = pd.Series(senti_series).reindex(daily_ret.index).fillna(0.0)
 
     news_daily: dict[date, float] = {}
@@ -103,4 +114,3 @@ def estimate_factor_contrib_120d(
     stability = (rolling_mean / rolling_std).replace([np.inf, -np.inf], 0.0)
     contrib["fundamental"] = max(0.01, float(abs(stability.mean())))
     return contrib
-

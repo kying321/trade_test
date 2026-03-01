@@ -13,6 +13,43 @@ from lie_engine.data.pipeline import DataBus
 from lie_engine.models import NewsEvent
 
 
+class _MiniProvider:
+    def __init__(self, name: str, sentiment: dict[str, float]) -> None:
+        self.name = str(name)
+        self._sentiment = dict(sentiment)
+
+    def fetch_ohlcv(self, symbol: str, start, end, freq: str = "1d"):  # type: ignore[no-untyped-def]
+        ts = pd.to_datetime([str(start)])
+        return pd.DataFrame(
+            {
+                "ts": ts,
+                "symbol": [symbol],
+                "open": [100.0],
+                "high": [101.0],
+                "low": [99.0],
+                "close": [100.0],
+                "volume": [1000.0],
+                "source": [self.name],
+                "asset_class": ["equity"],
+            }
+        )
+
+    def fetch_macro(self, start, end):  # type: ignore[no-untyped-def]
+        return pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"])
+
+    def fetch_news(self, start_ts, end_ts, lang: str):  # type: ignore[no-untyped-def]
+        return []
+
+    def fetch_sentiment_factors(self, as_of):  # type: ignore[no-untyped-def]
+        return dict(self._sentiment)
+
+    def fetch_l2(self, symbol, start_ts, end_ts, depth: int = 20):  # type: ignore[no-untyped-def]
+        raise NotImplementedError
+
+    def fetch_trades(self, symbol, start_ts, end_ts, limit: int = 2000):  # type: ignore[no-untyped-def]
+        raise NotImplementedError
+
+
 class DataPipelineTests(unittest.TestCase):
     def test_news_normalization_uses_source_reliability_and_category_extraction(self) -> None:
         bus = DataBus(
@@ -142,6 +179,31 @@ class DataPipelineTests(unittest.TestCase):
         self.assertGreater(conf.by_source["open_source_primary"], conf.by_source["random_blog"])
         src_detail = {d.source: d for d in conf.details}
         self.assertGreater(src_detail["open_source_primary"].macro_consistency, src_detail["random_blog"].macro_consistency)
+
+    def test_ingest_merges_sentiment_across_sources_with_prefixed_keys(self) -> None:
+        p1 = _MiniProvider(name="src_a", sentiment={"pcr_50etf": 1.10, "btc_return_24h": -0.01})
+        p2 = _MiniProvider(name="src_b", sentiment={"pcr_50etf": 0.90, "btc_return_24h": 0.03})
+        bus = DataBus(
+            providers=[p1, p2],  # type: ignore[list-item]
+            output_dir=Path("."),
+            sqlite_path=Path("tmp.db"),
+            completeness_min=0.99,
+            conflict_max=0.005,
+        )
+        out = bus.ingest(
+            symbols=["TEST1"],
+            start=datetime(2026, 2, 13).date(),
+            end=datetime(2026, 2, 13).date(),
+            start_ts=datetime(2026, 2, 13, 0, 0),
+            end_ts=datetime(2026, 2, 13, 23, 59),
+            langs=("zh",),
+        )
+        self.assertIn("src_a.pcr_50etf", out.sentiment)
+        self.assertIn("src_b.pcr_50etf", out.sentiment)
+        self.assertIn("pcr_50etf", out.sentiment)
+        self.assertAlmostEqual(float(out.sentiment["pcr_50etf"]), 1.0, places=6)
+        self.assertIn("btc_return_24h", out.sentiment)
+        self.assertAlmostEqual(float(out.sentiment["btc_return_24h"]), 0.01, places=6)
 
 
 if __name__ == "__main__":

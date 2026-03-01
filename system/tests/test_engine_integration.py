@@ -4,10 +4,11 @@ from contextlib import closing
 import sys
 from pathlib import Path
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import tempfile
 import json
 import sqlite3
+from unittest.mock import patch
 
 import yaml
 import pandas as pd
@@ -33,6 +34,7 @@ class EngineIntegrationTests(unittest.TestCase):
         cfg_data["validation"]["use_mode_profiles"] = False
         cfg_data["validation"]["review_backtest_lookback_days"] = 540
         cfg_data["validation"]["style_drift_adaptive_enabled"] = False
+        cfg_data["validation"]["micro_cross_source_build_missing_provider"] = False
         cfg_path = tmp_root / "config.yaml"
         cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
         return LieEngine(config_path=cfg_path), tmp_root
@@ -53,6 +55,75 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue((tmp_root / "output" / "artifacts" / "manifests" / "eod_2026-02-13.json").exists())
         self.assertIn("mode_feedback", out)
         self.assertIn("broker_snapshot", out)
+        self.assertIn("system_time_sync_probe", out)
+
+    def test_run_eod_mode_feedback_includes_microstructure_summary(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        mode_feedback_path = tmp_root / "output" / "daily" / "2026-02-13_mode_feedback.json"
+        payload = json.loads(mode_feedback_path.read_text(encoding="utf-8"))
+        self.assertIn("microstructure", payload)
+        micro = payload.get("microstructure", {})
+        self.assertIn("enabled", micro)
+        self.assertIn("symbols_total", micro)
+        self.assertIn("symbols_with_data", micro)
+        self.assertIn("coverage", micro)
+        self.assertIn("symbols_schema_ok", micro)
+        self.assertIn("symbols_schema_fail", micro)
+        self.assertIn("symbols_time_sync_available", micro)
+        self.assertIn("symbols_time_sync_ok", micro)
+        self.assertIn("symbols_time_sync_breach", micro)
+        self.assertIn("cross_source_audit", micro)
+        self.assertIn("time_sync", payload)
+        self.assertIn("status", payload.get("time_sync", {}))
+        cs = micro.get("cross_source_audit", {})
+        self.assertIn("quality_7d", cs)
+        self.assertIn("quality_report_path", cs)
+        report_path = Path(str(cs.get("quality_report_path", "")))
+        self.assertTrue(report_path.exists())
+
+    def test_run_time_sync_probe_with_mock_sntp(self) -> None:
+        eng, tmp_root = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["system_time_sync_probe_enabled"] = True
+        eng.settings.raw["validation"]["system_time_sync_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["system_time_sync_primary_source"] = "time.google.com"
+        eng.settings.raw["validation"]["system_time_sync_secondary_source"] = "time.cloudflare.com"
+        eng.settings.raw["validation"]["system_time_sync_probe_timeout_seconds"] = 1.0
+        eng.settings.raw["validation"]["system_time_sync_max_offset_ms"] = 5
+        eng.settings.raw["validation"]["system_time_sync_max_rtt_ms"] = 120
+        eng.settings.raw["validation"]["system_time_sync_min_ok_sources"] = 1
+
+        fake_output = "\n".join(
+            [
+                "selected:",
+                "sntp_exchange {",
+                "  delay: 0000.0000 (0.050000000)",
+                "}",
+                "+0.001000 +/- 0.050000 time.google.com 198.18.0.1",
+            ]
+        )
+
+        class _FakeProc:
+            returncode = 0
+            stdout = fake_output
+            stderr = ""
+
+        with patch("lie_engine.engine.shutil.which", return_value="/usr/bin/sntp"), patch(
+            "lie_engine.engine.subprocess.run",
+            return_value=_FakeProc(),
+        ):
+            out = eng.run_time_sync_probe(date(2026, 2, 13))
+
+        self.assertEqual(str(out.get("status", "")), "ok")
+        self.assertTrue(bool(out.get("pass", False)))
+        self.assertGreaterEqual(int(out.get("ok_sources", 0)), 1)
+        with closing(sqlite3.connect(tmp_root / "output" / "artifacts" / "lie_engine.db")) as conn:
+            daily = pd.read_sql_query("SELECT status, ok_sources FROM system_time_sync_daily", conn)
+            rows = pd.read_sql_query("SELECT source, ok, offset_ms, rtt_ms FROM system_time_sync_source_state", conn)
+        self.assertFalse(daily.empty)
+        self.assertFalse(rows.empty)
 
     def test_market_factor_state_includes_cross_section_style(self) -> None:
         eng, _ = self._make_engine()
@@ -1318,6 +1389,236 @@ class EngineIntegrationTests(unittest.TestCase):
             ],
         )
 
+    def test_baseline_rollback_drill_preflight_lints_mixed_path_and_non_path_fields_in_stable_order(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        active_baseline = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "active_baseline.yaml"
+        )
+        self.assertTrue(active_baseline.exists())
+        active_payload = yaml.safe_load(active_baseline.read_text(encoding="utf-8"))
+        self.assertTrue(isinstance(active_payload, dict))
+        active_payload.update(
+            {
+                "as_of": "2026/02/14",
+                "profiles": {
+                    "temporal_autofix_patch": {
+                        "json_glob": "",
+                        "md_glob": 123,
+                        "checksum_index_filename": " ",
+                        "retention_days": 30,
+                        "checksum_index_enabled": True,
+                    }
+                },
+                "snapshot_path": 12345,
+            }
+        )
+        active_baseline.write_text(
+            yaml.safe_dump(active_payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        invalid_anchor = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "history"
+            / "invalid_profile_path_and_schema_fields_anchor_mixed.yaml"
+        )
+        invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
+        invalid_anchor.write_text(
+            yaml.safe_dump(
+                {
+                    "as_of": "2026/02/13",
+                    "profiles": {
+                        "temporal_autofix_patch": {
+                            "json_glob": "",
+                            "md_glob": 123,
+                            "checksum_index_filename": " ",
+                            "retention_days": 30,
+                            "checksum_index_enabled": True,
+                        }
+                    },
+                    "snapshot_path": 67890,
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        out = eng.baseline_rollback_drill(as_of=d3, anchor=str(invalid_anchor), dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "active_baseline_invalid_payload")
+        preflight = out.get("preflight", {})
+        self.assertFalse(bool(preflight.get("active_baseline_schema_ok", True)))
+        self.assertFalse(bool(preflight.get("rollback_anchor_schema_ok", True)))
+
+        errors = preflight.get("errors", [])
+        self.assertTrue(isinstance(errors, list))
+        self.assertEqual(
+            [
+                (
+                    str(item.get("source", "")),
+                    str(item.get("field", "")),
+                    str(item.get("code", "")),
+                )
+                for item in errors
+                if isinstance(item, dict)
+            ],
+            [
+                ("active_baseline", "as_of", "invalid_format"),
+                (
+                    "active_baseline",
+                    "profiles.temporal_autofix_patch.json_glob",
+                    "empty_item",
+                ),
+                (
+                    "active_baseline",
+                    "profiles.temporal_autofix_patch.md_glob",
+                    "invalid_type",
+                ),
+                (
+                    "active_baseline",
+                    "profiles.temporal_autofix_patch.checksum_index_filename",
+                    "empty_item",
+                ),
+                ("active_baseline", "snapshot_path", "invalid_type"),
+                ("rollback_anchor", "as_of", "invalid_format"),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.json_glob",
+                    "empty_item",
+                ),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.md_glob",
+                    "invalid_type",
+                ),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.checksum_index_filename",
+                    "empty_item",
+                ),
+                ("rollback_anchor", "snapshot_path", "invalid_type"),
+            ],
+        )
+
+    def test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d1 = date(2026, 2, 13)
+        d2 = date(2026, 2, 14)
+        d3 = date(2026, 2, 15)
+        eng.run_review(d1)
+        eng.run_review(d2)
+
+        active_baseline = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "active_baseline.yaml"
+        )
+        self.assertTrue(active_baseline.exists())
+        active_payload = yaml.safe_load(active_baseline.read_text(encoding="utf-8"))
+        self.assertTrue(isinstance(active_payload, dict))
+        active_payload.update(
+            {
+                "as_of": " ",
+                "profiles": {},
+                "snapshot_path": " ",
+            }
+        )
+        active_baseline.write_text(
+            yaml.safe_dump(active_payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        invalid_anchor = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "history"
+            / "invalid_missing_required_and_profile_path_anchor_mixed.yaml"
+        )
+        invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
+        invalid_anchor.write_text(
+            yaml.safe_dump(
+                {
+                    "as_of": "2026-02-13",
+                    "profiles": {
+                        "temporal_autofix_patch": {
+                            "json_glob": "",
+                            "md_glob": 123,
+                            "checksum_index_filename": " ",
+                            "retention_days": 30,
+                            "checksum_index_enabled": True,
+                        }
+                    },
+                    "snapshot_path": str(invalid_anchor),
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        out = eng.baseline_rollback_drill(as_of=d3, anchor=str(invalid_anchor), dry_run=True)
+        self.assertFalse(bool(out.get("executed", False)))
+        self.assertEqual(str(out.get("reason", "")), "active_baseline_invalid_payload")
+        preflight = out.get("preflight", {})
+        self.assertFalse(bool(preflight.get("active_baseline_schema_ok", True)))
+        self.assertFalse(bool(preflight.get("rollback_anchor_schema_ok", True)))
+
+        errors = preflight.get("errors", [])
+        self.assertTrue(isinstance(errors, list))
+        self.assertEqual(
+            [
+                (
+                    str(item.get("source", "")),
+                    str(item.get("field", "")),
+                    str(item.get("code", "")),
+                )
+                for item in errors
+                if isinstance(item, dict)
+            ],
+            [
+                ("active_baseline", "as_of", "missing_required_field"),
+                ("active_baseline", "profiles", "missing_required_field"),
+                ("active_baseline", "snapshot_path", "missing_required_field"),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.json_glob",
+                    "empty_item",
+                ),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.md_glob",
+                    "invalid_type",
+                ),
+                (
+                    "rollback_anchor",
+                    "profiles.temporal_autofix_patch.checksum_index_filename",
+                    "empty_item",
+                ),
+            ],
+        )
+
     def test_run_review_writes_slot_regime_tuning_artifact(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
@@ -1747,6 +2048,411 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(len(eng.providers), 1)
         self.assertEqual(getattr(eng.providers[0], "name", ""), "open_source_primary")
 
+    def test_engine_provider_profile_binance_public(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        tmp_root = Path(td.name)
+
+        cfg_data = yaml.safe_load((project_root / "config.yaml").read_text(encoding="utf-8"))
+        cfg_data["paths"] = {"output": "output", "sqlite": "output/artifacts/lie_engine.db"}
+        cfg_data["data"] = {"provider_profile": "binance_spot_public"}
+        cfg_data["universe"] = {
+            "core": [
+                {"symbol": "BTCUSDT", "asset_class": "crypto", "theme": "crypto"},
+            ],
+            "max_dynamic_additions": 0,
+        }
+        cfg_path = tmp_root / "config.yaml"
+        cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
+
+        eng = LieEngine(config_path=cfg_path)
+        self.assertEqual(len(eng.providers), 1)
+        self.assertEqual(getattr(eng.providers[0], "name", ""), "binance_spot_public")
+
+    def test_engine_provider_profile_dual_binance_bybit_public(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        tmp_root = Path(td.name)
+
+        cfg_data = yaml.safe_load((project_root / "config.yaml").read_text(encoding="utf-8"))
+        cfg_data["paths"] = {"output": "output", "sqlite": "output/artifacts/lie_engine.db"}
+        cfg_data["data"] = {"provider_profile": "dual_binance_bybit_public"}
+        cfg_data["universe"] = {
+            "core": [
+                {"symbol": "BTCUSDT", "asset_class": "crypto", "theme": "crypto"},
+            ],
+            "max_dynamic_additions": 0,
+        }
+        cfg_path = tmp_root / "config.yaml"
+        cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
+
+        eng = LieEngine(config_path=cfg_path)
+        self.assertEqual(len(eng.providers), 2)
+        self.assertEqual(getattr(eng.providers[0], "name", ""), "binance_spot_public")
+        self.assertEqual(getattr(eng.providers[1], "name", ""), "bybit_spot_public")
+
+    def test_collect_micro_factor_map_uses_configured_symbols(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["microstructure_signal_enabled"] = True
+        eng.settings.raw["validation"]["microstructure_symbols"] = ["BTCUSDT"]
+        eng.settings.raw["validation"]["micro_min_trade_count"] = 1
+        eng.settings.raw["validation"]["micro_time_sync_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["micro_time_sync_max_offset_ms"] = 5
+        eng.settings.raw["validation"]["micro_time_sync_max_rtt_ms"] = 120
+
+        class _FakeMicroProvider:
+            name = "fake_micro"
+
+            def fetch_l2(self, symbol, start_ts, end_ts, depth=20):  # type: ignore[no-untyped-def]
+                if str(symbol) != "BTCUSDT":
+                    return pd.DataFrame()
+                return pd.DataFrame(
+                    [
+                        {
+                            "exchange": "fake",
+                            "symbol": "BTCUSDT",
+                            "event_ts_ms": 1700000000000,
+                            "recv_ts_ms": 1700000000001,
+                            "seq": 10,
+                            "prev_seq": 9,
+                            "bids": [[100.0, 2.0]],
+                            "asks": [[100.2, 1.5]],
+                            "source": "fake_micro",
+                        }
+                    ]
+                )
+
+            def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # type: ignore[no-untyped-def]
+                if str(symbol) != "BTCUSDT":
+                    return pd.DataFrame()
+                rows = []
+                for i in range(12):
+                    rows.append(
+                        {
+                            "exchange": "fake",
+                            "symbol": "BTCUSDT",
+                            "trade_id": str(i),
+                            "event_ts_ms": 1700000000000 + i * 200,
+                            "recv_ts_ms": 1700000000000 + i * 200 + 1,
+                            "price": 100.0 + i * 0.01,
+                            "qty": 0.1 + 0.01 * i,
+                            "side": "BUY" if i % 2 == 0 else "SELL",
+                            "source": "fake_micro",
+                        }
+                    )
+                return pd.DataFrame(rows)
+
+            def fetch_time_sync_sample(self):  # type: ignore[no-untyped-def]
+                return {
+                    "source": "fake_micro",
+                    "server_ts_ms": 1700000000000,
+                    "local_send_ts_ms": 1699999999998,
+                    "local_recv_ts_ms": 1700000000002,
+                    "local_mid_ts_ms": 1700000000000,
+                    "rtt_ms": 4,
+                    "offset_ms": 0,
+                    "offset_abs_ms": 0,
+                }
+
+        eng.providers = [_FakeMicroProvider()]  # type: ignore[assignment]
+        out = eng._collect_micro_factor_map(as_of=date(2026, 2, 13), symbols=["300750"])
+        self.assertIn("BTCUSDT", out)
+        self.assertTrue(bool(out["BTCUSDT"].get("has_data", False)))
+        self.assertTrue(bool(out["BTCUSDT"].get("time_sync_available", False)))
+        self.assertTrue(bool(out["BTCUSDT"].get("time_sync_ok", False)))
+        self.assertNotIn("300750", out)
+
+    def test_collect_micro_factor_map_clamps_today_window_to_now(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["microstructure_signal_enabled"] = True
+        eng.settings.raw["validation"]["microstructure_symbols"] = ["BTCUSDT"]
+        eng.settings.raw["validation"]["micro_min_trade_count"] = 1
+
+        seen_end_ts: list[datetime] = []
+
+        class _WindowProbeProvider:
+            name = "window_probe"
+
+            def fetch_l2(self, symbol, start_ts, end_ts, depth=20):  # type: ignore[no-untyped-def]
+                seen_end_ts.append(end_ts)
+                return pd.DataFrame(
+                    [
+                        {
+                            "exchange": "probe",
+                            "symbol": "BTCUSDT",
+                            "event_ts_ms": 1700000000000,
+                            "recv_ts_ms": 1700000000001,
+                            "seq": 10,
+                            "prev_seq": 9,
+                            "bids": [[100.0, 1.0]],
+                            "asks": [[100.1, 1.0]],
+                            "source": "window_probe",
+                        }
+                    ]
+                )
+
+            def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # type: ignore[no-untyped-def]
+                rows = []
+                for i in range(5):
+                    rows.append(
+                        {
+                            "exchange": "probe",
+                            "symbol": "BTCUSDT",
+                            "trade_id": str(i),
+                            "event_ts_ms": 1700000000000 + i * 100,
+                            "recv_ts_ms": 1700000000000 + i * 100 + 1,
+                            "price": 100.0,
+                            "qty": 0.1,
+                            "side": "BUY",
+                            "source": "window_probe",
+                        }
+                    )
+                return pd.DataFrame(rows)
+
+        eng.providers = [_WindowProbeProvider()]  # type: ignore[assignment]
+        eng._collect_micro_factor_map(as_of=date.today(), symbols=["BTCUSDT"])
+        self.assertTrue(bool(seen_end_ts))
+        now_utc = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+        self.assertLessEqual(seen_end_ts[0], now_utc + timedelta(seconds=2))
+
+    def test_collect_cross_source_audit_builds_missing_providers_from_profile(self) -> None:
+        import lie_engine.engine as eng_mod
+
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["micro_cross_source_audit_enabled"] = True
+        eng.settings.raw["validation"]["micro_cross_source_primary"] = "fake_primary"
+        eng.settings.raw["validation"]["micro_cross_source_secondary"] = "fake_secondary"
+        eng.settings.raw["validation"]["micro_cross_source_build_missing_provider"] = True
+        eng.settings.raw["validation"]["micro_cross_source_symbols"] = ["BTCUSDT"]
+        eng.settings.raw["validation"]["micro_cross_source_audit_symbol_cap"] = 1
+        eng.settings.raw["validation"]["micro_cross_source_trade_limit"] = 200
+        eng.settings.raw["validation"]["micro_cross_source_window_ms"] = 200
+        eng.settings.raw["validation"]["micro_cross_source_tolerance_ms"] = 80
+        eng.settings.raw["validation"]["micro_continuous_gap_ms"] = 2500
+
+        class _FakeTradeProvider:
+            def __init__(self, name: str, skew_ms: int = 0) -> None:
+                self.name = name
+                self.skew_ms = int(skew_ms)
+
+            def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # type: ignore[no-untyped-def]
+                rows = []
+                base = 1700000000000
+                for i in range(20):
+                    event_ts = base + i * 200 + self.skew_ms
+                    rows.append(
+                        {
+                            "exchange": self.name,
+                            "symbol": str(symbol),
+                            "trade_id": f"{self.name}-{i}",
+                            "event_ts_ms": event_ts,
+                            "recv_ts_ms": event_ts + 1,
+                            "price": 100.0 + i * 0.02,
+                            "qty": 0.2,
+                            "side": "BUY" if i % 2 == 0 else "SELL",
+                            "source": self.name,
+                        }
+                    )
+                return pd.DataFrame(rows)
+
+        original = eng_mod.build_provider_stack
+
+        def _fake_build_provider_stack(profile):  # type: ignore[no-untyped-def]
+            p = str(profile).strip().lower()
+            if p == "fake_primary":
+                return [_FakeTradeProvider(name="fake_primary", skew_ms=0)]
+            if p == "fake_secondary":
+                return [_FakeTradeProvider(name="fake_secondary", skew_ms=0)]
+            raise ValueError(f"unsupported profile: {profile}")
+
+        eng_mod.build_provider_stack = _fake_build_provider_stack  # type: ignore[assignment]
+        try:
+            out = eng._collect_cross_source_audit(as_of=date(2026, 2, 13), symbols=["300750"])
+        finally:
+            eng_mod.build_provider_stack = original  # type: ignore[assignment]
+
+        self.assertTrue(bool(out.get("active", False)))
+        self.assertEqual(str(out.get("status", "")), "ok")
+        self.assertEqual(int(out.get("symbols_audited", 0)), 1)
+        self.assertLessEqual(float(out.get("fail_ratio", 1.0)), 0.0)
+
+    def test_collect_cross_source_audit_marks_insufficient_samples_without_fail(self) -> None:
+        import lie_engine.engine as eng_mod
+
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["micro_cross_source_audit_enabled"] = True
+        eng.settings.raw["validation"]["micro_cross_source_primary"] = "fake_primary"
+        eng.settings.raw["validation"]["micro_cross_source_secondary"] = "fake_secondary"
+        eng.settings.raw["validation"]["micro_cross_source_build_missing_provider"] = True
+        eng.settings.raw["validation"]["micro_cross_source_symbols"] = ["BTCUSDT"]
+        eng.settings.raw["validation"]["micro_cross_source_audit_symbol_cap"] = 1
+        eng.settings.raw["validation"]["micro_cross_source_min_rows_per_side"] = 2
+        eng.settings.raw["validation"]["micro_cross_source_trade_limit"] = 100
+
+        class _EmptyTradeProvider:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # type: ignore[no-untyped-def]
+                return pd.DataFrame()
+
+        original = eng_mod.build_provider_stack
+
+        def _fake_build_provider_stack(profile):  # type: ignore[no-untyped-def]
+            p = str(profile).strip().lower()
+            if p == "fake_primary":
+                return [_EmptyTradeProvider(name="fake_primary")]
+            if p == "fake_secondary":
+                return [_EmptyTradeProvider(name="fake_secondary")]
+            raise ValueError(f"unsupported profile: {profile}")
+
+        eng_mod.build_provider_stack = _fake_build_provider_stack  # type: ignore[assignment]
+        try:
+            out = eng._collect_cross_source_audit(as_of=date(2026, 2, 13), symbols=["300750"])
+        finally:
+            eng_mod.build_provider_stack = original  # type: ignore[assignment]
+
+        self.assertTrue(bool(out.get("active", False)))
+        self.assertEqual(str(out.get("status", "")), "insufficient_samples")
+        self.assertEqual(int(out.get("symbols_selected", 0)), 1)
+        self.assertEqual(int(out.get("symbols_audited", 0)), 0)
+        self.assertEqual(int(out.get("symbols_insufficient", 0)), 1)
+        self.assertEqual(float(out.get("fail_ratio", 1.0)), 0.0)
+        self.assertEqual(out.get("fail_symbols", []), [])
+
+    def test_collect_cross_source_audit_uses_frequency_normalized_gap_limit(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["micro_cross_source_audit_enabled"] = True
+        eng.settings.raw["validation"]["micro_cross_source_primary"] = "fake_primary"
+        eng.settings.raw["validation"]["micro_cross_source_secondary"] = "fake_secondary"
+        eng.settings.raw["validation"]["micro_cross_source_symbols"] = ["BTCUSDT"]
+        eng.settings.raw["validation"]["micro_cross_source_audit_symbol_cap"] = 1
+        eng.settings.raw["validation"]["micro_cross_source_align_seconds"] = 6
+        eng.settings.raw["validation"]["micro_cross_source_window_ms"] = 200
+        eng.settings.raw["validation"]["micro_cross_source_trade_limit"] = 100
+        eng.settings.raw["validation"]["micro_cross_source_tolerance_ms"] = 80
+        eng.settings.raw["validation"]["micro_continuous_gap_ms"] = 1000
+        eng.settings.raw["validation"]["micro_cross_source_adaptive_gap_enabled"] = True
+        eng.settings.raw["validation"]["micro_cross_source_gap_freq_multiplier"] = 2.0
+        eng.settings.raw["validation"]["micro_cross_source_gap_hist_window_days"] = 7
+        eng.settings.raw["validation"]["micro_cross_source_gap_hist_quantile"] = 0.9
+        eng.settings.raw["validation"]["micro_cross_source_gap_hist_multiplier"] = 1.1
+        eng.settings.raw["validation"]["micro_cross_source_gap_limit_cap_ms"] = 10000
+        eng.settings.raw["validation"]["micro_cross_source_min_rows_per_side"] = 1
+
+        class _RateSkewProvider:
+            def __init__(self, name: str, step_ms: int) -> None:
+                self.name = name
+                self.step_ms = int(step_ms)
+
+            def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # type: ignore[no-untyped-def]
+                base = 1700000000000
+                rows = []
+                for i in range(30):
+                    ts = base + i * self.step_ms
+                    rows.append(
+                        {
+                            "exchange": self.name,
+                            "symbol": str(symbol),
+                            "trade_id": f"{self.name}-{i}",
+                            "event_ts_ms": ts,
+                            "recv_ts_ms": ts + 1,
+                            "price": 100.0,
+                            "qty": 0.1,
+                            "side": "BUY" if i % 2 == 0 else "SELL",
+                            "source": self.name,
+                        }
+                    )
+                return pd.DataFrame(rows)
+
+        eng.providers = [
+            _RateSkewProvider(name="fake_primary", step_ms=200),
+            _RateSkewProvider(name="fake_secondary", step_ms=2000),
+        ]  # type: ignore[assignment]
+        out = eng._collect_cross_source_audit(as_of=date(2026, 2, 13), symbols=["300750"])
+        rows = out.get("rows", [])
+        self.assertTrue(isinstance(rows, list) and rows)
+        row = rows[0]
+        self.assertGreater(int(row.get("effective_gap_limit_ms", 0)), 1000)
+        self.assertGreaterEqual(int(row.get("gap_limit_from_freq_ms", 0)), 4000)
+        self.assertTrue(bool(row.get("gap_ok", False)))
+        self.assertEqual(str(row.get("row_status", "")), "audited_pass")
+        self.assertEqual(str(out.get("status", "")), "ok")
+        self.assertEqual(float(out.get("fail_ratio", 1.0)), 0.0)
+
+    def test_execution_risk_control_applies_cross_source_stress_multiplier(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["execution_min_risk_multiplier"] = 0.2
+        eng.settings.raw["validation"]["execution_cross_source_stress_risk_multiplier"] = 0.7
+        eng.settings.raw["validation"]["execution_cross_source_stress_full_scale"] = 1.0
+        out = eng._execution_risk_control(
+            source_confidence_score=0.95,
+            mode_health={"passed": True, "active": True},
+            market_factor_state={"crypto_stress": 0.0, "cross_source_stress": 1.0},
+        )
+        self.assertAlmostEqual(float(out.get("cross_source_multiplier", 0.0)), 0.7, places=6)
+        self.assertAlmostEqual(float(out.get("risk_multiplier", 0.0)), 0.7, places=6)
+
+    def test_microstructure_gate_reasons_on_schema_fail(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["micro_schema_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["micro_schema_max_fail_symbols"] = 0
+        reasons = eng._microstructure_gate_reasons(
+            symbols=["BTCUSDT"],
+            micro_factor_map={"BTCUSDT": {"schema_ok": False, "schema_issues": ["l2_missing:event_ts_ms"]}},
+            cross_source_audit={"enabled": False, "active": False},
+        )
+        self.assertTrue(any("字段完整性熔断" in str(x) for x in reasons))
+
+    def test_microstructure_gate_reasons_on_cross_source_fail_ratio(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["micro_cross_source_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["micro_cross_source_min_samples"] = 1
+        eng.settings.raw["validation"]["micro_cross_source_max_fail_ratio"] = 0.0
+        reasons = eng._microstructure_gate_reasons(
+            symbols=["BTCUSDT"],
+            micro_factor_map={},
+            cross_source_audit={
+                "enabled": True,
+                "active": True,
+                "symbols_audited": 1,
+                "fail_ratio": 1.0,
+                "fail_symbols": ["BTCUSDT"],
+            },
+        )
+        self.assertTrue(any("跨源对齐熔断" in str(x) for x in reasons))
+
+    def test_microstructure_gate_reasons_on_time_sync_breach(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["micro_time_sync_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["micro_time_sync_min_samples"] = 1
+        eng.settings.raw["validation"]["micro_time_sync_max_offset_ms"] = 5
+        eng.settings.raw["validation"]["micro_time_sync_max_rtt_ms"] = 120
+        reasons = eng._microstructure_gate_reasons(
+            symbols=["BTCUSDT"],
+            micro_factor_map={
+                "BTCUSDT": {
+                    "has_data": True,
+                    "time_sync_available": True,
+                    "time_sync_offset_ms": 1000,
+                    "time_sync_rtt_ms": 200,
+                }
+            },
+            cross_source_audit={"enabled": False, "active": False},
+        )
+        self.assertTrue(any("时钟同步熔断" in str(x) for x in reasons))
+
     def test_run_strategy_lab_manifest(self) -> None:
         import lie_engine.engine as eng_mod
 
@@ -1787,6 +2493,10 @@ class EngineIntegrationTests(unittest.TestCase):
             self.assertEqual(str(metadata.get("cutoff_ts", "")), "2026-02-13T23:59:59")
             self.assertEqual(str(metadata.get("bar_max_ts", "")), "2026-02-13T15:00:00")
             self.assertEqual(str(metadata.get("news_max_ts", "")), "2026-02-13T23:59:59")
+            self.assertIn("term_registry_version", metadata)
+            self.assertIn("term_registry_checksum_sha256", metadata)
+            self.assertIn("term_registry_atoms_total", metadata)
+            self.assertIn("term_registry_l2_atoms", metadata)
         finally:
             eng_mod.run_strategy_lab_pipeline = original  # type: ignore[assignment]
 

@@ -44,6 +44,32 @@ validation:
   cooldown_consecutive_losses: 3
   major_event_window_hours: 24
   factor_lookback_days: 120
+  micro_cross_source_audit_enabled: true
+  micro_cross_source_build_missing_provider: true
+  micro_cross_source_primary: "binance_spot_public"
+  micro_cross_source_secondary: "bybit_spot_public"
+  micro_cross_source_symbols: ["BTCUSDT", "ETHUSDT"]
+  micro_cross_source_min_rows_per_side: 1
+  micro_cross_source_adaptive_gap_enabled: true
+  micro_cross_source_gap_freq_multiplier: 2.0
+  micro_cross_source_gap_hist_window_days: 30
+  micro_cross_source_gap_hist_quantile: 0.90
+  micro_cross_source_gap_hist_multiplier: 1.10
+  micro_cross_source_gap_limit_cap_ms: 60000
+  micro_cross_source_quality_lookback_days: 7
+  micro_time_sync_hard_fuse_enabled: false
+  micro_time_sync_max_offset_ms: 5
+  micro_time_sync_max_rtt_ms: 120
+  micro_time_sync_min_samples: 1
+  system_time_sync_probe_enabled: false
+  system_time_sync_hard_fuse_enabled: false
+  system_time_sync_primary_source: "time.google.com"
+  system_time_sync_secondary_source: "time.cloudflare.com"
+  system_time_sync_probe_timeout_seconds: 5.0
+  system_time_sync_max_offset_ms: 5
+  system_time_sync_max_rtt_ms: 120
+  system_time_sync_min_ok_sources: 1
+  microstructure_symbols: ["BTCUSDT", "ETHUSDT"]
   review_use_strategy_lab: true
   strategy_lab_merge_step: 0.18
   strategy_lab_manifest_lookback_days: 45
@@ -250,6 +276,10 @@ validation:
   ops_risk_multiplier_drift_max: 0.30
   ops_source_confidence_floor: 0.75
   ops_mode_health_fail_days_max: 2
+  ops_system_time_sync_monitor_enabled: false
+  ops_system_time_sync_fail_days_max: 2
+  ops_system_time_sync_inactive_days_max: 5
+  ops_system_time_sync_min_ok_sources: 1
   broker_snapshot_source_mode: "paper_engine"  # paper_engine | live_adapter | hybrid_prefer_live
   broker_snapshot_live_mapping_profile: "generic"  # generic | ibkr | binance | ctp
   broker_snapshot_live_inbox: "output/artifacts/broker_live_inbox"
@@ -258,6 +288,10 @@ validation:
   source_confidence_floor_risk_multiplier: 0.35
   mode_health_risk_multiplier: 0.50
   mode_health_insufficient_sample_risk_multiplier: 0.85
+  execution_crypto_stress_risk_multiplier: 0.65
+  execution_crypto_stress_full_scale: 1.00
+  execution_cross_source_stress_risk_multiplier: 0.70
+  execution_cross_source_stress_full_scale: 1.00
   test_all_timeout_seconds: 1800
   review_loop_fast_test_enabled: true
   review_loop_fast_ratio: 0.10

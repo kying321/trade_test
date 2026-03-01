@@ -100,7 +100,28 @@ class OrchestrationTests(unittest.TestCase):
             self.assertIn(key, contrib)
             self.assertGreaterEqual(float(contrib[key]), 0.0)
 
+    def test_build_guard_assessment_triggers_on_crypto_stress(self) -> None:
+        out = build_guard_assessment(
+            as_of=date(2026, 2, 13),
+            regime=RegimeLabel.STRONG_TREND,
+            atr_z=0.2,
+            quality_passed=True,
+            sentiment={
+                "btc_return_24h": -0.055,
+                "btc_realized_vol_24h": 0.16,
+                "btc_funding_abs_8h": 0.0008,
+                "btc_book_spread_bps": 10.0,
+            },
+            news=[],
+            recent_trades=pd.DataFrame({"pnl": [1.0, -0.2]}),
+            lookback_hours=24,
+            cooldown_losses=3,
+            black_swan_threshold=35.0,
+        )
+        self.assertTrue(out.black_swan_trigger)
+        self.assertTrue(out.trade_blocked)
+        self.assertTrue(any("BTC" in x for x in out.black_swan_items))
+
 
 if __name__ == "__main__":
     unittest.main()
-
