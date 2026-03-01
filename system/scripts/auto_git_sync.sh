@@ -10,7 +10,7 @@ Options:
   --skip-tests        Skip `lie validate-config` + `lie test-all`.
   --include-logs      Include `system/output/logs/tests_*.json` in commit.
   --no-review-files   Do not include `system/output/review/*` files.
-  --branch NAME       Target git branch (must start with `codex/`).
+  --branch NAME       Target git branch (`main`/`pi`/`lie`).
   --message TEXT      Commit message.
   -h, --help          Show this help.
 EOF
@@ -20,8 +20,15 @@ dry_run=0
 run_tests=1
 include_logs=0
 include_review_files=1
-branch_name="${AUTO_GIT_BRANCH:-codex/auto-sync}"
+branch_name="${AUTO_GIT_BRANCH:-lie}"
 commit_message="${AUTO_GIT_MESSAGE:-chore(system): automated sync $(date '+%Y-%m-%d %H:%M:%S')}"
+
+is_allowed_branch() {
+  case "$1" in
+    main|pi|lie) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -62,8 +69,9 @@ if [[ -z "$branch_name" ]]; then
   echo "ERROR: branch name is empty." >&2
   exit 2
 fi
-if [[ "$branch_name" != codex/* ]]; then
-  echo "ERROR: branch must start with 'codex/'." >&2
+if ! is_allowed_branch "$branch_name"; then
+  echo "ERROR: branch '$branch_name' is blocked." >&2
+  echo "Allowed branches: main, pi, lie" >&2
   exit 2
 fi
 if [[ -z "$commit_message" ]]; then
@@ -164,7 +172,11 @@ fi
 
 current_branch="$(git branch --show-current)"
 if [[ "$current_branch" != "$branch_name" ]]; then
-  git checkout -B "$branch_name"
+  if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+    git checkout "$branch_name"
+  else
+    git checkout -b "$branch_name"
+  fi
 fi
 
 git add -- "${eligible_files[@]}"

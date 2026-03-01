@@ -148,7 +148,8 @@ graph LR
 
 - 分支约定：
   - `main`：稳定基线。
-  - `codex/*`：功能迭代分支（与现有自动脚本一致）。
+  - `pi`：Pi/OpenClaw 主线。
+  - `lie`：LiE 交易引擎主线。
 - 提交粒度：一个模块一个意图，避免“代码+大量输出文件”混提。
 - 提交信息模板：
   - `feat(module): ...`
@@ -168,7 +169,7 @@ lie test-all --fast --fast-ratio 0.10
 cd /Users/jokenrobot/Downloads/离厄—技术分析原理
 ./system/scripts/auto_git_sync.sh --dry-run
 # 确认后
-./system/scripts/auto_git_sync.sh --branch codex/demo-versioning --message "docs(arch): establish demo versioning baseline"
+./system/scripts/auto_git_sync.sh --branch lie --message "docs(arch): establish demo versioning baseline"
 ```
 
 ## 8. 当前风险与改进建议
