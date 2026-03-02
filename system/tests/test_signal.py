@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from lie_engine.models import RegimeLabel, Side, SignalCandidate
 from lie_engine.signal import SignalEngineConfig, scan_signals
 from lie_engine.signal.engine import generate_signal_for_symbol
+from lie_engine.signal.features import add_common_features
+from lie_engine.signal.theory import compute_theory_confluence
 from tests.helpers import make_bars
 
 
@@ -227,6 +229,68 @@ class SignalTests(unittest.TestCase):
         assert drifted is not None
         self.assertLess(float(drifted.confidence), float(aligned.confidence))
         self.assertIn("micro_time_sync_risk", drifted.factor_flags)
+
+    def test_theory_confluence_adds_confidence_on_aligned_setup(self) -> None:
+        bars = make_bars("BTCUSDT", n=320, trend=0.16, seed=52, asset_class="future").reset_index(drop=True)
+        i = len(bars) - 1
+        prev = len(bars) - 2
+        anchor = float(bars.loc[prev, "high"])
+        bars.loc[i, "open"] = anchor * 1.01
+        bars.loc[i, "low"] = anchor * 1.02
+        bars.loc[i, "close"] = anchor * 1.06
+        bars.loc[i, "high"] = anchor * 1.07
+        bars.loc[i, "volume"] = float(bars["volume"].tail(20).mean()) * 2.4
+
+        base_cfg = SignalEngineConfig(
+            confidence_min=0.0,
+            convexity_min=0.0,
+            factor_filter_enabled=False,
+            microstructure_enabled=False,
+            theory_enabled=False,
+        )
+        theory_cfg = SignalEngineConfig(
+            confidence_min=0.0,
+            convexity_min=0.0,
+            factor_filter_enabled=False,
+            microstructure_enabled=False,
+            theory_enabled=True,
+            theory_confidence_boost_max=9.0,
+            theory_penalty_max=1.0,
+        )
+        base = generate_signal_for_symbol(bars, regime=RegimeLabel.STRONG_TREND, cfg=base_cfg)
+        enriched = generate_signal_for_symbol(bars, regime=RegimeLabel.STRONG_TREND, cfg=theory_cfg)
+        self.assertIsNotNone(base)
+        self.assertIsNotNone(enriched)
+        assert base is not None
+        assert enriched is not None
+        self.assertGreater(float(enriched.confidence), float(base.confidence))
+        self.assertIn("theory=", enriched.notes)
+
+    def test_theory_conflict_detected_on_sweep_reclaim_failure(self) -> None:
+        bars = make_bars("BTCUSDT", n=320, trend=0.12, seed=53, asset_class="future").reset_index(drop=True)
+        i = len(bars) - 1
+        prev10_high = float(bars.iloc[-11:-1]["high"].max())
+        near_trend = float(bars.iloc[-20:]["close"].mean())
+        close_px = max(near_trend * 1.002, prev10_high * 0.985)
+        bars.loc[i, "open"] = close_px * 1.001
+        bars.loc[i, "close"] = close_px
+        bars.loc[i, "high"] = prev10_high * 1.018
+        bars.loc[i, "low"] = close_px * 0.992
+        bars.loc[i, "volume"] = float(bars["volume"].tail(20).mean()) * 0.85
+
+        featured = add_common_features(bars)
+        result = compute_theory_confluence(
+            df=featured,
+            side=Side.LONG,
+            regime=RegimeLabel.STRONG_TREND,
+            lie_score_ratio=0.52,
+            ict_weight=1.0,
+            brooks_weight=1.0,
+            lie_weight=1.0,
+        )
+        self.assertGreater(float(result.conflict), 0.15)
+        self.assertGreater(float(result.conflict), float(result.confluence))
+        self.assertIn("theory_confluence_weak", result.flags)
 
 
 if __name__ == "__main__":

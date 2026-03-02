@@ -250,12 +250,72 @@ def _generate_candidates(
     candidate_count: int,
 ) -> list[dict[str, Any]]:
     base_templates: list[dict[str, Any]] = [
-        {"name": "trend_convex", "hold_days": 9, "max_daily_trades": 2, "signal_confidence_min": 50.0, "convexity_min": 2.2, "rationale": "趋势驱动+凸性约束"},
-        {"name": "report_momentum", "hold_days": 12, "max_daily_trades": 2, "signal_confidence_min": 48.0, "convexity_min": 2.0, "rationale": "研报偏向驱动的动量延续"},
-        {"name": "news_reversion", "hold_days": 5, "max_daily_trades": 3, "signal_confidence_min": 45.0, "convexity_min": 1.8, "rationale": "新闻冲击后的均值回归"},
-        {"name": "balanced_flow", "hold_days": 7, "max_daily_trades": 2, "signal_confidence_min": 47.0, "convexity_min": 2.0, "rationale": "新闻与研报一致性中庸策略"},
-        {"name": "defensive_tail", "hold_days": 6, "max_daily_trades": 1, "signal_confidence_min": 52.0, "convexity_min": 2.6, "rationale": "尾部风险防御优先"},
-        {"name": "aggressive_breakout", "hold_days": 4, "max_daily_trades": 4, "signal_confidence_min": 43.0, "convexity_min": 1.6, "rationale": "高波动突破捕捉"},
+        {
+            "name": "trend_convex",
+            "hold_days": 9,
+            "max_daily_trades": 2,
+            "signal_confidence_min": 50.0,
+            "convexity_min": 2.2,
+            "theory_ict_weight": 1.2,
+            "theory_brooks_weight": 0.9,
+            "theory_lie_weight": 1.4,
+            "rationale": "趋势驱动+凸性约束",
+        },
+        {
+            "name": "report_momentum",
+            "hold_days": 12,
+            "max_daily_trades": 2,
+            "signal_confidence_min": 48.0,
+            "convexity_min": 2.0,
+            "theory_ict_weight": 1.0,
+            "theory_brooks_weight": 1.0,
+            "theory_lie_weight": 1.3,
+            "rationale": "研报偏向驱动的动量延续",
+        },
+        {
+            "name": "news_reversion",
+            "hold_days": 5,
+            "max_daily_trades": 3,
+            "signal_confidence_min": 45.0,
+            "convexity_min": 1.8,
+            "theory_ict_weight": 1.2,
+            "theory_brooks_weight": 1.3,
+            "theory_lie_weight": 0.9,
+            "rationale": "新闻冲击后的均值回归",
+        },
+        {
+            "name": "balanced_flow",
+            "hold_days": 7,
+            "max_daily_trades": 2,
+            "signal_confidence_min": 47.0,
+            "convexity_min": 2.0,
+            "theory_ict_weight": 1.0,
+            "theory_brooks_weight": 1.0,
+            "theory_lie_weight": 1.1,
+            "rationale": "新闻与研报一致性中庸策略",
+        },
+        {
+            "name": "defensive_tail",
+            "hold_days": 6,
+            "max_daily_trades": 1,
+            "signal_confidence_min": 52.0,
+            "convexity_min": 2.6,
+            "theory_ict_weight": 0.9,
+            "theory_brooks_weight": 1.3,
+            "theory_lie_weight": 1.2,
+            "rationale": "尾部风险防御优先",
+        },
+        {
+            "name": "aggressive_breakout",
+            "hold_days": 4,
+            "max_daily_trades": 4,
+            "signal_confidence_min": 43.0,
+            "convexity_min": 1.6,
+            "theory_ict_weight": 1.4,
+            "theory_brooks_weight": 0.8,
+            "theory_lie_weight": 1.1,
+            "rationale": "高波动突破捕捉",
+        },
     ]
 
     trend = float(market.get("trend_strength_z", 0.0))
@@ -274,11 +334,17 @@ def _generate_candidates(
         convex = float(tpl["convexity_min"]) + 0.35 * max(0.0, vol) + 0.20 * max(0.0, -tail)
         hold = int(round(float(tpl["hold_days"]) + 3.0 * regime_push))
         trades = int(round(float(tpl["max_daily_trades"]) + (1.0 if abs(info_push) > 0.8 else 0.0)))
+        ict_w = float(tpl["theory_ict_weight"]) + 0.25 * max(0.0, info_push) + 0.10 * max(0.0, trend)
+        brooks_w = float(tpl["theory_brooks_weight"]) + 0.20 * max(0.0, vol) + 0.20 * max(0.0, -agree)
+        lie_w = float(tpl["theory_lie_weight"]) + 0.25 * max(0.0, trend) - 0.12 * max(0.0, vol)
 
         tpl["signal_confidence_min"] = _clip(conf, 28.0, 75.0)
         tpl["convexity_min"] = _clip(convex, 1.0, 3.5)
         tpl["hold_days"] = int(max(1, min(20, hold)))
         tpl["max_daily_trades"] = int(max(1, min(5, trades)))
+        tpl["theory_ict_weight"] = _clip(ict_w, 0.6, 1.8)
+        tpl["theory_brooks_weight"] = _clip(brooks_w, 0.6, 1.8)
+        tpl["theory_lie_weight"] = _clip(lie_w, 0.6, 1.8)
         tpl["name"] = f"{tpl['name']}_{i+1:02d}"
         out.append(tpl)
     return out
@@ -502,6 +568,10 @@ def run_strategy_lab(
             regime_recalc_interval=5,
             signal_eval_interval=1,
             proxy_lookback=180,
+            theory_enabled=True,
+            theory_ict_weight=float(spec.get("theory_ict_weight", 1.0)),
+            theory_brooks_weight=float(spec.get("theory_brooks_weight", 1.0)),
+            theory_lie_weight=float(spec.get("theory_lie_weight", 1.2)),
         )
         train_bt = run_event_backtest(
             bars=bars,
@@ -585,6 +655,9 @@ def run_strategy_lab(
                     "convexity_min": float(spec["convexity_min"]),
                     "hold_days": int(spec["hold_days"]),
                     "max_daily_trades": int(spec["max_daily_trades"]),
+                    "theory_ict_weight": float(spec.get("theory_ict_weight", 1.0)),
+                    "theory_brooks_weight": float(spec.get("theory_brooks_weight", 1.0)),
+                    "theory_lie_weight": float(spec.get("theory_lie_weight", 1.2)),
                 },
                 train_metrics={
                     "annual_return": float(train_bt.annual_return),
