@@ -310,6 +310,7 @@ def _render_markdown(
     data_source: str,
     max_drawdown_target: float,
     drawdown_soft_band: float,
+    auto_exposure_search: dict[str, object] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# Theory Ablation Report | {ended_at[:19]}")
@@ -323,6 +324,20 @@ def _render_markdown(
     lines.append(f"- data_source: `{data_source}`")
     lines.append(f"- max_drawdown_target: `{max_drawdown_target:.4f}`")
     lines.append(f"- drawdown_soft_band: `{drawdown_soft_band:.4f}`")
+    auto_cfg = auto_exposure_search if isinstance(auto_exposure_search, dict) else {}
+    if bool(auto_cfg.get("enabled", False)):
+        lines.append("- auto_exposure_search: `on`")
+        lines.append(
+            "- "
+            + f"auto_exposure_range: `{float(auto_cfg.get('low', 0.0)):.4f} ~ {float(auto_cfg.get('high', 0.0)):.4f}`"
+        )
+        lines.append(f"- auto_exposure_iters: `{int(auto_cfg.get('iterations', 0))}`")
+        lines.append(f"- auto_exposure_theory: `{int(bool(auto_cfg.get('theory_enabled', False)))}`")
+        best_exp = auto_cfg.get("best_exposure", None)
+        if best_exp is None:
+            lines.append("- auto_exposure_best: `none`")
+        else:
+            lines.append(f"- auto_exposure_best: `{float(best_exp):.4f}`")
     lines.append("")
     lines.append("## Cases")
     lines.append(
@@ -404,6 +419,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-drawdown-target", type=float, default=0.05)
     parser.add_argument("--drawdown-soft-band", type=float, default=0.03)
     parser.add_argument("--exposure-grid", default="", help="comma-separated exposure scan values, e.g. 1.0,0.6,0.3,0.2")
+    parser.add_argument("--auto-exposure-search", action="store_true")
+    parser.add_argument("--auto-exposure-low", type=float, default=0.08)
+    parser.add_argument("--auto-exposure-high", type=float, default=1.0)
+    parser.add_argument("--auto-exposure-iters", type=int, default=8)
+    parser.add_argument("--auto-exposure-theory", action="store_true")
     parser.add_argument(
         "--weight-grid",
         default="1.0:1.0:1.2;1.2:1.0:1.3;1.2:1.1:1.3;1.4:0.9:1.2",
@@ -435,6 +455,7 @@ def main() -> int:
     weight_grid = _parse_weight_grid(args.weight_grid)
     gate_grid = _parse_gate_grid(args.gate_grid)
     exposure_grid = _parse_exposure_grid(args.exposure_grid)
+    auto_exposure_cfg: dict[str, object] = {"enabled": bool(args.auto_exposure_search)}
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -484,6 +505,7 @@ def main() -> int:
             "risk_feasible": False,
             "feasible_count": 0,
             "best_feasible_case": {},
+            "auto_exposure_search": auto_exposure_cfg,
             "error": "no_bars_available_after_remote_and_local_fallback",
         }
         (run_dir / "summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -498,6 +520,7 @@ def main() -> int:
             data_source=data_source,
             max_drawdown_target=float(args.max_drawdown_target),
             drawdown_soft_band=float(args.drawdown_soft_band),
+            auto_exposure_search=auto_exposure_cfg,
         )
         (run_dir / "report.md").write_text(report, encoding="utf-8")
         print(json.dumps({"run_dir": str(run_dir), "bars_rows": 0, "error": payload["error"]}, ensure_ascii=False, indent=2))
@@ -604,6 +627,121 @@ def main() -> int:
                 drawdown_soft_band=float(args.drawdown_soft_band),
             )
         )
+    if bool(args.auto_exposure_search):
+        auto_low = float(min(args.auto_exposure_low, args.auto_exposure_high))
+        auto_high = float(max(args.auto_exposure_low, args.auto_exposure_high))
+        auto_low = max(0.05, auto_low)
+        auto_high = min(1.50, max(auto_low, auto_high))
+        auto_iters = max(1, int(args.auto_exposure_iters))
+        auto_theory = bool(args.auto_exposure_theory)
+
+        auto_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
+        probe_lo = float(auto_low)
+        probe_hi = float(auto_high)
+        probe_trace: list[dict[str, object]] = []
+        best_feasible: AblationCase | None = None
+        for i in range(auto_iters):
+            probe = 0.5 * (probe_lo + probe_hi)
+            probe_case = _run_case(
+                name=f"exp_auto_probe_{i + 1:02d}",
+                bars=bars,
+                start=start,
+                end=end,
+                signal_confidence_min=float(args.signal_confidence_min),
+                convexity_min=float(args.convexity_min),
+                max_daily_trades=int(args.max_daily_trades),
+                hold_days=int(args.hold_days),
+                exposure_scale=float(probe),
+                proxy_lookback=int(args.proxy_lookback),
+                theory_enabled=auto_theory,
+                theory_ict_weight=float(auto_weights[0]),
+                theory_brooks_weight=float(auto_weights[1]),
+                theory_lie_weight=float(auto_weights[2]),
+                theory_confidence_boost_max=float(args.theory_confidence_boost_max),
+                theory_penalty_max=float(args.theory_penalty_max),
+                theory_min_confluence=float(args.theory_min_confluence),
+                theory_conflict_fuse=float(args.theory_conflict_fuse),
+                max_drawdown_target=float(args.max_drawdown_target),
+                drawdown_soft_band=float(args.drawdown_soft_band),
+            )
+            probe_trace.append(
+                {
+                    "iter": int(i + 1),
+                    "probe_exposure": float(probe),
+                    "max_drawdown": float(probe_case.max_drawdown),
+                    "drawdown_excess": float(probe_case.drawdown_excess),
+                    "target_breached": bool(probe_case.target_breached),
+                    "annual_return": float(probe_case.annual_return),
+                    "objective": float(probe_case.objective),
+                }
+            )
+            if probe_case.target_breached:
+                probe_hi = float(probe)
+            else:
+                probe_lo = float(probe)
+                if best_feasible is None or float(probe_case.objective) > float(best_feasible.objective):
+                    best_feasible = probe_case
+
+        refine_exposures = sorted(
+            {
+                float(round(probe_lo, 4)),
+                float(round(max(auto_low, probe_lo * 0.92), 4)),
+                float(round(max(auto_low, probe_lo * 0.84), 4)),
+                float(round(max(auto_low, probe_lo - 0.02), 4)),
+            }
+        )
+        for idx, exp in enumerate(refine_exposures, start=1):
+            refine_case = _run_case(
+                name=f"exp_auto_refine_{idx:02d}",
+                bars=bars,
+                start=start,
+                end=end,
+                signal_confidence_min=float(args.signal_confidence_min),
+                convexity_min=float(args.convexity_min),
+                max_daily_trades=int(args.max_daily_trades),
+                hold_days=int(args.hold_days),
+                exposure_scale=float(exp),
+                proxy_lookback=int(args.proxy_lookback),
+                theory_enabled=auto_theory,
+                theory_ict_weight=float(auto_weights[0]),
+                theory_brooks_weight=float(auto_weights[1]),
+                theory_lie_weight=float(auto_weights[2]),
+                theory_confidence_boost_max=float(args.theory_confidence_boost_max),
+                theory_penalty_max=float(args.theory_penalty_max),
+                theory_min_confluence=float(args.theory_min_confluence),
+                theory_conflict_fuse=float(args.theory_conflict_fuse),
+                max_drawdown_target=float(args.max_drawdown_target),
+                drawdown_soft_band=float(args.drawdown_soft_band),
+            )
+            probe_trace.append(
+                {
+                    "iter": int(auto_iters + idx),
+                    "probe_exposure": float(exp),
+                    "max_drawdown": float(refine_case.max_drawdown),
+                    "drawdown_excess": float(refine_case.drawdown_excess),
+                    "target_breached": bool(refine_case.target_breached),
+                    "annual_return": float(refine_case.annual_return),
+                    "objective": float(refine_case.objective),
+                }
+            )
+            if not bool(refine_case.target_breached):
+                if best_feasible is None or float(refine_case.objective) > float(best_feasible.objective):
+                    best_feasible = refine_case
+
+        if best_feasible is not None:
+            best_payload = asdict(best_feasible)
+            best_payload["name"] = "exp_auto_best"
+            cases.append(AblationCase(**best_payload))
+        auto_exposure_cfg = {
+            "enabled": True,
+            "low": float(auto_low),
+            "high": float(auto_high),
+            "iterations": int(auto_iters),
+            "theory_enabled": bool(auto_theory),
+            "best_exposure": None if best_feasible is None else float(best_feasible.exposure_scale),
+            "best_case": {} if best_feasible is None else asdict(best_feasible),
+            "trace": probe_trace,
+        }
 
     t1 = datetime.now()
     sorted_cases = sorted(cases, key=lambda x: x.objective, reverse=True)
@@ -626,6 +764,7 @@ def main() -> int:
         "risk_feasible": bool(feasible_cases),
         "feasible_count": int(len(feasible_cases)),
         "best_feasible_case": asdict(feasible_cases[0]) if feasible_cases else {},
+        "auto_exposure_search": auto_exposure_cfg,
     }
     (run_dir / "summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     report = _render_markdown(
@@ -639,6 +778,7 @@ def main() -> int:
         data_source=data_source,
         max_drawdown_target=float(args.max_drawdown_target),
         drawdown_soft_band=float(args.drawdown_soft_band),
+        auto_exposure_search=auto_exposure_cfg,
     )
     (run_dir / "report.md").write_text(report, encoding="utf-8")
 
