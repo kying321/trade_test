@@ -33,6 +33,7 @@ scripts/openclaw_cloud_bridge.sh tunnel-down
 scripts/openclaw_cloud_bridge.sh sample-whitelist
 scripts/openclaw_cloud_bridge.sh sample-whitelist-gate
 scripts/openclaw_cloud_bridge.sh assert-whitelist-gate
+scripts/openclaw_cloud_bridge.sh ensure-whitelist-gate
 ```
 
 ## Local forwarded ports
@@ -75,6 +76,14 @@ WHITELIST_ASSERT_MAX_AGE_MINUTES=90 \
 WHITELIST_MIN_TOTAL_SUCCESS_RATE=0.95 \
 WHITELIST_MIN_ACTION_SUCCESS_RATE=0.66 \
 scripts/openclaw_cloud_bridge.sh assert-whitelist-gate
+```
+- 自愈命令（先断言，失败后自动重采样再断言）：
+```bash
+cd /Users/jokenrobot/Downloads/fenlie/system
+WHITELIST_ASSERT_MAX_AGE_MINUTES=90 \
+WHITELIST_MIN_TOTAL_SUCCESS_RATE=0.95 \
+WHITELIST_MIN_ACTION_SUCCESS_RATE=0.66 \
+scripts/openclaw_cloud_bridge.sh ensure-whitelist-gate
 ```
 - 产物：
   - `output/review/*_openclaw_bridge_whitelist_24h.json`
