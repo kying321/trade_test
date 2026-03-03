@@ -204,8 +204,88 @@ class ResearchTests(unittest.TestCase):
                 self.assertEqual(summary.report_max_ts, "")
                 self.assertTrue(bool(summary.term_registry.get("exists", False)))
                 self.assertGreaterEqual(int(summary.term_registry.get("atoms_total", 0)), 1)
+                self.assertAlmostEqual(float(summary.max_drawdown_target), 0.05, places=6)
+                self.assertAlmostEqual(float(summary.review_max_drawdown_target), 0.07, places=6)
+                self.assertAlmostEqual(float(summary.drawdown_soft_band), 0.03, places=6)
         finally:
             sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+
+    def test_run_strategy_lab_dd_target_acceptance_gate(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+        from lie_engine.models import BacktestResult
+
+        bars = make_multi_symbol_bars()
+        bars["asset_class"] = bars["asset_class"].astype(str)
+        bars["source"] = "mock"
+        idx = sorted(pd.to_datetime(bars["ts"]).dt.date.unique())
+        news_daily = pd.Series([0.0] * len(idx), index=idx, dtype=float)
+        report_daily = pd.Series([0.0] * len(idx), index=idx, dtype=float)
+        bundle = RealDataBundle(
+            bars=bars,
+            review_bars=pd.DataFrame(columns=bars.columns),
+            universe=sorted(set(bars["symbol"])),
+            news_daily=news_daily,
+            report_daily=report_daily,
+            news_records=0,
+            report_records=0,
+            fetch_stats={"mocked": True, "strict_cutoff_enforced": True},
+            cutoff_date=date(2025, 12, 31),
+            review_days=0,
+        )
+
+        original_loader = sl_mod.load_real_data_bundle
+        original_bt = sl_mod.run_event_backtest
+
+        def _fake_backtest(*, bars, start, end, cfg, trend_thr, mean_thr, atr_extreme):  # type: ignore[no-untyped-def]
+            exp = float(getattr(cfg, "exposure_scale", 1.0))
+            mdd = 0.045 if exp <= 0.21 else 0.065
+            ann = 0.18 if exp <= 0.21 else 0.28
+            return BacktestResult(
+                start=start,
+                end=end,
+                total_return=ann,
+                annual_return=ann,
+                max_drawdown=mdd,
+                win_rate=0.60,
+                profit_factor=1.30,
+                expectancy=0.01,
+                trades=12,
+                violations=0,
+                positive_window_ratio=0.85,
+                equity_curve=[{"date": start.isoformat(), "equity": 1.0}, {"date": end.isoformat(), "equity": 1.0 + ann}],
+                by_asset={},
+            )
+
+        sl_mod.load_real_data_bundle = lambda **kwargs: bundle  # type: ignore[assignment]
+        sl_mod.run_event_backtest = _fake_backtest  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                summary = run_strategy_lab(
+                    output_root=Path(td),
+                    core_symbols=["300750", "002050", "513130", "LC2603"],
+                    start=date(2025, 1, 1),
+                    end=date(2025, 12, 31),
+                    max_symbols=10,
+                    report_symbol_cap=5,
+                    workers=2,
+                    review_days=0,
+                    candidate_count=6,
+                    max_drawdown_target=0.05,
+                    review_max_drawdown_target=0.07,
+                    drawdown_soft_band=0.03,
+                )
+                accepted = [c for c in summary.candidates if bool(c.accepted)]
+                rejected = [c for c in summary.candidates if not bool(c.accepted)]
+                self.assertGreaterEqual(len(accepted), 1)
+                self.assertGreaterEqual(len(rejected), 1)
+                self.assertTrue(all(float(c.validation_metrics.get("max_drawdown", 1.0)) <= 0.05 for c in accepted))
+                self.assertTrue(any(float(c.validation_metrics.get("max_drawdown", 0.0)) > 0.05 for c in rejected))
+                self.assertAlmostEqual(float(summary.max_drawdown_target), 0.05, places=6)
+                self.assertAlmostEqual(float(summary.review_max_drawdown_target), 0.07, places=6)
+                self.assertAlmostEqual(float(summary.drawdown_soft_band), 0.03, places=6)
+        finally:
+            sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+            sl_mod.run_event_backtest = original_bt  # type: ignore[assignment]
 
 
 if __name__ == "__main__":
