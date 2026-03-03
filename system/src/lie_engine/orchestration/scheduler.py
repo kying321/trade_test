@@ -158,7 +158,7 @@ class SchedulerOrchestrator:
             ops = self.ops_report(as_of, replay_days)
             return {"slot": "ops", "result": ops}
 
-        if slot in {"micro-capture", "micro_capture", "microcapture"}:
+        if slot in {"micro-capture", "micro_capture", "microcapture", "interval:micro_capture", "interval_micro_capture", "interval-micro-capture"}:
             if not callable(self.run_micro_capture):
                 raise ValueError("micro-capture runner unavailable")
             cfg_mc = self._micro_capture_cfg()
