@@ -124,6 +124,19 @@ class SchedulerOrchestratorTests(unittest.TestCase):
         self.assertEqual(len(mc_calls), 1)
         self.assertEqual(mc_calls[0]["date"], "2026-02-13")
 
+    def test_run_slot_interval_micro_capture_alias(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        orch, calls = self._make_orchestrator(td)
+        d = date(2026, 2, 13)
+
+        out = orch.run_slot(as_of=d, slot="interval:micro_capture")
+        self.assertEqual(out["slot"], "micro-capture")
+        mc_calls = calls["micro_capture"]
+        assert isinstance(mc_calls, list)
+        self.assertEqual(len(mc_calls), 1)
+        self.assertEqual(mc_calls[0]["date"], "2026-02-13")
+
     def test_run_session_respects_review_flag(self) -> None:
         td = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
