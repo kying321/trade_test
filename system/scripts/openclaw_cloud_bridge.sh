@@ -9,6 +9,7 @@ Usage:
 Actions:
   whitelist               Print executable action whitelist.
   sample-whitelist        Run whitelist sampling and render 24h success report.
+  sample-whitelist-gate   Run sampling and fail-fast when whitelist gate is red.
   cut-local               Disable local OpenClaw launchd services.
   probe-cloud             Probe cloud host/project availability.
   compare                 Compare local/remote git heads.
@@ -29,10 +30,17 @@ Environment:
   CLOUD_PASS              optional password for sshpass
   SAMPLE_ROUNDS           default: 1
   SAMPLE_WINDOW_HOURS     default: 24
+  WHITELIST_ENFORCE       default: false (true -> non-pass gate exits 3)
+  WHITELIST_MIN_TOTAL_SUCCESS_RATE   default: 0.95
+  WHITELIST_MIN_ACTION_SUCCESS_RATE  default: 0.80
+  WHITELIST_MIN_SAMPLES_PER_ACTION   default: 1
+  WHITELIST_REQUIRE_LAST_RC_ZERO     default: true
+  WHITELIST_REQUIRED_ACTIONS         default: probe-cloud,compare,tunnel-up,tunnel-probe,validate-remote-config,tunnel-down,sync-dry-run
 
 Notes:
   - SSH connect timeout is hard-limited to 5s for bridge reliability checks.
   - sample-whitelist appends sample records to output/logs jsonl and renders json/md artifacts.
+  - With WHITELIST_ENFORCE=true, gate failure exits with code 3 (fuse).
 USAGE
 }
 
@@ -70,6 +78,12 @@ cloud_pass="${CLOUD_PASS:-}"
 
 sample_rounds="${SAMPLE_ROUNDS:-1}"
 sample_window_hours="${SAMPLE_WINDOW_HOURS:-24}"
+whitelist_enforce="${WHITELIST_ENFORCE:-false}"
+whitelist_min_total_success_rate="${WHITELIST_MIN_TOTAL_SUCCESS_RATE:-0.95}"
+whitelist_min_action_success_rate="${WHITELIST_MIN_ACTION_SUCCESS_RATE:-0.80}"
+whitelist_min_samples_per_action="${WHITELIST_MIN_SAMPLES_PER_ACTION:-1}"
+whitelist_require_last_rc_zero="${WHITELIST_REQUIRE_LAST_RC_ZERO:-true}"
+whitelist_required_actions="${WHITELIST_REQUIRED_ACTIONS:-probe-cloud,compare,tunnel-up,tunnel-probe,validate-remote-config,tunnel-down,sync-dry-run}"
 
 output_dir="${system_root}/output/review"
 log_dir="${system_root}/output/logs"
@@ -86,6 +100,40 @@ if ! [[ "${sample_window_hours}" =~ ^[0-9]+$ ]] || (( sample_window_hours <= 0 )
   echo "ERROR: SAMPLE_WINDOW_HOURS must be a positive integer." >&2
   exit 2
 fi
+if ! [[ "${whitelist_min_samples_per_action}" =~ ^[0-9]+$ ]] || (( whitelist_min_samples_per_action <= 0 )); then
+  echo "ERROR: WHITELIST_MIN_SAMPLES_PER_ACTION must be a positive integer." >&2
+  exit 2
+fi
+
+validate_rate_0_1() {
+  local name="$1"
+  local raw="$2"
+  python3 - "$name" "$raw" <<'PY'
+import sys
+name = sys.argv[1]
+raw = sys.argv[2]
+try:
+    val = float(raw)
+except Exception:
+    print(f"ERROR: {name} must be numeric.", file=sys.stderr)
+    raise SystemExit(2)
+if not (0.0 <= val <= 1.0):
+    print(f"ERROR: {name} must be in [0,1].", file=sys.stderr)
+    raise SystemExit(2)
+PY
+}
+
+validate_rate_0_1 "WHITELIST_MIN_TOTAL_SUCCESS_RATE" "${whitelist_min_total_success_rate}"
+validate_rate_0_1 "WHITELIST_MIN_ACTION_SUCCESS_RATE" "${whitelist_min_action_success_rate}"
+
+is_true() {
+  local raw
+  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    1|true|yes|y|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 ssh_opts=(
   -o ConnectTimeout=5
@@ -135,6 +183,7 @@ sync-apply-prune
 remote-clean-junk
 validate-remote-config
 sample-whitelist
+sample-whitelist-gate
 WL
 }
 
@@ -326,6 +375,7 @@ run_action_by_name() {
   case "${action}" in
     whitelist) action_whitelist ;;
     sample-whitelist) action_sample_whitelist ;;
+    sample-whitelist-gate) action_sample_whitelist_gate ;;
     cut-local) action_cut_local ;;
     probe-cloud) action_probe_cloud ;;
     compare) action_compare ;;
@@ -344,6 +394,14 @@ run_action_by_name() {
       return 2
       ;;
   esac
+}
+
+action_sample_whitelist_gate() {
+  local old_enforce
+  old_enforce="${whitelist_enforce}"
+  whitelist_enforce="true"
+  action_sample_whitelist
+  whitelist_enforce="${old_enforce}"
 }
 
 action_sample_whitelist() {
@@ -378,7 +436,7 @@ action_sample_whitelist() {
   artifact_json="${output_dir}/${artifact_ts}_openclaw_bridge_whitelist_24h.json"
   artifact_md="${output_dir}/${artifact_ts}_openclaw_bridge_whitelist_24h.md"
 
-  python3 - "$samples_log" "$sample_window_hours" "$artifact_json" "$artifact_md" "$artifact_ts" <<'PY'
+  python3 - "$samples_log" "$sample_window_hours" "$artifact_json" "$artifact_md" "$artifact_ts" "${whitelist_min_total_success_rate}" "${whitelist_min_action_success_rate}" "${whitelist_min_samples_per_action}" "${whitelist_required_actions}" "${whitelist_require_last_rc_zero}" <<'PY'
 import json
 import sys
 from collections import defaultdict
@@ -390,6 +448,11 @@ window_hours = int(sys.argv[2])
 artifact_json = Path(sys.argv[3])
 artifact_md = Path(sys.argv[4])
 artifact_ts = sys.argv[5]
+min_total_success_rate = float(sys.argv[6])
+min_action_success_rate = float(sys.argv[7])
+min_samples_per_action = int(sys.argv[8])
+required_actions = [x.strip() for x in str(sys.argv[9]).split(",") if x.strip()]
+require_last_rc_zero = str(sys.argv[10]).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 now = datetime.now(timezone.utc)
 cutoff = now - timedelta(hours=window_hours)
@@ -441,9 +504,33 @@ for action in sorted(by_action.keys()):
         }
     )
 
+row_by_action = {str(r["action"]): r for r in rows}
+
 total_samples = len(records)
 total_success = sum(1 for r in records if bool(r.get("ok", False)))
 total_rate = (total_success / total_samples) if total_samples else 0.0
+
+gate_reasons: list[str] = []
+if total_samples <= 0:
+    gate_reasons.append("no_samples_in_window")
+if total_rate < min_total_success_rate:
+    gate_reasons.append(f"total_success_rate({total_rate:.4f})<min_total({min_total_success_rate:.4f})")
+for action in required_actions:
+    row = row_by_action.get(action)
+    if row is None:
+        gate_reasons.append(f"missing_action:{action}")
+        continue
+    samples = int(row.get("samples", 0))
+    rate = float(row.get("success_rate", 0.0))
+    last_rc = row.get("last_rc", None)
+    if samples < min_samples_per_action:
+        gate_reasons.append(f"samples:{action}:{samples}<min({min_samples_per_action})")
+    if rate < min_action_success_rate:
+        gate_reasons.append(f"success_rate:{action}:{rate:.4f}<min({min_action_success_rate:.4f})")
+    if require_last_rc_zero and last_rc not in {0, None}:
+        gate_reasons.append(f"last_rc_nonzero:{action}:{last_rc}")
+
+gate_pass = len(gate_reasons) == 0
 
 summary = {
     "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -453,6 +540,15 @@ summary = {
     "total_success": total_success,
     "total_success_rate": round(total_rate, 4),
     "commands": rows,
+    "gate": {
+        "pass": bool(gate_pass),
+        "required_actions": required_actions,
+        "min_total_success_rate": round(min_total_success_rate, 4),
+        "min_action_success_rate": round(min_action_success_rate, 4),
+        "min_samples_per_action": int(min_samples_per_action),
+        "require_last_rc_zero": bool(require_last_rc_zero),
+        "reasons": gate_reasons,
+    },
 }
 artifact_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -463,6 +559,8 @@ lines = [
     f"- cutoff_utc: `{summary['cutoff_utc']}`",
     f"- total_samples: `{total_samples}`",
     f"- total_success_rate: `{summary['total_success_rate']:.4f}`",
+    f"- gate_pass: `{bool(summary['gate']['pass'])}`",
+    f"- gate_reasons: `{';'.join(summary['gate']['reasons']) if summary['gate']['reasons'] else 'none'}`",
     "",
     "| command | samples | success_rate | last_timestamp_utc | last_rc |",
     "| --- | ---: | ---: | --- | ---: |",
@@ -475,11 +573,32 @@ for row in rows:
 artifact_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 print(str(artifact_json))
 print(str(artifact_md))
+print(f"gate_pass={str(gate_pass).lower()}")
 PY
 
   echo "whitelist sample artifacts:"
   echo "  - ${artifact_json}"
   echo "  - ${artifact_md}"
+
+  local gate_pass
+  gate_pass="$(
+    python3 - "$artifact_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+try:
+    payload = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    print("false")
+    raise SystemExit(0)
+print("true" if bool(payload.get("gate", {}).get("pass", False)) else "false")
+PY
+  )"
+  if is_true "${whitelist_enforce}" && [[ "${gate_pass}" != "true" ]]; then
+    echo "FUSE: whitelist gate failed (see ${artifact_json})." >&2
+    return 3
+  fi
 }
 
 if (( $# != 1 )); then

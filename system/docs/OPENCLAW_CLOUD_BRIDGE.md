@@ -31,6 +31,7 @@ scripts/openclaw_cloud_bridge.sh remote-clean-junk
 scripts/openclaw_cloud_bridge.sh validate-remote-config
 scripts/openclaw_cloud_bridge.sh tunnel-down
 scripts/openclaw_cloud_bridge.sh sample-whitelist
+scripts/openclaw_cloud_bridge.sh sample-whitelist-gate
 ```
 
 ## Local forwarded ports
@@ -51,6 +52,20 @@ scripts/openclaw_cloud_bridge.sh sample-whitelist
 ```bash
 cd /Users/jokenrobot/Downloads/fenlie/system
 scripts/openclaw_cloud_bridge.sh sample-whitelist
+```
+- 熔断命令（失败返回码 `3`）：
+```bash
+cd /Users/jokenrobot/Downloads/fenlie/system
+WHITELIST_ENFORCE=true \
+WHITELIST_MIN_TOTAL_SUCCESS_RATE=0.95 \
+WHITELIST_MIN_ACTION_SUCCESS_RATE=0.80 \
+WHITELIST_MIN_SAMPLES_PER_ACTION=1 \
+scripts/openclaw_cloud_bridge.sh sample-whitelist
+```
+- 等价快捷命令：
+```bash
+cd /Users/jokenrobot/Downloads/fenlie/system
+scripts/openclaw_cloud_bridge.sh sample-whitelist-gate
 ```
 - 产物：
   - `output/review/*_openclaw_bridge_whitelist_24h.json`
