@@ -446,7 +446,7 @@ total_success = sum(1 for r in records if bool(r.get("ok", False)))
 total_rate = (total_success / total_samples) if total_samples else 0.0
 
 summary = {
-    "generated_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "window_hours": window_hours,
     "cutoff_utc": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
     "total_samples": total_samples,
