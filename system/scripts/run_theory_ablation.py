@@ -86,6 +86,16 @@ def _parse_gate_grid(raw: str) -> list[tuple[float, float, float, float]]:
     return out
 
 
+def _parse_exposure_grid(raw: str) -> list[float]:
+    out: list[float] = []
+    for block in [x.strip() for x in str(raw).split(",") if x.strip()]:
+        try:
+            out.append(float(block))
+        except ValueError:
+            continue
+    return out
+
+
 def _safe_div(x: float, y: float) -> float:
     if abs(y) <= 1e-12:
         return 0.0
@@ -348,6 +358,8 @@ def _render_markdown(
         lines.append("")
 
     best = max(cases, key=lambda x: x.objective) if cases else None
+    feasible = [x for x in cases if not bool(x.target_breached)]
+    best_feasible = max(feasible, key=lambda x: x.objective) if feasible else None
     lines.append("## Conclusion")
     if best is None:
         lines.append("- no case executed")
@@ -357,6 +369,16 @@ def _render_markdown(
             + f"best_by_objective: `{best.name}` "
             + f"(obj={best.objective:.4f}, ann_ret={best.annual_return:.4f}, mdd={best.max_drawdown:.4f}, trades={best.trades})"
         )
+    lines.append(f"- feasible_cases_under_target: `{len(feasible)}`")
+    if best_feasible is not None:
+        lines.append(
+            "- "
+            + f"best_feasible_case: `{best_feasible.name}` "
+            + f"(obj={best_feasible.objective:.4f}, ann_ret={best_feasible.annual_return:.4f}, "
+            + f"mdd={best_feasible.max_drawdown:.4f}, exp={best_feasible.exposure_scale:.2f})"
+        )
+    else:
+        lines.append("- best_feasible_case: `none`")
     lines.append("")
     return "\n".join(lines)
 
@@ -381,6 +403,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--proxy-lookback", type=int, default=180)
     parser.add_argument("--max-drawdown-target", type=float, default=0.05)
     parser.add_argument("--drawdown-soft-band", type=float, default=0.03)
+    parser.add_argument("--exposure-grid", default="", help="comma-separated exposure scan values, e.g. 1.0,0.6,0.3,0.2")
     parser.add_argument(
         "--weight-grid",
         default="1.0:1.0:1.2;1.2:1.0:1.3;1.2:1.1:1.3;1.4:0.9:1.2",
@@ -411,6 +434,7 @@ def main() -> int:
     symbols = _parse_symbols(args.symbols)
     weight_grid = _parse_weight_grid(args.weight_grid)
     gate_grid = _parse_gate_grid(args.gate_grid)
+    exposure_grid = _parse_exposure_grid(args.exposure_grid)
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -457,6 +481,9 @@ def main() -> int:
             "fallback_path": fallback_path,
             "bundle_fetch_stats": bundle.fetch_stats,
             "cases": [],
+            "risk_feasible": False,
+            "feasible_count": 0,
+            "best_feasible_case": {},
             "error": "no_bars_available_after_remote_and_local_fallback",
         }
         (run_dir / "summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -552,8 +579,35 @@ def main() -> int:
                 drawdown_soft_band=float(args.drawdown_soft_band),
             )
         )
+    for idx, exp in enumerate(exposure_grid, start=1):
+        cases.append(
+            _run_case(
+                name=f"exp_scan_{idx:02d}",
+                bars=bars,
+                start=start,
+                end=end,
+                signal_confidence_min=float(args.signal_confidence_min),
+                convexity_min=float(args.convexity_min),
+                max_daily_trades=int(args.max_daily_trades),
+                hold_days=int(args.hold_days),
+                exposure_scale=float(exp),
+                proxy_lookback=int(args.proxy_lookback),
+                theory_enabled=False,
+                theory_ict_weight=1.0,
+                theory_brooks_weight=1.0,
+                theory_lie_weight=1.2,
+                theory_confidence_boost_max=float(args.theory_confidence_boost_max),
+                theory_penalty_max=float(args.theory_penalty_max),
+                theory_min_confluence=float(args.theory_min_confluence),
+                theory_conflict_fuse=float(args.theory_conflict_fuse),
+                max_drawdown_target=float(args.max_drawdown_target),
+                drawdown_soft_band=float(args.drawdown_soft_band),
+            )
+        )
 
     t1 = datetime.now()
+    sorted_cases = sorted(cases, key=lambda x: x.objective, reverse=True)
+    feasible_cases = [x for x in sorted_cases if not bool(x.target_breached)]
     payload = {
         "started_at": t0.isoformat(),
         "ended_at": t1.isoformat(),
@@ -568,7 +622,10 @@ def main() -> int:
         "drawdown_soft_band": float(args.drawdown_soft_band),
         "fallback_path": fallback_path,
         "bundle_fetch_stats": bundle.fetch_stats,
-        "cases": [asdict(c) for c in sorted(cases, key=lambda x: x.objective, reverse=True)],
+        "cases": [asdict(c) for c in sorted_cases],
+        "risk_feasible": bool(feasible_cases),
+        "feasible_count": int(len(feasible_cases)),
+        "best_feasible_case": asdict(feasible_cases[0]) if feasible_cases else {},
     }
     (run_dir / "summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     report = _render_markdown(
@@ -578,7 +635,7 @@ def main() -> int:
         end=end,
         symbols=symbols,
         bars_rows=int(len(bars)),
-        cases=sorted(cases, key=lambda x: x.objective, reverse=True),
+        cases=sorted_cases,
         data_source=data_source,
         max_drawdown_target=float(args.max_drawdown_target),
         drawdown_soft_band=float(args.drawdown_soft_band),
