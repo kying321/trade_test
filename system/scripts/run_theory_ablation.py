@@ -198,7 +198,10 @@ def _load_local_fallback_bars(
         frame = frame[(frame["ts"].dt.date >= start) & (frame["ts"].dt.date <= end)]
         if frame.empty:
             return pd.DataFrame(), ""
-        filtered = frame[frame["symbol"].astype(str).isin(symbol_set)] if symbols else frame.copy()
+        if symbols:
+            filtered = frame[frame["symbol"].astype(str).isin(symbol_set)].copy()
+        else:
+            filtered = frame.copy()
         if "asset_class" not in frame.columns:
             frame["asset_class"] = "equity"
         if "source" not in frame.columns:
