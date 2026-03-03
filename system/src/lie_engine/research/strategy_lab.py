@@ -254,7 +254,7 @@ def _generate_candidates(
             "name": "trend_convex",
             "hold_days": 9,
             "max_daily_trades": 2,
-            "signal_confidence_min": 50.0,
+            "signal_confidence_min": 32.0,
             "convexity_min": 2.2,
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 0.9,
@@ -265,7 +265,7 @@ def _generate_candidates(
             "name": "report_momentum",
             "hold_days": 12,
             "max_daily_trades": 2,
-            "signal_confidence_min": 48.0,
+            "signal_confidence_min": 30.0,
             "convexity_min": 2.0,
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
@@ -276,7 +276,7 @@ def _generate_candidates(
             "name": "news_reversion",
             "hold_days": 5,
             "max_daily_trades": 3,
-            "signal_confidence_min": 45.0,
+            "signal_confidence_min": 26.0,
             "convexity_min": 1.8,
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 1.3,
@@ -287,7 +287,7 @@ def _generate_candidates(
             "name": "balanced_flow",
             "hold_days": 7,
             "max_daily_trades": 2,
-            "signal_confidence_min": 47.0,
+            "signal_confidence_min": 28.0,
             "convexity_min": 2.0,
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
@@ -298,7 +298,7 @@ def _generate_candidates(
             "name": "defensive_tail",
             "hold_days": 6,
             "max_daily_trades": 1,
-            "signal_confidence_min": 52.0,
+            "signal_confidence_min": 34.0,
             "convexity_min": 2.6,
             "theory_ict_weight": 0.9,
             "theory_brooks_weight": 1.3,
@@ -309,7 +309,7 @@ def _generate_candidates(
             "name": "aggressive_breakout",
             "hold_days": 4,
             "max_daily_trades": 4,
-            "signal_confidence_min": 43.0,
+            "signal_confidence_min": 24.0,
             "convexity_min": 1.6,
             "theory_ict_weight": 1.4,
             "theory_brooks_weight": 0.8,
@@ -338,7 +338,7 @@ def _generate_candidates(
         brooks_w = float(tpl["theory_brooks_weight"]) + 0.20 * max(0.0, vol) + 0.20 * max(0.0, -agree)
         lie_w = float(tpl["theory_lie_weight"]) + 0.25 * max(0.0, trend) - 0.12 * max(0.0, vol)
 
-        tpl["signal_confidence_min"] = _clip(conf, 28.0, 75.0)
+        tpl["signal_confidence_min"] = _clip(conf, 15.0, 72.0)
         tpl["convexity_min"] = _clip(convex, 1.0, 3.5)
         tpl["hold_days"] = int(max(1, min(20, hold)))
         tpl["max_daily_trades"] = int(max(1, min(5, trades)))
@@ -641,10 +641,20 @@ def run_strategy_lab(
             robustness_score=robustness,
         )
         accepted = (
-            float(valid_bt.positive_window_ratio) >= 0.70
+            int(valid_bt.trades) >= 5
+            and float(valid_bt.annual_return) > 0.0
+            and float(valid_bt.positive_window_ratio) >= 0.70
             and float(valid_bt.max_drawdown) <= 0.18
             and int(valid_bt.violations) == 0
-            and (review_bt is None or (float(review_bt.positive_window_ratio) >= 0.60 and float(review_bt.max_drawdown) <= 0.22))
+            and (
+                review_bt is None
+                or (
+                    int(review_bt.trades) >= 2
+                    and float(review_bt.annual_return) > 0.0
+                    and float(review_bt.positive_window_ratio) >= 0.60
+                    and float(review_bt.max_drawdown) <= 0.22
+                )
+            )
         )
         out_candidates.append(
             StrategyCandidateResult(
