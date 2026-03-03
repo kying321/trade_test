@@ -315,7 +315,7 @@ def _wall_clock_timeout(seconds: int):
         return
 
     def _handler(signum, frame):  # noqa: ARG001
-        raise TimeoutError(f"bundle load timed out after {timeout}s")
+        raise TimeoutError(f"operation timed out after {timeout}s")
 
     prev_handler = signal.getsignal(signal.SIGALRM)
     signal.signal(signal.SIGALRM, _handler)
@@ -404,6 +404,25 @@ def _load_bundle_with_recovery(
     raise RuntimeError(err_txt)
 
 
+def _execute_with_watchdog(
+    *,
+    label: str,
+    timeout_seconds: int,
+    retry_times: int,
+    run_fn: Callable[[], AblationCase],
+) -> tuple[AblationCase | None, list[str]]:
+    retries = max(0, int(retry_times))
+    max_attempts = 1 + retries
+    errors: list[str] = []
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with _wall_clock_timeout(timeout_seconds):
+                return run_fn(), errors
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"attempt={attempt} label={label} error={type(exc).__name__}:{exc}")
+    return None, errors
+
+
 def _auto_exposure_search(
     *,
     auto_low: float,
@@ -419,11 +438,18 @@ def _auto_exposure_search(
     probe_lo = float(low)
     probe_hi = float(high)
     probe_trace: list[dict[str, object]] = []
+    search_errors: list[str] = []
     best_feasible: AblationCase | None = None
 
     for i in range(iters):
         probe = 0.5 * (probe_lo + probe_hi)
-        probe_case = evaluate_case(f"exp_auto_probe_{i + 1:02d}", float(probe))
+        probe_name = f"exp_auto_probe_{i + 1:02d}"
+        try:
+            probe_case = evaluate_case(probe_name, float(probe))
+        except Exception as exc:  # noqa: BLE001
+            search_errors.append(f"{probe_name}:{type(exc).__name__}:{exc}")
+            probe_trace.append({"iter": int(i + 1), "probe_exposure": float(probe), "error": search_errors[-1]})
+            break
         probe_trace.append(
             {
                 "iter": int(i + 1),
@@ -442,30 +468,37 @@ def _auto_exposure_search(
             if best_feasible is None or float(probe_case.objective) > float(best_feasible.objective):
                 best_feasible = probe_case
 
-    refine_exposures = sorted(
-        {
-            float(round(probe_lo, 4)),
-            float(round(max(low, probe_lo * 0.92), 4)),
-            float(round(max(low, probe_lo * 0.84), 4)),
-            float(round(max(low, probe_lo - 0.02), 4)),
-        }
-    )
-    for idx, exposure in enumerate(refine_exposures, start=1):
-        refine_case = evaluate_case(f"exp_auto_refine_{idx:02d}", float(exposure))
-        probe_trace.append(
+    if not search_errors:
+        refine_exposures = sorted(
             {
-                "iter": int(iters + idx),
-                "probe_exposure": float(exposure),
-                "max_drawdown": float(refine_case.max_drawdown),
-                "drawdown_excess": float(refine_case.drawdown_excess),
-                "target_breached": bool(refine_case.target_breached),
-                "annual_return": float(refine_case.annual_return),
-                "objective": float(refine_case.objective),
+                float(round(probe_lo, 4)),
+                float(round(max(low, probe_lo * 0.92), 4)),
+                float(round(max(low, probe_lo * 0.84), 4)),
+                float(round(max(low, probe_lo - 0.02), 4)),
             }
         )
-        if not bool(refine_case.target_breached):
-            if best_feasible is None or float(refine_case.objective) > float(best_feasible.objective):
-                best_feasible = refine_case
+        for idx, exposure in enumerate(refine_exposures, start=1):
+            refine_name = f"exp_auto_refine_{idx:02d}"
+            try:
+                refine_case = evaluate_case(refine_name, float(exposure))
+            except Exception as exc:  # noqa: BLE001
+                search_errors.append(f"{refine_name}:{type(exc).__name__}:{exc}")
+                probe_trace.append({"iter": int(iters + idx), "probe_exposure": float(exposure), "error": search_errors[-1]})
+                break
+            probe_trace.append(
+                {
+                    "iter": int(iters + idx),
+                    "probe_exposure": float(exposure),
+                    "max_drawdown": float(refine_case.max_drawdown),
+                    "drawdown_excess": float(refine_case.drawdown_excess),
+                    "target_breached": bool(refine_case.target_breached),
+                    "annual_return": float(refine_case.annual_return),
+                    "objective": float(refine_case.objective),
+                }
+            )
+            if not bool(refine_case.target_breached):
+                if best_feasible is None or float(refine_case.objective) > float(best_feasible.objective):
+                    best_feasible = refine_case
 
     cfg = {
         "enabled": True,
@@ -476,6 +509,8 @@ def _auto_exposure_search(
         "best_exposure": None if best_feasible is None else float(best_feasible.exposure_scale),
         "best_case": {} if best_feasible is None else asdict(best_feasible),
         "trace": probe_trace,
+        "errors": search_errors,
+        "aborted": bool(search_errors),
     }
     return best_feasible, cfg
 
@@ -494,6 +529,7 @@ def _render_markdown(
     drawdown_soft_band: float,
     auto_exposure_search: dict[str, object] | None = None,
     bundle_load_guard: dict[str, object] | None = None,
+    execution_guard: dict[str, object] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# Theory Ablation Report | {ended_at[:19]}")
@@ -514,6 +550,13 @@ def _render_markdown(
         lines.append(f"- bundle_load_attempts: `{int(bundle_guard.get('attempts', 0))}`")
         lines.append(f"- bundle_load_timeout_seconds: `{int(bundle_guard.get('timeout_seconds', 0))}`")
         lines.append(f"- bundle_load_fallback_single_worker: `{int(bool(bundle_guard.get('fallback_to_single_worker', False)))}`")
+    exec_guard = execution_guard if isinstance(execution_guard, dict) else {}
+    if exec_guard:
+        lines.append(f"- case_timeout_seconds: `{int(exec_guard.get('case_timeout_seconds', 0))}`")
+        lines.append(f"- case_retry_times: `{int(exec_guard.get('case_retry_times', 0))}`")
+        lines.append(f"- case_failures: `{int(exec_guard.get('failure_count', 0))}`")
+        lines.append(f"- fuse_max_failures: `{int(exec_guard.get('fuse_max_failures', 0))}`")
+        lines.append(f"- fuse_triggered: `{int(bool(exec_guard.get('fuse_triggered', False)))}`")
     auto_cfg = auto_exposure_search if isinstance(auto_exposure_search, dict) else {}
     if bool(auto_cfg.get("enabled", False)):
         lines.append("- auto_exposure_search: `on`")
@@ -602,6 +645,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--bundle-load-timeout-seconds", type=int, default=180)
     parser.add_argument("--disable-single-worker-recovery", action="store_true")
+    parser.add_argument("--case-timeout-seconds", type=int, default=120)
+    parser.add_argument("--case-retry-times", type=int, default=1)
+    parser.add_argument("--fuse-max-failures", type=int, default=3)
     parser.add_argument("--signal-confidence-min", type=float, default=5.0)
     parser.add_argument("--convexity-min", type=float, default=0.3)
     parser.add_argument("--max-daily-trades", type=int, default=5)
@@ -649,6 +695,16 @@ def main() -> int:
     exposure_grid = _parse_exposure_grid(args.exposure_grid)
     auto_exposure_cfg: dict[str, object] = {"enabled": bool(args.auto_exposure_search)}
     bundle_load_guard: dict[str, object] = {}
+    execution_guard: dict[str, object] = {
+        "case_timeout_seconds": int(max(0, int(args.case_timeout_seconds))),
+        "case_retry_times": int(max(0, int(args.case_retry_times))),
+        "fuse_max_failures": int(max(1, int(args.fuse_max_failures))),
+        "failure_count": 0,
+        "failed_cases": [],
+        "fuse_triggered": False,
+        "fuse_reason": "",
+        "fuse_skipped_cases": [],
+    }
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -717,6 +773,7 @@ def main() -> int:
             "fallback_path": fallback_path,
             "bundle_fetch_stats": bundle.fetch_stats,
             "bundle_load_guard": bundle_load_guard,
+            "execution_guard": execution_guard,
             "cases": [],
             "risk_feasible": False,
             "feasible_count": 0,
@@ -738,25 +795,179 @@ def main() -> int:
             drawdown_soft_band=float(args.drawdown_soft_band),
             auto_exposure_search=auto_exposure_cfg,
             bundle_load_guard=bundle_load_guard,
+            execution_guard=execution_guard,
         )
         (run_dir / "report.md").write_text(report, encoding="utf-8")
         print(json.dumps({"run_dir": str(run_dir), "bars_rows": 0, "error": payload["error"]}, ensure_ascii=False, indent=2))
         return 2
 
     cases: list[AblationCase] = []
-    cases.append(
-        _run_case(
-            name="baseline_off",
-            bars=bars,
+    case_timeout_seconds = int(execution_guard["case_timeout_seconds"])
+    case_retry_times = int(execution_guard["case_retry_times"])
+    fuse_max_failures = int(execution_guard["fuse_max_failures"])
+    failure_count = 0
+    failed_case_entries: list[dict[str, object]] = []
+    fuse_triggered = False
+    fuse_skipped_cases: list[str] = []
+
+    common_case_kwargs = {
+        "bars": bars,
+        "start": start,
+        "end": end,
+        "signal_confidence_min": float(args.signal_confidence_min),
+        "convexity_min": float(args.convexity_min),
+        "max_daily_trades": int(args.max_daily_trades),
+        "hold_days": int(args.hold_days),
+        "proxy_lookback": int(args.proxy_lookback),
+        "max_drawdown_target": float(args.max_drawdown_target),
+        "drawdown_soft_band": float(args.drawdown_soft_band),
+    }
+
+    def _sync_execution_guard() -> None:
+        execution_guard["failure_count"] = int(failure_count)
+        execution_guard["failed_cases"] = failed_case_entries
+        execution_guard["fuse_triggered"] = bool(fuse_triggered)
+        execution_guard["fuse_skipped_cases"] = fuse_skipped_cases
+
+    def _register_failure(case_name: str, errors: list[str]) -> None:
+        nonlocal failure_count, fuse_triggered
+        failure_count += 1
+        failed_case_entries.append(
+            {
+                "case_name": case_name,
+                "attempts": int(1 + case_retry_times),
+                "errors": list(errors),
+            }
+        )
+        if (not fuse_triggered) and failure_count >= fuse_max_failures:
+            fuse_triggered = True
+            execution_guard["fuse_reason"] = (
+                f"failure_count({failure_count})>=fuse_max_failures({fuse_max_failures})"
+            )
+        _sync_execution_guard()
+
+    def _run_guarded_case(case_name: str, **case_kwargs) -> AblationCase | None:
+        case, errors = _execute_with_watchdog(
+            label=case_name,
+            timeout_seconds=case_timeout_seconds,
+            retry_times=case_retry_times,
+            run_fn=lambda: _run_case(name=case_name, **case_kwargs),
+        )
+        if case is not None:
+            return case
+        _register_failure(case_name, errors)
+        return None
+
+    baseline_case = _run_guarded_case(
+        "baseline_off",
+        **common_case_kwargs,
+        theory_enabled=False,
+        exposure_scale=float(args.exposure_scale),
+        theory_ict_weight=1.0,
+        theory_brooks_weight=1.0,
+        theory_lie_weight=1.2,
+        theory_confidence_boost_max=float(args.theory_confidence_boost_max),
+        theory_penalty_max=float(args.theory_penalty_max),
+        theory_min_confluence=float(args.theory_min_confluence),
+        theory_conflict_fuse=float(args.theory_conflict_fuse),
+    )
+    if baseline_case is None:
+        _sync_execution_guard()
+        t1 = datetime.now()
+        payload = {
+            "started_at": t0.isoformat(),
+            "ended_at": t1.isoformat(),
+            "elapsed_seconds": float((t1 - t0).total_seconds()),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "symbols": symbols,
+            "bars_rows": int(len(bars)),
+            "data_source": data_source,
+            "fallback_path": fallback_path,
+            "bundle_fetch_stats": bundle.fetch_stats,
+            "bundle_load_guard": bundle_load_guard,
+            "execution_guard": execution_guard,
+            "cases": [],
+            "risk_feasible": False,
+            "feasible_count": 0,
+            "best_feasible_case": {},
+            "auto_exposure_search": auto_exposure_cfg,
+            "error": "baseline_case_failed",
+        }
+        (run_dir / "summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        report = _render_markdown(
+            started_at=str(payload["started_at"]),
+            ended_at=str(payload["ended_at"]),
             start=start,
             end=end,
-            signal_confidence_min=float(args.signal_confidence_min),
-            convexity_min=float(args.convexity_min),
-            max_daily_trades=int(args.max_daily_trades),
-            hold_days=int(args.hold_days),
+            symbols=symbols,
+            bars_rows=int(len(bars)),
+            cases=[],
+            data_source=data_source,
+            max_drawdown_target=float(args.max_drawdown_target),
+            drawdown_soft_band=float(args.drawdown_soft_band),
+            auto_exposure_search=auto_exposure_cfg,
+            bundle_load_guard=bundle_load_guard,
+            execution_guard=execution_guard,
+        )
+        (run_dir / "report.md").write_text(report, encoding="utf-8")
+        print(json.dumps({"run_dir": str(run_dir), "bars_rows": int(len(bars)), "error": payload["error"]}, ensure_ascii=False, indent=2))
+        return 3
+    cases.append(baseline_case)
+
+    for idx, (w_ict, w_brooks, w_lie) in enumerate(weight_grid, start=1):
+        case_name = f"weight_on_{idx:02d}"
+        if fuse_triggered:
+            fuse_skipped_cases.append(case_name)
+            continue
+        c = _run_guarded_case(
+            case_name,
+            **common_case_kwargs,
+            theory_enabled=True,
             exposure_scale=float(args.exposure_scale),
-            proxy_lookback=int(args.proxy_lookback),
+            theory_ict_weight=float(w_ict),
+            theory_brooks_weight=float(w_brooks),
+            theory_lie_weight=float(w_lie),
+            theory_confidence_boost_max=float(args.theory_confidence_boost_max),
+            theory_penalty_max=float(args.theory_penalty_max),
+            theory_min_confluence=float(args.theory_min_confluence),
+            theory_conflict_fuse=float(args.theory_conflict_fuse),
+        )
+        if c is not None:
+            cases.append(c)
+
+    base_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
+    for idx, (boost, penalty, min_conf, cfuse) in enumerate(gate_grid, start=1):
+        case_name = f"gate_on_{idx:02d}"
+        if fuse_triggered:
+            fuse_skipped_cases.append(case_name)
+            continue
+        c = _run_guarded_case(
+            case_name,
+            **common_case_kwargs,
+            theory_enabled=True,
+            exposure_scale=float(args.exposure_scale),
+            theory_ict_weight=float(base_weights[0]),
+            theory_brooks_weight=float(base_weights[1]),
+            theory_lie_weight=float(base_weights[2]),
+            theory_confidence_boost_max=float(boost),
+            theory_penalty_max=float(penalty),
+            theory_min_confluence=float(min_conf),
+            theory_conflict_fuse=float(cfuse),
+        )
+        if c is not None:
+            cases.append(c)
+
+    for idx, exp in enumerate(exposure_grid, start=1):
+        case_name = f"exp_scan_{idx:02d}"
+        if fuse_triggered:
+            fuse_skipped_cases.append(case_name)
+            continue
+        c = _run_guarded_case(
+            case_name,
+            **common_case_kwargs,
             theory_enabled=False,
+            exposure_scale=float(exp),
             theory_ict_weight=1.0,
             theory_brooks_weight=1.0,
             theory_lie_weight=1.2,
@@ -764,124 +975,66 @@ def main() -> int:
             theory_penalty_max=float(args.theory_penalty_max),
             theory_min_confluence=float(args.theory_min_confluence),
             theory_conflict_fuse=float(args.theory_conflict_fuse),
-            max_drawdown_target=float(args.max_drawdown_target),
-            drawdown_soft_band=float(args.drawdown_soft_band),
         )
-    )
-    for idx, (w_ict, w_brooks, w_lie) in enumerate(weight_grid, start=1):
-        cases.append(
-            _run_case(
-                name=f"weight_on_{idx:02d}",
-                bars=bars,
-                start=start,
-                end=end,
-                signal_confidence_min=float(args.signal_confidence_min),
-                convexity_min=float(args.convexity_min),
-                max_daily_trades=int(args.max_daily_trades),
-                hold_days=int(args.hold_days),
-                exposure_scale=float(args.exposure_scale),
-                proxy_lookback=int(args.proxy_lookback),
-                theory_enabled=True,
-                theory_ict_weight=float(w_ict),
-                theory_brooks_weight=float(w_brooks),
-                theory_lie_weight=float(w_lie),
-                theory_confidence_boost_max=float(args.theory_confidence_boost_max),
-                theory_penalty_max=float(args.theory_penalty_max),
-                theory_min_confluence=float(args.theory_min_confluence),
-                theory_conflict_fuse=float(args.theory_conflict_fuse),
-                max_drawdown_target=float(args.max_drawdown_target),
-                drawdown_soft_band=float(args.drawdown_soft_band),
-            )
-        )
-    base_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
-    for idx, (boost, penalty, min_conf, cfuse) in enumerate(gate_grid, start=1):
-        cases.append(
-            _run_case(
-                name=f"gate_on_{idx:02d}",
-                bars=bars,
-                start=start,
-                end=end,
-                signal_confidence_min=float(args.signal_confidence_min),
-                convexity_min=float(args.convexity_min),
-                max_daily_trades=int(args.max_daily_trades),
-                hold_days=int(args.hold_days),
-                exposure_scale=float(args.exposure_scale),
-                proxy_lookback=int(args.proxy_lookback),
-                theory_enabled=True,
-                theory_ict_weight=float(base_weights[0]),
-                theory_brooks_weight=float(base_weights[1]),
-                theory_lie_weight=float(base_weights[2]),
-                theory_confidence_boost_max=float(boost),
-                theory_penalty_max=float(penalty),
-                theory_min_confluence=float(min_conf),
-                theory_conflict_fuse=float(cfuse),
-                max_drawdown_target=float(args.max_drawdown_target),
-                drawdown_soft_band=float(args.drawdown_soft_band),
-            )
-        )
-    for idx, exp in enumerate(exposure_grid, start=1):
-        cases.append(
-            _run_case(
-                name=f"exp_scan_{idx:02d}",
-                bars=bars,
-                start=start,
-                end=end,
-                signal_confidence_min=float(args.signal_confidence_min),
-                convexity_min=float(args.convexity_min),
-                max_daily_trades=int(args.max_daily_trades),
-                hold_days=int(args.hold_days),
-                exposure_scale=float(exp),
-                proxy_lookback=int(args.proxy_lookback),
-                theory_enabled=False,
-                theory_ict_weight=1.0,
-                theory_brooks_weight=1.0,
-                theory_lie_weight=1.2,
-                theory_confidence_boost_max=float(args.theory_confidence_boost_max),
-                theory_penalty_max=float(args.theory_penalty_max),
-                theory_min_confluence=float(args.theory_min_confluence),
-                theory_conflict_fuse=float(args.theory_conflict_fuse),
-                max_drawdown_target=float(args.max_drawdown_target),
-                drawdown_soft_band=float(args.drawdown_soft_band),
-            )
-        )
+        if c is not None:
+            cases.append(c)
+
     if bool(args.auto_exposure_search):
+        auto_low = max(0.05, float(min(args.auto_exposure_low, args.auto_exposure_high)))
+        auto_high = min(1.50, float(max(auto_low, args.auto_exposure_high)))
+        auto_iters = max(1, int(args.auto_exposure_iters))
         auto_theory = bool(args.auto_exposure_theory)
         auto_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
-        def _evaluate_auto_case(name: str, exposure: float) -> AblationCase:
-            return _run_case(
-                name=name,
-                bars=bars,
-                start=start,
-                end=end,
-                signal_confidence_min=float(args.signal_confidence_min),
-                convexity_min=float(args.convexity_min),
-                max_daily_trades=int(args.max_daily_trades),
-                hold_days=int(args.hold_days),
-                exposure_scale=float(exposure),
-                proxy_lookback=int(args.proxy_lookback),
-                theory_enabled=auto_theory,
-                theory_ict_weight=float(auto_weights[0]),
-                theory_brooks_weight=float(auto_weights[1]),
-                theory_lie_weight=float(auto_weights[2]),
-                theory_confidence_boost_max=float(args.theory_confidence_boost_max),
-                theory_penalty_max=float(args.theory_penalty_max),
-                theory_min_confluence=float(args.theory_min_confluence),
-                theory_conflict_fuse=float(args.theory_conflict_fuse),
-                max_drawdown_target=float(args.max_drawdown_target),
-                drawdown_soft_band=float(args.drawdown_soft_band),
-            )
+        if fuse_triggered:
+            auto_exposure_cfg = {
+                "enabled": True,
+                "low": float(auto_low),
+                "high": float(auto_high),
+                "iterations": int(auto_iters),
+                "theory_enabled": bool(auto_theory),
+                "best_exposure": None,
+                "best_case": {},
+                "trace": [],
+                "errors": [str(execution_guard.get("fuse_reason", "fuse_triggered"))],
+                "aborted": True,
+                "skipped_due_to_fuse": True,
+            }
+        else:
 
-        best_feasible, auto_exposure_cfg = _auto_exposure_search(
-            auto_low=float(args.auto_exposure_low),
-            auto_high=float(args.auto_exposure_high),
-            auto_iters=int(args.auto_exposure_iters),
-            theory_enabled=bool(auto_theory),
-            evaluate_case=_evaluate_auto_case,
-        )
-        if best_feasible is not None:
-            best_payload = asdict(best_feasible)
-            best_payload["name"] = "exp_auto_best"
-            cases.append(AblationCase(**best_payload))
+            def _evaluate_auto_case(name: str, exposure: float) -> AblationCase:
+                c = _run_guarded_case(
+                    name,
+                    **common_case_kwargs,
+                    theory_enabled=auto_theory,
+                    exposure_scale=float(exposure),
+                    theory_ict_weight=float(auto_weights[0]),
+                    theory_brooks_weight=float(auto_weights[1]),
+                    theory_lie_weight=float(auto_weights[2]),
+                    theory_confidence_boost_max=float(args.theory_confidence_boost_max),
+                    theory_penalty_max=float(args.theory_penalty_max),
+                    theory_min_confluence=float(args.theory_min_confluence),
+                    theory_conflict_fuse=float(args.theory_conflict_fuse),
+                )
+                if c is None:
+                    raise RuntimeError("case_execution_failed")
+                return c
+
+            best_feasible, auto_exposure_cfg = _auto_exposure_search(
+                auto_low=float(auto_low),
+                auto_high=float(auto_high),
+                auto_iters=int(auto_iters),
+                theory_enabled=bool(auto_theory),
+                evaluate_case=_evaluate_auto_case,
+            )
+            if best_feasible is not None:
+                best_payload = asdict(best_feasible)
+                best_payload["name"] = "exp_auto_best"
+                cases.append(AblationCase(**best_payload))
+            if fuse_triggered:
+                auto_exposure_cfg = dict(auto_exposure_cfg)
+                auto_exposure_cfg["skipped_due_to_fuse"] = True
+
+    _sync_execution_guard()
 
     t1 = datetime.now()
     sorted_cases = sorted(cases, key=lambda x: x.objective, reverse=True)
@@ -901,6 +1054,7 @@ def main() -> int:
         "fallback_path": fallback_path,
         "bundle_fetch_stats": bundle.fetch_stats,
         "bundle_load_guard": bundle_load_guard,
+        "execution_guard": execution_guard,
         "cases": [asdict(c) for c in sorted_cases],
         "risk_feasible": bool(feasible_cases),
         "feasible_count": int(len(feasible_cases)),
@@ -921,6 +1075,7 @@ def main() -> int:
         drawdown_soft_band=float(args.drawdown_soft_band),
         auto_exposure_search=auto_exposure_cfg,
         bundle_load_guard=bundle_load_guard,
+        execution_guard=execution_guard,
     )
     (run_dir / "report.md").write_text(report, encoding="utf-8")
 

@@ -344,6 +344,139 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(str(cfg.get("best_case", {}).get("name", "")), str(best_case.name))
         self.assertLessEqual(float(best_case.max_drawdown), 0.05)
 
+    def test_theory_ablation_execute_with_watchdog_retry_success(self) -> None:
+        ab_mod = _load_theory_ablation_module()
+
+        base_case = ab_mod.AblationCase(
+            name="ok_case",
+            theory_enabled=False,
+            exposure_scale=0.2,
+            theory_ict_weight=1.0,
+            theory_brooks_weight=1.0,
+            theory_lie_weight=1.2,
+            theory_confidence_boost_max=5.0,
+            theory_penalty_max=6.0,
+            theory_min_confluence=0.38,
+            theory_conflict_fuse=0.72,
+            annual_return=0.02,
+            max_drawdown=0.04,
+            drawdown_excess=0.0,
+            target_breached=False,
+            positive_window_ratio=0.7,
+            profit_factor=1.1,
+            win_rate=0.5,
+            trades=3,
+            violations=0,
+            sharpe_like=0.2,
+            objective=0.1,
+        )
+        call_count = {"n": 0}
+
+        def _flaky():  # type: ignore[no-untyped-def]
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("transient")
+            return base_case
+
+        out, errors = ab_mod._execute_with_watchdog(
+            label="flaky_case",
+            timeout_seconds=0,
+            retry_times=2,
+            run_fn=_flaky,
+        )
+        self.assertIsNotNone(out)
+        self.assertEqual(call_count["n"], 2)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("transient", errors[0])
+
+    def test_theory_ablation_auto_exposure_search_abort_on_error(self) -> None:
+        ab_mod = _load_theory_ablation_module()
+
+        counter = {"n": 0}
+
+        def _eval_case(name: str, exposure: float):  # type: ignore[no-untyped-def]
+            counter["n"] += 1
+            if counter["n"] == 2:
+                raise RuntimeError("probe_failed")
+            return ab_mod.AblationCase(
+                name=name,
+                theory_enabled=False,
+                exposure_scale=float(exposure),
+                theory_ict_weight=1.0,
+                theory_brooks_weight=1.0,
+                theory_lie_weight=1.2,
+                theory_confidence_boost_max=5.0,
+                theory_penalty_max=6.0,
+                theory_min_confluence=0.38,
+                theory_conflict_fuse=0.72,
+                annual_return=0.01,
+                max_drawdown=0.03,
+                drawdown_excess=0.0,
+                target_breached=False,
+                positive_window_ratio=0.6,
+                profit_factor=1.1,
+                win_rate=0.4,
+                trades=2,
+                violations=0,
+                sharpe_like=0.1,
+                objective=0.05,
+            )
+
+        best_case, cfg = ab_mod._auto_exposure_search(
+            auto_low=0.08,
+            auto_high=0.20,
+            auto_iters=3,
+            theory_enabled=False,
+            evaluate_case=_eval_case,
+        )
+        self.assertIsNotNone(best_case)
+        self.assertTrue(bool(cfg.get("aborted", False)))
+        self.assertGreaterEqual(len(cfg.get("errors", [])), 1)
+        self.assertIn("probe_failed", str(cfg.get("errors", [""])[0]))
+
+    def test_theory_ablation_render_markdown_includes_execution_guard(self) -> None:
+        ab_mod = _load_theory_ablation_module()
+        sample = ab_mod.AblationCase(
+            name="baseline_off",
+            theory_enabled=False,
+            exposure_scale=0.2,
+            theory_ict_weight=1.0,
+            theory_brooks_weight=1.0,
+            theory_lie_weight=1.2,
+            theory_confidence_boost_max=5.0,
+            theory_penalty_max=6.0,
+            theory_min_confluence=0.38,
+            theory_conflict_fuse=0.72,
+            annual_return=0.01,
+            max_drawdown=0.03,
+            drawdown_excess=0.0,
+            target_breached=False,
+            positive_window_ratio=0.6,
+            profit_factor=1.1,
+            win_rate=0.4,
+            trades=2,
+            violations=0,
+            sharpe_like=0.1,
+            objective=0.05,
+        )
+        md = ab_mod._render_markdown(
+            started_at="2026-03-04T00:00:00",
+            ended_at="2026-03-04T00:00:01",
+            start=date(2025, 1, 1),
+            end=date(2025, 1, 31),
+            symbols=["300750"],
+            bars_rows=100,
+            cases=[sample],
+            data_source="mock",
+            max_drawdown_target=0.05,
+            drawdown_soft_band=0.03,
+            auto_exposure_search={"enabled": False},
+            bundle_load_guard={"requested_workers": 2, "effective_workers": 1, "attempts": 2, "timeout_seconds": 60, "fallback_to_single_worker": True},
+            execution_guard={"case_timeout_seconds": 30, "case_retry_times": 1, "failure_count": 2, "fuse_max_failures": 3, "fuse_triggered": True},
+        )
+        self.assertIn("case_timeout_seconds", md)
+        self.assertIn("fuse_triggered", md)
+
     def test_theory_ablation_bundle_load_recovery_single_worker(self) -> None:
         ab_mod = _load_theory_ablation_module()
 
