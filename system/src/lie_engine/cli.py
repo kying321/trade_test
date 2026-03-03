@@ -5,8 +5,6 @@ from datetime import date, datetime
 import json
 
 from lie_engine.config import load_settings, validate_settings
-from lie_engine.engine import LieEngine
-from lie_engine.models import BacktestResult, ReviewDelta
 
 
 def _parse_date(s: str) -> date:
@@ -136,6 +134,8 @@ def main() -> None:
         settings = load_settings(args.config)
         out = validate_settings(settings)
     else:
+        from lie_engine.engine import LieEngine
+
         eng = LieEngine(config_path=args.config)
 
     if args.cmd == "validate-config":
@@ -152,7 +152,7 @@ def main() -> None:
         symbols = [x.strip() for x in str(args.symbols).split(",") if x.strip()]
         out = eng.run_micro_capture(as_of=_parse_date(args.date), symbols=symbols if symbols else None)
     elif args.cmd == "backtest":
-        result: BacktestResult = eng.run_backtest(start=_parse_date(args.start), end=_parse_date(args.end))
+        result = eng.run_backtest(start=_parse_date(args.start), end=_parse_date(args.end))
         out = result.to_dict()
     elif args.cmd == "research-backtest":
         out = eng.run_research_backtest(
@@ -181,7 +181,7 @@ def main() -> None:
             drawdown_soft_band=float(args.drawdown_soft_band),
         )
     elif args.cmd == "review":
-        result2: ReviewDelta = eng.run_review(as_of=_parse_date(args.date))
+        result2 = eng.run_review(as_of=_parse_date(args.date))
         out = result2.to_dict()
     elif args.cmd == "run-review-cycle":
         out = eng.run_review_cycle(
