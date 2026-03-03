@@ -11,6 +11,7 @@ Actions:
   sample-whitelist        Run whitelist sampling and render 24h success report.
   sample-whitelist-gate   Run sampling and fail-fast when whitelist gate is red.
   assert-whitelist-gate   Assert latest whitelist artifact gate without resampling.
+  ensure-whitelist-gate   Assert first, then auto-resample+reassert on failure.
   cut-local               Disable local OpenClaw launchd services.
   probe-cloud             Probe cloud host/project availability.
   compare                 Compare local/remote git heads.
@@ -192,6 +193,7 @@ validate-remote-config
 sample-whitelist
 sample-whitelist-gate
 assert-whitelist-gate
+ensure-whitelist-gate
 WL
 }
 
@@ -385,6 +387,7 @@ run_action_by_name() {
     sample-whitelist) action_sample_whitelist ;;
     sample-whitelist-gate) action_sample_whitelist_gate ;;
     assert-whitelist-gate) action_assert_whitelist_gate ;;
+    ensure-whitelist-gate) action_ensure_whitelist_gate ;;
     cut-local) action_cut_local ;;
     probe-cloud) action_probe_cloud ;;
     compare) action_compare ;;
@@ -493,6 +496,38 @@ print(
     + f"age_minutes={age_minutes:.1f}; total_success_rate={total_success_rate:.4f}"
 )
 PY
+}
+
+action_ensure_whitelist_gate() {
+  set +e
+  action_assert_whitelist_gate
+  local rc_assert=$?
+  set -e
+  if (( rc_assert == 0 )); then
+    echo "ENSURE PASS: whitelist assert passed without resample."
+    return 0
+  fi
+
+  echo "ensure-whitelist-gate: assert failed (rc=${rc_assert}), running sample-whitelist-gate for recovery..."
+  set +e
+  action_sample_whitelist_gate
+  local rc_sample=$?
+  set -e
+  if (( rc_sample != 0 )); then
+    echo "FUSE: ensure-whitelist-gate failed after resample (sample_rc=${rc_sample})." >&2
+    return 3
+  fi
+
+  set +e
+  action_assert_whitelist_gate
+  local rc_assert2=$?
+  set -e
+  if (( rc_assert2 != 0 )); then
+    echo "FUSE: ensure-whitelist-gate assert failed after successful sample (assert_rc=${rc_assert2})." >&2
+    return 3
+  fi
+  echo "ENSURE PASS: whitelist gate recovered via resample."
+  return 0
 }
 
 action_sample_whitelist() {
