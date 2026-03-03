@@ -3638,6 +3638,9 @@ class LieEngine:
         workers: int = 8,
         review_days: int = 5,
         candidate_count: int = 10,
+        max_drawdown_target: float = 0.05,
+        review_max_drawdown_target: float = 0.07,
+        drawdown_soft_band: float = 0.03,
     ) -> dict[str, Any]:
         summary = run_strategy_lab_pipeline(
             output_root=self.ctx.output_dir,
@@ -3649,6 +3652,9 @@ class LieEngine:
             workers=workers,
             review_days=review_days,
             candidate_count=candidate_count,
+            max_drawdown_target=max_drawdown_target,
+            review_max_drawdown_target=review_max_drawdown_target,
+            drawdown_soft_band=drawdown_soft_band,
         )
         payload = summary.to_dict()
         manifest_path = write_run_manifest(
@@ -3679,6 +3685,9 @@ class LieEngine:
                 "review_news_max_ts": str(payload.get("review_news_max_ts", "")),
                 "review_report_max_ts": str(payload.get("review_report_max_ts", "")),
                 "review_days": int(payload.get("review_days", 0)),
+                "max_drawdown_target": float(payload.get("max_drawdown_target", 0.0)),
+                "review_max_drawdown_target": float(payload.get("review_max_drawdown_target", 0.0)),
+                "drawdown_soft_band": float(payload.get("drawdown_soft_band", 0.0)),
                 "term_registry_version": str(payload.get("term_registry", {}).get("version", "")),
                 "term_registry_checksum_sha256": str(payload.get("term_registry", {}).get("checksum_sha256", "")),
                 "term_registry_atoms_total": int(payload.get("term_registry", {}).get("atoms_total", 0)),

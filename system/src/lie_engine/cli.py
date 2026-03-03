@@ -59,6 +59,9 @@ def main() -> None:
     p_sl.add_argument("--workers", default="8")
     p_sl.add_argument("--review-days", default="5")
     p_sl.add_argument("--candidate-count", default="10")
+    p_sl.add_argument("--max-drawdown-target", default="0.05")
+    p_sl.add_argument("--review-max-drawdown-target", default="0.07")
+    p_sl.add_argument("--drawdown-soft-band", default="0.03")
 
     p_rv = sub.add_parser("review", help="Run post-market review and parameter update")
     p_rv.add_argument("--date", required=True)
@@ -173,6 +176,9 @@ def main() -> None:
             workers=int(args.workers),
             review_days=int(args.review_days),
             candidate_count=int(args.candidate_count),
+            max_drawdown_target=float(args.max_drawdown_target),
+            review_max_drawdown_target=float(args.review_max_drawdown_target),
+            drawdown_soft_band=float(args.drawdown_soft_band),
         )
     elif args.cmd == "review":
         result2: ReviewDelta = eng.run_review(as_of=_parse_date(args.date))
