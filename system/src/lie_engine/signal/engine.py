@@ -16,6 +16,7 @@ from lie_engine.regime import (
 )
 from lie_engine.signal.features import add_common_features
 from lie_engine.signal.range_engine import score_range
+from lie_engine.signal.theory import TheoryConfluenceResult, compute_theory_confluence
 from lie_engine.signal.trend import score_trend
 
 
@@ -41,6 +42,14 @@ class SignalEngineConfig:
     micro_confidence_boost_max: float = 8.0
     micro_penalty_max: float = 10.0
     micro_min_trade_count: int = 30
+    theory_enabled: bool = False
+    theory_ict_weight: float = 1.0
+    theory_brooks_weight: float = 1.0
+    theory_lie_weight: float = 1.2
+    theory_confidence_boost_max: float = 5.0
+    theory_penalty_max: float = 6.0
+    theory_min_confluence: float = 0.38
+    theory_conflict_fuse: float = 0.72
 
 
 def _bounded(value: float, low: float, high: float) -> float:
@@ -416,6 +425,49 @@ def _microstructure_adjustment(
     return boost, penalty, flags, signed_signal
 
 
+def _theory_adjustment(
+    *,
+    side: Side,
+    regime: RegimeLabel,
+    cfg: SignalEngineConfig,
+    df: pd.DataFrame,
+    score_ratio: float,
+) -> tuple[float, float, list[str], TheoryConfluenceResult | None]:
+    if not bool(cfg.theory_enabled):
+        return 0.0, 0.0, [], None
+    if side == Side.FLAT:
+        return 0.0, 0.0, ["theory_flat_side"], None
+
+    result = compute_theory_confluence(
+        df=df,
+        side=side,
+        regime=regime,
+        lie_score_ratio=_bounded(score_ratio, 0.0, 1.0),
+        ict_weight=float(cfg.theory_ict_weight),
+        brooks_weight=float(cfg.theory_brooks_weight),
+        lie_weight=float(cfg.theory_lie_weight),
+    )
+    boost = float(result.confluence) * float(cfg.theory_confidence_boost_max)
+    penalty = float(result.conflict) * float(cfg.theory_penalty_max)
+    flags = list(result.flags)
+
+    if float(result.conflict) >= float(cfg.theory_conflict_fuse):
+        penalty += 0.25 * float(cfg.theory_penalty_max)
+        flags.append("theory_conflict_fuse")
+
+    if float(result.confluence) < float(cfg.theory_min_confluence):
+        shortfall = (float(cfg.theory_min_confluence) - float(result.confluence)) / max(float(cfg.theory_min_confluence), 1e-9)
+        penalty += shortfall * 0.35 * float(cfg.theory_penalty_max)
+        flags.append("theory_confluence_low")
+
+    if float(result.confluence) > float(result.conflict) + 0.25:
+        boost += 0.15 * float(cfg.theory_confidence_boost_max)
+        flags.append("theory_resonance")
+
+    penalty = min(float(cfg.theory_penalty_max) * 1.8, penalty)
+    return boost, penalty, flags, result
+
+
 def generate_signal_for_symbol(
     symbol_df: pd.DataFrame,
     regime: RegimeLabel,
@@ -466,12 +518,19 @@ def generate_signal_for_symbol(
         return None
 
     factor_penalty = min(float(cfg.factor_penalty_max), factor_risk_score * float(cfg.factor_penalty_max))
+    theory_boost, theory_penalty, theory_flags, theory_state = _theory_adjustment(
+        side=side,
+        regime=regime,
+        cfg=cfg,
+        df=df,
+        score_ratio=score_ratio,
+    )
     micro_boost, micro_penalty, micro_flags, micro_signed = _microstructure_adjustment(
         side=side,
         cfg=cfg,
         micro_factor_state=micro_factor_state,
     )
-    confidence = _bounded(raw_confidence - factor_penalty + micro_boost - micro_penalty, 0.0, 100.0)
+    confidence = _bounded(raw_confidence - factor_penalty + theory_boost + micro_boost - theory_penalty - micro_penalty, 0.0, 100.0)
     close = float(cur["close"])
     atr = float(cur["atr14"])
     atr_pct = atr / max(close, 1e-9)
@@ -498,6 +557,17 @@ def generate_signal_for_symbol(
         note = f"Regime: {regime.value}; target_mult={reward_mult:.2f}"
     if factor_flags:
         note += " | factor=" + ",".join(factor_flags)
+    if theory_flags:
+        note += " | theory_flags=" + ",".join(theory_flags)
+    if theory_state is not None:
+        note += (
+            " | theory="
+            + f"conf={float(theory_state.confluence):.3f},"
+            + f"conflict={float(theory_state.conflict):.3f},"
+            + f"ict={float(theory_state.ict_align):.3f},"
+            + f"brooks={float(theory_state.brooks_align):.3f},"
+            + f"lie={float(theory_state.lie_align):.3f}"
+        )
     if micro_flags:
         note += " | micro_flags=" + ",".join(micro_flags)
     if isinstance(micro_factor_state, dict) and bool(micro_factor_state.get("has_data", False)):
@@ -532,8 +602,8 @@ def generate_signal_for_symbol(
         target_price=target,
         can_short=can_short,
         factor_exposure_score=float(factor_risk_score),
-        factor_penalty=float(factor_penalty + micro_penalty),
-        factor_flags=factor_flags + micro_flags,
+        factor_penalty=float(factor_penalty + theory_penalty + micro_penalty),
+        factor_flags=list(dict.fromkeys(factor_flags + theory_flags + micro_flags)),
         notes=note,
     )
 

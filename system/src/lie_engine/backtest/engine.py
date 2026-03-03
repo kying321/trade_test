@@ -21,6 +21,14 @@ class BacktestConfig:
     regime_recalc_interval: int = 5
     signal_eval_interval: int = 2
     proxy_lookback: int = 180
+    theory_enabled: bool = False
+    theory_ict_weight: float = 1.0
+    theory_brooks_weight: float = 1.0
+    theory_lie_weight: float = 1.2
+    theory_confidence_boost_max: float = 5.0
+    theory_penalty_max: float = 6.0
+    theory_min_confluence: float = 0.38
+    theory_conflict_fuse: float = 0.72
 
 
 SHORTABLE_ASSET = {"future", "option", "hedge"}
@@ -150,7 +158,18 @@ def run_event_backtest(
         sigs = scan_signals(
             bars=day_universe,
             regime=regime.consensus,
-            cfg=SignalEngineConfig(confidence_min=cfg.signal_confidence_min, convexity_min=cfg.convexity_min),
+            cfg=SignalEngineConfig(
+                confidence_min=cfg.signal_confidence_min,
+                convexity_min=cfg.convexity_min,
+                theory_enabled=bool(cfg.theory_enabled),
+                theory_ict_weight=float(cfg.theory_ict_weight),
+                theory_brooks_weight=float(cfg.theory_brooks_weight),
+                theory_lie_weight=float(cfg.theory_lie_weight),
+                theory_confidence_boost_max=float(cfg.theory_confidence_boost_max),
+                theory_penalty_max=float(cfg.theory_penalty_max),
+                theory_min_confluence=float(cfg.theory_min_confluence),
+                theory_conflict_fuse=float(cfg.theory_conflict_fuse),
+            ),
         )
         sigs = sigs[: cfg.max_daily_trades]
 
