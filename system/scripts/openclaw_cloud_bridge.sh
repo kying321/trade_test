@@ -10,6 +10,7 @@ Actions:
   whitelist               Print executable action whitelist.
   sample-whitelist        Run whitelist sampling and render 24h success report.
   sample-whitelist-gate   Run sampling and fail-fast when whitelist gate is red.
+  assert-whitelist-gate   Assert latest whitelist artifact gate without resampling.
   cut-local               Disable local OpenClaw launchd services.
   probe-cloud             Probe cloud host/project availability.
   compare                 Compare local/remote git heads.
@@ -36,6 +37,7 @@ Environment:
   WHITELIST_MIN_SAMPLES_PER_ACTION   default: 1
   WHITELIST_REQUIRE_LAST_RC_ZERO     default: true
   WHITELIST_REQUIRED_ACTIONS         default: probe-cloud,compare,tunnel-up,tunnel-probe,validate-remote-config,tunnel-down,sync-dry-run
+  WHITELIST_ASSERT_MAX_AGE_MINUTES   default: 90 (artifact freshness guard)
 
 Notes:
   - SSH connect timeout is hard-limited to 5s for bridge reliability checks.
@@ -84,6 +86,7 @@ whitelist_min_action_success_rate="${WHITELIST_MIN_ACTION_SUCCESS_RATE:-0.80}"
 whitelist_min_samples_per_action="${WHITELIST_MIN_SAMPLES_PER_ACTION:-1}"
 whitelist_require_last_rc_zero="${WHITELIST_REQUIRE_LAST_RC_ZERO:-true}"
 whitelist_required_actions="${WHITELIST_REQUIRED_ACTIONS:-probe-cloud,compare,tunnel-up,tunnel-probe,validate-remote-config,tunnel-down,sync-dry-run}"
+whitelist_assert_max_age_minutes="${WHITELIST_ASSERT_MAX_AGE_MINUTES:-90}"
 
 output_dir="${system_root}/output/review"
 log_dir="${system_root}/output/logs"
@@ -102,6 +105,10 @@ if ! [[ "${sample_window_hours}" =~ ^[0-9]+$ ]] || (( sample_window_hours <= 0 )
 fi
 if ! [[ "${whitelist_min_samples_per_action}" =~ ^[0-9]+$ ]] || (( whitelist_min_samples_per_action <= 0 )); then
   echo "ERROR: WHITELIST_MIN_SAMPLES_PER_ACTION must be a positive integer." >&2
+  exit 2
+fi
+if ! [[ "${whitelist_assert_max_age_minutes}" =~ ^[0-9]+$ ]] || (( whitelist_assert_max_age_minutes <= 0 )); then
+  echo "ERROR: WHITELIST_ASSERT_MAX_AGE_MINUTES must be a positive integer." >&2
   exit 2
 fi
 
@@ -184,6 +191,7 @@ remote-clean-junk
 validate-remote-config
 sample-whitelist
 sample-whitelist-gate
+assert-whitelist-gate
 WL
 }
 
@@ -376,6 +384,7 @@ run_action_by_name() {
     whitelist) action_whitelist ;;
     sample-whitelist) action_sample_whitelist ;;
     sample-whitelist-gate) action_sample_whitelist_gate ;;
+    assert-whitelist-gate) action_assert_whitelist_gate ;;
     cut-local) action_cut_local ;;
     probe-cloud) action_probe_cloud ;;
     compare) action_compare ;;
@@ -402,6 +411,88 @@ action_sample_whitelist_gate() {
   whitelist_enforce="true"
   action_sample_whitelist
   whitelist_enforce="${old_enforce}"
+}
+
+action_assert_whitelist_gate() {
+  local latest_json
+  latest_json="$(ls -1t "${output_dir}"/*_openclaw_bridge_whitelist_24h.json 2>/dev/null | head -n 1 || true)"
+  if [[ -z "${latest_json}" || ! -f "${latest_json}" ]]; then
+    echo "FUSE: missing whitelist artifact under ${output_dir}" >&2
+    return 3
+  fi
+
+  python3 - "$latest_json" "${whitelist_assert_max_age_minutes}" "${whitelist_min_total_success_rate}" "${whitelist_min_action_success_rate}" "${whitelist_min_samples_per_action}" "${whitelist_required_actions}" "${whitelist_require_last_rc_zero}" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+artifact = Path(sys.argv[1])
+max_age_minutes = int(sys.argv[2])
+min_total_success_rate = float(sys.argv[3])
+min_action_success_rate = float(sys.argv[4])
+min_samples_per_action = int(sys.argv[5])
+required_actions = [x.strip() for x in str(sys.argv[6]).split(",") if x.strip()]
+require_last_rc_zero = str(sys.argv[7]).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+try:
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"FUSE: invalid artifact json: {artifact} ({exc})", file=sys.stderr)
+    raise SystemExit(3)
+
+generated = str(payload.get("generated_at_utc", ""))
+try:
+    generated_dt = datetime.strptime(generated, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+except Exception:
+    generated_dt = datetime.fromtimestamp(artifact.stat().st_mtime, tz=timezone.utc)
+age_minutes = max(0.0, (datetime.now(timezone.utc) - generated_dt).total_seconds() / 60.0)
+
+rows = payload.get("commands", [])
+if not isinstance(rows, list):
+    rows = []
+row_by_action: dict[str, dict] = {}
+for row in rows:
+    if isinstance(row, dict):
+        row_by_action[str(row.get("action", ""))] = row
+
+total_success_rate = float(payload.get("total_success_rate", 0.0))
+reasons: list[str] = []
+if age_minutes > float(max_age_minutes):
+    reasons.append(f"artifact_stale:{age_minutes:.1f}m>max_age({max_age_minutes}m)")
+if total_success_rate < min_total_success_rate:
+    reasons.append(f"total_success_rate({total_success_rate:.4f})<min_total({min_total_success_rate:.4f})")
+
+for action in required_actions:
+    row = row_by_action.get(action)
+    if row is None:
+        reasons.append(f"missing_action:{action}")
+        continue
+    samples = int(row.get("samples", 0))
+    rate = float(row.get("success_rate", 0.0))
+    last_rc = row.get("last_rc", None)
+    if samples < min_samples_per_action:
+        reasons.append(f"samples:{action}:{samples}<min({min_samples_per_action})")
+    if rate < min_action_success_rate:
+        reasons.append(f"success_rate:{action}:{rate:.4f}<min({min_action_success_rate:.4f})")
+    if require_last_rc_zero and last_rc not in {0, None}:
+        reasons.append(f"last_rc_nonzero:{action}:{last_rc}")
+
+if reasons:
+    print(
+        "FUSE: whitelist assert failed; "
+        + f"artifact={artifact}; generated_at_utc={generated_dt.strftime('%Y-%m-%dT%H:%M:%SZ')}; "
+        + f"age_minutes={age_minutes:.1f}; reasons={'|'.join(reasons)}",
+        file=sys.stderr,
+    )
+    raise SystemExit(3)
+
+print(
+    "ASSERT PASS: whitelist gate healthy; "
+    + f"artifact={artifact}; generated_at_utc={generated_dt.strftime('%Y-%m-%dT%H:%M:%SZ')}; "
+    + f"age_minutes={age_minutes:.1f}; total_success_rate={total_success_rate:.4f}"
+)
+PY
 }
 
 action_sample_whitelist() {
