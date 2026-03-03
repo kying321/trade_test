@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -13,7 +14,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from lie_engine.research.optimizer import run_research_backtest
 from lie_engine.research.real_data import RealDataBundle
 from lie_engine.research.strategy_lab import run_strategy_lab
+from lie_engine.models import BacktestResult
 from tests.helpers import make_multi_symbol_bars
+
+
+def _load_theory_ablation_module():
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_theory_ablation.py"
+    spec = importlib.util.spec_from_file_location("run_theory_ablation_for_tests", script_path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class ResearchTests(unittest.TestCase):
@@ -212,7 +224,6 @@ class ResearchTests(unittest.TestCase):
 
     def test_run_strategy_lab_dd_target_acceptance_gate(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
-        from lie_engine.models import BacktestResult
 
         bars = make_multi_symbol_bars()
         bars["asset_class"] = bars["asset_class"].astype(str)
@@ -286,6 +297,107 @@ class ResearchTests(unittest.TestCase):
         finally:
             sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
             sl_mod.run_event_backtest = original_bt  # type: ignore[assignment]
+
+    def test_theory_ablation_auto_exposure_search_fields(self) -> None:
+        ab_mod = _load_theory_ablation_module()
+
+        def _mk_case(name: str, exposure: float):  # type: ignore[no-untyped-def]
+            mdd = float(exposure * 0.25)
+            breached = bool(mdd > 0.05)
+            return ab_mod.AblationCase(
+                name=name,
+                theory_enabled=False,
+                exposure_scale=float(exposure),
+                theory_ict_weight=1.0,
+                theory_brooks_weight=1.0,
+                theory_lie_weight=1.2,
+                theory_confidence_boost_max=5.0,
+                theory_penalty_max=6.0,
+                theory_min_confluence=0.38,
+                theory_conflict_fuse=0.72,
+                annual_return=float(exposure),
+                max_drawdown=float(mdd),
+                drawdown_excess=float(max(0.0, mdd - 0.05)),
+                target_breached=breached,
+                positive_window_ratio=0.5,
+                profit_factor=1.0,
+                win_rate=0.5,
+                trades=1,
+                violations=0,
+                sharpe_like=0.0,
+                objective=float(exposure if not breached else -1.0),
+            )
+
+        best_case, cfg = ab_mod._auto_exposure_search(
+            auto_low=0.08,
+            auto_high=0.40,
+            auto_iters=6,
+            theory_enabled=False,
+            evaluate_case=_mk_case,
+        )
+        self.assertIsNotNone(best_case)
+        assert best_case is not None
+        self.assertTrue(bool(cfg.get("enabled", False)))
+        self.assertFalse(bool(cfg.get("theory_enabled", True)))
+        self.assertGreaterEqual(int(len(cfg.get("trace", []))), 7)
+        self.assertAlmostEqual(float(cfg.get("best_exposure", 0.0)), float(best_case.exposure_scale), places=6)
+        self.assertEqual(str(cfg.get("best_case", {}).get("name", "")), str(best_case.name))
+        self.assertLessEqual(float(best_case.max_drawdown), 0.05)
+
+    def test_theory_ablation_bundle_load_recovery_single_worker(self) -> None:
+        ab_mod = _load_theory_ablation_module()
+
+        bars = make_multi_symbol_bars()
+        bars["asset_class"] = bars["asset_class"].astype(str)
+        bars["source"] = "mock"
+        idx = sorted(pd.to_datetime(bars["ts"]).dt.date.unique())
+        bundle_ok = RealDataBundle(
+            bars=bars,
+            universe=sorted(set(bars["symbol"])),
+            news_daily=pd.Series([0.0] * len(idx), index=idx, dtype=float),
+            report_daily=pd.Series([0.0] * len(idx), index=idx, dtype=float),
+            news_records=0,
+            report_records=0,
+            fetch_stats={"mocked": True},
+        )
+
+        calls: list[int] = []
+        original_loader = ab_mod.load_real_data_bundle
+
+        def _fake_loader(**kwargs):  # type: ignore[no-untyped-def]
+            w = int(kwargs.get("workers", 0))
+            calls.append(w)
+            if w > 1:
+                raise TimeoutError("simulated_timeout")
+            return bundle_ok
+
+        ab_mod.load_real_data_bundle = _fake_loader  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                bundle, guard = ab_mod._load_bundle_with_recovery(
+                    core_symbols=["300750", "002050"],
+                    start=date(2025, 1, 1),
+                    end=date(2025, 12, 31),
+                    max_symbols=4,
+                    report_symbol_cap=2,
+                    workers=2,
+                    cache_dir=Path(td),
+                    cache_ttl_hours=8.0,
+                    strict_cutoff=date(2025, 12, 31),
+                    review_days=0,
+                    include_post_review=False,
+                    timeout_seconds=5,
+                    allow_single_worker_recovery=True,
+                )
+            self.assertIs(bundle, bundle_ok)
+            self.assertEqual(calls, [2, 1])
+            self.assertEqual(int(guard.get("requested_workers", 0)), 2)
+            self.assertEqual(int(guard.get("effective_workers", 0)), 1)
+            self.assertTrue(bool(guard.get("fallback_to_single_worker", False)))
+            self.assertEqual(int(guard.get("attempts", 0)), 2)
+            self.assertGreaterEqual(len(guard.get("errors", [])), 1)
+        finally:
+            ab_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
 
 
 if __name__ == "__main__":
