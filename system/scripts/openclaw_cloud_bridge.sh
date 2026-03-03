@@ -26,6 +26,7 @@ Actions:
   validate-remote-config  Run remote `lie validate-config`.
 
 Environment:
+  FENLIE_SYSTEM_ROOT       optional absolute path to system root (preferred for launchd).
   CLOUD_HOST              default: 43.153.148.242
   CLOUD_USER              default: ubuntu
   CLOUD_PROJECT_DIR       default: /home/ubuntu/openclaw-system
@@ -62,16 +63,32 @@ print(int(time.time() * 1000))
 PY
 }
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_system_root="$(cd "${script_dir}/.." && pwd)"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [[ -z "${repo_root}" ]]; then
-  echo "ERROR: must run inside repository." >&2
+system_root="${FENLIE_SYSTEM_ROOT:-}"
+
+if [[ -n "${system_root}" && ! -d "${system_root}" ]]; then
+  echo "ERROR: FENLIE_SYSTEM_ROOT does not exist: ${system_root}" >&2
   exit 2
 fi
 
-system_root="${repo_root}/system"
-if [[ ! -d "${system_root}" ]]; then
-  echo "ERROR: missing system directory: ${system_root}" >&2
-  exit 2
+if [[ -z "${system_root}" ]]; then
+  if [[ -n "${repo_root}" && -d "${repo_root}/system" ]]; then
+    system_root="${repo_root}/system"
+  elif [[ -d "${script_system_root}/src" && -d "${script_system_root}/scripts" ]]; then
+    system_root="${script_system_root}"
+  else
+    echo "ERROR: unable to resolve system root. Set FENLIE_SYSTEM_ROOT explicitly." >&2
+    exit 2
+  fi
+fi
+
+if [[ -z "${repo_root}" ]]; then
+  repo_root="$(git -C "${system_root}/.." rev-parse --show-toplevel 2>/dev/null || true)"
+fi
+if [[ -z "${repo_root}" ]]; then
+  repo_root="$(cd "${system_root}/.." && pwd)"
 fi
 
 cloud_host="${CLOUD_HOST:-43.153.148.242}"
