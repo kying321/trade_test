@@ -29,6 +29,7 @@ class BacktestConfig:
     theory_penalty_max: float = 6.0
     theory_min_confluence: float = 0.38
     theory_conflict_fuse: float = 0.72
+    exposure_scale: float = 1.0
 
 
 SHORTABLE_ASSET = {"future", "option", "hedge"}
@@ -243,6 +244,7 @@ def run_event_backtest(
 
         if executed_count:
             day_ret /= executed_count
+            day_ret *= max(0.0, min(1.5, float(cfg.exposure_scale)))
             equity *= 1.0 + day_ret
             window_returns.append(day_ret)
 

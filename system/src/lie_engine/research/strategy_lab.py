@@ -256,6 +256,7 @@ def _generate_candidates(
             "max_daily_trades": 2,
             "signal_confidence_min": 32.0,
             "convexity_min": 2.2,
+            "exposure_scale": 0.70,
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 0.9,
             "theory_lie_weight": 1.4,
@@ -271,6 +272,7 @@ def _generate_candidates(
             "max_daily_trades": 2,
             "signal_confidence_min": 30.0,
             "convexity_min": 2.0,
+            "exposure_scale": 0.62,
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
             "theory_lie_weight": 1.3,
@@ -286,6 +288,7 @@ def _generate_candidates(
             "max_daily_trades": 3,
             "signal_confidence_min": 26.0,
             "convexity_min": 1.8,
+            "exposure_scale": 0.58,
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 1.3,
             "theory_lie_weight": 0.9,
@@ -301,6 +304,7 @@ def _generate_candidates(
             "max_daily_trades": 2,
             "signal_confidence_min": 28.0,
             "convexity_min": 2.0,
+            "exposure_scale": 0.60,
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
             "theory_lie_weight": 1.1,
@@ -316,6 +320,7 @@ def _generate_candidates(
             "max_daily_trades": 1,
             "signal_confidence_min": 34.0,
             "convexity_min": 2.6,
+            "exposure_scale": 0.46,
             "theory_ict_weight": 0.9,
             "theory_brooks_weight": 1.3,
             "theory_lie_weight": 1.2,
@@ -331,6 +336,7 @@ def _generate_candidates(
             "max_daily_trades": 4,
             "signal_confidence_min": 24.0,
             "convexity_min": 1.6,
+            "exposure_scale": 0.66,
             "theory_ict_weight": 1.4,
             "theory_brooks_weight": 0.8,
             "theory_lie_weight": 1.1,
@@ -356,6 +362,13 @@ def _generate_candidates(
         info_push = float(np.tanh(0.6 * report_bias + 0.4 * news_bias))
         conf = float(tpl["signal_confidence_min"]) - 5.0 * info_push + 2.0 * max(0.0, -agree)
         convex = float(tpl["convexity_min"]) + 0.35 * max(0.0, vol) + 0.20 * max(0.0, -tail)
+        exposure = (
+            float(tpl.get("exposure_scale", 0.60))
+            + 0.10 * max(0.0, trend)
+            - 0.22 * max(0.0, vol)
+            - 0.25 * max(0.0, tail)
+            - 0.15 * max(0.0, -agree)
+        )
         hold = int(round(float(tpl["hold_days"]) + 3.0 * regime_push))
         trades = int(round(float(tpl["max_daily_trades"]) + (1.0 if abs(info_push) > 0.8 else 0.0)))
         ict_w = float(tpl["theory_ict_weight"]) + 0.25 * max(0.0, info_push) + 0.10 * max(0.0, trend)
@@ -368,6 +381,7 @@ def _generate_candidates(
 
         tpl["signal_confidence_min"] = _clip(conf, 15.0, 72.0)
         tpl["convexity_min"] = _clip(convex, 1.0, 3.5)
+        tpl["exposure_scale"] = _clip(exposure, 0.12, 1.0)
         tpl["hold_days"] = int(max(1, min(20, hold)))
         tpl["max_daily_trades"] = int(max(1, min(5, trades)))
         tpl["theory_ict_weight"] = _clip(ict_w, 0.6, 1.8)
@@ -392,8 +406,16 @@ def _score_candidate(
     align_review: float = 0.0,
     robustness_score: float = 0.0,
 ) -> float:
+    dd_target = 0.05
+    dd_soft_band = 0.03
+
+    def _dd_target_penalty(mdd: float) -> float:
+        excess = max(0.0, float(mdd) - dd_target)
+        return float(2.2 * excess + 5.0 * max(0.0, excess - dd_soft_band))
+
     trades_valid = int(getattr(valid_bt, "trades", 0))
     trade_penalty = 0.0 if trades_valid >= 5 else 0.08 * float(5 - trades_valid)
+    dd_penalty_valid = _dd_target_penalty(float(getattr(valid_bt, "max_drawdown", 0.0)))
     base = float(
         0.25 * float(getattr(train_bt, "annual_return", 0.0))
         + 0.55 * float(getattr(valid_bt, "annual_return", 0.0))
@@ -401,6 +423,7 @@ def _score_candidate(
         + 0.20 * float(align_valid)
         + 0.08 * float(align_train)
         - 2.40 * float(getattr(valid_bt, "max_drawdown", 0.0))
+        - dd_penalty_valid
         - 0.35 * float(getattr(valid_bt, "violations", 0))
         - trade_penalty
     )
@@ -408,6 +431,7 @@ def _score_candidate(
         return base
     review_trades = int(getattr(review_bt, "trades", 0))
     review_penalty = 0.0 if review_trades >= 2 else 0.04 * float(2 - review_trades)
+    dd_penalty_review = _dd_target_penalty(float(getattr(review_bt, "max_drawdown", 0.0)))
     return float(
         base
         + 0.18 * float(getattr(review_bt, "annual_return", 0.0))
@@ -415,6 +439,7 @@ def _score_candidate(
         + 0.10 * float(align_review)
         + 0.20 * float(robustness_score)
         - 1.20 * float(getattr(review_bt, "max_drawdown", 0.0))
+        - 0.60 * dd_penalty_review
         - 0.20 * float(getattr(review_bt, "violations", 0))
         - review_penalty
     )
@@ -597,6 +622,7 @@ def run_strategy_lab(
             convexity_min=float(spec["convexity_min"]),
             max_daily_trades=int(spec["max_daily_trades"]),
             hold_days=int(spec["hold_days"]),
+            exposure_scale=float(spec.get("exposure_scale", 1.0)),
             regime_recalc_interval=5,
             signal_eval_interval=1,
             proxy_lookback=180,
@@ -701,6 +727,7 @@ def run_strategy_lab(
                     "convexity_min": float(spec["convexity_min"]),
                     "hold_days": int(spec["hold_days"]),
                     "max_daily_trades": int(spec["max_daily_trades"]),
+                    "exposure_scale": float(spec.get("exposure_scale", 1.0)),
                     "theory_ict_weight": float(spec.get("theory_ict_weight", 1.0)),
                     "theory_brooks_weight": float(spec.get("theory_brooks_weight", 1.0)),
                     "theory_lie_weight": float(spec.get("theory_lie_weight", 1.2)),

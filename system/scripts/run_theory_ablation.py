@@ -19,6 +19,7 @@ from lie_engine.research.real_data import load_real_data_bundle
 class AblationCase:
     name: str
     theory_enabled: bool
+    exposure_scale: float
     theory_ict_weight: float
     theory_brooks_weight: float
     theory_lie_weight: float
@@ -28,6 +29,8 @@ class AblationCase:
     theory_conflict_fuse: float
     annual_return: float
     max_drawdown: float
+    drawdown_excess: float
+    target_breached: bool
     positive_window_ratio: float
     profit_factor: float
     win_rate: float
@@ -103,8 +106,29 @@ def _sharpe_like(equity_curve: list[dict[str, object]]) -> float:
     return float(np.sqrt(252.0) * _safe_div(mu, sd))
 
 
-def _objective(annual_return: float, max_drawdown: float, positive_window_ratio: float, violations: int) -> float:
-    return float(annual_return - 0.90 * max_drawdown + 0.20 * positive_window_ratio - 0.15 * float(violations))
+def _objective(
+    annual_return: float,
+    max_drawdown: float,
+    positive_window_ratio: float,
+    violations: int,
+    *,
+    max_drawdown_target: float,
+    drawdown_soft_band: float,
+) -> float:
+    target = max(0.0, float(max_drawdown_target))
+    soft_band = max(0.0, float(drawdown_soft_band))
+    excess = max(0.0, float(max_drawdown) - target)
+    # Penalize drawdown target breach more aggressively than baseline noise.
+    target_penalty = 4.0 * excess + 8.0 * max(0.0, excess - soft_band)
+    breach_penalty = 0.35 if excess > 0.0 else 0.0
+    return float(
+        annual_return
+        - 0.90 * max_drawdown
+        + 0.20 * positive_window_ratio
+        - 0.15 * float(violations)
+        - target_penalty
+        - breach_penalty
+    )
 
 
 def _run_case(
@@ -119,6 +143,7 @@ def _run_case(
     hold_days: int,
     proxy_lookback: int,
     theory_enabled: bool,
+    exposure_scale: float,
     theory_ict_weight: float,
     theory_brooks_weight: float,
     theory_lie_weight: float,
@@ -126,6 +151,8 @@ def _run_case(
     theory_penalty_max: float,
     theory_min_confluence: float,
     theory_conflict_fuse: float,
+    max_drawdown_target: float,
+    drawdown_soft_band: float,
 ) -> AblationCase:
     bt = run_event_backtest(
         bars=bars,
@@ -136,6 +163,7 @@ def _run_case(
             convexity_min=float(convexity_min),
             max_daily_trades=int(max_daily_trades),
             hold_days=int(hold_days),
+            exposure_scale=float(exposure_scale),
             regime_recalc_interval=5,
             signal_eval_interval=1,
             proxy_lookback=int(proxy_lookback),
@@ -158,10 +186,14 @@ def _run_case(
         max_drawdown=float(bt.max_drawdown),
         positive_window_ratio=float(bt.positive_window_ratio),
         violations=int(bt.violations),
+        max_drawdown_target=float(max_drawdown_target),
+        drawdown_soft_band=float(drawdown_soft_band),
     )
+    dd_excess = max(0.0, float(bt.max_drawdown) - float(max_drawdown_target))
     return AblationCase(
         name=name,
         theory_enabled=bool(theory_enabled),
+        exposure_scale=float(exposure_scale),
         theory_ict_weight=float(theory_ict_weight),
         theory_brooks_weight=float(theory_brooks_weight),
         theory_lie_weight=float(theory_lie_weight),
@@ -171,6 +203,8 @@ def _run_case(
         theory_conflict_fuse=float(theory_conflict_fuse),
         annual_return=float(bt.annual_return),
         max_drawdown=float(bt.max_drawdown),
+        drawdown_excess=float(dd_excess),
+        target_breached=bool(dd_excess > 0.0),
         positive_window_ratio=float(bt.positive_window_ratio),
         profit_factor=float(bt.profit_factor),
         win_rate=float(bt.win_rate),
@@ -264,6 +298,8 @@ def _render_markdown(
     bars_rows: int,
     cases: list[AblationCase],
     data_source: str,
+    max_drawdown_target: float,
+    drawdown_soft_band: float,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# Theory Ablation Report | {ended_at[:19]}")
@@ -275,18 +311,20 @@ def _render_markdown(
     lines.append(f"- symbols: `{','.join(symbols)}`")
     lines.append(f"- bars_rows: `{bars_rows}`")
     lines.append(f"- data_source: `{data_source}`")
+    lines.append(f"- max_drawdown_target: `{max_drawdown_target:.4f}`")
+    lines.append(f"- drawdown_soft_band: `{drawdown_soft_band:.4f}`")
     lines.append("")
     lines.append("## Cases")
     lines.append(
-        "| name | theory | ict | brooks | lie | boost | penalty | min_conf | cfuse | ann_ret | mdd | pwr | pf | wr | trades | viol | sharpe_like | obj |"
+        "| name | theory | exp | ict | brooks | lie | boost | penalty | min_conf | cfuse | ann_ret | mdd | mdd_excess | breach | pwr | pf | wr | trades | viol | sharpe_like | obj |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for c in cases:
         lines.append(
             "| "
-            + f"{c.name} | {int(c.theory_enabled)} | {c.theory_ict_weight:.2f} | {c.theory_brooks_weight:.2f} | {c.theory_lie_weight:.2f} | "
+            + f"{c.name} | {int(c.theory_enabled)} | {c.exposure_scale:.2f} | {c.theory_ict_weight:.2f} | {c.theory_brooks_weight:.2f} | {c.theory_lie_weight:.2f} | "
             + f"{c.theory_confidence_boost_max:.2f} | {c.theory_penalty_max:.2f} | {c.theory_min_confluence:.2f} | {c.theory_conflict_fuse:.2f} | "
-            + f"{c.annual_return:.4f} | {c.max_drawdown:.4f} | {c.positive_window_ratio:.4f} | {c.profit_factor:.4f} | "
+            + f"{c.annual_return:.4f} | {c.max_drawdown:.4f} | {c.drawdown_excess:.4f} | {int(c.target_breached)} | {c.positive_window_ratio:.4f} | {c.profit_factor:.4f} | "
             + f"{c.win_rate:.4f} | {c.trades} | {c.violations} | {c.sharpe_like:.4f} | {c.objective:.4f} |"
         )
     lines.append("")
@@ -301,6 +339,7 @@ def _render_markdown(
                 "- "
                 + f"`{c.name}`: Δann_ret={c.annual_return - base.annual_return:+.4f}, "
                 + f"Δmdd={c.max_drawdown - base.max_drawdown:+.4f}, "
+                + f"Δmdd_excess={c.drawdown_excess - base.drawdown_excess:+.4f}, "
                 + f"Δpf={c.profit_factor - base.profit_factor:+.4f}, "
                 + f"Δwr={c.win_rate - base.win_rate:+.4f}, "
                 + f"Δtrades={c.trades - base.trades:+d}, "
@@ -338,7 +377,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--convexity-min", type=float, default=0.3)
     parser.add_argument("--max-daily-trades", type=int, default=5)
     parser.add_argument("--hold-days", type=int, default=5)
+    parser.add_argument("--exposure-scale", type=float, default=1.0)
     parser.add_argument("--proxy-lookback", type=int, default=180)
+    parser.add_argument("--max-drawdown-target", type=float, default=0.05)
+    parser.add_argument("--drawdown-soft-band", type=float, default=0.03)
     parser.add_argument(
         "--weight-grid",
         default="1.0:1.0:1.2;1.2:1.0:1.3;1.2:1.1:1.3;1.4:0.9:1.2",
@@ -427,6 +469,8 @@ def main() -> int:
             bars_rows=0,
             cases=[],
             data_source=data_source,
+            max_drawdown_target=float(args.max_drawdown_target),
+            drawdown_soft_band=float(args.drawdown_soft_band),
         )
         (run_dir / "report.md").write_text(report, encoding="utf-8")
         print(json.dumps({"run_dir": str(run_dir), "bars_rows": 0, "error": payload["error"]}, ensure_ascii=False, indent=2))
@@ -443,6 +487,7 @@ def main() -> int:
             convexity_min=float(args.convexity_min),
             max_daily_trades=int(args.max_daily_trades),
             hold_days=int(args.hold_days),
+            exposure_scale=float(args.exposure_scale),
             proxy_lookback=int(args.proxy_lookback),
             theory_enabled=False,
             theory_ict_weight=1.0,
@@ -452,6 +497,8 @@ def main() -> int:
             theory_penalty_max=float(args.theory_penalty_max),
             theory_min_confluence=float(args.theory_min_confluence),
             theory_conflict_fuse=float(args.theory_conflict_fuse),
+            max_drawdown_target=float(args.max_drawdown_target),
+            drawdown_soft_band=float(args.drawdown_soft_band),
         )
     )
     for idx, (w_ict, w_brooks, w_lie) in enumerate(weight_grid, start=1):
@@ -465,6 +512,7 @@ def main() -> int:
                 convexity_min=float(args.convexity_min),
                 max_daily_trades=int(args.max_daily_trades),
                 hold_days=int(args.hold_days),
+                exposure_scale=float(args.exposure_scale),
                 proxy_lookback=int(args.proxy_lookback),
                 theory_enabled=True,
                 theory_ict_weight=float(w_ict),
@@ -474,6 +522,8 @@ def main() -> int:
                 theory_penalty_max=float(args.theory_penalty_max),
                 theory_min_confluence=float(args.theory_min_confluence),
                 theory_conflict_fuse=float(args.theory_conflict_fuse),
+                max_drawdown_target=float(args.max_drawdown_target),
+                drawdown_soft_band=float(args.drawdown_soft_band),
             )
         )
     base_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
@@ -488,6 +538,7 @@ def main() -> int:
                 convexity_min=float(args.convexity_min),
                 max_daily_trades=int(args.max_daily_trades),
                 hold_days=int(args.hold_days),
+                exposure_scale=float(args.exposure_scale),
                 proxy_lookback=int(args.proxy_lookback),
                 theory_enabled=True,
                 theory_ict_weight=float(base_weights[0]),
@@ -497,6 +548,8 @@ def main() -> int:
                 theory_penalty_max=float(penalty),
                 theory_min_confluence=float(min_conf),
                 theory_conflict_fuse=float(cfuse),
+                max_drawdown_target=float(args.max_drawdown_target),
+                drawdown_soft_band=float(args.drawdown_soft_band),
             )
         )
 
@@ -510,6 +563,9 @@ def main() -> int:
         "symbols": symbols,
         "bars_rows": int(len(bars)),
         "data_source": data_source,
+        "exposure_scale": float(args.exposure_scale),
+        "max_drawdown_target": float(args.max_drawdown_target),
+        "drawdown_soft_band": float(args.drawdown_soft_band),
         "fallback_path": fallback_path,
         "bundle_fetch_stats": bundle.fetch_stats,
         "cases": [asdict(c) for c in sorted(cases, key=lambda x: x.objective, reverse=True)],
@@ -524,6 +580,8 @@ def main() -> int:
         bars_rows=int(len(bars)),
         cases=sorted(cases, key=lambda x: x.objective, reverse=True),
         data_source=data_source,
+        max_drawdown_target=float(args.max_drawdown_target),
+        drawdown_soft_band=float(args.drawdown_soft_band),
     )
     (run_dir / "report.md").write_text(report, encoding="utf-8")
 
