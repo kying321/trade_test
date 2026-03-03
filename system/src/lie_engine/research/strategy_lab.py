@@ -50,6 +50,9 @@ class StrategyLabSummary:
     news_max_ts: str
     report_max_ts: str
     review_days: int
+    max_drawdown_target: float
+    review_max_drawdown_target: float
+    drawdown_soft_band: float
     universe_count: int
     bars_rows: int
     review_bars_rows: int
@@ -248,6 +251,7 @@ def _generate_candidates(
     market: dict[str, float],
     report: dict[str, float],
     candidate_count: int,
+    exposure_cap: float = 0.35,
 ) -> list[dict[str, Any]]:
     base_templates: list[dict[str, Any]] = [
         {
@@ -256,7 +260,7 @@ def _generate_candidates(
             "max_daily_trades": 2,
             "signal_confidence_min": 32.0,
             "convexity_min": 2.2,
-            "exposure_scale": 0.70,
+            "exposure_scale": 0.28,
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 0.9,
             "theory_lie_weight": 1.4,
@@ -272,7 +276,7 @@ def _generate_candidates(
             "max_daily_trades": 2,
             "signal_confidence_min": 30.0,
             "convexity_min": 2.0,
-            "exposure_scale": 0.62,
+            "exposure_scale": 0.24,
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
             "theory_lie_weight": 1.3,
@@ -288,7 +292,7 @@ def _generate_candidates(
             "max_daily_trades": 3,
             "signal_confidence_min": 26.0,
             "convexity_min": 1.8,
-            "exposure_scale": 0.58,
+            "exposure_scale": 0.22,
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 1.3,
             "theory_lie_weight": 0.9,
@@ -304,7 +308,7 @@ def _generate_candidates(
             "max_daily_trades": 2,
             "signal_confidence_min": 28.0,
             "convexity_min": 2.0,
-            "exposure_scale": 0.60,
+            "exposure_scale": 0.23,
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
             "theory_lie_weight": 1.1,
@@ -320,7 +324,7 @@ def _generate_candidates(
             "max_daily_trades": 1,
             "signal_confidence_min": 34.0,
             "convexity_min": 2.6,
-            "exposure_scale": 0.46,
+            "exposure_scale": 0.18,
             "theory_ict_weight": 0.9,
             "theory_brooks_weight": 1.3,
             "theory_lie_weight": 1.2,
@@ -336,7 +340,7 @@ def _generate_candidates(
             "max_daily_trades": 4,
             "signal_confidence_min": 24.0,
             "convexity_min": 1.6,
-            "exposure_scale": 0.66,
+            "exposure_scale": 0.26,
             "theory_ict_weight": 1.4,
             "theory_brooks_weight": 0.8,
             "theory_lie_weight": 1.1,
@@ -381,7 +385,7 @@ def _generate_candidates(
 
         tpl["signal_confidence_min"] = _clip(conf, 15.0, 72.0)
         tpl["convexity_min"] = _clip(convex, 1.0, 3.5)
-        tpl["exposure_scale"] = _clip(exposure, 0.12, 1.0)
+        tpl["exposure_scale"] = _clip(exposure, 0.08, max(0.08, float(exposure_cap)))
         tpl["hold_days"] = int(max(1, min(20, hold)))
         tpl["max_daily_trades"] = int(max(1, min(5, trades)))
         tpl["theory_ict_weight"] = _clip(ict_w, 0.6, 1.8)
@@ -405,17 +409,21 @@ def _score_candidate(
     review_bt=None,
     align_review: float = 0.0,
     robustness_score: float = 0.0,
+    max_drawdown_target: float = 0.05,
+    review_max_drawdown_target: float = 0.07,
+    drawdown_soft_band: float = 0.03,
 ) -> float:
-    dd_target = 0.05
-    dd_soft_band = 0.03
+    dd_target = max(0.0, float(max_drawdown_target))
+    dd_review_target = max(dd_target, float(review_max_drawdown_target))
+    dd_soft = max(0.0, float(drawdown_soft_band))
 
-    def _dd_target_penalty(mdd: float) -> float:
-        excess = max(0.0, float(mdd) - dd_target)
-        return float(2.2 * excess + 5.0 * max(0.0, excess - dd_soft_band))
+    def _dd_target_penalty(mdd: float, target: float) -> float:
+        excess = max(0.0, float(mdd) - float(target))
+        return float(2.2 * excess + 5.0 * max(0.0, excess - dd_soft))
 
     trades_valid = int(getattr(valid_bt, "trades", 0))
     trade_penalty = 0.0 if trades_valid >= 5 else 0.08 * float(5 - trades_valid)
-    dd_penalty_valid = _dd_target_penalty(float(getattr(valid_bt, "max_drawdown", 0.0)))
+    dd_penalty_valid = _dd_target_penalty(float(getattr(valid_bt, "max_drawdown", 0.0)), dd_target)
     base = float(
         0.25 * float(getattr(train_bt, "annual_return", 0.0))
         + 0.55 * float(getattr(valid_bt, "annual_return", 0.0))
@@ -431,7 +439,7 @@ def _score_candidate(
         return base
     review_trades = int(getattr(review_bt, "trades", 0))
     review_penalty = 0.0 if review_trades >= 2 else 0.04 * float(2 - review_trades)
-    dd_penalty_review = _dd_target_penalty(float(getattr(review_bt, "max_drawdown", 0.0)))
+    dd_penalty_review = _dd_target_penalty(float(getattr(review_bt, "max_drawdown", 0.0)), dd_review_target)
     return float(
         base
         + 0.18 * float(getattr(review_bt, "annual_return", 0.0))
@@ -468,6 +476,9 @@ def _render_report(summary: StrategyLabSummary) -> str:
     lines.append(f"- 训练截止: `{summary.train_end_date}`")
     lines.append(f"- 验证起点: `{summary.validation_start_date}`")
     lines.append(f"- 截止时间戳: `{summary.cutoff_ts}`")
+    lines.append(f"- 训练回撤目标: `{summary.max_drawdown_target:.2%}`")
+    lines.append(f"- 复盘回撤目标: `{summary.review_max_drawdown_target:.2%}`")
+    lines.append(f"- 回撤软带宽: `{summary.drawdown_soft_band:.2%}`")
     lines.append(f"- 训练行情最大时间戳: `{summary.bar_max_ts}`")
     lines.append(f"- 训练新闻最大时间戳: `{summary.news_max_ts}`")
     lines.append(f"- 训练研报最大时间戳: `{summary.report_max_ts}`")
@@ -534,12 +545,18 @@ def run_strategy_lab(
     workers: int = 8,
     review_days: int = 5,
     candidate_count: int = 10,
+    max_drawdown_target: float = 0.05,
+    review_max_drawdown_target: float = 0.07,
+    drawdown_soft_band: float = 0.03,
 ) -> StrategyLabSummary:
     t0 = datetime.now()
     run_dir = output_root / "research" / f"strategy_lab_{t0:%Y%m%d_%H%M%S}"
     run_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = output_root / "artifacts" / "research_cache"
     term_registry = _term_registry_snapshot()
+    valid_dd_target = _clip(float(max_drawdown_target), 0.01, 0.30)
+    review_dd_target = _clip(float(review_max_drawdown_target), valid_dd_target, 0.35)
+    dd_soft_band = _clip(float(drawdown_soft_band), 0.0, 0.12)
 
     bundle = load_real_data_bundle(
         core_symbols=core_symbols,
@@ -574,6 +591,9 @@ def run_strategy_lab(
             news_max_ts=str(bundle.news_max_ts),
             report_max_ts=str(bundle.report_max_ts),
             review_days=int(bundle.review_days),
+            max_drawdown_target=float(valid_dd_target),
+            review_max_drawdown_target=float(review_dd_target),
+            drawdown_soft_band=float(dd_soft_band),
             review_start_date="",
             review_end_date="",
             review_bar_max_ts=str(bundle.review_bar_max_ts),
@@ -613,7 +633,13 @@ def run_strategy_lab(
 
     market = _market_insights(bars)
     report = _report_insights(bundle.news_daily, bundle.report_daily)
-    candidates_cfg = _generate_candidates(market=market, report=report, candidate_count=candidate_count)
+    exposure_cap = _clip(valid_dd_target / 0.22, 0.10, 0.35)
+    candidates_cfg = _generate_candidates(
+        market=market,
+        report=report,
+        candidate_count=candidate_count,
+        exposure_cap=exposure_cap,
+    )
 
     out_candidates: list[StrategyCandidateResult] = []
     for spec in candidates_cfg:
@@ -701,12 +727,15 @@ def run_strategy_lab(
             review_bt=review_bt,
             align_review=align_review,
             robustness_score=robustness,
+            max_drawdown_target=float(valid_dd_target),
+            review_max_drawdown_target=float(review_dd_target),
+            drawdown_soft_band=float(dd_soft_band),
         )
         accepted = (
             int(valid_bt.trades) >= 5
             and float(valid_bt.annual_return) > 0.0
             and float(valid_bt.positive_window_ratio) >= 0.70
-            and float(valid_bt.max_drawdown) <= 0.18
+            and float(valid_bt.max_drawdown) <= float(valid_dd_target)
             and int(valid_bt.violations) == 0
             and (
                 review_bt is None
@@ -714,7 +743,8 @@ def run_strategy_lab(
                     int(review_bt.trades) >= 2
                     and float(review_bt.annual_return) > 0.0
                     and float(review_bt.positive_window_ratio) >= 0.60
-                    and float(review_bt.max_drawdown) <= 0.22
+                    and float(review_bt.max_drawdown) <= float(review_dd_target)
+                    and int(review_bt.violations) == 0
                 )
             )
         )
@@ -777,6 +807,9 @@ def run_strategy_lab(
         news_max_ts=str(bundle.news_max_ts),
         report_max_ts=str(bundle.report_max_ts),
         review_days=int(bundle.review_days),
+        max_drawdown_target=float(valid_dd_target),
+        review_max_drawdown_target=float(review_dd_target),
+        drawdown_soft_band=float(dd_soft_band),
         review_start_date=review_start.isoformat() if review_start else "",
         review_end_date=review_end.isoformat() if review_end else "",
         review_bar_max_ts=str(bundle.review_bar_max_ts),
