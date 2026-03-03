@@ -22,6 +22,10 @@ class AblationCase:
     theory_ict_weight: float
     theory_brooks_weight: float
     theory_lie_weight: float
+    theory_confidence_boost_max: float
+    theory_penalty_max: float
+    theory_min_confluence: float
+    theory_conflict_fuse: float
     annual_return: float
     max_drawdown: float
     positive_window_ratio: float
@@ -56,6 +60,26 @@ def _parse_weight_grid(raw: str) -> list[tuple[float, float, float]]:
             continue
     if not out:
         return [(1.0, 1.0, 1.2), (1.2, 1.0, 1.3), (1.2, 1.1, 1.3), (1.4, 0.9, 1.2)]
+    return out
+
+
+def _parse_gate_grid(raw: str) -> list[tuple[float, float, float, float]]:
+    out: list[tuple[float, float, float, float]] = []
+    for block in [x.strip() for x in str(raw).split(";") if x.strip()]:
+        parts = [p.strip() for p in block.split(":")]
+        if len(parts) != 4:
+            continue
+        try:
+            out.append((float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])))
+        except ValueError:
+            continue
+    if not out:
+        return [
+            (5.0, 6.0, 0.38, 0.72),
+            (6.6, 4.8, 0.30, 0.82),
+            (4.2, 7.4, 0.44, 0.64),
+            (5.8, 5.4, 0.34, 0.76),
+        ]
     return out
 
 
@@ -98,6 +122,10 @@ def _run_case(
     theory_ict_weight: float,
     theory_brooks_weight: float,
     theory_lie_weight: float,
+    theory_confidence_boost_max: float,
+    theory_penalty_max: float,
+    theory_min_confluence: float,
+    theory_conflict_fuse: float,
 ) -> AblationCase:
     bt = run_event_backtest(
         bars=bars,
@@ -115,6 +143,10 @@ def _run_case(
             theory_ict_weight=float(theory_ict_weight),
             theory_brooks_weight=float(theory_brooks_weight),
             theory_lie_weight=float(theory_lie_weight),
+            theory_confidence_boost_max=float(theory_confidence_boost_max),
+            theory_penalty_max=float(theory_penalty_max),
+            theory_min_confluence=float(theory_min_confluence),
+            theory_conflict_fuse=float(theory_conflict_fuse),
         ),
         trend_thr=0.6,
         mean_thr=0.4,
@@ -133,6 +165,10 @@ def _run_case(
         theory_ict_weight=float(theory_ict_weight),
         theory_brooks_weight=float(theory_brooks_weight),
         theory_lie_weight=float(theory_lie_weight),
+        theory_confidence_boost_max=float(theory_confidence_boost_max),
+        theory_penalty_max=float(theory_penalty_max),
+        theory_min_confluence=float(theory_min_confluence),
+        theory_conflict_fuse=float(theory_conflict_fuse),
         annual_return=float(bt.annual_return),
         max_drawdown=float(bt.max_drawdown),
         positive_window_ratio=float(bt.positive_window_ratio),
@@ -153,6 +189,7 @@ def _load_local_fallback_bars(
     symbols: list[str],
 ) -> tuple[pd.DataFrame, str]:
     required = {"ts", "symbol", "open", "high", "low", "close", "volume"}
+    symbol_set = set(symbols)
 
     def _finalize(frame: pd.DataFrame, path_label: str) -> tuple[pd.DataFrame, str]:
         frame = frame.copy()
@@ -161,7 +198,7 @@ def _load_local_fallback_bars(
         frame = frame[(frame["ts"].dt.date >= start) & (frame["ts"].dt.date <= end)]
         if frame.empty:
             return pd.DataFrame(), ""
-        filtered = frame[frame["symbol"].astype(str).isin(set(symbols))] if symbols else frame.copy()
+        filtered = frame[frame["symbol"].astype(str).isin(symbol_set)] if symbols else frame.copy()
         if "asset_class" not in frame.columns:
             frame["asset_class"] = "equity"
         if "source" not in frame.columns:
@@ -176,37 +213,41 @@ def _load_local_fallback_bars(
 
     candidates = sorted(
         list((output_root / "artifacts" / "research_cache").glob("*_bars.parquet"))
-        + list((output_root / "research").glob("*/bars_used.parquet")),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    for path in candidates:
-        try:
-            bars = pd.read_parquet(path)
-        except Exception:  # noqa: BLE001
-            continue
-        if bars.empty or not required.issubset(set(bars.columns)):
-            continue
-        out, label = _finalize(bars, str(path))
-        if not out.empty:
-            return out, label
-
-    csv_candidates = sorted(
-        list((output_root / "artifacts" / "raw").glob("*_bars_raw.csv"))
+        + list((output_root / "research").glob("*/bars_used.parquet"))
+        + list((output_root / "artifacts" / "raw").glob("*_bars_raw.csv"))
         + list((output_root / "artifacts" / "normalized").glob("*_bars_normalized.csv")),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    for path in csv_candidates:
+
+    scored: list[tuple[tuple[int, int, int, int, float], pd.DataFrame, str]] = []
+    for path in candidates:
         try:
-            bars = pd.read_csv(path)
+            bars = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
         except Exception:  # noqa: BLE001
             continue
         if bars.empty or not required.issubset(set(bars.columns)):
             continue
         out, label = _finalize(bars, str(path))
-        if not out.empty:
-            return out, label
+        if out.empty:
+            continue
+        ts_min = pd.to_datetime(out["ts"], errors="coerce").min()
+        ts_max = pd.to_datetime(out["ts"], errors="coerce").max()
+        span_days = int(max(0, (ts_max - ts_min).days)) if pd.notna(ts_min) and pd.notna(ts_max) else 0
+        matched_symbols = 0 if label.endswith("#all_symbols") else 1
+        score = (
+            matched_symbols,
+            int(len(out)),
+            int(out["symbol"].astype(str).nunique()),
+            span_days,
+            float(path.stat().st_mtime),
+        )
+        scored.append((score, out, label))
+
+    if scored:
+        scored.sort(key=lambda x: x[0], reverse=True)
+        _, best_frame, best_label = scored[0]
+        return best_frame, best_label
     return pd.DataFrame(), ""
 
 
@@ -233,12 +274,15 @@ def _render_markdown(
     lines.append(f"- data_source: `{data_source}`")
     lines.append("")
     lines.append("## Cases")
-    lines.append("| name | theory | ict | brooks | lie | ann_ret | mdd | pwr | pf | wr | trades | viol | sharpe_like | obj |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append(
+        "| name | theory | ict | brooks | lie | boost | penalty | min_conf | cfuse | ann_ret | mdd | pwr | pf | wr | trades | viol | sharpe_like | obj |"
+    )
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for c in cases:
         lines.append(
             "| "
             + f"{c.name} | {int(c.theory_enabled)} | {c.theory_ict_weight:.2f} | {c.theory_brooks_weight:.2f} | {c.theory_lie_weight:.2f} | "
+            + f"{c.theory_confidence_boost_max:.2f} | {c.theory_penalty_max:.2f} | {c.theory_min_confluence:.2f} | {c.theory_conflict_fuse:.2f} | "
             + f"{c.annual_return:.4f} | {c.max_drawdown:.4f} | {c.positive_window_ratio:.4f} | {c.profit_factor:.4f} | "
             + f"{c.win_rate:.4f} | {c.trades} | {c.violations} | {c.sharpe_like:.4f} | {c.objective:.4f} |"
         )
@@ -276,7 +320,7 @@ def _render_markdown(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run theory on/off and weight-grid ablation with consistent backtest setup.")
+    parser = argparse.ArgumentParser(description="Run theory on/off with weight-grid and theory-gate ablation using a consistent backtest setup.")
     parser.add_argument("--start", required=True, help="YYYY-MM-DD")
     parser.add_argument("--end", required=True, help="YYYY-MM-DD")
     parser.add_argument(
@@ -297,6 +341,15 @@ def _parse_args() -> argparse.Namespace:
         default="1.0:1.0:1.2;1.2:1.0:1.3;1.2:1.1:1.3;1.4:0.9:1.2",
         help="semicolon-separated ict:brooks:lie triples",
     )
+    parser.add_argument("--theory-confidence-boost-max", type=float, default=5.0)
+    parser.add_argument("--theory-penalty-max", type=float, default=6.0)
+    parser.add_argument("--theory-min-confluence", type=float, default=0.38)
+    parser.add_argument("--theory-conflict-fuse", type=float, default=0.72)
+    parser.add_argument(
+        "--gate-grid",
+        default="5.0:6.0:0.38:0.72;6.6:4.8:0.30:0.82;4.2:7.4:0.44:0.64;5.8:5.4:0.34:0.76",
+        help="semicolon-separated boost:penalty:min_conflict:conflict_fuse quadruples",
+    )
     return parser.parse_args()
 
 
@@ -312,6 +365,7 @@ def main() -> int:
     end = _parse_date(args.end)
     symbols = _parse_symbols(args.symbols)
     weight_grid = _parse_weight_grid(args.weight_grid)
+    gate_grid = _parse_gate_grid(args.gate_grid)
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -391,12 +445,16 @@ def main() -> int:
             theory_ict_weight=1.0,
             theory_brooks_weight=1.0,
             theory_lie_weight=1.2,
+            theory_confidence_boost_max=float(args.theory_confidence_boost_max),
+            theory_penalty_max=float(args.theory_penalty_max),
+            theory_min_confluence=float(args.theory_min_confluence),
+            theory_conflict_fuse=float(args.theory_conflict_fuse),
         )
     )
     for idx, (w_ict, w_brooks, w_lie) in enumerate(weight_grid, start=1):
         cases.append(
             _run_case(
-                name=f"theory_on_{idx:02d}",
+                name=f"weight_on_{idx:02d}",
                 bars=bars,
                 start=start,
                 end=end,
@@ -409,6 +467,33 @@ def main() -> int:
                 theory_ict_weight=float(w_ict),
                 theory_brooks_weight=float(w_brooks),
                 theory_lie_weight=float(w_lie),
+                theory_confidence_boost_max=float(args.theory_confidence_boost_max),
+                theory_penalty_max=float(args.theory_penalty_max),
+                theory_min_confluence=float(args.theory_min_confluence),
+                theory_conflict_fuse=float(args.theory_conflict_fuse),
+            )
+        )
+    base_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
+    for idx, (boost, penalty, min_conf, cfuse) in enumerate(gate_grid, start=1):
+        cases.append(
+            _run_case(
+                name=f"gate_on_{idx:02d}",
+                bars=bars,
+                start=start,
+                end=end,
+                signal_confidence_min=float(args.signal_confidence_min),
+                convexity_min=float(args.convexity_min),
+                max_daily_trades=int(args.max_daily_trades),
+                hold_days=int(args.hold_days),
+                proxy_lookback=int(args.proxy_lookback),
+                theory_enabled=True,
+                theory_ict_weight=float(base_weights[0]),
+                theory_brooks_weight=float(base_weights[1]),
+                theory_lie_weight=float(base_weights[2]),
+                theory_confidence_boost_max=float(boost),
+                theory_penalty_max=float(penalty),
+                theory_min_confluence=float(min_conf),
+                theory_conflict_fuse=float(cfuse),
             )
         )
 

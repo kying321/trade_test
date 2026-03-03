@@ -25,6 +25,10 @@ class BacktestConfig:
     theory_ict_weight: float = 1.0
     theory_brooks_weight: float = 1.0
     theory_lie_weight: float = 1.2
+    theory_confidence_boost_max: float = 5.0
+    theory_penalty_max: float = 6.0
+    theory_min_confluence: float = 0.38
+    theory_conflict_fuse: float = 0.72
 
 
 SHORTABLE_ASSET = {"future", "option", "hedge"}
@@ -161,6 +165,10 @@ def run_event_backtest(
                 theory_ict_weight=float(cfg.theory_ict_weight),
                 theory_brooks_weight=float(cfg.theory_brooks_weight),
                 theory_lie_weight=float(cfg.theory_lie_weight),
+                theory_confidence_boost_max=float(cfg.theory_confidence_boost_max),
+                theory_penalty_max=float(cfg.theory_penalty_max),
+                theory_min_confluence=float(cfg.theory_min_confluence),
+                theory_conflict_fuse=float(cfg.theory_conflict_fuse),
             ),
         )
         sigs = sigs[: cfg.max_daily_trades]

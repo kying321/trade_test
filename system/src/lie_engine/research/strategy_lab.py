@@ -259,6 +259,10 @@ def _generate_candidates(
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 0.9,
             "theory_lie_weight": 1.4,
+            "theory_confidence_boost_max": 5.8,
+            "theory_penalty_max": 5.4,
+            "theory_min_confluence": 0.34,
+            "theory_conflict_fuse": 0.76,
             "rationale": "趋势驱动+凸性约束",
         },
         {
@@ -270,6 +274,10 @@ def _generate_candidates(
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
             "theory_lie_weight": 1.3,
+            "theory_confidence_boost_max": 5.2,
+            "theory_penalty_max": 6.0,
+            "theory_min_confluence": 0.36,
+            "theory_conflict_fuse": 0.72,
             "rationale": "研报偏向驱动的动量延续",
         },
         {
@@ -281,6 +289,10 @@ def _generate_candidates(
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 1.3,
             "theory_lie_weight": 0.9,
+            "theory_confidence_boost_max": 4.6,
+            "theory_penalty_max": 6.8,
+            "theory_min_confluence": 0.40,
+            "theory_conflict_fuse": 0.68,
             "rationale": "新闻冲击后的均值回归",
         },
         {
@@ -292,6 +304,10 @@ def _generate_candidates(
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
             "theory_lie_weight": 1.1,
+            "theory_confidence_boost_max": 5.0,
+            "theory_penalty_max": 6.2,
+            "theory_min_confluence": 0.38,
+            "theory_conflict_fuse": 0.72,
             "rationale": "新闻与研报一致性中庸策略",
         },
         {
@@ -303,6 +319,10 @@ def _generate_candidates(
             "theory_ict_weight": 0.9,
             "theory_brooks_weight": 1.3,
             "theory_lie_weight": 1.2,
+            "theory_confidence_boost_max": 4.2,
+            "theory_penalty_max": 7.4,
+            "theory_min_confluence": 0.44,
+            "theory_conflict_fuse": 0.64,
             "rationale": "尾部风险防御优先",
         },
         {
@@ -314,6 +334,10 @@ def _generate_candidates(
             "theory_ict_weight": 1.4,
             "theory_brooks_weight": 0.8,
             "theory_lie_weight": 1.1,
+            "theory_confidence_boost_max": 6.6,
+            "theory_penalty_max": 4.8,
+            "theory_min_confluence": 0.30,
+            "theory_conflict_fuse": 0.82,
             "rationale": "高波动突破捕捉",
         },
     ]
@@ -337,6 +361,10 @@ def _generate_candidates(
         ict_w = float(tpl["theory_ict_weight"]) + 0.25 * max(0.0, info_push) + 0.10 * max(0.0, trend)
         brooks_w = float(tpl["theory_brooks_weight"]) + 0.20 * max(0.0, vol) + 0.20 * max(0.0, -agree)
         lie_w = float(tpl["theory_lie_weight"]) + 0.25 * max(0.0, trend) - 0.12 * max(0.0, vol)
+        boost = float(tpl["theory_confidence_boost_max"]) + 0.9 * max(0.0, trend) - 0.6 * max(0.0, vol)
+        penalty = float(tpl["theory_penalty_max"]) + 0.8 * max(0.0, vol) + 0.7 * max(0.0, -agree)
+        min_conf = float(tpl["theory_min_confluence"]) + 0.05 * max(0.0, vol) + 0.03 * max(0.0, -tail)
+        conflict_fuse = float(tpl["theory_conflict_fuse"]) - 0.04 * max(0.0, vol) + 0.03 * max(0.0, trend)
 
         tpl["signal_confidence_min"] = _clip(conf, 15.0, 72.0)
         tpl["convexity_min"] = _clip(convex, 1.0, 3.5)
@@ -345,6 +373,10 @@ def _generate_candidates(
         tpl["theory_ict_weight"] = _clip(ict_w, 0.6, 1.8)
         tpl["theory_brooks_weight"] = _clip(brooks_w, 0.6, 1.8)
         tpl["theory_lie_weight"] = _clip(lie_w, 0.6, 1.8)
+        tpl["theory_confidence_boost_max"] = _clip(boost, 2.5, 10.0)
+        tpl["theory_penalty_max"] = _clip(penalty, 3.0, 10.0)
+        tpl["theory_min_confluence"] = _clip(min_conf, 0.20, 0.60)
+        tpl["theory_conflict_fuse"] = _clip(conflict_fuse, 0.50, 0.90)
         tpl["name"] = f"{tpl['name']}_{i+1:02d}"
         out.append(tpl)
     return out
@@ -572,6 +604,10 @@ def run_strategy_lab(
             theory_ict_weight=float(spec.get("theory_ict_weight", 1.0)),
             theory_brooks_weight=float(spec.get("theory_brooks_weight", 1.0)),
             theory_lie_weight=float(spec.get("theory_lie_weight", 1.2)),
+            theory_confidence_boost_max=float(spec.get("theory_confidence_boost_max", 5.0)),
+            theory_penalty_max=float(spec.get("theory_penalty_max", 6.0)),
+            theory_min_confluence=float(spec.get("theory_min_confluence", 0.38)),
+            theory_conflict_fuse=float(spec.get("theory_conflict_fuse", 0.72)),
         )
         train_bt = run_event_backtest(
             bars=bars,
@@ -668,6 +704,10 @@ def run_strategy_lab(
                     "theory_ict_weight": float(spec.get("theory_ict_weight", 1.0)),
                     "theory_brooks_weight": float(spec.get("theory_brooks_weight", 1.0)),
                     "theory_lie_weight": float(spec.get("theory_lie_weight", 1.2)),
+                    "theory_confidence_boost_max": float(spec.get("theory_confidence_boost_max", 5.0)),
+                    "theory_penalty_max": float(spec.get("theory_penalty_max", 6.0)),
+                    "theory_min_confluence": float(spec.get("theory_min_confluence", 0.38)),
+                    "theory_conflict_fuse": float(spec.get("theory_conflict_fuse", 0.72)),
                 },
                 train_metrics={
                     "annual_return": float(train_bt.annual_return),
