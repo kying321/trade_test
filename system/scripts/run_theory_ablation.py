@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 import json
 from pathlib import Path
+import signal
+from typing import Callable
 import warnings
 
 import numpy as np
 import pandas as pd
 
 from lie_engine.backtest.engine import BacktestConfig, run_event_backtest
-from lie_engine.research.real_data import load_real_data_bundle
+from lie_engine.research.real_data import RealDataBundle, load_real_data_bundle
 
 
 @dataclass(slots=True)
@@ -298,6 +301,185 @@ def _load_local_fallback_bars(
     return pd.DataFrame(), ""
 
 
+@contextlib.contextmanager
+def _wall_clock_timeout(seconds: int):
+    timeout = max(0, int(seconds))
+    supported = bool(
+        timeout > 0
+        and hasattr(signal, "SIGALRM")
+        and hasattr(signal, "setitimer")
+        and hasattr(signal, "ITIMER_REAL")
+    )
+    if not supported:
+        yield
+        return
+
+    def _handler(signum, frame):  # noqa: ARG001
+        raise TimeoutError(f"bundle load timed out after {timeout}s")
+
+    prev_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _handler)
+    signal.setitimer(signal.ITIMER_REAL, float(timeout))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, prev_handler)
+
+
+def _empty_bundle(*, universe: list[str], error: str) -> RealDataBundle:
+    return RealDataBundle(
+        bars=pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"]),
+        universe=list(universe),
+        news_daily=pd.Series(dtype=float),
+        report_daily=pd.Series(dtype=float),
+        news_records=0,
+        report_records=0,
+        fetch_stats={"bundle_load_error": error},
+    )
+
+
+def _load_bundle_with_recovery(
+    *,
+    core_symbols: list[str],
+    start: date,
+    end: date,
+    max_symbols: int,
+    report_symbol_cap: int,
+    workers: int,
+    cache_dir: Path,
+    cache_ttl_hours: float,
+    strict_cutoff: date,
+    review_days: int,
+    include_post_review: bool,
+    timeout_seconds: int,
+    allow_single_worker_recovery: bool,
+) -> tuple[RealDataBundle, dict[str, object]]:
+    requested_workers = max(1, int(workers))
+    worker_plan = [requested_workers]
+    if bool(allow_single_worker_recovery) and requested_workers > 1:
+        worker_plan.append(1)
+
+    attempt_errors: list[dict[str, object]] = []
+    last_exc: Exception | None = None
+    for idx, candidate_workers in enumerate(worker_plan, start=1):
+        try:
+            with _wall_clock_timeout(timeout_seconds):
+                bundle = load_real_data_bundle(
+                    core_symbols=core_symbols,
+                    start=start,
+                    end=end,
+                    max_symbols=int(max_symbols),
+                    report_symbol_cap=int(report_symbol_cap),
+                    workers=int(candidate_workers),
+                    cache_dir=cache_dir,
+                    cache_ttl_hours=float(cache_ttl_hours),
+                    strict_cutoff=strict_cutoff,
+                    review_days=int(review_days),
+                    include_post_review=bool(include_post_review),
+                )
+            guard = {
+                "status": "ok",
+                "requested_workers": int(requested_workers),
+                "effective_workers": int(candidate_workers),
+                "attempts": int(idx),
+                "timeout_seconds": int(max(0, int(timeout_seconds))),
+                "fallback_to_single_worker": bool(candidate_workers != requested_workers),
+                "errors": attempt_errors,
+            }
+            return bundle, guard
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            attempt_errors.append(
+                {
+                    "attempt": int(idx),
+                    "workers": int(candidate_workers),
+                    "error": f"{type(exc).__name__}:{exc}",
+                }
+            )
+
+    err_txt = "bundle load failed after recovery attempts"
+    if last_exc is not None:
+        err_txt = f"{err_txt}: {type(last_exc).__name__}:{last_exc}"
+    raise RuntimeError(err_txt)
+
+
+def _auto_exposure_search(
+    *,
+    auto_low: float,
+    auto_high: float,
+    auto_iters: int,
+    theory_enabled: bool,
+    evaluate_case: Callable[[str, float], AblationCase],
+) -> tuple[AblationCase | None, dict[str, object]]:
+    low = max(0.05, float(min(auto_low, auto_high)))
+    high = min(1.50, float(max(low, auto_high)))
+    iters = max(1, int(auto_iters))
+
+    probe_lo = float(low)
+    probe_hi = float(high)
+    probe_trace: list[dict[str, object]] = []
+    best_feasible: AblationCase | None = None
+
+    for i in range(iters):
+        probe = 0.5 * (probe_lo + probe_hi)
+        probe_case = evaluate_case(f"exp_auto_probe_{i + 1:02d}", float(probe))
+        probe_trace.append(
+            {
+                "iter": int(i + 1),
+                "probe_exposure": float(probe),
+                "max_drawdown": float(probe_case.max_drawdown),
+                "drawdown_excess": float(probe_case.drawdown_excess),
+                "target_breached": bool(probe_case.target_breached),
+                "annual_return": float(probe_case.annual_return),
+                "objective": float(probe_case.objective),
+            }
+        )
+        if probe_case.target_breached:
+            probe_hi = float(probe)
+        else:
+            probe_lo = float(probe)
+            if best_feasible is None or float(probe_case.objective) > float(best_feasible.objective):
+                best_feasible = probe_case
+
+    refine_exposures = sorted(
+        {
+            float(round(probe_lo, 4)),
+            float(round(max(low, probe_lo * 0.92), 4)),
+            float(round(max(low, probe_lo * 0.84), 4)),
+            float(round(max(low, probe_lo - 0.02), 4)),
+        }
+    )
+    for idx, exposure in enumerate(refine_exposures, start=1):
+        refine_case = evaluate_case(f"exp_auto_refine_{idx:02d}", float(exposure))
+        probe_trace.append(
+            {
+                "iter": int(iters + idx),
+                "probe_exposure": float(exposure),
+                "max_drawdown": float(refine_case.max_drawdown),
+                "drawdown_excess": float(refine_case.drawdown_excess),
+                "target_breached": bool(refine_case.target_breached),
+                "annual_return": float(refine_case.annual_return),
+                "objective": float(refine_case.objective),
+            }
+        )
+        if not bool(refine_case.target_breached):
+            if best_feasible is None or float(refine_case.objective) > float(best_feasible.objective):
+                best_feasible = refine_case
+
+    cfg = {
+        "enabled": True,
+        "low": float(low),
+        "high": float(high),
+        "iterations": int(iters),
+        "theory_enabled": bool(theory_enabled),
+        "best_exposure": None if best_feasible is None else float(best_feasible.exposure_scale),
+        "best_case": {} if best_feasible is None else asdict(best_feasible),
+        "trace": probe_trace,
+    }
+    return best_feasible, cfg
+
+
 def _render_markdown(
     *,
     started_at: str,
@@ -311,6 +493,7 @@ def _render_markdown(
     max_drawdown_target: float,
     drawdown_soft_band: float,
     auto_exposure_search: dict[str, object] | None = None,
+    bundle_load_guard: dict[str, object] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# Theory Ablation Report | {ended_at[:19]}")
@@ -324,6 +507,13 @@ def _render_markdown(
     lines.append(f"- data_source: `{data_source}`")
     lines.append(f"- max_drawdown_target: `{max_drawdown_target:.4f}`")
     lines.append(f"- drawdown_soft_band: `{drawdown_soft_band:.4f}`")
+    bundle_guard = bundle_load_guard if isinstance(bundle_load_guard, dict) else {}
+    if bundle_guard:
+        lines.append(f"- bundle_load_requested_workers: `{int(bundle_guard.get('requested_workers', 0))}`")
+        lines.append(f"- bundle_load_effective_workers: `{int(bundle_guard.get('effective_workers', 0))}`")
+        lines.append(f"- bundle_load_attempts: `{int(bundle_guard.get('attempts', 0))}`")
+        lines.append(f"- bundle_load_timeout_seconds: `{int(bundle_guard.get('timeout_seconds', 0))}`")
+        lines.append(f"- bundle_load_fallback_single_worker: `{int(bool(bundle_guard.get('fallback_to_single_worker', False)))}`")
     auto_cfg = auto_exposure_search if isinstance(auto_exposure_search, dict) else {}
     if bool(auto_cfg.get("enabled", False)):
         lines.append("- auto_exposure_search: `on`")
@@ -410,6 +600,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-symbols", type=int, default=8)
     parser.add_argument("--report-symbol-cap", type=int, default=5)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--bundle-load-timeout-seconds", type=int, default=180)
+    parser.add_argument("--disable-single-worker-recovery", action="store_true")
     parser.add_argument("--signal-confidence-min", type=float, default=5.0)
     parser.add_argument("--convexity-min", type=float, default=0.3)
     parser.add_argument("--max-daily-trades", type=int, default=5)
@@ -456,23 +648,46 @@ def main() -> int:
     gate_grid = _parse_gate_grid(args.gate_grid)
     exposure_grid = _parse_exposure_grid(args.exposure_grid)
     auto_exposure_cfg: dict[str, object] = {"enabled": bool(args.auto_exposure_search)}
+    bundle_load_guard: dict[str, object] = {}
 
     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
     t0 = datetime.now()
-    bundle = load_real_data_bundle(
-        core_symbols=symbols,
-        start=start,
-        end=end,
-        max_symbols=int(args.max_symbols),
-        report_symbol_cap=int(args.report_symbol_cap),
-        workers=int(args.workers),
-        cache_dir=cache_dir,
-        cache_ttl_hours=8.0,
-        strict_cutoff=end,
-        review_days=0,
-        include_post_review=False,
-    )
+    bundle_error = ""
+    try:
+        bundle, bundle_load_guard = _load_bundle_with_recovery(
+            core_symbols=symbols,
+            start=start,
+            end=end,
+            max_symbols=int(args.max_symbols),
+            report_symbol_cap=int(args.report_symbol_cap),
+            workers=int(args.workers),
+            cache_dir=cache_dir,
+            cache_ttl_hours=8.0,
+            strict_cutoff=end,
+            review_days=0,
+            include_post_review=False,
+            timeout_seconds=int(args.bundle_load_timeout_seconds),
+            allow_single_worker_recovery=not bool(args.disable_single_worker_recovery),
+        )
+    except Exception as exc:  # noqa: BLE001
+        bundle_error = f"{type(exc).__name__}:{exc}"
+        bundle = _empty_bundle(universe=symbols, error=bundle_error)
+        bundle_load_guard = {
+            "status": "failed",
+            "requested_workers": int(max(1, int(args.workers))),
+            "effective_workers": 0,
+            "attempts": 0,
+            "timeout_seconds": int(max(0, int(args.bundle_load_timeout_seconds))),
+            "fallback_to_single_worker": False,
+            "errors": [{"attempt": 0, "workers": int(max(1, int(args.workers))), "error": bundle_error}],
+        }
+
+    bundle.fetch_stats = dict(bundle.fetch_stats)
+    bundle.fetch_stats["bundle_load_guard"] = bundle_load_guard
+    if bundle_error:
+        bundle.fetch_stats["bundle_load_error"] = bundle_error
+
     bars = bundle.bars.copy()
     data_source = "remote_bundle"
     fallback_path = ""
@@ -501,6 +716,7 @@ def main() -> int:
             "data_source": data_source,
             "fallback_path": fallback_path,
             "bundle_fetch_stats": bundle.fetch_stats,
+            "bundle_load_guard": bundle_load_guard,
             "cases": [],
             "risk_feasible": False,
             "feasible_count": 0,
@@ -521,6 +737,7 @@ def main() -> int:
             max_drawdown_target=float(args.max_drawdown_target),
             drawdown_soft_band=float(args.drawdown_soft_band),
             auto_exposure_search=auto_exposure_cfg,
+            bundle_load_guard=bundle_load_guard,
         )
         (run_dir / "report.md").write_text(report, encoding="utf-8")
         print(json.dumps({"run_dir": str(run_dir), "bars_rows": 0, "error": payload["error"]}, ensure_ascii=False, indent=2))
@@ -628,22 +845,11 @@ def main() -> int:
             )
         )
     if bool(args.auto_exposure_search):
-        auto_low = float(min(args.auto_exposure_low, args.auto_exposure_high))
-        auto_high = float(max(args.auto_exposure_low, args.auto_exposure_high))
-        auto_low = max(0.05, auto_low)
-        auto_high = min(1.50, max(auto_low, auto_high))
-        auto_iters = max(1, int(args.auto_exposure_iters))
         auto_theory = bool(args.auto_exposure_theory)
-
         auto_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
-        probe_lo = float(auto_low)
-        probe_hi = float(auto_high)
-        probe_trace: list[dict[str, object]] = []
-        best_feasible: AblationCase | None = None
-        for i in range(auto_iters):
-            probe = 0.5 * (probe_lo + probe_hi)
-            probe_case = _run_case(
-                name=f"exp_auto_probe_{i + 1:02d}",
+        def _evaluate_auto_case(name: str, exposure: float) -> AblationCase:
+            return _run_case(
+                name=name,
                 bars=bars,
                 start=start,
                 end=end,
@@ -651,7 +857,7 @@ def main() -> int:
                 convexity_min=float(args.convexity_min),
                 max_daily_trades=int(args.max_daily_trades),
                 hold_days=int(args.hold_days),
-                exposure_scale=float(probe),
+                exposure_scale=float(exposure),
                 proxy_lookback=int(args.proxy_lookback),
                 theory_enabled=auto_theory,
                 theory_ict_weight=float(auto_weights[0]),
@@ -664,84 +870,18 @@ def main() -> int:
                 max_drawdown_target=float(args.max_drawdown_target),
                 drawdown_soft_band=float(args.drawdown_soft_band),
             )
-            probe_trace.append(
-                {
-                    "iter": int(i + 1),
-                    "probe_exposure": float(probe),
-                    "max_drawdown": float(probe_case.max_drawdown),
-                    "drawdown_excess": float(probe_case.drawdown_excess),
-                    "target_breached": bool(probe_case.target_breached),
-                    "annual_return": float(probe_case.annual_return),
-                    "objective": float(probe_case.objective),
-                }
-            )
-            if probe_case.target_breached:
-                probe_hi = float(probe)
-            else:
-                probe_lo = float(probe)
-                if best_feasible is None or float(probe_case.objective) > float(best_feasible.objective):
-                    best_feasible = probe_case
 
-        refine_exposures = sorted(
-            {
-                float(round(probe_lo, 4)),
-                float(round(max(auto_low, probe_lo * 0.92), 4)),
-                float(round(max(auto_low, probe_lo * 0.84), 4)),
-                float(round(max(auto_low, probe_lo - 0.02), 4)),
-            }
+        best_feasible, auto_exposure_cfg = _auto_exposure_search(
+            auto_low=float(args.auto_exposure_low),
+            auto_high=float(args.auto_exposure_high),
+            auto_iters=int(args.auto_exposure_iters),
+            theory_enabled=bool(auto_theory),
+            evaluate_case=_evaluate_auto_case,
         )
-        for idx, exp in enumerate(refine_exposures, start=1):
-            refine_case = _run_case(
-                name=f"exp_auto_refine_{idx:02d}",
-                bars=bars,
-                start=start,
-                end=end,
-                signal_confidence_min=float(args.signal_confidence_min),
-                convexity_min=float(args.convexity_min),
-                max_daily_trades=int(args.max_daily_trades),
-                hold_days=int(args.hold_days),
-                exposure_scale=float(exp),
-                proxy_lookback=int(args.proxy_lookback),
-                theory_enabled=auto_theory,
-                theory_ict_weight=float(auto_weights[0]),
-                theory_brooks_weight=float(auto_weights[1]),
-                theory_lie_weight=float(auto_weights[2]),
-                theory_confidence_boost_max=float(args.theory_confidence_boost_max),
-                theory_penalty_max=float(args.theory_penalty_max),
-                theory_min_confluence=float(args.theory_min_confluence),
-                theory_conflict_fuse=float(args.theory_conflict_fuse),
-                max_drawdown_target=float(args.max_drawdown_target),
-                drawdown_soft_band=float(args.drawdown_soft_band),
-            )
-            probe_trace.append(
-                {
-                    "iter": int(auto_iters + idx),
-                    "probe_exposure": float(exp),
-                    "max_drawdown": float(refine_case.max_drawdown),
-                    "drawdown_excess": float(refine_case.drawdown_excess),
-                    "target_breached": bool(refine_case.target_breached),
-                    "annual_return": float(refine_case.annual_return),
-                    "objective": float(refine_case.objective),
-                }
-            )
-            if not bool(refine_case.target_breached):
-                if best_feasible is None or float(refine_case.objective) > float(best_feasible.objective):
-                    best_feasible = refine_case
-
         if best_feasible is not None:
             best_payload = asdict(best_feasible)
             best_payload["name"] = "exp_auto_best"
             cases.append(AblationCase(**best_payload))
-        auto_exposure_cfg = {
-            "enabled": True,
-            "low": float(auto_low),
-            "high": float(auto_high),
-            "iterations": int(auto_iters),
-            "theory_enabled": bool(auto_theory),
-            "best_exposure": None if best_feasible is None else float(best_feasible.exposure_scale),
-            "best_case": {} if best_feasible is None else asdict(best_feasible),
-            "trace": probe_trace,
-        }
 
     t1 = datetime.now()
     sorted_cases = sorted(cases, key=lambda x: x.objective, reverse=True)
@@ -760,6 +900,7 @@ def main() -> int:
         "drawdown_soft_band": float(args.drawdown_soft_band),
         "fallback_path": fallback_path,
         "bundle_fetch_stats": bundle.fetch_stats,
+        "bundle_load_guard": bundle_load_guard,
         "cases": [asdict(c) for c in sorted_cases],
         "risk_feasible": bool(feasible_cases),
         "feasible_count": int(len(feasible_cases)),
@@ -779,6 +920,7 @@ def main() -> int:
         max_drawdown_target=float(args.max_drawdown_target),
         drawdown_soft_band=float(args.drawdown_soft_band),
         auto_exposure_search=auto_exposure_cfg,
+        bundle_load_guard=bundle_load_guard,
     )
     (run_dir / "report.md").write_text(report, encoding="utf-8")
 
