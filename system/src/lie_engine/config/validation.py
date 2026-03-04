@@ -265,6 +265,48 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
             v = _as_float(val.get(k, 0.0))
             if not (0.0 <= v <= 1.0):
                 issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
+    for k in ("strategy_lab_merge_require_accepted", "strategy_lab_merge_require_validation_metrics"):
+        if k in val and not isinstance(val.get(k), bool):
+            issues.append(ValidationIssue("error", f"validation.{k}", "必须是布尔值"))
+    if "strategy_lab_merge_min_validation_trades" in val and _as_int(val.get("strategy_lab_merge_min_validation_trades", 0)) < 0:
+        issues.append(ValidationIssue("error", "validation.strategy_lab_merge_min_validation_trades", "必须 >= 0"))
+    for k in (
+        "strategy_lab_merge_min_validation_positive_window_ratio",
+        "strategy_lab_merge_min_robustness",
+    ):
+        if k in val:
+            v = _as_float(val.get(k, 0.0))
+            if not (0.0 <= v <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
+    for k in ("strategy_lab_merge_max_validation_drawdown", "strategy_lab_merge_max_review_drawdown"):
+        if k in val:
+            dd = _as_float(val.get(k, 0.0))
+            if not (0.0 <= dd <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
+    if (
+        "strategy_lab_merge_max_validation_drawdown" in val
+        and "max_drawdown_max" in val
+        and _as_float(val.get("strategy_lab_merge_max_validation_drawdown", 0.0)) > _as_float(val.get("max_drawdown_max", 0.18))
+    ):
+        issues.append(
+            ValidationIssue(
+                "warning",
+                "validation.strategy_lab_merge_max_validation_drawdown",
+                "建议不高于 validation.max_drawdown_max",
+            )
+        )
+    if (
+        "strategy_lab_merge_max_review_drawdown" in val
+        and "max_drawdown_max" in val
+        and _as_float(val.get("strategy_lab_merge_max_review_drawdown", 0.0)) > _as_float(val.get("max_drawdown_max", 0.18))
+    ):
+        issues.append(
+            ValidationIssue(
+                "warning",
+                "validation.strategy_lab_merge_max_review_drawdown",
+                "建议不高于 validation.max_drawdown_max",
+            )
+        )
     if _as_int(val.get("required_stable_replay_days", 3)) < 1:
         issues.append(ValidationIssue("error", "validation.required_stable_replay_days", "必须 >= 1"))
     if _as_int(val.get("cooldown_consecutive_losses", 3)) < 1:

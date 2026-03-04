@@ -513,6 +513,37 @@ class ResearchTests(unittest.TestCase):
         self.assertLessEqual(int(crypto_low.get("hold_days", 99)), int(low.get("hold_days", 0)))
         self.assertGreaterEqual(int(crypto_low.get("max_daily_trades", 0)), int(low.get("max_daily_trades", 0)))
 
+    def test_strategy_lab_candidate_generation_crypto_mode_prefers_crypto_templates(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        market = {
+            "trend_strength_z": 0.0,
+            "volatility_z": 0.0,
+            "tail_risk_z": 0.0,
+            "brooks_trend_bar_z": 0.0,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+        report = {
+            "news_bias_z": 0.0,
+            "report_bias_z": 0.0,
+            "news_report_agreement": 0.0,
+        }
+        crypto = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=2,
+            exposure_cap=0.20,
+            low_activity_mode=False,
+            crypto_mode=True,
+        )
+        self.assertTrue(str(crypto[0].get("name", "")).startswith("crypto_tactical_"))
+        self.assertTrue(str(crypto[1].get("name", "")).startswith("crypto_swing_flow_"))
     def test_strategy_lab_resolve_exposure_cap_prefers_feasible_ablation(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
 

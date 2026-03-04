@@ -1072,6 +1072,57 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.review_loop_stress_matrix_autorun_adaptive_max_runs_cap", paths)
         self.assertIn("validation.review_loop_stress_matrix_autorun_modes[0]", paths)
 
+    def test_validate_settings_detects_invalid_strategy_lab_merge_gate_knobs(self) -> None:
+        settings = SystemSettings(
+            raw={
+                "timezone": "Asia/Shanghai",
+                "schedule": {
+                    "premarket": "08:40",
+                    "intraday_slots": ["10:30"],
+                    "eod": "15:10",
+                    "nightly_review": "20:30",
+                },
+                "thresholds": {
+                    "hurst_trend": 0.6,
+                    "hurst_mean_revert": 0.4,
+                    "atr_extreme": 2.0,
+                    "signal_confidence_min": 60.0,
+                    "convexity_min": 3.0,
+                },
+                "risk": {
+                    "max_single_risk_pct": 2.0,
+                    "max_total_exposure_pct": 50.0,
+                    "max_symbol_pct": 15.0,
+                    "max_theme_pct": 25.0,
+                    "safety_bucket_pct": 85.0,
+                    "convexity_bucket_pct": 15.0,
+                },
+                "validation": {
+                    "max_drawdown_max": 0.18,
+                    "strategy_lab_merge_require_accepted": "yes",
+                    "strategy_lab_merge_require_validation_metrics": "yes",
+                    "strategy_lab_merge_min_validation_trades": -1,
+                    "strategy_lab_merge_min_validation_positive_window_ratio": 1.2,
+                    "strategy_lab_merge_min_robustness": -0.1,
+                    "strategy_lab_merge_max_validation_drawdown": 1.2,
+                    "strategy_lab_merge_max_review_drawdown": 1.1,
+                },
+                "universe": {"core": [{"symbol": "BTCUSDT", "asset_class": "crypto"}]},
+                "data": {"provider_profile": "binance_spot_public"},
+                "paths": {"output": "output", "sqlite": "output/artifacts/lie_engine.db"},
+            }
+        )
+        out = validate_settings(settings)
+        self.assertFalse(out["ok"])
+        paths = {x["path"] for x in out.get("errors", [])}
+        self.assertIn("validation.strategy_lab_merge_require_accepted", paths)
+        self.assertIn("validation.strategy_lab_merge_require_validation_metrics", paths)
+        self.assertIn("validation.strategy_lab_merge_min_validation_trades", paths)
+        self.assertIn("validation.strategy_lab_merge_min_validation_positive_window_ratio", paths)
+        self.assertIn("validation.strategy_lab_merge_min_robustness", paths)
+        self.assertIn("validation.strategy_lab_merge_max_validation_drawdown", paths)
+        self.assertIn("validation.strategy_lab_merge_max_review_drawdown", paths)
+
 
 if __name__ == "__main__":
     unittest.main()
