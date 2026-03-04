@@ -391,6 +391,44 @@ class SignalTests(unittest.TestCase):
         self.assertLess(float(stressed_result.brooks_align), float(base_result.brooks_align))
         self.assertGreater(float(stressed_result.brooks_oppose), float(base_result.brooks_oppose))
 
+    def test_theory_wyckoff_vpa_spring_biases_long(self) -> None:
+        bars = make_bars("BTCUSDT", n=320, trend=0.08, seed=70, asset_class="future").reset_index(drop=True)
+        i = len(bars) - 1
+        prev_low20 = float(bars.iloc[-21:-1]["low"].min())
+        vol_anchor = float(bars["volume"].tail(20).mean())
+        bars.loc[i, "open"] = prev_low20 * 0.998
+        bars.loc[i, "low"] = prev_low20 * 0.985
+        bars.loc[i, "close"] = prev_low20 * 1.010
+        bars.loc[i, "high"] = prev_low20 * 1.014
+        bars.loc[i, "volume"] = vol_anchor * 2.6
+
+        featured = add_common_features(bars)
+        long_result = compute_theory_confluence(
+            df=featured,
+            side=Side.LONG,
+            regime=RegimeLabel.WEAK_TREND,
+            lie_score_ratio=0.52,
+            ict_weight=0.0,
+            brooks_weight=0.0,
+            lie_weight=0.0,
+            wyckoff_weight=1.8,
+            vpa_weight=1.6,
+        )
+        short_result = compute_theory_confluence(
+            df=featured,
+            side=Side.SHORT,
+            regime=RegimeLabel.WEAK_TREND,
+            lie_score_ratio=0.52,
+            ict_weight=0.0,
+            brooks_weight=0.0,
+            lie_weight=0.0,
+            wyckoff_weight=1.8,
+            vpa_weight=1.6,
+        )
+        self.assertGreater(float(long_result.wyckoff_align), float(long_result.wyckoff_oppose))
+        self.assertGreater(float(long_result.vpa_align), float(long_result.vpa_oppose))
+        self.assertGreater(float(long_result.confluence), float(short_result.confluence))
+
     def test_theory_conflict_detected_on_sweep_reclaim_failure(self) -> None:
         bars = make_bars("BTCUSDT", n=320, trend=0.12, seed=53, asset_class="future").reset_index(drop=True)
         i = len(bars) - 1

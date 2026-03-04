@@ -107,10 +107,17 @@ def _stability_score(rows: list[dict[str, Any]], mdd_target: float, min_trades: 
         "theory_ict_weight",
         "theory_brooks_weight",
         "theory_lie_weight",
+        "theory_wyckoff_weight",
+        "theory_vpa_weight",
         "theory_confidence_boost_max",
         "theory_penalty_max",
         "theory_min_confluence",
         "theory_conflict_fuse",
+        "execution_confirm_loss_mult",
+        "execution_confirm_lookahead",
+        "execution_anti_martingale_step",
+        "execution_anti_martingale_floor",
+        "execution_anti_martingale_ceiling",
     ]
     drift_scores: list[float] = []
     for row in rows[1:]:

@@ -758,6 +758,11 @@ class ConfigValidationTests(unittest.TestCase):
                     "ops_reconcile_require_broker_snapshot": "yes",
                     "ops_reconcile_broker_contract_emit_canonical_view": "yes",
                     "ops_reconcile_broker_contract_canonical_dir": "",
+                    "ops_strategy_stability_gate_enabled": "yes",
+                    "ops_strategy_stability_score_min": 1.2,
+                    "ops_strategy_stability_trade_activity_ratio_min": -0.1,
+                    "ops_strategy_stability_min_windows": 0,
+                    "ops_strategy_stability_max_age_days": -1,
                     "ops_state_min_samples": 0,
                     "ops_risk_multiplier_floor": -0.2,
                     "ops_risk_multiplier_drift_max": 1.5,
@@ -977,6 +982,11 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.ops_reconcile_require_broker_snapshot", paths)
         self.assertIn("validation.ops_reconcile_broker_contract_emit_canonical_view", paths)
         self.assertIn("validation.ops_reconcile_broker_contract_canonical_dir", paths)
+        self.assertIn("validation.ops_strategy_stability_gate_enabled", paths)
+        self.assertIn("validation.ops_strategy_stability_score_min", paths)
+        self.assertIn("validation.ops_strategy_stability_trade_activity_ratio_min", paths)
+        self.assertIn("validation.ops_strategy_stability_min_windows", paths)
+        self.assertIn("validation.ops_strategy_stability_max_age_days", paths)
         self.assertIn("validation.ops_state_min_samples", paths)
         self.assertIn("validation.ops_risk_multiplier_floor", paths)
         self.assertIn("validation.ops_risk_multiplier_drift_max", paths)

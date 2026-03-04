@@ -7763,6 +7763,11 @@ class ReleaseOrchestrator:
                 f"优先修复 mode_drift 缺陷并重跑 lie ops-report --date {as_of.isoformat()} --window-days 7",
                 "确认 live/backtest 口径一致后再放开模式自适应更新",
             ] + [x for x in next_actions if x not in default_actions] + default_actions
+        if any(str(x.get("code", "")).startswith("STRATEGY_") for x in defects):
+            next_actions = [
+                "优先重跑 strategy_stability 并刷新稳定性工件（score/trade_activity/windows）。",
+                f"刷新后重跑 lie gate-report --date {as_of.isoformat()}，确认 strategy_stability_ok=true。",
+            ] + [x for x in next_actions if x not in default_actions] + default_actions
         if any(str(x.get("code", "")).startswith("RECONCILE_") for x in defects):
             next_actions = [
                 f"优先修复 reconcile_drift 缺陷并重跑 lie ops-report --date {as_of.isoformat()} --window-days 7",

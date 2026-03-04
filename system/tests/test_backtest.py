@@ -9,7 +9,15 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lie_engine.backtest.engine import BacktestConfig, _compute_metrics, _proxy_history_min_points, run_event_backtest
+from lie_engine.backtest.engine import (
+    BacktestConfig,
+    _compute_metrics,
+    _next_anti_martingale_scale,
+    _proxy_history_min_points,
+    _resolve_confirmation_scale,
+    run_event_backtest,
+)
+from lie_engine.models import Side
 from tests.helpers import make_multi_symbol_bars
 
 
@@ -62,6 +70,60 @@ class BacktestTests(unittest.TestCase):
         metrics = _compute_metrics(equity, trades, window_returns)
         positive_window_ratio = metrics[-1]
         self.assertAlmostEqual(positive_window_ratio, 1.0, places=6)
+
+    def test_confirmation_scale_distinguishes_confirm_vs_invalidate(self) -> None:
+        confirmed_path = pd.DataFrame(
+            [
+                {"high": 102.0, "low": 99.7},
+                {"high": 103.1, "low": 100.2},
+            ]
+        )
+        fail_path = pd.DataFrame(
+            [
+                {"high": 100.3, "low": 98.6},
+                {"high": 101.2, "low": 98.9},
+            ]
+        )
+        win_scale, confirmed = _resolve_confirmation_scale(
+            side=Side.LONG,
+            entry=100.0,
+            stop=95.0,
+            probe_path=confirmed_path,
+            lookahead=2,
+            loss_mult=0.6,
+            win_mult=1.1,
+        )
+        loss_scale, failed = _resolve_confirmation_scale(
+            side=Side.LONG,
+            entry=100.0,
+            stop=95.0,
+            probe_path=fail_path,
+            lookahead=2,
+            loss_mult=0.6,
+            win_mult=1.1,
+        )
+        self.assertTrue(confirmed)
+        self.assertFalse(failed)
+        self.assertAlmostEqual(win_scale, 1.1, places=6)
+        self.assertAlmostEqual(loss_scale, 0.6, places=6)
+
+    def test_anti_martingale_scale_updates_deterministically(self) -> None:
+        up = _next_anti_martingale_scale(
+            previous_scale=1.0,
+            pnl=0.01,
+            step=0.2,
+            floor=0.6,
+            ceiling=1.4,
+        )
+        down = _next_anti_martingale_scale(
+            previous_scale=up,
+            pnl=-0.02,
+            step=0.2,
+            floor=0.6,
+            ceiling=1.4,
+        )
+        self.assertAlmostEqual(up, 1.2, places=6)
+        self.assertAlmostEqual(down, 1.0, places=6)
 
 
 if __name__ == "__main__":

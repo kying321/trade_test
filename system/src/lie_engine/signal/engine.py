@@ -46,6 +46,8 @@ class SignalEngineConfig:
     theory_ict_weight: float = 1.0
     theory_brooks_weight: float = 1.0
     theory_lie_weight: float = 1.2
+    theory_wyckoff_weight: float = 0.0
+    theory_vpa_weight: float = 0.0
     theory_confidence_boost_max: float = 5.0
     theory_penalty_max: float = 6.0
     theory_min_confluence: float = 0.38
@@ -446,6 +448,8 @@ def _theory_adjustment(
         ict_weight=float(cfg.theory_ict_weight),
         brooks_weight=float(cfg.theory_brooks_weight),
         lie_weight=float(cfg.theory_lie_weight),
+        wyckoff_weight=float(cfg.theory_wyckoff_weight),
+        vpa_weight=float(cfg.theory_vpa_weight),
     )
     boost = float(result.confluence) * float(cfg.theory_confidence_boost_max)
     penalty = float(result.conflict) * float(cfg.theory_penalty_max)
@@ -566,6 +570,8 @@ def generate_signal_for_symbol(
             + f"conflict={float(theory_state.conflict):.3f},"
             + f"ict={float(theory_state.ict_align):.3f},"
             + f"brooks={float(theory_state.brooks_align):.3f},"
+            + f"wyckoff={float(theory_state.wyckoff_align):.3f},"
+            + f"vpa={float(theory_state.vpa_align):.3f},"
             + f"lie={float(theory_state.lie_align):.3f}"
         )
     if micro_flags:

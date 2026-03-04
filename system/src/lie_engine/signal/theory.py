@@ -17,6 +17,10 @@ class TheoryConfluenceResult:
     ict_oppose: float
     brooks_align: float
     brooks_oppose: float
+    wyckoff_align: float
+    wyckoff_oppose: float
+    vpa_align: float
+    vpa_oppose: float
     lie_align: float
     lie_oppose: float
     flags: list[str]
@@ -263,6 +267,135 @@ def _brooks_scores(df: pd.DataFrame) -> tuple[float, float]:
     return brooks_long, brooks_short
 
 
+def _wyckoff_scores(df: pd.DataFrame) -> tuple[float, float]:
+    if len(df) < 12:
+        return 0.0, 0.0
+
+    prev = df.iloc[-2]
+    cur = df.iloc[-1]
+
+    open_px = _safe_float(cur.get("open"), 0.0)
+    close_px = _safe_float(cur.get("close"), 0.0)
+    prev_close = _safe_float(prev.get("close"), close_px)
+    high = _safe_float(cur.get("high"), close_px)
+    low = _safe_float(cur.get("low"), close_px)
+    volume = _safe_float(cur.get("volume"), 0.0)
+    atr14 = max(1e-9, _safe_float(cur.get("atr14"), high - low))
+    bar_range = max(1e-9, high - low)
+    close_location = _bounded((close_px - low) / bar_range, 0.0, 1.0)
+    upper_wick = max(0.0, high - max(close_px, open_px))
+    lower_wick = max(0.0, min(close_px, open_px) - low)
+
+    vol_ma20 = max(1e-9, _safe_float(cur.get("vol_ma20"), volume if volume > 0.0 else 1.0))
+    vol_ratio = max(0.0, volume / vol_ma20)
+    vol_confirm = _bounded((vol_ratio - 0.9) / 1.4, 0.0, 1.0)
+
+    roll_high20_prev = _safe_float(prev.get("roll_high20"), _safe_float(cur.get("roll_high20"), high))
+    roll_low20_prev = _safe_float(prev.get("roll_low20"), _safe_float(cur.get("roll_low20"), low))
+    ma20 = _safe_float(cur.get("ma20"), close_px)
+    ma60 = _safe_float(cur.get("ma60"), close_px)
+
+    spring = 1.0 if low < roll_low20_prev and close_px > roll_low20_prev and close_location > 0.55 else 0.0
+    upthrust = 1.0 if high > roll_high20_prev and close_px < roll_high20_prev and close_location < 0.45 else 0.0
+    sos = 1.0 if close_px >= roll_high20_prev * 0.999 and vol_ratio >= 1.05 else 0.0
+    sow = 1.0 if close_px <= roll_low20_prev * 1.001 and vol_ratio >= 1.05 else 0.0
+
+    accumulation = 0.0
+    if ma20 >= ma60 and close_px >= ma20 * 0.998 and close_px >= prev_close:
+        accumulation = _bounded(0.45 + 0.30 * vol_confirm + 0.25 * close_location, 0.0, 1.0)
+
+    distribution = 0.0
+    if ma20 <= ma60 and close_px <= ma20 * 1.002 and close_px <= prev_close:
+        distribution = _bounded(0.45 + 0.30 * vol_confirm + 0.25 * (1.0 - close_location), 0.0, 1.0)
+
+    absorb_demand = _bounded(((lower_wick - upper_wick) / bar_range + 0.5) * vol_confirm, 0.0, 1.0)
+    absorb_supply = _bounded(((upper_wick - lower_wick) / bar_range + 0.5) * vol_confirm, 0.0, 1.0)
+
+    wyckoff_long = _weighted_mean(
+        [
+            (spring, 0.30),
+            (sos, 0.22),
+            (accumulation, 0.24),
+            (absorb_demand, 0.24),
+        ]
+    )
+    wyckoff_short = _weighted_mean(
+        [
+            (upthrust, 0.30),
+            (sow, 0.22),
+            (distribution, 0.24),
+            (absorb_supply, 0.24),
+        ]
+    )
+    wyckoff_long = _bounded(wyckoff_long * (1.0 - 0.40 * upthrust), 0.0, 1.0)
+    wyckoff_short = _bounded(wyckoff_short * (1.0 - 0.40 * spring), 0.0, 1.0)
+    return wyckoff_long, wyckoff_short
+
+
+def _vpa_scores(df: pd.DataFrame) -> tuple[float, float]:
+    if len(df) < 8:
+        return 0.0, 0.0
+
+    prev = df.iloc[-2]
+    cur = df.iloc[-1]
+
+    open_px = _safe_float(cur.get("open"), 0.0)
+    close_px = _safe_float(cur.get("close"), 0.0)
+    prev_open = _safe_float(prev.get("open"), open_px)
+    prev_close = _safe_float(prev.get("close"), close_px)
+    prev_high = _safe_float(prev.get("high"), close_px)
+    prev_low = _safe_float(prev.get("low"), close_px)
+    high = _safe_float(cur.get("high"), close_px)
+    low = _safe_float(cur.get("low"), close_px)
+    atr14 = max(1e-9, _safe_float(cur.get("atr14"), high - low))
+    prev_atr = max(1e-9, _safe_float(prev.get("atr14"), prev_high - prev_low))
+    bar_range = max(1e-9, high - low)
+    close_location = _bounded((close_px - low) / bar_range, 0.0, 1.0)
+
+    volume = _safe_float(cur.get("volume"), 0.0)
+    prev_volume = _safe_float(prev.get("volume"), 0.0)
+    vol_ma20 = max(1e-9, _safe_float(cur.get("vol_ma20"), volume if volume > 0.0 else 1.0))
+    prev_vol_ma20 = max(1e-9, _safe_float(prev.get("vol_ma20"), prev_volume if prev_volume > 0.0 else 1.0))
+    vol_ratio = max(0.0, volume / vol_ma20)
+    prev_vol_ratio = max(0.0, prev_volume / prev_vol_ma20)
+    vol_support = _bounded((vol_ratio - 0.8) / 1.6, 0.0, 1.0)
+
+    result_long = _bounded((close_px - prev_close) / atr14 + 0.5, 0.0, 1.0)
+    result_short = _bounded((prev_close - close_px) / atr14 + 0.5, 0.0, 1.0)
+    effort_result_long = min(vol_support, result_long)
+    effort_result_short = min(vol_support, result_short)
+
+    prev_spread = abs(prev_high - prev_low)
+    narrow_prev = prev_spread <= 0.85 * prev_atr
+    low_vol_prev = prev_vol_ratio <= 0.90
+    no_supply = 1.0 if prev_close < prev_open and narrow_prev and low_vol_prev and close_px > prev_high * 0.998 else 0.0
+    no_demand = 1.0 if prev_close > prev_open and narrow_prev and low_vol_prev and close_px < prev_low * 1.002 else 0.0
+
+    climactic_rev_long = 1.0 if low < prev_low and close_location > 0.62 and vol_ratio >= 1.25 else 0.0
+    climactic_rev_short = 1.0 if high > prev_high and close_location < 0.38 and vol_ratio >= 1.25 else 0.0
+
+    close_bias_long = _bounded(2.0 * max(0.0, close_location - 0.5), 0.0, 1.0)
+    close_bias_short = _bounded(2.0 * max(0.0, 0.5 - close_location), 0.0, 1.0)
+
+    vpa_long = _weighted_mean(
+        [
+            (effort_result_long, 0.34),
+            (no_supply, 0.20),
+            (climactic_rev_long, 0.24),
+            (close_bias_long, 0.22),
+        ]
+    )
+    vpa_short = _weighted_mean(
+        [
+            (effort_result_short, 0.34),
+            (no_demand, 0.20),
+            (climactic_rev_short, 0.24),
+            (close_bias_short, 0.22),
+        ]
+    )
+    return vpa_long, vpa_short
+
+
 def compute_theory_confluence(
     *,
     df: pd.DataFrame,
@@ -272,6 +405,8 @@ def compute_theory_confluence(
     ict_weight: float,
     brooks_weight: float,
     lie_weight: float,
+    wyckoff_weight: float = 0.0,
+    vpa_weight: float = 0.0,
 ) -> TheoryConfluenceResult:
     if df.empty or len(df) < 30:
         return TheoryConfluenceResult(
@@ -281,6 +416,10 @@ def compute_theory_confluence(
             ict_oppose=0.0,
             brooks_align=0.0,
             brooks_oppose=0.0,
+            wyckoff_align=0.0,
+            wyckoff_oppose=0.0,
+            vpa_align=0.0,
+            vpa_oppose=0.0,
             lie_align=0.0,
             lie_oppose=0.0,
             flags=["theory_insufficient_history"],
@@ -288,6 +427,8 @@ def compute_theory_confluence(
 
     ict_long, ict_short = _ict_scores(df)
     brooks_long, brooks_short = _brooks_scores(df)
+    wyckoff_long, wyckoff_short = _wyckoff_scores(df)
+    vpa_long, vpa_short = _vpa_scores(df)
     lie_align = _bounded((_safe_float(lie_score_ratio, 0.0) - 0.30) / 0.70, 0.0, 1.0)
     lie_oppose = _bounded((0.55 - _safe_float(lie_score_ratio, 0.0)) / 0.55, 0.0, 1.0)
 
@@ -296,11 +437,19 @@ def compute_theory_confluence(
         ict_oppose = ict_short
         brooks_align = brooks_long
         brooks_oppose = brooks_short
+        wyckoff_align = wyckoff_long
+        wyckoff_oppose = wyckoff_short
+        vpa_align = vpa_long
+        vpa_oppose = vpa_short
     elif side == Side.SHORT:
         ict_align = ict_short
         ict_oppose = ict_long
         brooks_align = brooks_short
         brooks_oppose = brooks_long
+        wyckoff_align = wyckoff_short
+        wyckoff_oppose = wyckoff_long
+        vpa_align = vpa_short
+        vpa_oppose = vpa_long
     else:
         return TheoryConfluenceResult(
             confluence=0.0,
@@ -309,6 +458,10 @@ def compute_theory_confluence(
             ict_oppose=0.0,
             brooks_align=0.0,
             brooks_oppose=0.0,
+            wyckoff_align=0.0,
+            wyckoff_oppose=0.0,
+            vpa_align=0.0,
+            vpa_oppose=0.0,
             lie_align=0.0,
             lie_oppose=1.0,
             flags=["theory_flat_side"],
@@ -317,10 +470,34 @@ def compute_theory_confluence(
     w_ict = max(0.0, float(ict_weight))
     w_brooks = max(0.0, float(brooks_weight))
     w_lie = max(0.0, float(lie_weight))
-    total = max(1e-9, w_ict + w_brooks + w_lie)
+    w_wyckoff = max(0.0, float(wyckoff_weight))
+    w_vpa = max(0.0, float(vpa_weight))
+    total = max(1e-9, w_ict + w_brooks + w_lie + w_wyckoff + w_vpa)
 
-    confluence = _bounded((w_ict * ict_align + w_brooks * brooks_align + w_lie * lie_align) / total, 0.0, 1.0)
-    conflict = _bounded((w_ict * ict_oppose + w_brooks * brooks_oppose + w_lie * lie_oppose) / total, 0.0, 1.0)
+    confluence = _bounded(
+        (
+            w_ict * ict_align
+            + w_brooks * brooks_align
+            + w_lie * lie_align
+            + w_wyckoff * wyckoff_align
+            + w_vpa * vpa_align
+        )
+        / total,
+        0.0,
+        1.0,
+    )
+    conflict = _bounded(
+        (
+            w_ict * ict_oppose
+            + w_brooks * brooks_oppose
+            + w_lie * lie_oppose
+            + w_wyckoff * wyckoff_oppose
+            + w_vpa * vpa_oppose
+        )
+        / total,
+        0.0,
+        1.0,
+    )
 
     flags: list[str] = []
     if confluence >= 0.70:
@@ -331,12 +508,14 @@ def compute_theory_confluence(
     if conflict >= 0.60:
         flags.append("theory_conflict_high")
 
-    if abs(ict_align - brooks_align) >= 0.55:
+    if max(ict_align, brooks_align, wyckoff_align, vpa_align) - min(ict_align, brooks_align, wyckoff_align, vpa_align) >= 0.55:
         flags.append("theory_family_divergence")
 
     if regime in {RegimeLabel.STRONG_TREND, RegimeLabel.WEAK_TREND, RegimeLabel.DOWNTREND} and brooks_oppose >= 0.55:
         flags.append("brooks_countertrend_risk")
-    if regime == RegimeLabel.RANGE and max(ict_oppose, brooks_oppose) >= 0.60:
+    if regime in {RegimeLabel.STRONG_TREND, RegimeLabel.WEAK_TREND, RegimeLabel.DOWNTREND} and wyckoff_oppose >= 0.55:
+        flags.append("wyckoff_counterflow_risk")
+    if regime == RegimeLabel.RANGE and max(ict_oppose, brooks_oppose, wyckoff_oppose, vpa_oppose) >= 0.60:
         flags.append("range_breakout_risk")
 
     return TheoryConfluenceResult(
@@ -346,6 +525,10 @@ def compute_theory_confluence(
         ict_oppose=ict_oppose,
         brooks_align=brooks_align,
         brooks_oppose=brooks_oppose,
+        wyckoff_align=wyckoff_align,
+        wyckoff_oppose=wyckoff_oppose,
+        vpa_align=vpa_align,
+        vpa_oppose=vpa_oppose,
         lie_align=lie_align,
         lie_oppose=lie_oppose,
         flags=flags,

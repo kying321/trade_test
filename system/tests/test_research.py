@@ -309,6 +309,10 @@ class ResearchTests(unittest.TestCase):
             "brooks_micro_channel_bias",
             "brooks_two_legged_bias",
             "brooks_exhaustion_z",
+            "wyckoff_accumulation_bias",
+            "wyckoff_distribution_bias",
+            "vpa_effort_result_bias",
+            "vpa_climax_z",
         ):
             self.assertIn(key, out)
             v = float(out.get(key, 0.0))
@@ -331,6 +335,10 @@ class ResearchTests(unittest.TestCase):
             "brooks_micro_channel_bias": 0.0,
             "brooks_two_legged_bias": 0.0,
             "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
         }
         support_market = dict(base_market)
         support_market.update(
@@ -339,6 +347,10 @@ class ResearchTests(unittest.TestCase):
                 "brooks_micro_channel_bias": 0.8,
                 "brooks_two_legged_bias": 0.9,
                 "brooks_exhaustion_z": -0.2,
+                "wyckoff_accumulation_bias": 0.8,
+                "wyckoff_distribution_bias": -0.2,
+                "vpa_effort_result_bias": 0.7,
+                "vpa_climax_z": -0.2,
             }
         )
         hazard_market = dict(base_market)
@@ -348,6 +360,10 @@ class ResearchTests(unittest.TestCase):
                 "brooks_micro_channel_bias": -0.6,
                 "brooks_two_legged_bias": 0.1,
                 "brooks_exhaustion_z": 1.5,
+                "wyckoff_accumulation_bias": -0.2,
+                "wyckoff_distribution_bias": 0.9,
+                "vpa_effort_result_bias": -0.7,
+                "vpa_climax_z": 1.8,
             }
         )
 
@@ -358,9 +374,13 @@ class ResearchTests(unittest.TestCase):
         self.assertGreater(float(support.get("theory_brooks_weight", 0.0)), float(base.get("theory_brooks_weight", 0.0)))
         self.assertGreater(float(hazard.get("theory_penalty_max", 0.0)), float(base.get("theory_penalty_max", 0.0)))
         self.assertLess(float(hazard.get("theory_conflict_fuse", 1.0)), float(base.get("theory_conflict_fuse", 1.0)))
+        self.assertGreater(float(support.get("theory_wyckoff_weight", 0.0)), float(base.get("theory_wyckoff_weight", 0.0)))
+        self.assertGreater(float(support.get("theory_vpa_weight", 0.0)), float(base.get("theory_vpa_weight", 0.0)))
         self.assertLessEqual(int(hazard.get("hold_days", 0)), int(support.get("hold_days", 0)))
         self.assertGreater(float(support.get("brooks_support_score", 0.0)), float(hazard.get("brooks_support_score", 0.0)))
         self.assertGreater(float(hazard.get("brooks_hazard_score", 0.0)), float(support.get("brooks_hazard_score", 0.0)))
+        self.assertGreater(float(hazard.get("wyckoff_hazard_score", 0.0)), float(support.get("wyckoff_hazard_score", 0.0)))
+        self.assertGreater(float(support.get("vpa_support_score", 0.0)), float(hazard.get("vpa_support_score", 0.0)))
 
     def test_strategy_lab_candidate_generation_low_activity_relaxes_thresholds(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
@@ -373,6 +393,10 @@ class ResearchTests(unittest.TestCase):
             "brooks_micro_channel_bias": 0.0,
             "brooks_two_legged_bias": 0.0,
             "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
         }
         report = {
             "news_bias_z": 0.0,

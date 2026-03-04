@@ -270,6 +270,116 @@ def _brooks_market_proxies(bars: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def _wyckoff_vpa_market_proxies(bars: pd.DataFrame) -> dict[str, float]:
+    if bars.empty:
+        return {
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+
+    work = bars.copy()
+    work["ts"] = pd.to_datetime(work["ts"])
+    daily = (
+        work.groupby("ts", as_index=False)
+        .agg(
+            open=("open", "mean"),
+            high=("high", "mean"),
+            low=("low", "mean"),
+            close=("close", "mean"),
+            volume=("volume", "sum"),
+        )
+        .sort_values("ts")
+        .reset_index(drop=True)
+    )
+    if len(daily) < 8:
+        return {
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+
+    prev_close = daily["close"].shift(1)
+    tr = pd.concat(
+        [
+            (daily["high"] - daily["low"]).abs(),
+            (daily["high"] - prev_close).abs(),
+            (daily["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr14 = tr.rolling(14, min_periods=5).mean().bfill().ffill().replace(0.0, np.nan)
+    roll_high20_prev = daily["high"].shift(1).rolling(20, min_periods=5).max()
+    roll_low20_prev = daily["low"].shift(1).rolling(20, min_periods=5).min()
+    ma20 = daily["close"].rolling(20, min_periods=5).mean().bfill().ffill()
+    ma60 = daily["close"].rolling(60, min_periods=10).mean().bfill().ffill()
+    bar_range = (daily["high"] - daily["low"]).replace(0.0, np.nan).abs().fillna(1e-9)
+    close_loc = ((daily["close"] - daily["low"]) / bar_range).clip(0.0, 1.0)
+    upper_wick = (daily["high"] - daily[["close", "open"]].max(axis=1)).clip(lower=0.0)
+    lower_wick = (daily[["close", "open"]].min(axis=1) - daily["low"]).clip(lower=0.0)
+
+    vol_ma20 = daily["volume"].rolling(20, min_periods=5).mean().replace(0.0, np.nan).bfill().ffill()
+    vol_ratio = (daily["volume"] / vol_ma20).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    spring = (
+        (daily["low"] < roll_low20_prev)
+        & (daily["close"] > roll_low20_prev)
+        & (close_loc > 0.55)
+        & (vol_ratio >= 1.0)
+    ).astype(float)
+    upthrust = (
+        (daily["high"] > roll_high20_prev)
+        & (daily["close"] < roll_high20_prev)
+        & (close_loc < 0.45)
+        & (vol_ratio >= 1.0)
+    ).astype(float)
+
+    accumulation = ((ma20 >= ma60) & (daily["close"] >= ma20) & (daily["close"] >= prev_close)).astype(float)
+    distribution = ((ma20 <= ma60) & (daily["close"] <= ma20) & (daily["close"] <= prev_close)).astype(float)
+
+    demand_absorb = (((lower_wick - upper_wick) / bar_range + 0.5) * ((vol_ratio - 0.9) / 1.4).clip(0.0, 1.0)).clip(0.0, 1.0)
+    supply_absorb = (((upper_wick - lower_wick) / bar_range + 0.5) * ((vol_ratio - 0.9) / 1.4).clip(0.0, 1.0)).clip(0.0, 1.0)
+
+    wyckoff_long = 0.32 * spring + 0.24 * accumulation + 0.24 * demand_absorb
+    wyckoff_short = 0.32 * upthrust + 0.24 * distribution + 0.24 * supply_absorb
+    wyckoff_long = (wyckoff_long * (1.0 - 0.35 * upthrust)).clip(0.0, 1.0)
+    wyckoff_short = (wyckoff_short * (1.0 - 0.35 * spring)).clip(0.0, 1.0)
+
+    effort = ((daily["close"] - prev_close) / atr14).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    effort = effort.clip(-1.0, 1.0)
+    effort_result = (effort * ((vol_ratio - 0.8) / 1.6).clip(0.0, 1.0)).clip(-1.0, 1.0)
+    climax_raw = (vol_ratio * (bar_range / atr14).replace([np.inf, -np.inf], np.nan)).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    def _recent(series: pd.Series, lookback: int) -> float:
+        clean = pd.Series(series).replace([np.inf, -np.inf], np.nan).dropna()
+        if clean.empty:
+            return 0.0
+        return float(clean.tail(lookback).mean())
+
+    def _recent_z(series: pd.Series, lookback: int = 20) -> float:
+        clean = pd.Series(series).replace([np.inf, -np.inf], np.nan).dropna()
+        if clean.empty:
+            return 0.0
+        recent = float(clean.tail(lookback).mean())
+        mean = float(clean.mean())
+        std = float(clean.std(ddof=0))
+        return _safe_z(recent, mean, std)
+
+    accumulation_bias = float(np.clip(_recent(wyckoff_long - wyckoff_short, 30), -1.0, 1.0))
+    distribution_bias = float(np.clip(_recent(wyckoff_short - wyckoff_long, 30), -1.0, 1.0))
+    effort_bias = float(np.clip(_recent(effort_result, 30), -1.0, 1.0))
+    climax_z = float(np.clip(_recent_z(climax_raw, lookback=20), -4.0, 4.0))
+
+    return {
+        "wyckoff_accumulation_bias": accumulation_bias,
+        "wyckoff_distribution_bias": distribution_bias,
+        "vpa_effort_result_bias": effort_bias,
+        "vpa_climax_z": climax_z,
+    }
+
+
 def _market_insights(bars: pd.DataFrame) -> dict[str, float]:
     ret = _daily_proxy_returns(bars)
     if ret.empty:
@@ -280,6 +390,7 @@ def _market_insights(bars: pd.DataFrame) -> dict[str, float]:
             "mean_return": 0.0,
             "volatility": 0.0,
             **_brooks_market_proxies(bars),
+            **_wyckoff_vpa_market_proxies(bars),
         }
     trend_raw = float(ret.rolling(20).mean().dropna().mean()) if len(ret) >= 20 else float(ret.mean())
     vol_raw = float(ret.rolling(20).std(ddof=0).dropna().mean()) if len(ret) >= 20 else float(ret.std(ddof=0))
@@ -293,6 +404,7 @@ def _market_insights(bars: pd.DataFrame) -> dict[str, float]:
         "mean_return": base_mean,
         "volatility": float(ret.std(ddof=0)),
         **_brooks_market_proxies(bars),
+        **_wyckoff_vpa_market_proxies(bars),
     }
 
 
@@ -507,10 +619,19 @@ def _generate_candidates(
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 0.9,
             "theory_lie_weight": 1.4,
+            "theory_wyckoff_weight": 1.0,
+            "theory_vpa_weight": 0.9,
             "theory_confidence_boost_max": 5.8,
             "theory_penalty_max": 5.4,
             "theory_min_confluence": 0.34,
             "theory_conflict_fuse": 0.76,
+            "execution_confirm_enabled": True,
+            "execution_confirm_lookahead": 2,
+            "execution_confirm_loss_mult": 0.62,
+            "execution_anti_martingale_enabled": True,
+            "execution_anti_martingale_step": 0.18,
+            "execution_anti_martingale_floor": 0.65,
+            "execution_anti_martingale_ceiling": 1.35,
             "rationale": "趋势驱动+凸性约束",
         },
         {
@@ -523,10 +644,19 @@ def _generate_candidates(
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
             "theory_lie_weight": 1.3,
+            "theory_wyckoff_weight": 0.9,
+            "theory_vpa_weight": 1.1,
             "theory_confidence_boost_max": 5.2,
             "theory_penalty_max": 6.0,
             "theory_min_confluence": 0.36,
             "theory_conflict_fuse": 0.72,
+            "execution_confirm_enabled": True,
+            "execution_confirm_lookahead": 2,
+            "execution_confirm_loss_mult": 0.65,
+            "execution_anti_martingale_enabled": True,
+            "execution_anti_martingale_step": 0.16,
+            "execution_anti_martingale_floor": 0.70,
+            "execution_anti_martingale_ceiling": 1.30,
             "rationale": "研报偏向驱动的动量延续",
         },
         {
@@ -539,10 +669,19 @@ def _generate_candidates(
             "theory_ict_weight": 1.2,
             "theory_brooks_weight": 1.3,
             "theory_lie_weight": 0.9,
+            "theory_wyckoff_weight": 1.2,
+            "theory_vpa_weight": 1.0,
             "theory_confidence_boost_max": 4.6,
             "theory_penalty_max": 6.8,
             "theory_min_confluence": 0.40,
             "theory_conflict_fuse": 0.68,
+            "execution_confirm_enabled": True,
+            "execution_confirm_lookahead": 3,
+            "execution_confirm_loss_mult": 0.68,
+            "execution_anti_martingale_enabled": True,
+            "execution_anti_martingale_step": 0.14,
+            "execution_anti_martingale_floor": 0.72,
+            "execution_anti_martingale_ceiling": 1.24,
             "rationale": "新闻冲击后的均值回归",
         },
         {
@@ -555,10 +694,19 @@ def _generate_candidates(
             "theory_ict_weight": 1.0,
             "theory_brooks_weight": 1.0,
             "theory_lie_weight": 1.1,
+            "theory_wyckoff_weight": 0.9,
+            "theory_vpa_weight": 0.9,
             "theory_confidence_boost_max": 5.0,
             "theory_penalty_max": 6.2,
             "theory_min_confluence": 0.38,
             "theory_conflict_fuse": 0.72,
+            "execution_confirm_enabled": True,
+            "execution_confirm_lookahead": 2,
+            "execution_confirm_loss_mult": 0.66,
+            "execution_anti_martingale_enabled": True,
+            "execution_anti_martingale_step": 0.16,
+            "execution_anti_martingale_floor": 0.68,
+            "execution_anti_martingale_ceiling": 1.30,
             "rationale": "新闻与研报一致性中庸策略",
         },
         {
@@ -571,10 +719,19 @@ def _generate_candidates(
             "theory_ict_weight": 0.9,
             "theory_brooks_weight": 1.3,
             "theory_lie_weight": 1.2,
+            "theory_wyckoff_weight": 1.1,
+            "theory_vpa_weight": 1.2,
             "theory_confidence_boost_max": 4.2,
             "theory_penalty_max": 7.4,
             "theory_min_confluence": 0.44,
             "theory_conflict_fuse": 0.64,
+            "execution_confirm_enabled": True,
+            "execution_confirm_lookahead": 3,
+            "execution_confirm_loss_mult": 0.72,
+            "execution_anti_martingale_enabled": True,
+            "execution_anti_martingale_step": 0.12,
+            "execution_anti_martingale_floor": 0.74,
+            "execution_anti_martingale_ceiling": 1.20,
             "rationale": "尾部风险防御优先",
         },
         {
@@ -587,10 +744,19 @@ def _generate_candidates(
             "theory_ict_weight": 1.4,
             "theory_brooks_weight": 0.8,
             "theory_lie_weight": 1.1,
+            "theory_wyckoff_weight": 0.8,
+            "theory_vpa_weight": 1.0,
             "theory_confidence_boost_max": 6.6,
             "theory_penalty_max": 4.8,
             "theory_min_confluence": 0.30,
             "theory_conflict_fuse": 0.82,
+            "execution_confirm_enabled": True,
+            "execution_confirm_lookahead": 1,
+            "execution_confirm_loss_mult": 0.58,
+            "execution_anti_martingale_enabled": True,
+            "execution_anti_martingale_step": 0.22,
+            "execution_anti_martingale_floor": 0.62,
+            "execution_anti_martingale_ceiling": 1.42,
             "rationale": "高波动突破捕捉",
         },
     ]
@@ -602,6 +768,10 @@ def _generate_candidates(
     brooks_micro_bias = float(market.get("brooks_micro_channel_bias", 0.0))
     brooks_two_legged = float(market.get("brooks_two_legged_bias", 0.0))
     brooks_exhaust = float(market.get("brooks_exhaustion_z", 0.0))
+    wyckoff_acc = float(market.get("wyckoff_accumulation_bias", 0.0))
+    wyckoff_dist = float(market.get("wyckoff_distribution_bias", 0.0))
+    vpa_effort = float(market.get("vpa_effort_result_bias", 0.0))
+    vpa_climax = float(market.get("vpa_climax_z", 0.0))
     news_bias = float(report.get("news_bias_z", 0.0))
     report_bias = float(report.get("report_bias_z", 0.0))
     agree = float(report.get("news_report_agreement", 0.0))
@@ -620,10 +790,27 @@ def _generate_candidates(
             )
         )
         brooks_hazard = float(np.tanh(0.65 * max(0.0, brooks_exhaust) + 0.20 * max(0.0, -brooks_micro_bias)))
+        wyckoff_support = float(
+            np.tanh(0.70 * max(0.0, wyckoff_acc) - 0.55 * max(0.0, wyckoff_dist) + 0.25 * max(0.0, vpa_effort))
+        )
+        wyckoff_hazard = float(
+            np.tanh(0.70 * max(0.0, wyckoff_dist) + 0.30 * max(0.0, vpa_climax) - 0.25 * max(0.0, wyckoff_acc))
+        )
+        vpa_support = float(np.tanh(0.60 * max(0.0, vpa_effort) + 0.20 * max(0.0, wyckoff_acc) - 0.28 * max(0.0, vpa_climax)))
+        vpa_hazard = float(
+            np.tanh(0.60 * max(0.0, -vpa_effort) + 0.34 * max(0.0, vpa_climax) + 0.20 * max(0.0, wyckoff_dist))
+        )
+
         conf = float(tpl["signal_confidence_min"]) - 5.0 * info_push + 2.0 * max(0.0, -agree)
         conf += 1.4 * max(0.0, brooks_hazard) - 1.1 * max(0.0, brooks_support)
+        conf += 1.0 * max(0.0, wyckoff_hazard) - 0.85 * max(0.0, wyckoff_support)
+        conf += 0.70 * max(0.0, vpa_hazard) - 0.65 * max(0.0, vpa_support)
+
         convex = float(tpl["convexity_min"]) + 0.35 * max(0.0, vol) + 0.20 * max(0.0, -tail)
         convex += 0.22 * max(0.0, brooks_hazard) - 0.10 * max(0.0, brooks_support)
+        convex += 0.16 * max(0.0, wyckoff_hazard) - 0.07 * max(0.0, wyckoff_support)
+        convex += 0.10 * max(0.0, vpa_hazard) - 0.06 * max(0.0, vpa_support)
+
         exposure = (
             float(tpl.get("exposure_scale", 0.60))
             + 0.10 * max(0.0, trend)
@@ -632,58 +819,149 @@ def _generate_candidates(
             - 0.15 * max(0.0, -agree)
             + 0.06 * max(0.0, brooks_support)
             - 0.10 * max(0.0, brooks_hazard)
+            + 0.05 * max(0.0, wyckoff_support)
+            - 0.07 * max(0.0, wyckoff_hazard)
+            + 0.04 * max(0.0, vpa_support)
+            - 0.06 * max(0.0, vpa_hazard)
         )
-        hold = int(round(float(tpl["hold_days"]) + 3.0 * regime_push + 1.0 * max(0.0, brooks_support) - 2.0 * max(0.0, brooks_hazard)))
+
+        hold = int(
+            round(
+                float(tpl["hold_days"])
+                + 3.0 * regime_push
+                + 1.0 * max(0.0, brooks_support)
+                + 0.7 * max(0.0, wyckoff_support)
+                - 2.0 * max(0.0, brooks_hazard)
+                - 1.1 * max(0.0, wyckoff_hazard)
+            )
+        )
         trades = int(
             round(
                 float(tpl["max_daily_trades"])
                 + (1.0 if abs(info_push) > 0.8 else 0.0)
                 + 0.8 * max(0.0, brooks_support)
+                + 0.6 * max(0.0, vpa_support)
                 - 1.2 * max(0.0, brooks_hazard)
+                - 0.8 * max(0.0, vpa_hazard)
             )
         )
-        ict_w = float(tpl["theory_ict_weight"]) + 0.25 * max(0.0, info_push) + 0.10 * max(0.0, trend)
+
+        ict_w = (
+            float(tpl["theory_ict_weight"])
+            + 0.25 * max(0.0, info_push)
+            + 0.10 * max(0.0, trend)
+            + 0.05 * max(0.0, wyckoff_support)
+            - 0.08 * max(0.0, wyckoff_hazard)
+        )
         brooks_w = (
             float(tpl["theory_brooks_weight"])
             + 0.20 * max(0.0, vol)
             + 0.20 * max(0.0, -agree)
             + 0.25 * max(0.0, brooks_support)
             - 0.20 * max(0.0, brooks_hazard)
+            + 0.04 * max(0.0, vpa_support)
         )
         lie_w = (
             float(tpl["theory_lie_weight"])
             + 0.25 * max(0.0, trend)
             - 0.12 * max(0.0, vol)
             + 0.08 * max(0.0, brooks_support)
+            + 0.10 * max(0.0, wyckoff_support)
             - 0.10 * max(0.0, brooks_hazard)
+            - 0.08 * max(0.0, wyckoff_hazard)
         )
+        wyckoff_w = (
+            float(tpl["theory_wyckoff_weight"])
+            + 0.26 * max(0.0, wyckoff_support)
+            + 0.10 * max(0.0, vpa_support)
+            + 0.08 * max(0.0, -agree)
+            - 0.20 * max(0.0, wyckoff_hazard)
+            - 0.06 * max(0.0, vpa_hazard)
+        )
+        vpa_w = (
+            float(tpl["theory_vpa_weight"])
+            + 0.24 * max(0.0, vpa_support)
+            + 0.08 * max(0.0, info_push)
+            - 0.16 * max(0.0, vpa_hazard)
+            - 0.06 * max(0.0, wyckoff_hazard)
+        )
+
         boost = (
             float(tpl["theory_confidence_boost_max"])
             + 0.9 * max(0.0, trend)
             - 0.6 * max(0.0, vol)
             + 0.30 * max(0.0, brooks_support)
+            + 0.20 * max(0.0, wyckoff_support)
+            + 0.14 * max(0.0, vpa_support)
             - 0.55 * max(0.0, brooks_hazard)
+            - 0.20 * max(0.0, wyckoff_hazard)
+            - 0.15 * max(0.0, vpa_hazard)
         )
         penalty = (
             float(tpl["theory_penalty_max"])
             + 0.8 * max(0.0, vol)
             + 0.7 * max(0.0, -agree)
             + 0.65 * max(0.0, brooks_hazard)
+            + 0.32 * max(0.0, wyckoff_hazard)
+            + 0.24 * max(0.0, vpa_hazard)
             - 0.18 * max(0.0, brooks_support)
+            - 0.08 * max(0.0, wyckoff_support)
         )
         min_conf = (
             float(tpl["theory_min_confluence"])
             + 0.05 * max(0.0, vol)
             + 0.03 * max(0.0, -tail)
             + 0.03 * max(0.0, brooks_hazard)
+            + 0.02 * max(0.0, wyckoff_hazard)
+            + 0.02 * max(0.0, vpa_hazard)
             - 0.02 * max(0.0, brooks_support)
+            - 0.01 * max(0.0, wyckoff_support)
         )
         conflict_fuse = (
             float(tpl["theory_conflict_fuse"])
             - 0.04 * max(0.0, vol)
             + 0.03 * max(0.0, trend)
             - 0.03 * max(0.0, brooks_hazard)
+            - 0.02 * max(0.0, wyckoff_hazard)
+            - 0.01 * max(0.0, vpa_hazard)
             + 0.01 * max(0.0, brooks_support)
+            + 0.01 * max(0.0, wyckoff_support)
+        )
+
+        confirm_loss_mult = (
+            float(tpl["execution_confirm_loss_mult"])
+            + 0.10 * max(0.0, brooks_hazard)
+            + 0.08 * max(0.0, wyckoff_hazard)
+            - 0.06 * max(0.0, brooks_support)
+            - 0.05 * max(0.0, wyckoff_support)
+        )
+        confirm_lookahead = int(
+            round(
+                float(tpl["execution_confirm_lookahead"])
+                + 1.1 * max(0.0, brooks_hazard)
+                + 0.8 * max(0.0, wyckoff_hazard)
+                - 0.7 * max(0.0, brooks_support)
+            )
+        )
+        anti_step = (
+            float(tpl["execution_anti_martingale_step"])
+            + 0.05 * max(0.0, brooks_support)
+            + 0.04 * max(0.0, wyckoff_support)
+            - 0.08 * max(0.0, brooks_hazard)
+            - 0.05 * max(0.0, wyckoff_hazard)
+        )
+        anti_floor = (
+            float(tpl["execution_anti_martingale_floor"])
+            + 0.10 * max(0.0, brooks_hazard)
+            + 0.08 * max(0.0, wyckoff_hazard)
+            - 0.05 * max(0.0, brooks_support)
+        )
+        anti_ceiling = (
+            float(tpl["execution_anti_martingale_ceiling"])
+            + 0.12 * max(0.0, brooks_support)
+            + 0.08 * max(0.0, wyckoff_support)
+            - 0.16 * max(0.0, brooks_hazard)
+            - 0.10 * max(0.0, wyckoff_hazard)
         )
 
         tpl["signal_confidence_min"] = _clip(conf, 15.0, 72.0)
@@ -694,22 +972,48 @@ def _generate_candidates(
         tpl["theory_ict_weight"] = _clip(ict_w, 0.6, 1.8)
         tpl["theory_brooks_weight"] = _clip(brooks_w, 0.6, 1.8)
         tpl["theory_lie_weight"] = _clip(lie_w, 0.6, 1.8)
+        tpl["theory_wyckoff_weight"] = _clip(wyckoff_w, 0.0, 1.8)
+        tpl["theory_vpa_weight"] = _clip(vpa_w, 0.0, 1.8)
         tpl["theory_confidence_boost_max"] = _clip(boost, 2.5, 10.0)
         tpl["theory_penalty_max"] = _clip(penalty, 3.0, 10.0)
         tpl["theory_min_confluence"] = _clip(min_conf, 0.20, 0.60)
         tpl["theory_conflict_fuse"] = _clip(conflict_fuse, 0.50, 0.90)
+        tpl["execution_confirm_loss_mult"] = _clip(confirm_loss_mult, 0.45, 0.95)
+        tpl["execution_confirm_lookahead"] = int(max(1, min(5, confirm_lookahead)))
+        tpl["execution_anti_martingale_step"] = _clip(anti_step, 0.05, 0.35)
+        tpl["execution_anti_martingale_floor"] = _clip(anti_floor, 0.40, 1.00)
+        tpl["execution_anti_martingale_ceiling"] = _clip(anti_ceiling, 1.05, 1.80)
+        if float(tpl["execution_anti_martingale_floor"]) > float(tpl["execution_anti_martingale_ceiling"]):
+            tpl["execution_anti_martingale_floor"] = float(tpl["execution_anti_martingale_ceiling"])
         tpl["brooks_support_score"] = _clip(brooks_support, -1.0, 1.0)
         tpl["brooks_hazard_score"] = _clip(brooks_hazard, 0.0, 1.0)
+        tpl["wyckoff_support_score"] = _clip(wyckoff_support, -1.0, 1.0)
+        tpl["wyckoff_hazard_score"] = _clip(wyckoff_hazard, 0.0, 1.0)
+        tpl["vpa_support_score"] = _clip(vpa_support, -1.0, 1.0)
+        tpl["vpa_hazard_score"] = _clip(vpa_hazard, 0.0, 1.0)
+
         if float(tpl["brooks_support_score"]) >= 0.25:
             tpl["rationale"] = f"{tpl['rationale']} | Brooks顺势结构强化"
         if float(tpl["brooks_hazard_score"]) >= 0.25:
             tpl["rationale"] = f"{tpl['rationale']} | Brooks高潮风险抑制"
+        if float(tpl["wyckoff_support_score"]) >= 0.20:
+            tpl["rationale"] = f"{tpl['rationale']} | Wyckoff吸筹偏多"
+        if float(tpl["wyckoff_hazard_score"]) >= 0.20:
+            tpl["rationale"] = f"{tpl['rationale']} | Wyckoff派发风控"
+        if float(tpl["vpa_support_score"]) >= 0.20:
+            tpl["rationale"] = f"{tpl['rationale']} | VPA量价共振"
+        if float(tpl["vpa_hazard_score"]) >= 0.20:
+            tpl["rationale"] = f"{tpl['rationale']} | VPA量价背离"
+
         if bool(low_activity_mode):
             tpl["signal_confidence_min"] = _clip(float(tpl["signal_confidence_min"]) - 4.0, 12.0, 72.0)
             tpl["convexity_min"] = _clip(float(tpl["convexity_min"]) - 0.30, 0.9, 3.5)
             tpl["hold_days"] = int(max(1, min(20, int(tpl["hold_days"]) - 2)))
             tpl["max_daily_trades"] = int(max(1, min(5, int(tpl["max_daily_trades"]) + 1)))
+            tpl["execution_confirm_loss_mult"] = _clip(float(tpl["execution_confirm_loss_mult"]) + 0.04, 0.45, 0.95)
+            tpl["execution_confirm_lookahead"] = int(max(1, min(5, int(tpl["execution_confirm_lookahead"]) - 1)))
             tpl["rationale"] = f"{tpl['rationale']} | 低活跃窗口松绑"
+
         tpl["name"] = f"{tpl['name']}_{i+1:02d}"
         out.append(tpl)
     return out
@@ -1012,10 +1316,20 @@ def run_strategy_lab(
             theory_ict_weight=float(spec.get("theory_ict_weight", 1.0)),
             theory_brooks_weight=float(spec.get("theory_brooks_weight", 1.0)),
             theory_lie_weight=float(spec.get("theory_lie_weight", 1.2)),
+            theory_wyckoff_weight=float(spec.get("theory_wyckoff_weight", 0.0)),
+            theory_vpa_weight=float(spec.get("theory_vpa_weight", 0.0)),
             theory_confidence_boost_max=float(spec.get("theory_confidence_boost_max", 5.0)),
             theory_penalty_max=float(spec.get("theory_penalty_max", 6.0)),
             theory_min_confluence=float(spec.get("theory_min_confluence", 0.38)),
             theory_conflict_fuse=float(spec.get("theory_conflict_fuse", 0.72)),
+            execution_confirm_enabled=bool(spec.get("execution_confirm_enabled", False)),
+            execution_confirm_lookahead=int(spec.get("execution_confirm_lookahead", 2)),
+            execution_confirm_loss_mult=float(spec.get("execution_confirm_loss_mult", 0.65)),
+            execution_confirm_win_mult=float(spec.get("execution_confirm_win_mult", 1.0)),
+            execution_anti_martingale_enabled=bool(spec.get("execution_anti_martingale_enabled", False)),
+            execution_anti_martingale_step=float(spec.get("execution_anti_martingale_step", 0.2)),
+            execution_anti_martingale_floor=float(spec.get("execution_anti_martingale_floor", 0.6)),
+            execution_anti_martingale_ceiling=float(spec.get("execution_anti_martingale_ceiling", 1.4)),
         )
         train_bt = run_event_backtest(
             bars=bars,
@@ -1117,12 +1431,26 @@ def run_strategy_lab(
                     "theory_ict_weight": float(spec.get("theory_ict_weight", 1.0)),
                     "theory_brooks_weight": float(spec.get("theory_brooks_weight", 1.0)),
                     "theory_lie_weight": float(spec.get("theory_lie_weight", 1.2)),
+                    "theory_wyckoff_weight": float(spec.get("theory_wyckoff_weight", 0.0)),
+                    "theory_vpa_weight": float(spec.get("theory_vpa_weight", 0.0)),
                     "theory_confidence_boost_max": float(spec.get("theory_confidence_boost_max", 5.0)),
                     "theory_penalty_max": float(spec.get("theory_penalty_max", 6.0)),
                     "theory_min_confluence": float(spec.get("theory_min_confluence", 0.38)),
                     "theory_conflict_fuse": float(spec.get("theory_conflict_fuse", 0.72)),
                     "brooks_support_score": float(spec.get("brooks_support_score", 0.0)),
                     "brooks_hazard_score": float(spec.get("brooks_hazard_score", 0.0)),
+                    "wyckoff_support_score": float(spec.get("wyckoff_support_score", 0.0)),
+                    "wyckoff_hazard_score": float(spec.get("wyckoff_hazard_score", 0.0)),
+                    "vpa_support_score": float(spec.get("vpa_support_score", 0.0)),
+                    "vpa_hazard_score": float(spec.get("vpa_hazard_score", 0.0)),
+                    "execution_confirm_enabled": bool(spec.get("execution_confirm_enabled", False)),
+                    "execution_confirm_lookahead": int(spec.get("execution_confirm_lookahead", 2)),
+                    "execution_confirm_loss_mult": float(spec.get("execution_confirm_loss_mult", 0.65)),
+                    "execution_confirm_win_mult": float(spec.get("execution_confirm_win_mult", 1.0)),
+                    "execution_anti_martingale_enabled": bool(spec.get("execution_anti_martingale_enabled", False)),
+                    "execution_anti_martingale_step": float(spec.get("execution_anti_martingale_step", 0.2)),
+                    "execution_anti_martingale_floor": float(spec.get("execution_anti_martingale_floor", 0.6)),
+                    "execution_anti_martingale_ceiling": float(spec.get("execution_anti_martingale_ceiling", 1.4)),
                 },
                 train_metrics={
                     "annual_return": float(train_bt.annual_return),
