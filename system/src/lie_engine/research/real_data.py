@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import threading
 import time
 from typing import Any
 
@@ -15,9 +16,13 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from lie_engine.data.providers import BinanceSpotPublicProvider
+
 
 EQUITY_RE = re.compile(r"^\d{6}$")
 FUTURE_RE = re.compile(r"^([A-Z]{1,3})\d{4}$")
+CRYPTO_PAIR_RE = re.compile(r"^[A-Z0-9]{6,20}$")
+CRYPTO_QUOTES = ("USDT", "USDC", "BUSD", "FDUSD", "BTC", "ETH", "BNB", "EUR")
 
 
 POSITIVE_KWS = (
@@ -46,6 +51,10 @@ NEGATIVE_KWS = (
     "miss",
     "warn",
 )
+
+
+_BINANCE_DAILY_PROVIDER_LOCK = threading.Lock()
+_BINANCE_DAILY_PROVIDER: BinanceSpotPublicProvider | None = None
 
 
 @dataclass(slots=True)
@@ -112,6 +121,30 @@ def _retry_call(fn, retries: int = 3, base_sleep: float = 0.8):
     if last_err:
         raise last_err
     raise RuntimeError("unreachable")
+
+
+def _normalize_symbol(raw: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", str(raw or "").upper())
+
+
+def _is_crypto_symbol(symbol: str) -> bool:
+    sym = _normalize_symbol(symbol)
+    if not CRYPTO_PAIR_RE.match(sym):
+        return False
+    return any(sym.endswith(q) and len(sym) > len(q) + 1 for q in CRYPTO_QUOTES)
+
+
+def _get_binance_provider() -> BinanceSpotPublicProvider:
+    global _BINANCE_DAILY_PROVIDER
+    if _BINANCE_DAILY_PROVIDER is not None:
+        return _BINANCE_DAILY_PROVIDER
+    with _BINANCE_DAILY_PROVIDER_LOCK:
+        if _BINANCE_DAILY_PROVIDER is None:
+            _BINANCE_DAILY_PROVIDER = BinanceSpotPublicProvider(
+                request_timeout_ms=5000,
+                rate_limit_per_minute=10,
+            )
+    return _BINANCE_DAILY_PROVIDER
 
 
 def _symbol_to_yf(symbol: str) -> str:
@@ -229,17 +262,34 @@ def fetch_future_daily(symbol: str, start: date, end: date) -> pd.DataFrame:
     return _retry_call(_ak, retries=3)
 
 
+def fetch_crypto_daily(symbol: str, start: date, end: date) -> pd.DataFrame:
+    sym = _normalize_symbol(symbol)
+    if not _is_crypto_symbol(sym):
+        return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    provider = _get_binance_provider()
+    df = provider.fetch_ohlcv(symbol=sym, start=start, end=end, freq="1d")
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    out = df.copy()
+    out["symbol"] = sym
+    return out
+
+
 def _fetch_one_symbol(symbol: str, start: date, end: date) -> tuple[str, pd.DataFrame, str | None]:
+    normalized_symbol = _normalize_symbol(symbol)
     try:
-        if EQUITY_RE.match(symbol):
-            df = fetch_equity_daily(symbol, start, end)
-            return symbol, df, None
-        if FUTURE_RE.match(symbol):
-            df = fetch_future_daily(symbol, start, end)
-            return symbol, df, None
-        return symbol, pd.DataFrame(), f"unsupported_symbol:{symbol}"
+        if EQUITY_RE.match(normalized_symbol):
+            df = fetch_equity_daily(normalized_symbol, start, end)
+            return normalized_symbol, df, None
+        if FUTURE_RE.match(normalized_symbol):
+            df = fetch_future_daily(normalized_symbol, start, end)
+            return normalized_symbol, df, None
+        if _is_crypto_symbol(normalized_symbol):
+            df = fetch_crypto_daily(normalized_symbol, start, end)
+            return normalized_symbol, df, None
+        return normalized_symbol, pd.DataFrame(), f"unsupported_symbol:{normalized_symbol}"
     except Exception as exc:  # noqa: BLE001
-        return symbol, pd.DataFrame(), f"{type(exc).__name__}:{exc}"
+        return normalized_symbol, pd.DataFrame(), f"{type(exc).__name__}:{exc}"
 
 
 def _stock_news_score(title: str, content: str) -> float:
@@ -319,9 +369,15 @@ def load_universe(core_symbols: list[str], max_symbols: int = 120) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for s in core_symbols:
-        if s not in seen:
-            out.append(s)
-            seen.add(s)
+        sym = _normalize_symbol(s)
+        if (not sym) or (sym in seen):
+            continue
+        out.append(sym)
+        seen.add(sym)
+
+    # Crypto mode: keep user core symbols only, avoid equity index contamination.
+    if out and all(_is_crypto_symbol(s) for s in out):
+        return out[:max_symbols]
 
     candidates: list[str] = []
     for idx in ("000300", "000905"):
@@ -486,6 +542,7 @@ def load_real_data_bundle(
             pass
 
     universe = load_universe(core_symbols=core_symbols, max_symbols=max_symbols)
+    universe_is_all_crypto = bool(universe) and all(_is_crypto_symbol(s) for s in universe)
 
     bars_frames: list[pd.DataFrame] = []
     errors: dict[str, str] = {}
@@ -585,7 +642,11 @@ def load_real_data_bundle(
             "review_bar_max_ts": review_bar_max_ts,
             "review_news_max_ts": review_news_max_ts,
             "review_report_max_ts": review_report_max_ts,
-            "universe_source_notice": "index constituents are latest snapshot; survivorship bias may remain",
+            "universe_source_notice": (
+                "core symbols only (crypto mode)"
+                if universe_is_all_crypto
+                else "index constituents are latest snapshot; survivorship bias may remain"
+            ),
         },
     )
     if cache_meta and bars_cache_path and news_cache_path and report_cache_path and review_news_cache_path and review_report_cache_path:
