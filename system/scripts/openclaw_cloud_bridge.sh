@@ -12,6 +12,8 @@ Actions:
   sample-whitelist-gate   Run sampling and fail-fast when whitelist gate is red.
   assert-whitelist-gate   Assert latest whitelist artifact gate without resampling.
   ensure-whitelist-gate   Assert first, then auto-resample+reassert on failure.
+  live-takeover-probe     Run remote Binance takeover probe (config+evomap+telemetry, no order).
+  live-takeover-canary    Run remote Binance takeover canary (includes minimal live order).
   cut-local               Disable local OpenClaw launchd services.
   probe-cloud             Probe cloud host/project availability.
   compare                 Compare local/remote git heads.
@@ -40,6 +42,15 @@ Environment:
   WHITELIST_REQUIRE_LAST_RC_ZERO     default: true
   WHITELIST_REQUIRED_ACTIONS         default: probe-cloud,compare,tunnel-up,tunnel-probe,validate-remote-config,tunnel-down,sync-dry-run
   WHITELIST_ASSERT_MAX_AGE_MINUTES   default: 90 (artifact freshness guard)
+  LIVE_TAKEOVER_DATE       optional YYYY-MM-DD
+  LIVE_TAKEOVER_CANARY_USDT          default: 5
+  LIVE_TAKEOVER_MAX_DRAWDOWN         default: 0.05
+  LIVE_TAKEOVER_RATE_LIMIT_PER_MINUTE default: 10
+  LIVE_TAKEOVER_TIMEOUT_MS           default: 5000
+  LIVE_TAKEOVER_TRADE_WINDOW_HOURS   default: 24
+  LIVE_TAKEOVER_MARKET               default: spot (spot|futures_usdm)
+  LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK default: true
+  LIVE_TAKEOVER_FORWARD_LOCAL_CREDS  default: false (forward local BINANCE_API_KEY/BINANCE_SECRET to remote run env)
 
 Notes:
   - SSH connect timeout is hard-limited to 5s for bridge reliability checks.
@@ -105,6 +116,20 @@ whitelist_min_samples_per_action="${WHITELIST_MIN_SAMPLES_PER_ACTION:-1}"
 whitelist_require_last_rc_zero="${WHITELIST_REQUIRE_LAST_RC_ZERO:-true}"
 whitelist_required_actions="${WHITELIST_REQUIRED_ACTIONS:-probe-cloud,compare,tunnel-up,tunnel-probe,validate-remote-config,tunnel-down,sync-dry-run}"
 whitelist_assert_max_age_minutes="${WHITELIST_ASSERT_MAX_AGE_MINUTES:-90}"
+live_takeover_date="${LIVE_TAKEOVER_DATE:-}"
+live_takeover_canary_usdt="${LIVE_TAKEOVER_CANARY_USDT:-5}"
+live_takeover_max_drawdown="${LIVE_TAKEOVER_MAX_DRAWDOWN:-0.05}"
+live_takeover_rate_limit_per_minute="${LIVE_TAKEOVER_RATE_LIMIT_PER_MINUTE:-10}"
+live_takeover_timeout_ms="${LIVE_TAKEOVER_TIMEOUT_MS:-5000}"
+live_takeover_trade_window_hours="${LIVE_TAKEOVER_TRADE_WINDOW_HOURS:-24}"
+live_takeover_market="$(printf '%s' "${LIVE_TAKEOVER_MARKET:-spot}" | tr '[:upper:]' '[:lower:]')"
+live_takeover_allow_daemon_env_fallback="${LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK:-true}"
+live_takeover_forward_local_creds="${LIVE_TAKEOVER_FORWARD_LOCAL_CREDS:-false}"
+
+if [[ "${live_takeover_market}" != "spot" && "${live_takeover_market}" != "futures_usdm" ]]; then
+  echo "ERROR: LIVE_TAKEOVER_MARKET must be one of: spot, futures_usdm." >&2
+  exit 2
+fi
 
 output_dir="${system_root}/output/review"
 log_dir="${system_root}/output/logs"
@@ -160,6 +185,21 @@ is_true() {
   esac
 }
 
+build_live_takeover_cred_env_arg() {
+  if ! is_true "${live_takeover_forward_local_creds}"; then
+    echo ""
+    return 0
+  fi
+  local api_key api_secret
+  api_key="${BINANCE_API_KEY:-${BINANCE_KEY:-}}"
+  api_secret="${BINANCE_SECRET_KEY:-${BINANCE_API_SECRET:-${BINANCE_SECRET:-}}}"
+  if [[ -z "${api_key}" || -z "${api_secret}" ]]; then
+    echo "ERROR: LIVE_TAKEOVER_FORWARD_LOCAL_CREDS=true requires local BINANCE_API_KEY and BINANCE_SECRET/BINANCE_API_SECRET." >&2
+    return 2
+  fi
+  printf 'BINANCE_API_KEY=%q BINANCE_SECRET=%q ' "${api_key}" "${api_secret}"
+}
+
 ssh_opts=(
   -o ConnectTimeout=5
   -o StrictHostKeyChecking=accept-new
@@ -207,6 +247,8 @@ sync-apply
 sync-apply-prune
 remote-clean-junk
 validate-remote-config
+live-takeover-probe
+live-takeover-canary
 sample-whitelist
 sample-whitelist-gate
 assert-whitelist-gate
@@ -382,6 +424,34 @@ action_validate_remote_config() {
   ssh_exec "set -e; wd=\$(${remote_workdir_expr}); cd \"\$wd\"; PYTHONPATH=src python3 -m lie_engine.cli --config config.yaml validate-config >/tmp/lie_validate_config.json; cat /tmp/lie_validate_config.json"
 }
 
+action_live_takeover_probe() {
+  local date_arg daemon_env_arg cred_env_arg
+  date_arg=""
+  daemon_env_arg=""
+  cred_env_arg="$(build_live_takeover_cred_env_arg)"
+  if [[ -n "${live_takeover_date}" ]]; then
+    date_arg="--date ${live_takeover_date}"
+  fi
+  if is_true "${live_takeover_allow_daemon_env_fallback}"; then
+    daemon_env_arg="--allow-daemon-env-fallback"
+  fi
+  ssh_exec "set -e; wd=\$(${remote_workdir_expr}); cd \"\$wd\"; ${cred_env_arg}PYTHONPATH=src python3 scripts/binance_live_takeover.py ${date_arg} --config config.yaml --output-root output --activate-config --rate-limit-per-minute ${live_takeover_rate_limit_per_minute} --timeout-ms ${live_takeover_timeout_ms} --canary-quote-usdt ${live_takeover_canary_usdt} --max-drawdown ${live_takeover_max_drawdown} --trade-window-hours ${live_takeover_trade_window_hours} --market ${live_takeover_market} ${daemon_env_arg}"
+}
+
+action_live_takeover_canary() {
+  local date_arg daemon_env_arg cred_env_arg
+  date_arg=""
+  daemon_env_arg=""
+  cred_env_arg="$(build_live_takeover_cred_env_arg)"
+  if [[ -n "${live_takeover_date}" ]]; then
+    date_arg="--date ${live_takeover_date}"
+  fi
+  if is_true "${live_takeover_allow_daemon_env_fallback}"; then
+    daemon_env_arg="--allow-daemon-env-fallback"
+  fi
+  ssh_exec "set -e; wd=\$(${remote_workdir_expr}); cd \"\$wd\"; ${cred_env_arg}PYTHONPATH=src python3 scripts/binance_live_takeover.py ${date_arg} --config config.yaml --output-root output --activate-config --allow-live-order --rate-limit-per-minute ${live_takeover_rate_limit_per_minute} --timeout-ms ${live_takeover_timeout_ms} --canary-quote-usdt ${live_takeover_canary_usdt} --max-drawdown ${live_takeover_max_drawdown} --trade-window-hours ${live_takeover_trade_window_hours} --market ${live_takeover_market} ${daemon_env_arg}"
+}
+
 append_sample_record() {
   local action="$1"
   local rc="$2"
@@ -417,6 +487,8 @@ run_action_by_name() {
     sync-apply-prune) action_sync_apply_prune ;;
     remote-clean-junk) action_remote_clean_junk ;;
     validate-remote-config) action_validate_remote_config ;;
+    live-takeover-probe) action_live_takeover_probe ;;
+    live-takeover-canary) action_live_takeover_canary ;;
     *)
       echo "ERROR: unknown action '${action}'" >&2
       usage

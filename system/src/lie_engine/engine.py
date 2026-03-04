@@ -1802,8 +1802,17 @@ class LieEngine:
         if pos.empty:
             return {}, {}, 0.0
 
+        pos["symbol"] = pos["symbol"].astype(str)
+        pos["status"] = pos["status"].astype(str).str.upper()
+        pos["size_pct"] = pd.to_numeric(pos["size_pct"], errors="coerce").fillna(0.0)
         pos = pos[pos["status"] == "ACTIVE"]
-        by_symbol = pos.groupby("symbol")["size_pct"].sum().to_dict()
+        by_symbol_raw = pos.groupby("symbol")["size_pct"].sum().to_dict()
+        by_symbol: dict[str, float] = {}
+        for sym, val in by_symbol_raw.items():
+            sym_s = str(sym).strip()
+            if not sym_s:
+                continue
+            by_symbol[sym_s] = float(val)
         theme_map = self._theme_map()
         by_theme: dict[str, float] = {}
         for sym, val in by_symbol.items():
@@ -2630,7 +2639,183 @@ class LieEngine:
             "avg_selected_time_sync_ok_ratio": float(np.clip(time_vals.mean(), 0.0, 1.0)),
         }
 
-    def run_micro_capture(self, *, as_of: date, symbols: list[str] | None = None) -> dict[str, Any]:
+    def _binance_live_takeover_settings(self) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        order_side_raw = str(val.get("binance_live_takeover_order_side", "")).strip().upper()
+        if order_side_raw not in {"BUY", "SELL"}:
+            order_side_raw = ""
+        return {
+            "enabled": bool(val.get("binance_live_takeover_enabled", False)),
+            "on_micro_capture": bool(val.get("binance_live_takeover_on_micro_capture", True)),
+            "on_eod": bool(val.get("binance_live_takeover_on_eod", True)),
+            "activate_config": bool(val.get("binance_live_takeover_activate_config", True)),
+            "allow_live_order": bool(val.get("binance_live_takeover_allow_live_order", False)),
+            "allow_daemon_env_fallback": bool(val.get("binance_live_takeover_allow_daemon_env_fallback", True)),
+            "market": str(val.get("binance_live_takeover_market", "futures_usdm")).strip().lower(),
+            "rate_limit_per_minute": max(1, int(val.get("binance_live_takeover_rate_limit_per_minute", 10))),
+            "timeout_ms": int(min(5000, max(100, int(val.get("binance_live_takeover_timeout_ms", 5000))))),
+            "exec_timeout_seconds": int(min(300, max(5, int(val.get("binance_live_takeover_exec_timeout_seconds", 45))))),
+            "canary_quote_usdt": max(0.1, float(val.get("binance_live_takeover_canary_quote_usdt", 5.0))),
+            "max_drawdown": self._clamp_float(float(val.get("binance_live_takeover_max_drawdown", 0.05)), 0.01, 0.5),
+            "trade_window_hours": max(1, int(val.get("binance_live_takeover_trade_window_hours", 24))),
+            "max_trade_symbols": max(1, int(val.get("binance_live_takeover_max_trade_symbols", 3))),
+            "order_symbol": str(val.get("binance_live_takeover_order_symbol", "")).strip().upper(),
+            "order_side": order_side_raw,
+        }
+
+    def _run_binance_live_takeover(
+        self,
+        *,
+        as_of: date,
+        trigger: str,
+        skip_mutex: bool = False,
+    ) -> dict[str, Any]:
+        cfg = self._binance_live_takeover_settings()
+        enabled = bool(cfg.get("enabled", False))
+        trigger_key = str(trigger).strip().lower()
+        trigger_enabled = bool(cfg.get("on_micro_capture", True)) if trigger_key == "micro_capture" else bool(cfg.get("on_eod", True))
+
+        out: dict[str, Any] = {
+            "enabled": bool(enabled),
+            "trigger": trigger_key,
+            "trigger_enabled": bool(trigger_enabled),
+            "executed": False,
+            "ok": True,
+            "mode": "disabled",
+            "artifact": "",
+            "returncode": 0,
+            "reason": "disabled",
+        }
+        if not enabled:
+            return out
+        if not trigger_enabled:
+            out["mode"] = "trigger_disabled"
+            out["reason"] = f"trigger_{trigger_key}_disabled"
+            return out
+
+        script_path = self.ctx.root / "scripts" / "binance_live_takeover.py"
+        if not script_path.exists():
+            out["ok"] = False
+            out["mode"] = "script_missing"
+            out["reason"] = f"script_missing:{script_path}"
+            return out
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--date",
+            as_of.isoformat(),
+            "--config",
+            str(self.ctx.config_path),
+            "--output-root",
+            str(self.ctx.output_dir),
+            "--rate-limit-per-minute",
+            str(int(cfg.get("rate_limit_per_minute", 10))),
+            "--timeout-ms",
+            str(int(cfg.get("timeout_ms", 5000))),
+            "--canary-quote-usdt",
+            str(float(cfg.get("canary_quote_usdt", 5.0))),
+            "--max-drawdown",
+            str(float(cfg.get("max_drawdown", 0.05))),
+            "--trade-window-hours",
+            str(int(cfg.get("trade_window_hours", 24))),
+            "--max-trade-symbols",
+            str(int(cfg.get("max_trade_symbols", 3))),
+        ]
+        market = str(cfg.get("market", "futures_usdm")).strip().lower()
+        if market not in {"futures_usdm", "spot"}:
+            market = "futures_usdm"
+        cmd.extend(["--market", market])
+        if bool(cfg.get("activate_config", True)):
+            cmd.append("--activate-config")
+        if bool(cfg.get("allow_live_order", False)):
+            cmd.append("--allow-live-order")
+        if bool(cfg.get("allow_daemon_env_fallback", True)):
+            cmd.append("--allow-daemon-env-fallback")
+        order_symbol = str(cfg.get("order_symbol", "")).strip().upper()
+        if order_symbol:
+            cmd.extend(["--order-symbol", order_symbol])
+        order_side = str(cfg.get("order_side", "")).strip().upper()
+        if order_side in {"BUY", "SELL"}:
+            cmd.extend(["--order-side", order_side])
+        if bool(skip_mutex):
+            cmd.append("--skip-mutex")
+
+        env = dict(os.environ)
+        env["PYTHON"] = sys.executable
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=self.ctx.root,
+                text=True,
+                capture_output=True,
+                timeout=int(cfg.get("exec_timeout_seconds", 45)),
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            out.update(
+                {
+                    "executed": True,
+                    "ok": False,
+                    "mode": "timeout",
+                    "reason": "timeout",
+                    "returncode": 124,
+                    "command": cmd,
+                }
+            )
+            return out
+        except Exception as exc:
+            out.update(
+                {
+                    "executed": True,
+                    "ok": False,
+                    "mode": "invoke_error",
+                    "reason": str(exc),
+                    "returncode": 1,
+                    "command": cmd,
+                }
+            )
+            return out
+
+        payload = self._parse_guarded_stdout_json(str(proc.stdout or ""))
+        if not isinstance(payload, dict):
+            payload = {}
+        if not payload:
+            latest = self.ctx.output_dir / "review" / "latest_binance_live_takeover.json"
+            payload = self._load_json_safely(latest)
+        mode = str(payload.get("mode", "unknown")).strip() if isinstance(payload, dict) else "unknown"
+        artifact = str(payload.get("artifact", "")).strip() if isinstance(payload, dict) else ""
+        out.update(
+            {
+                "executed": True,
+                "ok": int(proc.returncode) == 0,
+                "mode": mode or "unknown",
+                "reason": "ok" if int(proc.returncode) == 0 else f"returncode_{int(proc.returncode)}",
+                "artifact": artifact,
+                "returncode": int(proc.returncode),
+                "command": cmd,
+            }
+        )
+        if str(proc.stderr or "").strip():
+            out["stderr_excerpt"] = str(proc.stderr or "")[-2000:]
+        if isinstance(payload, dict):
+            out["payload"] = {
+                "credentials": payload.get("steps", {}).get("credentials", {})
+                if isinstance(payload.get("steps", {}), dict)
+                else {},
+                "canary_order": payload.get("steps", {}).get("canary_order", {})
+                if isinstance(payload.get("steps", {}), dict)
+                else {},
+            }
+        return out
+
+    def run_micro_capture(
+        self,
+        *,
+        as_of: date,
+        symbols: list[str] | None = None,
+        live_takeover_skip_mutex: bool = False,
+    ) -> dict[str, Any]:
         target_symbols = self._resolve_micro_capture_symbols(symbols=symbols)
         micro_factor_map, micro_source_rows = self._collect_micro_factor_map_with_rows(
             as_of=as_of,
@@ -2724,6 +2909,11 @@ class LieEngine:
         artifact_dir = self.ctx.output_dir / "artifacts" / "micro_capture"
         artifact_path = artifact_dir / f"{stamp}_micro_capture.json"
         write_json(artifact_path, capture_payload)
+        live_takeover = self._run_binance_live_takeover(
+            as_of=as_of,
+            trigger="micro_capture",
+            skip_mutex=bool(live_takeover_skip_mutex),
+        )
 
         append_sqlite(
             self.ctx.sqlite_path,
@@ -2751,6 +2941,11 @@ class LieEngine:
                         "selected_schema_ok_ratio": float(schema_ok_ratio),
                         "selected_time_sync_ok_ratio": float(time_sync_ok_ratio),
                         "selected_sync_ok_ratio": float(sync_ok_ratio),
+                        "live_takeover_enabled": bool(live_takeover.get("enabled", False)),
+                        "live_takeover_executed": bool(live_takeover.get("executed", False)),
+                        "live_takeover_ok": bool(live_takeover.get("ok", False)),
+                        "live_takeover_mode": str(live_takeover.get("mode", "")),
+                        "live_takeover_artifact": str(live_takeover.get("artifact", "")),
                         "artifact_path": str(artifact_path),
                     }
                 ]
@@ -2806,10 +3001,11 @@ class LieEngine:
             "symbols": list(target_symbols),
             "summary": dict(capture_payload.get("summary", {})),
             "rolling_7d": rolling,
+            "live_takeover": live_takeover,
             "artifact": str(artifact_path),
         }
 
-    def run_eod(self, as_of: date) -> dict[str, Any]:
+    def run_eod(self, as_of: date, live_takeover_skip_mutex: bool = False) -> dict[str, Any]:
         symbols = self._core_symbols()
         bars, ingest = self._run_ingestion(as_of, symbols)
         paper_exec = self._settle_open_paper_positions(as_of=as_of, bars=bars)
@@ -3305,6 +3501,11 @@ class LieEngine:
         )
         active_positions = list(paper_exec.get("remaining_positions", [])) + open_positions
         self._save_open_paper_positions(as_of=as_of, positions=active_positions)
+        live_takeover = self._run_binance_live_takeover(
+            as_of=as_of,
+            trigger="eod",
+            skip_mutex=bool(live_takeover_skip_mutex),
+        )
         broker_snapshot_path = self._resolve_and_write_broker_snapshot(
             as_of=as_of,
             active_positions=active_positions,
@@ -3321,6 +3522,7 @@ class LieEngine:
                 "positions": str(positions_path),
                 "mode_feedback": str(mode_feedback_path),
                 "broker_snapshot": broker_snapshot_ref,
+                "live_takeover": str(live_takeover.get("artifact", "")),
                 "cross_source_alignment": str(cross_source_audit.get("artifact_path", "")),
                 "cross_source_quality_report": str(cross_source_report_path),
                 "system_time_sync_probe": str(system_time_sync_probe.get("artifact_path", "")),
@@ -3337,10 +3539,12 @@ class LieEngine:
                 "closed_trades": int((paper_exec.get("summary", {}) or {}).get("closed_count", 0)),
                 "closed_pnl": float((paper_exec.get("summary", {}) or {}).get("closed_pnl", 0.0)),
                 "open_positions": int(len(active_positions)),
+                "live_takeover_ok": bool(live_takeover.get("ok", False)),
             },
             checks={
                 "quality_passed": bool(ingest.quality.passed),
                 "trade_blocked": bool(guard.trade_blocked),
+                "live_takeover_executed": bool(live_takeover.get("executed", False)),
             },
         )
 
@@ -3364,6 +3568,7 @@ class LieEngine:
             "closed_pnl": float((paper_exec.get("summary", {}) or {}).get("closed_pnl", 0.0)),
             "open_positions": int(len(active_positions)),
             "broker_snapshot": broker_snapshot_ref,
+            "live_takeover": live_takeover,
             "cross_source_quality_report": str(cross_source_report_path),
             "system_time_sync_probe": str(system_time_sync_probe.get("artifact_path", "")),
         }
@@ -5603,10 +5808,14 @@ class LieEngine:
             output_dir=self.ctx.output_dir,
             run_premarket=lambda d: self.run_premarket(d),
             run_intraday_check=lambda d, slot: self.run_intraday_check(d, slot=slot),
-            run_eod=lambda d: self.run_eod(d),
+            run_eod=lambda d: self.run_eod(d, live_takeover_skip_mutex=True),
             run_review_cycle=_scheduler_review_cycle,
             ops_report=lambda d, window_days: self.ops_report(as_of=d, window_days=window_days),
-            run_micro_capture=lambda d, symbols: self.run_micro_capture(as_of=d, symbols=symbols),
+            run_micro_capture=lambda d, symbols: self.run_micro_capture(
+                as_of=d,
+                symbols=symbols,
+                live_takeover_skip_mutex=True,
+            ),
         )
 
     def gate_report(

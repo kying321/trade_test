@@ -35,9 +35,26 @@ class EngineIntegrationTests(unittest.TestCase):
         cfg_data["validation"]["review_backtest_lookback_days"] = 540
         cfg_data["validation"]["style_drift_adaptive_enabled"] = False
         cfg_data["validation"]["micro_cross_source_build_missing_provider"] = False
+        cfg_data["validation"]["binance_live_takeover_enabled"] = False
         cfg_path = tmp_root / "config.yaml"
         cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
         return LieEngine(config_path=cfg_path), tmp_root
+
+    def _write_active_baseline(self, tmp_root: Path, payload: dict[str, object]) -> Path:
+        active_baseline = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "active_baseline.yaml"
+        )
+        active_baseline.parent.mkdir(parents=True, exist_ok=True)
+        active_baseline.write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        return active_baseline
 
     def test_run_eod_outputs_contract_files(self) -> None:
         eng, tmp_root = self._make_engine()
@@ -330,6 +347,60 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertFalse(src.empty)
         self.assertFalse(sel.empty)
         self.assertFalse(cross.empty)
+
+    def test_run_binance_live_takeover_skips_when_trigger_disabled(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw["validation"]["binance_live_takeover_enabled"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_on_micro_capture"] = False
+
+        out = eng._run_binance_live_takeover(as_of=d, trigger="micro_capture", skip_mutex=True)
+        self.assertTrue(bool(out.get("enabled", False)))
+        self.assertFalse(bool(out.get("executed", True)))
+        self.assertEqual(str(out.get("mode", "")), "trigger_disabled")
+
+    def test_run_binance_live_takeover_builds_skip_mutex_command(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw["validation"]["binance_live_takeover_enabled"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_on_micro_capture"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_allow_daemon_env_fallback"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_allow_live_order"] = False
+        eng.settings.raw["validation"]["binance_live_takeover_activate_config"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_market"] = "spot"
+
+        script_path = tmp_root / "scripts" / "binance_live_takeover.py"
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text("print('ok')\n", encoding="utf-8")
+
+        fake_payload = {
+            "mode": "degraded_read_only",
+            "artifact": str(tmp_root / "output" / "review" / "x.json"),
+            "steps": {
+                "credentials": {"has_api_key": True, "has_api_secret": False},
+                "canary_order": {"executed": False, "reason": "missing_binance_api_secret"},
+            },
+        }
+
+        class _Proc:
+            returncode = 2
+            stdout = json.dumps(fake_payload, ensure_ascii=False)
+            stderr = ""
+
+        with patch("lie_engine.engine.subprocess.run", return_value=_Proc()) as run_mock:
+            out = eng._run_binance_live_takeover(as_of=d, trigger="micro_capture", skip_mutex=True)
+
+        self.assertTrue(bool(out.get("executed", False)))
+        self.assertFalse(bool(out.get("ok", True)))
+        self.assertEqual(str(out.get("mode", "")), "degraded_read_only")
+        self.assertEqual(str(out.get("artifact", "")), str(tmp_root / "output" / "review" / "x.json"))
+        cmd = run_mock.call_args.args[0]
+        self.assertIn("--skip-mutex", cmd)
+        self.assertIn("--activate-config", cmd)
+        self.assertIn("--allow-daemon-env-fallback", cmd)
+        self.assertNotIn("--allow-live-order", cmd)
+        self.assertIn("--market", cmd)
+        self.assertIn("spot", cmd)
 
     def test_market_factor_state_includes_cross_section_style(self) -> None:
         eng, _ = self._make_engine()
@@ -903,6 +974,28 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(by_symbol.get("300750", 0.0)), 5.0, places=6)
         self.assertAlmostEqual(float(total), 5.0, places=6)
 
+    def test_symbol_exposure_snapshot_coerces_string_size_pct(self) -> None:
+        eng, _ = self._make_engine()
+        db_path = eng.ctx.sqlite_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("CREATE TABLE latest_positions (date TEXT, symbol TEXT, size_pct TEXT, status TEXT)")
+            conn.execute(
+                "INSERT INTO latest_positions (date, symbol, size_pct, status) VALUES ('2026-02-14', 'BTCUSDT', '2.5', 'ACTIVE')"
+            )
+            conn.execute(
+                "INSERT INTO latest_positions (date, symbol, size_pct, status) VALUES ('2026-02-14', 'ETHUSDT', 'bad', 'ACTIVE')"
+            )
+            conn.execute(
+                "INSERT INTO latest_positions (date, symbol, size_pct, status) VALUES ('2026-02-14', 'SOLUSDT', '1.2', 'CLOSED')"
+            )
+            conn.commit()
+        by_symbol, _, total = eng._symbol_exposure_snapshot()
+        self.assertAlmostEqual(float(by_symbol.get("BTCUSDT", 0.0)), 2.5, places=6)
+        self.assertAlmostEqual(float(by_symbol.get("ETHUSDT", 0.0)), 0.0, places=6)
+        self.assertNotIn("SOLUSDT", by_symbol)
+        self.assertAlmostEqual(float(total), 2.5, places=6)
+
     def test_run_slot_and_session(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
@@ -921,16 +1014,18 @@ class EngineIntegrationTests(unittest.TestCase):
     def test_run_slot_micro_capture_alias(self) -> None:
         eng, _ = self._make_engine()
         d = date(2026, 2, 13)
-        eng.run_micro_capture = lambda as_of, symbols=None: {  # type: ignore[method-assign]
+        eng.run_micro_capture = lambda as_of, symbols=None, live_takeover_skip_mutex=False: {  # type: ignore[method-assign]
             "as_of": as_of.isoformat(),
             "symbols": list(symbols or []),
             "status": "ok",
             "pass": True,
+            "live_takeover_skip_mutex": bool(live_takeover_skip_mutex),
         }
         out = eng.run_slot(as_of=d, slot="micro-capture")
         self.assertEqual(out["slot"], "micro-capture")
         result = out.get("result", {})
         self.assertEqual(str(result.get("as_of", "")), "2026-02-13")
+        self.assertTrue(bool(result.get("live_takeover_skip_mutex", False)))
 
     def test_run_premarket_includes_source_confidence(self) -> None:
         eng, _ = self._make_engine()
@@ -1504,11 +1599,15 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_baseline_rollback_drill_preflight_lints_anchor_profile_subschema(self) -> None:
         eng, tmp_root = self._make_engine()
-        d1 = date(2026, 2, 13)
-        d2 = date(2026, 2, 14)
         d3 = date(2026, 2, 15)
-        eng.run_review(d1)
-        eng.run_review(d2)
+        self._write_active_baseline(
+            tmp_root,
+            {
+                "as_of": "2026-02-14",
+                "profiles": ["seed_profile"],
+                "snapshot_path": "output/artifacts/baselines/artifact_governance/history/seed.yaml",
+            },
+        )
 
         invalid_anchor = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "history" / "invalid_profile_schema_anchor.yaml"
         invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
@@ -1550,11 +1649,15 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_baseline_rollback_drill_preflight_lints_anchor_profile_path_fields(self) -> None:
         eng, tmp_root = self._make_engine()
-        d1 = date(2026, 2, 13)
-        d2 = date(2026, 2, 14)
         d3 = date(2026, 2, 15)
-        eng.run_review(d1)
-        eng.run_review(d2)
+        self._write_active_baseline(
+            tmp_root,
+            {
+                "as_of": "2026-02-14",
+                "profiles": ["seed_profile"],
+                "snapshot_path": "output/artifacts/baselines/artifact_governance/history/seed.yaml",
+            },
+        )
 
         invalid_anchor = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "history" / "invalid_profile_path_fields_anchor.yaml"
         invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
@@ -1763,19 +1866,14 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_baseline_rollback_drill_preflight_lints_mixed_path_and_non_path_fields_in_stable_order(self) -> None:
         eng, tmp_root = self._make_engine()
-        d1 = date(2026, 2, 13)
-        d2 = date(2026, 2, 14)
         d3 = date(2026, 2, 15)
-        eng.run_review(d1)
-        eng.run_review(d2)
-
-        active_baseline = (
-            tmp_root
-            / "output"
-            / "artifacts"
-            / "baselines"
-            / "artifact_governance"
-            / "active_baseline.yaml"
+        active_baseline = self._write_active_baseline(
+            tmp_root,
+            {
+                "as_of": "2026-02-14",
+                "profiles": ["seed_profile"],
+                "snapshot_path": "output/artifacts/baselines/artifact_governance/history/seed.yaml",
+            },
         )
         self.assertTrue(active_baseline.exists())
         active_payload = yaml.safe_load(active_baseline.read_text(encoding="utf-8"))
@@ -1890,19 +1988,14 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order(self) -> None:
         eng, tmp_root = self._make_engine()
-        d1 = date(2026, 2, 13)
-        d2 = date(2026, 2, 14)
         d3 = date(2026, 2, 15)
-        eng.run_review(d1)
-        eng.run_review(d2)
-
-        active_baseline = (
-            tmp_root
-            / "output"
-            / "artifacts"
-            / "baselines"
-            / "artifact_governance"
-            / "active_baseline.yaml"
+        active_baseline = self._write_active_baseline(
+            tmp_root,
+            {
+                "as_of": "2026-02-14",
+                "profiles": ["seed_profile"],
+                "snapshot_path": "output/artifacts/baselines/artifact_governance/history/seed.yaml",
+            },
         )
         self.assertTrue(active_baseline.exists())
         active_payload = yaml.safe_load(active_baseline.read_text(encoding="utf-8"))
