@@ -479,7 +479,7 @@ class BinanceSpotPublicProvider:
                         "close": float(item[4]),
                         "volume": float(item[5]),
                         "source": self.name,
-                        "asset_class": AssetClass.EQUITY.value,
+                        "asset_class": "crypto",
                     }
                 )
             last_open_ms = int(payload[-1][0])
@@ -885,7 +885,7 @@ class BybitSpotPublicProvider:
                     "close": float(item[4]),
                     "volume": float(item[5]),
                     "source": self.name,
-                    "asset_class": AssetClass.EQUITY.value,
+                    "asset_class": "crypto",
                 }
             )
         if not out_rows:

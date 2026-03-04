@@ -18,6 +18,8 @@ class AssetCost:
 def default_cost_model(asset_class: str) -> AssetCost:
     if asset_class == "future":
         return AssetCost(fee_bps=1.2, slippage_bps=0.8, impact_bps=1.2, borrow_bps_daily=0.0)
+    if asset_class in {"crypto", "perp", "perpetual"}:
+        return AssetCost(fee_bps=1.0, slippage_bps=0.9, impact_bps=1.0, borrow_bps_daily=0.0)
     if asset_class == "option":
         return AssetCost(fee_bps=2.0, slippage_bps=2.0, impact_bps=1.5, borrow_bps_daily=0.0)
     if asset_class == "etf":
