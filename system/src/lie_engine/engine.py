@@ -837,6 +837,15 @@ class LieEngine:
         if not isinstance(params, dict):
             return
 
+        gate_ok, gate_reasons = self._strategy_lab_candidate_merge_gate(cand)
+        if not gate_ok:
+            review.notes.append(
+                "strategy_lab_candidate_skipped="
+                + f"{cand.get('name', 'unknown')}; reasons={','.join(gate_reasons)}; "
+                + f"manifest={candidate_payload.get('manifest_path', '')}"
+            )
+            return
+
         step = self._clamp_float(float(self.settings.validation.get("strategy_lab_merge_step", 0.18)), 0.01, 0.60)
         updated: list[str] = []
         fields: list[tuple[str, float, float, bool]] = [
@@ -867,6 +876,74 @@ class LieEngine:
                 + f"news_max_ts={candidate_payload.get('news_max_ts', '')}; "
                 + f"manifest={candidate_payload.get('manifest_path', '')}"
             )
+
+    def _strategy_lab_candidate_merge_gate(self, cand: dict[str, Any]) -> tuple[bool, list[str]]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        reasons: list[str] = []
+
+        if bool(val.get("strategy_lab_merge_require_accepted", True)) and not bool(cand.get("accepted", False)):
+            reasons.append("candidate_not_accepted")
+
+        require_metrics = bool(val.get("strategy_lab_merge_require_validation_metrics", True))
+        valid_raw = cand.get("validation_metrics", {})
+        valid = valid_raw if isinstance(valid_raw, dict) else {}
+        if require_metrics and not valid:
+            reasons.append("validation_metrics_missing")
+            return False, reasons
+
+        if valid:
+            min_ann = float(val.get("strategy_lab_merge_min_validation_annual_return", 0.0))
+            max_mdd = self._clamp_float(
+                float(val.get("strategy_lab_merge_max_validation_drawdown", val.get("max_drawdown_max", 0.18))),
+                0.0,
+                1.0,
+            )
+            min_trades = max(0, int(val.get("strategy_lab_merge_min_validation_trades", 2)))
+            min_pwr = self._clamp_float(
+                float(val.get("strategy_lab_merge_min_validation_positive_window_ratio", 0.55)),
+                0.0,
+                1.0,
+            )
+            ann = float(valid.get("annual_return", 0.0))
+            mdd = float(valid.get("max_drawdown", 1.0))
+            trades = int(valid.get("trades", 0))
+            pwr = float(valid.get("positive_window_ratio", 0.0))
+            if ann < min_ann:
+                reasons.append(f"validation_annual_return_below_{min_ann:.4f}")
+            if mdd > max_mdd:
+                reasons.append(f"validation_drawdown_above_{max_mdd:.4f}")
+            if trades < min_trades:
+                reasons.append(f"validation_trades_below_{min_trades}")
+            if pwr < min_pwr:
+                reasons.append(f"validation_pwr_below_{min_pwr:.2f}")
+
+        robust_raw = cand.get("robustness_score")
+        if robust_raw is not None:
+            min_robust = self._clamp_float(float(val.get("strategy_lab_merge_min_robustness", 0.30)), 0.0, 1.0)
+            try:
+                robust = float(robust_raw)
+            except (TypeError, ValueError):
+                robust = 0.0
+            if robust < min_robust:
+                reasons.append(f"robustness_below_{min_robust:.2f}")
+
+        review_raw = cand.get("review_metrics", {})
+        review_metrics = review_raw if isinstance(review_raw, dict) else {}
+        if review_metrics:
+            min_review_ann = float(val.get("strategy_lab_merge_min_review_annual_return", 0.0))
+            max_review_mdd = self._clamp_float(
+                float(val.get("strategy_lab_merge_max_review_drawdown", val.get("max_drawdown_max", 0.18))),
+                0.0,
+                1.0,
+            )
+            review_ann = float(review_metrics.get("annual_return", 0.0))
+            review_mdd = float(review_metrics.get("max_drawdown", 1.0))
+            if review_ann < min_review_ann:
+                reasons.append(f"review_annual_return_below_{min_review_ann:.4f}")
+            if review_mdd > max_review_mdd:
+                reasons.append(f"review_drawdown_above_{max_review_mdd:.4f}")
+
+        return (len(reasons) == 0), reasons
 
     def _quality_snapshot(self, as_of: date) -> dict[str, Any]:
         path = self.ctx.output_dir / "artifacts" / f"{as_of.isoformat()}_quality.json"
