@@ -180,3 +180,45 @@ def test_main_records_exchange_reject_for_canary_order(tmp_path: Path, monkeypat
     assert isinstance(canary, dict)
     assert bool(canary.get("executed", True)) is False
     assert str(canary.get("reason", "")) == "exchange_reject"
+
+
+def test_detect_lie_daemon_pid_parses_ps_output(monkeypatch) -> None:
+    mod = _load_module()
+
+    class _Proc:
+        returncode = 0
+        stdout = " 1234 /usr/bin/python3 /x/venv/bin/lie run-daemon --poll-seconds 30\n"
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: _Proc())
+    assert str(mod.detect_lie_daemon_pid()) == "1234"
+
+
+def test_load_binance_credentials_from_env_file_reads_values(tmp_path: Path) -> None:
+    mod = _load_module()
+    env_file = tmp_path / "binance.env"
+    env_file.write_text(
+        "BINANCE_API_KEY='k-123'\nBINANCE_SECRET='s$#-456'\n",
+        encoding="utf-8",
+    )
+    creds = mod.load_binance_credentials_from_env_file(env_file)
+    assert str(creds.get("BINANCE_API_KEY", "")) == "k-123"
+    assert str(creds.get("BINANCE_SECRET", "")) == "s$#-456"
+
+
+def test_resolve_binance_credentials_uses_env_file_when_daemon_secret_missing(monkeypatch, tmp_path: Path) -> None:
+    mod = _load_module()
+    env_file = tmp_path / "binance.env"
+    env_file.write_text(
+        "BINANCE_API_KEY='k-abc'\nBINANCE_SECRET='s-def'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BINANCE_CREDENTIALS_ENV_FILE", str(env_file))
+    monkeypatch.setattr(mod, "load_binance_credentials_from_daemon", lambda: {"BINANCE_API_KEY": "k-abc"})
+    monkeypatch.setenv("BINANCE_API_KEY", "")
+    monkeypatch.setenv("BINANCE_SECRET", "")
+
+    api_key, api_secret, source = mod.resolve_binance_credentials(True)
+    assert api_key == "k-abc"
+    assert api_secret == "s-def"
+    assert source == "env_file"

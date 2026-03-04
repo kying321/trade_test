@@ -10,7 +10,9 @@ import json
 import math
 import os
 from pathlib import Path
+import shlex
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -601,13 +603,48 @@ def load_string_env(name: str) -> str:
     return str(os.environ.get(name, "")).strip()
 
 
+def detect_lie_daemon_pid() -> str:
+    ps_cmd = "ps"
+    for candidate in ("/bin/ps", "/usr/bin/ps"):
+        if Path(candidate).exists():
+            ps_cmd = candidate
+            break
+    try:
+        proc = subprocess.run(
+            [ps_cmd, "-eo", "pid=,args="],
+            text=True,
+            capture_output=True,
+            timeout=5.0,
+            check=False,
+        )
+    except Exception:
+        return ""
+    if int(proc.returncode) != 0:
+        return ""
+    for raw in str(proc.stdout or "").splitlines():
+        row = str(raw).strip()
+        if not row:
+            continue
+        parts = row.split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid_raw, args = parts
+        if "lie run-daemon" not in args:
+            continue
+        if "awk" in args:
+            continue
+        try:
+            pid_num = int(pid_raw)
+        except Exception:
+            continue
+        if pid_num > 1:
+            return str(pid_num)
+    return ""
+
+
 def load_binance_credentials_from_daemon() -> dict[str, str]:
     out: dict[str, str] = {}
-    pid = ""
-    for line in os.popen("ps -ef | awk '/lie run-daemon/ && !/awk/ {print $2; exit}'").read().splitlines():
-        pid = str(line).strip()
-        if pid:
-            break
+    pid = detect_lie_daemon_pid()
     if not pid:
         return out
     env_path = Path("/proc") / pid / "environ"
@@ -630,6 +667,39 @@ def load_binance_credentials_from_daemon() -> dict[str, str]:
             "BINANCE_KEY",
         }:
             out[key] = v
+    return out
+
+
+def load_binance_credentials_from_env_file(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not path.exists() or not path.is_file():
+        return out
+    source_cmd = (
+        "set -a; "
+        f"source {shlex.quote(str(path))}; "
+        "set +a; "
+        "printf 'BINANCE_API_KEY=%s\\n' \"${BINANCE_API_KEY:-${BINANCE_KEY:-}}\"; "
+        "printf 'BINANCE_SECRET=%s\\n' \"${BINANCE_SECRET_KEY:-${BINANCE_API_SECRET:-${BINANCE_SECRET:-}}}\""
+    )
+    try:
+        proc = subprocess.run(
+            ["bash", "-lc", source_cmd],
+            text=True,
+            capture_output=True,
+            timeout=5.0,
+            check=False,
+        )
+    except Exception:
+        return out
+    if int(proc.returncode) != 0:
+        return out
+    for raw in str(proc.stdout or "").splitlines():
+        if "=" not in raw:
+            continue
+        k, v = raw.split("=", 1)
+        key = str(k).strip()
+        if key in {"BINANCE_API_KEY", "BINANCE_SECRET"}:
+            out[key] = str(v).strip()
     return out
 
 
@@ -657,6 +727,15 @@ def resolve_binance_credentials(allow_daemon_env_fallback: bool) -> tuple[str, s
             ).strip()
         if env_map:
             source = "daemon_env"
+        if not api_key or not api_secret:
+            env_file = Path(os.environ.get("BINANCE_CREDENTIALS_ENV_FILE", "~/.openclaw/binance.env")).expanduser()
+            file_map = load_binance_credentials_from_env_file(env_file)
+            if not api_key:
+                api_key = str(file_map.get("BINANCE_API_KEY") or "").strip()
+            if not api_secret:
+                api_secret = str(file_map.get("BINANCE_SECRET") or "").strip()
+            if file_map:
+                source = "env_file"
     return api_key, api_secret, source
 
 
