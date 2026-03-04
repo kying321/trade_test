@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -199,6 +200,7 @@ class ResearchTests(unittest.TestCase):
             self.assertIsNone(err)
             self.assertFalse(df.empty)
             self.assertTrue((df["symbol"] == "BTCUSDT").all())
+            self.assertTrue((df["asset_class"] == "crypto").all())
             self.assertIn("open", df.columns)
             self.assertIn("source", df.columns)
         finally:
@@ -346,6 +348,350 @@ class ResearchTests(unittest.TestCase):
             sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
             sl_mod.run_event_backtest = original_bt  # type: ignore[assignment]
 
+    def test_strategy_lab_market_insights_include_brooks_proxies(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        bars = make_multi_symbol_bars()
+        out = sl_mod._market_insights(bars)  # type: ignore[attr-defined]
+        for key in (
+            "brooks_trend_bar_z",
+            "brooks_micro_channel_bias",
+            "brooks_two_legged_bias",
+            "brooks_exhaustion_z",
+            "wyckoff_accumulation_bias",
+            "wyckoff_distribution_bias",
+            "vpa_effort_result_bias",
+            "vpa_climax_z",
+        ):
+            self.assertIn(key, out)
+            v = float(out.get(key, 0.0))
+            self.assertTrue(v == v)
+            self.assertLess(abs(v), 10.0)
+
+    def test_strategy_lab_candidate_generation_brooks_support_hazard_shift(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        report = {
+            "news_bias_z": 0.0,
+            "report_bias_z": 0.0,
+            "news_report_agreement": 0.1,
+        }
+        base_market = {
+            "trend_strength_z": 0.2,
+            "volatility_z": 0.1,
+            "tail_risk_z": 0.0,
+            "brooks_trend_bar_z": 0.0,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+        support_market = dict(base_market)
+        support_market.update(
+            {
+                "brooks_trend_bar_z": 1.4,
+                "brooks_micro_channel_bias": 0.8,
+                "brooks_two_legged_bias": 0.9,
+                "brooks_exhaustion_z": -0.2,
+                "wyckoff_accumulation_bias": 0.8,
+                "wyckoff_distribution_bias": -0.2,
+                "vpa_effort_result_bias": 0.7,
+                "vpa_climax_z": -0.2,
+            }
+        )
+        hazard_market = dict(base_market)
+        hazard_market.update(
+            {
+                "brooks_trend_bar_z": 0.2,
+                "brooks_micro_channel_bias": -0.6,
+                "brooks_two_legged_bias": 0.1,
+                "brooks_exhaustion_z": 1.5,
+                "wyckoff_accumulation_bias": -0.2,
+                "wyckoff_distribution_bias": 0.9,
+                "vpa_effort_result_bias": -0.7,
+                "vpa_climax_z": 1.8,
+            }
+        )
+
+        base = sl_mod._generate_candidates(market=base_market, report=report, candidate_count=1, exposure_cap=0.35)[0]  # type: ignore[attr-defined]
+        support = sl_mod._generate_candidates(market=support_market, report=report, candidate_count=1, exposure_cap=0.35)[0]  # type: ignore[attr-defined]
+        hazard = sl_mod._generate_candidates(market=hazard_market, report=report, candidate_count=1, exposure_cap=0.35)[0]  # type: ignore[attr-defined]
+
+        self.assertGreater(float(support.get("theory_brooks_weight", 0.0)), float(base.get("theory_brooks_weight", 0.0)))
+        self.assertGreater(float(hazard.get("theory_penalty_max", 0.0)), float(base.get("theory_penalty_max", 0.0)))
+        self.assertLess(float(hazard.get("theory_conflict_fuse", 1.0)), float(base.get("theory_conflict_fuse", 1.0)))
+        self.assertGreater(float(support.get("theory_wyckoff_weight", 0.0)), float(base.get("theory_wyckoff_weight", 0.0)))
+        self.assertGreater(float(support.get("theory_vpa_weight", 0.0)), float(base.get("theory_vpa_weight", 0.0)))
+        self.assertLessEqual(int(hazard.get("hold_days", 0)), int(support.get("hold_days", 0)))
+        self.assertGreater(float(support.get("brooks_support_score", 0.0)), float(hazard.get("brooks_support_score", 0.0)))
+        self.assertGreater(float(hazard.get("brooks_hazard_score", 0.0)), float(support.get("brooks_hazard_score", 0.0)))
+        self.assertGreater(float(hazard.get("wyckoff_hazard_score", 0.0)), float(support.get("wyckoff_hazard_score", 0.0)))
+        self.assertGreater(float(support.get("vpa_support_score", 0.0)), float(hazard.get("vpa_support_score", 0.0)))
+
+    def test_strategy_lab_candidate_generation_low_activity_relaxes_thresholds(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        market = {
+            "trend_strength_z": 0.1,
+            "volatility_z": 0.0,
+            "tail_risk_z": 0.0,
+            "brooks_trend_bar_z": 0.1,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+        report = {
+            "news_bias_z": 0.0,
+            "report_bias_z": 0.0,
+            "news_report_agreement": 0.0,
+        }
+        normal = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.20,
+            low_activity_mode=False,
+        )[0]
+        relaxed = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.20,
+            low_activity_mode=True,
+        )[0]
+        self.assertLess(float(relaxed.get("signal_confidence_min", 0.0)), float(normal.get("signal_confidence_min", 0.0)))
+        self.assertLess(float(relaxed.get("convexity_min", 0.0)), float(normal.get("convexity_min", 0.0)))
+        self.assertLessEqual(int(relaxed.get("hold_days", 99)), int(normal.get("hold_days", 0)))
+        self.assertGreaterEqual(int(relaxed.get("max_daily_trades", 0)), int(normal.get("max_daily_trades", 0)))
+
+    def test_strategy_lab_candidate_generation_crypto_low_activity_relaxes_more(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        market = {
+            "trend_strength_z": 0.1,
+            "volatility_z": 0.0,
+            "tail_risk_z": 0.0,
+            "brooks_trend_bar_z": 0.1,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+        report = {
+            "news_bias_z": 0.0,
+            "report_bias_z": 0.0,
+            "news_report_agreement": 0.0,
+        }
+        low = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.20,
+            low_activity_mode=True,
+            crypto_mode=False,
+        )[0]
+        crypto_low = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.20,
+            low_activity_mode=True,
+            crypto_mode=True,
+        )[0]
+        self.assertLess(float(crypto_low.get("signal_confidence_min", 0.0)), float(low.get("signal_confidence_min", 0.0)))
+        self.assertLess(float(crypto_low.get("convexity_min", 0.0)), float(low.get("convexity_min", 0.0)))
+        self.assertLessEqual(int(crypto_low.get("hold_days", 99)), int(low.get("hold_days", 0)))
+        self.assertGreaterEqual(int(crypto_low.get("max_daily_trades", 0)), int(low.get("max_daily_trades", 0)))
+
+    def test_strategy_lab_resolve_exposure_cap_prefers_feasible_ablation(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            out_root = Path(td)
+            run = out_root / "research" / "theory_ablation_20260304_120000"
+            run.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "start": "2025-01-01",
+                "end": "2025-12-31",
+                "risk_feasible": True,
+                "best_feasible_case": {
+                    "name": "exp_auto_best",
+                    "exposure_scale": 0.11,
+                },
+            }
+            (run / "summary.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            cap, meta = sl_mod._resolve_exposure_cap(  # type: ignore[attr-defined]
+                output_root=out_root,
+                start=date(2025, 1, 1),
+                end=date(2025, 12, 31),
+                max_drawdown_target=0.05,
+                market={
+                    "brooks_exhaustion_z": 0.0,
+                    "brooks_trend_bar_z": 0.0,
+                    "brooks_two_legged_bias": 0.0,
+                },
+            )
+            self.assertTrue(bool(meta.get("ablation_found", False)))
+            self.assertLess(float(cap), float(meta.get("base_cap", 1.0)))
+            self.assertAlmostEqual(float(meta.get("ablation_cap", 0.0)), 0.1265, places=4)
+            self.assertAlmostEqual(float(cap), 0.1265, places=4)
+
+    def test_strategy_lab_resolve_exposure_cap_hazard_multiplier(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            out_root = Path(td)
+            calm_cap, calm_meta = sl_mod._resolve_exposure_cap(  # type: ignore[attr-defined]
+                output_root=out_root,
+                start=date(2025, 1, 1),
+                end=date(2025, 12, 31),
+                max_drawdown_target=0.05,
+                market={
+                    "brooks_exhaustion_z": 0.1,
+                    "brooks_trend_bar_z": 0.0,
+                    "brooks_two_legged_bias": 0.0,
+                },
+            )
+            hazard_cap, hazard_meta = sl_mod._resolve_exposure_cap(  # type: ignore[attr-defined]
+                output_root=out_root,
+                start=date(2025, 1, 1),
+                end=date(2025, 12, 31),
+                max_drawdown_target=0.05,
+                market={
+                    "brooks_exhaustion_z": 2.5,
+                    "brooks_trend_bar_z": -0.2,
+                    "brooks_two_legged_bias": -0.4,
+                },
+            )
+            self.assertFalse(bool(calm_meta.get("ablation_found", False)))
+            self.assertFalse(bool(hazard_meta.get("ablation_found", False)))
+            self.assertLess(float(hazard_meta.get("hazard_multiplier", 1.0)), float(calm_meta.get("hazard_multiplier", 1.0)))
+            self.assertLess(float(hazard_cap), float(calm_cap))
+
+    def test_strategy_lab_resolve_exposure_cap_accepts_covering_ablation_window(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            out_root = Path(td)
+            run = out_root / "research" / "theory_ablation_20260304_120000"
+            run.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "start": "2025-01-01",
+                "end": "2025-12-31",
+                "risk_feasible": True,
+                "best_feasible_case": {
+                    "name": "exp_auto_best",
+                    "exposure_scale": 0.09,
+                },
+            }
+            (run / "summary.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            cap, meta = sl_mod._resolve_exposure_cap(  # type: ignore[attr-defined]
+                output_root=out_root,
+                start=date(2025, 7, 5),
+                end=date(2025, 12, 31),
+                max_drawdown_target=0.05,
+                market={
+                    "brooks_exhaustion_z": 0.0,
+                    "brooks_trend_bar_z": 0.0,
+                    "brooks_two_legged_bias": 0.0,
+                },
+            )
+            self.assertTrue(bool(meta.get("ablation_found", False)))
+            self.assertEqual(int(meta.get("ablation_match_priority", -1)), 1)
+            self.assertGreaterEqual(int(meta.get("ablation_match_gap_days", -1)), 0)
+            self.assertLess(float(cap), float(meta.get("base_cap", 1.0)))
+
+    def test_strategy_lab_score_penalizes_zero_trade_case(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        train_bt = BacktestResult(
+            start=date(2025, 1, 1),
+            end=date(2025, 6, 30),
+            total_return=0.10,
+            annual_return=0.10,
+            max_drawdown=0.03,
+            win_rate=0.55,
+            profit_factor=1.2,
+            expectancy=0.01,
+            trades=12,
+            violations=0,
+            positive_window_ratio=0.80,
+            equity_curve=[{"date": "2025-01-01", "equity": 1.0}, {"date": "2025-06-30", "equity": 1.1}],
+            by_asset={},
+        )
+        zero_trade_valid = BacktestResult(
+            start=date(2025, 7, 1),
+            end=date(2025, 12, 31),
+            total_return=0.0,
+            annual_return=0.0,
+            max_drawdown=0.0,
+            win_rate=0.0,
+            profit_factor=0.0,
+            expectancy=0.0,
+            trades=0,
+            violations=0,
+            positive_window_ratio=1.0,
+            equity_curve=[{"date": "2025-07-01", "equity": 1.0}, {"date": "2025-12-31", "equity": 1.0}],
+            by_asset={},
+        )
+        active_valid = BacktestResult(
+            start=date(2025, 7, 1),
+            end=date(2025, 12, 31),
+            total_return=0.03,
+            annual_return=0.03,
+            max_drawdown=0.02,
+            win_rate=0.5,
+            profit_factor=1.1,
+            expectancy=0.005,
+            trades=8,
+            violations=0,
+            positive_window_ratio=0.70,
+            equity_curve=[{"date": "2025-07-01", "equity": 1.0}, {"date": "2025-12-31", "equity": 1.03}],
+            by_asset={},
+        )
+
+        score_zero = float(
+            sl_mod._score_candidate(  # type: ignore[attr-defined]
+                train_bt=train_bt,
+                valid_bt=zero_trade_valid,
+                align_train=0.0,
+                align_valid=0.0,
+                review_bt=None,
+                align_review=0.0,
+                robustness_score=0.0,
+                max_drawdown_target=0.05,
+                review_max_drawdown_target=0.07,
+                drawdown_soft_band=0.03,
+            )
+        )
+        score_active = float(
+            sl_mod._score_candidate(  # type: ignore[attr-defined]
+                train_bt=train_bt,
+                valid_bt=active_valid,
+                align_train=0.0,
+                align_valid=0.0,
+                review_bt=None,
+                align_review=0.0,
+                robustness_score=0.0,
+                max_drawdown_target=0.05,
+                review_max_drawdown_target=0.07,
+                drawdown_soft_band=0.03,
+            )
+        )
+        self.assertLess(score_zero, score_active)
+
     def test_theory_ablation_auto_exposure_search_fields(self) -> None:
         ab_mod = _load_theory_ablation_module()
 
@@ -391,6 +737,19 @@ class ResearchTests(unittest.TestCase):
         self.assertAlmostEqual(float(cfg.get("best_exposure", 0.0)), float(best_case.exposure_scale), places=6)
         self.assertEqual(str(cfg.get("best_case", {}).get("name", "")), str(best_case.name))
         self.assertLessEqual(float(best_case.max_drawdown), 0.05)
+
+    def test_theory_ablation_weight_grid_supports_legacy_and_extended(self) -> None:
+        ab_mod = _load_theory_ablation_module()
+        legacy = ab_mod._parse_weight_grid("1.0:1.1:1.2")
+        extended = ab_mod._parse_weight_grid("1.0:1.1:1.2:0.8:0.7")
+        self.assertEqual(len(legacy), 1)
+        self.assertEqual(len(extended), 1)
+        self.assertEqual(len(legacy[0]), 5)
+        self.assertEqual(len(extended[0]), 5)
+        self.assertAlmostEqual(float(legacy[0][3]), 0.0, places=6)
+        self.assertAlmostEqual(float(legacy[0][4]), 0.0, places=6)
+        self.assertAlmostEqual(float(extended[0][3]), 0.8, places=6)
+        self.assertAlmostEqual(float(extended[0][4]), 0.7, places=6)
 
     def test_theory_ablation_execute_with_watchdog_retry_success(self) -> None:
         ab_mod = _load_theory_ablation_module()

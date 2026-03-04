@@ -272,6 +272,7 @@ def fetch_crypto_daily(symbol: str, start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
     out = df.copy()
     out["symbol"] = sym
+    out["asset_class"] = "crypto"
     return out
 
 
@@ -420,7 +421,7 @@ def load_real_data_bundle(
     review_end = cutoff + timedelta(days=review_days) if include_post_review and review_days > 0 else cutoff
 
     cache_key_src = (
-        "v4|"
+        "v5|"
         f"{start.isoformat()}|{end.isoformat()}|{cutoff.isoformat()}|{review_end.isoformat()}|"
         f"{max_symbols}|{report_symbol_cap}|{include_post_review}|{','.join(sorted(core_symbols))}"
     )

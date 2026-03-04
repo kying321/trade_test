@@ -141,6 +141,7 @@ class BybitPublicProviderTests(unittest.TestCase):
         with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
             out = provider.fetch_ohlcv("BTCUSDT", date(2026, 2, 28), date(2026, 2, 28), freq="1d")
         self.assertEqual(len(out), 1)
+        self.assertEqual(str(out.loc[0, "asset_class"]), "crypto")
         self.assertTrue(bool(timeouts))
         self.assertTrue(all(t <= 5.0 for t in timeouts))
 
