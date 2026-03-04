@@ -170,6 +170,63 @@ atoms:
     input_fields: ["open", "high", "low", "close", "atr14"]
     status: "proxy"
 
+  - id: "BROOKS_TREND_BAR_QUALITY"
+    family: "al_brooks"
+    aliases: ["trend_bar", "signal_bar_quality", "sbq"]
+    objective: "Quantify trend-bar quality for continuation probability."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "Body share * close location * body/ATR with volume support; split by bullish/bearish bar."
+    invalidation:
+      - "Body/ATR below threshold floor."
+      - "Close location does not favor trend direction."
+    metrics:
+      - name: "trend_bar_followthrough_3bars"
+        direction: "higher_better"
+        eval_window: "3bars"
+      - name: "trend_bar_failed_continuation_ratio"
+        direction: "lower_better"
+        eval_window: "daily"
+    input_fields: ["open", "high", "low", "close", "volume", "vol_ma20", "atr14"]
+    status: "active"
+
+  - id: "BROOKS_MICRO_CHANNEL_PROXY"
+    family: "al_brooks"
+    aliases: ["micro_channel", "small_pullback_trend", "spt"]
+    objective: "Approximate micro-channel persistence using local high/low step monotonicity."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "Use 4-bar high/low deltas to score directional monotonicity on both tails."
+    invalidation:
+      - "Directional monotonicity collapses inside the 4-bar window."
+      - "Volatility regime exceeds channel viability threshold."
+    metrics:
+      - name: "micro_channel_breakout_hold_rate"
+        direction: "higher_better"
+        eval_window: "6bars"
+      - name: "micro_channel_false_break_ratio"
+        direction: "lower_better"
+        eval_window: "daily"
+    input_fields: ["high", "low", "atr14"]
+    status: "proxy"
+
+  - id: "BROOKS_TWO_LEGGED_PULLBACK_PROXY"
+    family: "al_brooks"
+    aliases: ["two_legged_pullback", "tlp", "2lp"]
+    objective: "Approximate second-entry continuation after two-legged pullback in trend."
+    formula_type: "proxy_ohlcv"
+    feature_formula: "On 5-bar pullback window, require >=2 countertrend legs + >=1 bounce, then reclaim prior bar extreme near trend MA."
+    invalidation:
+      - "Leg structure count is insufficient in pullback window."
+      - "Reclaim fails or pullback span exceeds noise budget."
+    metrics:
+      - name: "tlp_followthrough_rate"
+        direction: "higher_better"
+        eval_window: "5bars"
+      - name: "tlp_false_restart_ratio"
+        direction: "lower_better"
+        eval_window: "daily"
+    input_fields: ["high", "low", "close", "ma20", "ma60", "atr14"]
+    status: "proxy"
+
   - id: "BROOKS_TRADING_RANGE_REVERSAL"
     family: "al_brooks"
     aliases: ["tr", "range_reversal"]

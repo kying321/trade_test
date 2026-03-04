@@ -457,6 +457,13 @@ class ConfigValidationTests(unittest.TestCase):
                     "theory_signal_enabled": "yes",
                     "execution_confirm_enabled": "yes",
                     "execution_anti_martingale_enabled": "yes",
+                    "strategy_lab_merge_require_accepted": "yes",
+                    "strategy_lab_merge_require_validation_metrics": "yes",
+                    "strategy_lab_merge_min_validation_trades": -1,
+                    "strategy_lab_merge_min_validation_positive_window_ratio": 1.2,
+                    "strategy_lab_merge_min_robustness": -0.1,
+                    "strategy_lab_merge_max_validation_drawdown": 1.2,
+                    "strategy_lab_merge_max_review_drawdown": 1.2,
                     "exposure_scale": 0.01,
                     "theory_ict_weight": -0.1,
                     "theory_brooks_weight": 3.0,
@@ -549,6 +556,13 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.theory_signal_enabled", error_paths)
         self.assertIn("validation.execution_confirm_enabled", error_paths)
         self.assertIn("validation.execution_anti_martingale_enabled", error_paths)
+        self.assertIn("validation.strategy_lab_merge_require_accepted", error_paths)
+        self.assertIn("validation.strategy_lab_merge_require_validation_metrics", error_paths)
+        self.assertIn("validation.strategy_lab_merge_min_validation_trades", error_paths)
+        self.assertIn("validation.strategy_lab_merge_min_validation_positive_window_ratio", error_paths)
+        self.assertIn("validation.strategy_lab_merge_min_robustness", error_paths)
+        self.assertIn("validation.strategy_lab_merge_max_validation_drawdown", error_paths)
+        self.assertIn("validation.strategy_lab_merge_max_review_drawdown", error_paths)
         self.assertIn("validation.exposure_scale", error_paths)
         self.assertIn("validation.theory_ict_weight", error_paths)
         self.assertIn("validation.theory_brooks_weight", error_paths)
