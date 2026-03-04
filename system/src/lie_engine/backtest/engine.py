@@ -42,12 +42,29 @@ class BacktestConfig:
     execution_anti_martingale_ceiling: float = 1.40
 
 
-SHORTABLE_ASSET = {"future", "option", "hedge"}
+SHORTABLE_ASSET = {"future", "option", "hedge", "crypto", "perp", "perpetual"}
 
 
 def _proxy_history_min_points(proxy_lookback: int) -> int:
     lookback = max(10, int(proxy_lookback))
     return int(max(50, min(130, round(0.72 * lookback))))
+
+
+def _is_crypto_universe(hist: pd.DataFrame) -> bool:
+    if hist.empty or "asset_class" not in hist.columns:
+        return False
+    vals = {str(x).strip().lower() for x in hist["asset_class"].dropna().unique().tolist()}
+    if not vals:
+        return False
+    return vals.issubset({"crypto", "perp", "perpetual", "spot"})
+
+
+def _effective_proxy_min_points(proxy_lookback: int, hist: pd.DataFrame) -> int:
+    base = _proxy_history_min_points(proxy_lookback)
+    if not _is_crypto_universe(hist):
+        return int(base)
+    relaxed = int(max(30, min(base, round(0.50 * max(10, int(proxy_lookback))))))
+    return int(max(30, relaxed))
 
 
 def _compute_metrics(equity: pd.Series, trades: pd.DataFrame, window_returns: list[float]) -> tuple[float, float, float, float, float, float, int, float]:
@@ -206,7 +223,7 @@ def run_event_backtest(
 
         if last_regime is None or (i % max(1, cfg.regime_recalc_interval) == 0):
             market_proxy = hist.groupby("ts", as_index=False)["close"].mean().sort_values("ts").tail(cfg.proxy_lookback)
-            if len(market_proxy) < _proxy_history_min_points(int(cfg.proxy_lookback)):
+            if len(market_proxy) < _effective_proxy_min_points(int(cfg.proxy_lookback), hist):
                 equity_points.append({"date": d.isoformat(), "equity": equity})
                 continue
 

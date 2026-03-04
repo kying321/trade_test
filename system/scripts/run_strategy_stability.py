@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
+import re
 from statistics import mean, pstdev
 from typing import Any
 
@@ -13,6 +14,10 @@ import yaml
 
 from lie_engine.data.storage import write_json, write_markdown
 from lie_engine.research.strategy_lab import StrategyLabSummary, run_strategy_lab
+
+
+CRYPTO_PAIR_RE = re.compile(r"^[A-Z0-9]{6,20}$")
+CRYPTO_QUOTES = ("USDT", "USDC", "BUSD", "FDUSD", "BTC", "ETH", "BNB", "EUR")
 
 
 def _parse_date(raw: str) -> date:
@@ -38,6 +43,13 @@ def _parse_windows(raw: str) -> list[int]:
 def _parse_symbols(raw: str) -> list[str]:
     out = [s.strip() for s in str(raw).split(",") if s.strip()]
     return out
+
+
+def _looks_like_crypto_symbol(symbol: str) -> bool:
+    sym = re.sub(r"[^A-Za-z0-9]", "", str(symbol or "").upper())
+    if not CRYPTO_PAIR_RE.match(sym):
+        return False
+    return any(sym.endswith(q) and len(sym) > len(q) + 1 for q in CRYPTO_QUOTES)
 
 
 def _candidate_family(name: str) -> str:
@@ -285,13 +297,15 @@ def main() -> int:
 
     rows = sorted(rows, key=lambda r: int(r.window_days), reverse=True)
     row_dicts = [r.to_dict() for r in rows]
-    stats = _stability_score(row_dicts, float(args.max_drawdown_target))
+    min_trades_gate = 1 if symbols and all(_looks_like_crypto_symbol(s) for s in symbols) else 5
+    stats = _stability_score(row_dicts, float(args.max_drawdown_target), min_trades=int(min_trades_gate))
     payload = {
         "started_at": ended_at,
         "ended_at": datetime.now().isoformat(),
         "end": end.isoformat(),
         "window_days": list(windows),
         "symbols": list(symbols),
+        "min_trades_gate": int(min_trades_gate),
         "max_drawdown_target": float(args.max_drawdown_target),
         "windows": row_dicts,
         "stability": stats,

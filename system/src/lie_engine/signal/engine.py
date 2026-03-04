@@ -20,7 +20,7 @@ from lie_engine.signal.theory import TheoryConfluenceResult, compute_theory_conf
 from lie_engine.signal.trend import score_trend
 
 
-SHORTABLE_ASSET_CLASS = {"future", "option", "hedge"}
+SHORTABLE_ASSET_CLASS = {"future", "option", "hedge", "crypto", "perp", "perpetual"}
 
 
 @dataclass(slots=True)

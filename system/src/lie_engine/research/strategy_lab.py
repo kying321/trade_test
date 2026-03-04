@@ -607,6 +607,7 @@ def _generate_candidates(
     candidate_count: int,
     exposure_cap: float = 0.35,
     low_activity_mode: bool = False,
+    crypto_mode: bool = False,
 ) -> list[dict[str, Any]]:
     base_templates: list[dict[str, Any]] = [
         {
@@ -1014,6 +1015,37 @@ def _generate_candidates(
             tpl["execution_confirm_lookahead"] = int(max(1, min(5, int(tpl["execution_confirm_lookahead"]) - 1)))
             tpl["rationale"] = f"{tpl['rationale']} | 低活跃窗口松绑"
 
+        if bool(low_activity_mode) and bool(crypto_mode):
+            tpl["signal_confidence_min"] = _clip(float(tpl["signal_confidence_min"]) - 5.0, 8.0, 72.0)
+            tpl["convexity_min"] = _clip(float(tpl["convexity_min"]) - 0.35, 0.7, 3.5)
+            tpl["hold_days"] = int(max(1, min(20, int(tpl["hold_days"]) - 1)))
+            tpl["max_daily_trades"] = int(max(1, min(5, int(tpl["max_daily_trades"]) + 1)))
+            tpl["theory_min_confluence"] = _clip(float(tpl["theory_min_confluence"]) - 0.05, 0.15, 0.60)
+            tpl["execution_confirm_loss_mult"] = _clip(float(tpl["execution_confirm_loss_mult"]) + 0.06, 0.45, 0.95)
+            tpl["execution_confirm_lookahead"] = int(max(1, min(5, int(tpl["execution_confirm_lookahead"]) - 1)))
+            tpl["rationale"] = f"{tpl['rationale']} | crypto低活跃战术松绑"
+
+        if bool(low_activity_mode) and bool(crypto_mode) and i == 0:
+            tpl["name"] = "crypto_tactical"
+            tpl["signal_confidence_min"] = 14.0
+            tpl["convexity_min"] = 1.2
+            tpl["hold_days"] = 1
+            tpl["max_daily_trades"] = 5
+            tpl["exposure_scale"] = _clip(min(float(tpl.get("exposure_scale", 0.20)), 0.20), 0.08, max(0.08, float(exposure_cap)))
+            tpl["theory_ict_weight"] = 1.2
+            tpl["theory_brooks_weight"] = 1.3
+            tpl["theory_lie_weight"] = 0.9
+            tpl["theory_wyckoff_weight"] = 1.2
+            tpl["theory_vpa_weight"] = 1.0
+            tpl["theory_confidence_boost_max"] = 4.6
+            tpl["theory_penalty_max"] = 6.8
+            tpl["theory_min_confluence"] = 0.30
+            tpl["theory_conflict_fuse"] = 0.74
+            tpl["execution_confirm_lookahead"] = 1
+            tpl["execution_confirm_loss_mult"] = 0.70
+            tpl["execution_anti_martingale_step"] = 0.14
+            tpl["rationale"] = f"{tpl['rationale']} | crypto战术快切(1D)"
+
         tpl["name"] = f"{tpl['name']}_{i+1:02d}"
         out.append(tpl)
     return out
@@ -1277,12 +1309,18 @@ def run_strategy_lab(
     bars_all = pd.concat([bars, review_bars], ignore_index=True) if not review_bars.empty else bars.copy()
     bars_all = bars_all.sort_values(["ts", "symbol"]).reset_index(drop=True)
     train_end, valid_start = _split_dates(bars)
-    valid_days = int(sum(1 for d in pd.to_datetime(bars["ts"]).dt.date.tolist() if d >= valid_start))
+    valid_days = int(
+        len({d for d in pd.to_datetime(bars["ts"]).dt.date.tolist() if d >= valid_start})
+    )
     low_activity_mode = bool(valid_days < 45)
+    asset_classes = {str(x).strip().lower() for x in bars["asset_class"].dropna().unique().tolist()}
+    crypto_mode = bool(asset_classes) and asset_classes.issubset({"crypto", "perp", "perpetual", "spot"})
     total_days = int(len(pd.to_datetime(bars["ts"]).dt.date.unique()))
     proxy_lookback = int(_clip(float(total_days) * 0.70, 60.0, 180.0))
     if low_activity_mode:
         proxy_lookback = int(min(proxy_lookback, max(50, int(valid_days * 1.6))))
+    if low_activity_mode and crypto_mode:
+        proxy_lookback = int(max(proxy_lookback, 84))
 
     market = _market_insights(bars)
     report = _report_insights(bundle.news_daily, bundle.report_daily)
@@ -1299,6 +1337,7 @@ def run_strategy_lab(
         candidate_count=candidate_count,
         exposure_cap=exposure_cap,
         low_activity_mode=low_activity_mode,
+        crypto_mode=crypto_mode,
     )
 
     out_candidates: list[StrategyCandidateResult] = []
@@ -1401,22 +1440,38 @@ def run_strategy_lab(
             review_max_drawdown_target=float(review_dd_target),
             drawdown_soft_band=float(dd_soft_band),
         )
+        valid_trade_gate = 5
+        review_trade_gate = 2
+        valid_pwr_gate = 0.70
+        review_pwr_gate = 0.60
+        if bool(low_activity_mode):
+            valid_trade_gate = 3
+            review_trade_gate = 1
+            valid_pwr_gate = 0.65
+            review_pwr_gate = 0.55
+        if bool(low_activity_mode) and bool(crypto_mode):
+            valid_trade_gate = 1
+            review_trade_gate = 0
+            valid_pwr_gate = 0.60
+            review_pwr_gate = 0.50
+
+        review_ok = True
+        if review_bt is not None:
+            review_ok = (
+                int(review_bt.trades) >= int(review_trade_gate)
+                and float(review_bt.annual_return) >= 0.0
+                and float(review_bt.positive_window_ratio) >= float(review_pwr_gate)
+                and float(review_bt.max_drawdown) <= float(review_dd_target)
+                and int(review_bt.violations) == 0
+            )
+
         accepted = (
-            int(valid_bt.trades) >= 5
+            int(valid_bt.trades) >= int(valid_trade_gate)
             and float(valid_bt.annual_return) > 0.0
-            and float(valid_bt.positive_window_ratio) >= 0.70
+            and float(valid_bt.positive_window_ratio) >= float(valid_pwr_gate)
             and float(valid_bt.max_drawdown) <= float(valid_dd_target)
             and int(valid_bt.violations) == 0
-            and (
-                review_bt is None
-                or (
-                    int(review_bt.trades) >= 2
-                    and float(review_bt.annual_return) > 0.0
-                    and float(review_bt.positive_window_ratio) >= 0.60
-                    and float(review_bt.max_drawdown) <= float(review_dd_target)
-                    and int(review_bt.violations) == 0
-                )
-            )
+            and bool(review_ok)
         )
         out_candidates.append(
             StrategyCandidateResult(

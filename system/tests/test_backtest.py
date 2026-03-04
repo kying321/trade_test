@@ -12,13 +12,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from lie_engine.backtest.engine import (
     BacktestConfig,
     _compute_metrics,
+    _effective_proxy_min_points,
     _next_anti_martingale_scale,
     _proxy_history_min_points,
     _resolve_confirmation_scale,
     run_event_backtest,
 )
-from lie_engine.models import Side
-from tests.helpers import make_multi_symbol_bars
+from lie_engine.models import RegimeLabel, RegimeState, Side, SignalCandidate
+from tests.helpers import make_bars, make_multi_symbol_bars
 
 
 class BacktestTests(unittest.TestCase):
@@ -26,6 +27,12 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(_proxy_history_min_points(180), 130)
         self.assertEqual(_proxy_history_min_points(90), 65)
         self.assertEqual(_proxy_history_min_points(40), 50)
+
+    def test_effective_proxy_min_points_relaxes_for_crypto(self) -> None:
+        crypto_hist = pd.DataFrame({"asset_class": ["crypto", "crypto", "perp"]})
+        mixed_hist = pd.DataFrame({"asset_class": ["equity", "crypto"]})
+        self.assertEqual(_effective_proxy_min_points(90, mixed_hist), 65)
+        self.assertEqual(_effective_proxy_min_points(90, crypto_hist), 45)
 
     def test_backtest_runs(self) -> None:
         bars = make_multi_symbol_bars()
@@ -124,6 +131,77 @@ class BacktestTests(unittest.TestCase):
         )
         self.assertAlmostEqual(up, 1.2, places=6)
         self.assertAlmostEqual(down, 1.0, places=6)
+
+    def test_backtest_allows_crypto_short_when_shortable(self) -> None:
+        import lie_engine.backtest.engine as bt_mod
+
+        bars = pd.concat(
+            [
+                make_bars("BTCUSDT", n=260, trend=-0.04, seed=211, asset_class="crypto"),
+                make_bars("ETHUSDT", n=260, trend=-0.03, seed=212, asset_class="crypto"),
+            ],
+            ignore_index=True,
+        )
+
+        original_scan = bt_mod.scan_signals
+        original_regime = bt_mod.derive_regime_consensus
+
+        def _fake_scan_signals(*, bars: pd.DataFrame, regime, cfg):  # noqa: ANN001
+            row = bars.sort_values("ts").iloc[-1]
+            px = float(row["close"])
+            return [
+                SignalCandidate(
+                    symbol=str(row["symbol"]),
+                    side=Side.SHORT,
+                    regime=regime,
+                    position_score=1.0,
+                    structure_score=1.0,
+                    momentum_score=1.0,
+                    confidence=95.0,
+                    convexity_ratio=2.0,
+                    entry_price=px,
+                    stop_price=px * 1.01,
+                    target_price=px * 0.99,
+                    can_short=True,
+                )
+            ]
+
+        def _fake_regime(*, as_of, hurst, hmm_probs, atr_z, trend_thr, mean_thr, atr_extreme):  # noqa: ANN001
+            return RegimeState(
+                as_of=as_of,
+                hurst=float(hurst),
+                hmm_probs={"trend": 1.0},
+                atr_z=float(atr_z),
+                consensus=RegimeLabel.WEAK_TREND,
+                protection_mode=False,
+                rationale="test_force_trend",
+            )
+
+        bt_mod.scan_signals = _fake_scan_signals  # type: ignore[assignment]
+        bt_mod.derive_regime_consensus = _fake_regime  # type: ignore[assignment]
+        try:
+            result = run_event_backtest(
+                bars=bars,
+                start=date(2025, 1, 1),
+                end=date(2025, 9, 17),
+                cfg=BacktestConfig(
+                    max_daily_trades=1,
+                    hold_days=2,
+                    signal_confidence_min=0.0,
+                    convexity_min=0.0,
+                    signal_eval_interval=1,
+                    regime_recalc_interval=1,
+                    proxy_lookback=60,
+                ),
+                trend_thr=0.6,
+                mean_thr=0.4,
+                atr_extreme=2.0,
+            )
+            self.assertGreater(int(result.trades), 0)
+            self.assertIn("crypto", result.by_asset)
+        finally:
+            bt_mod.scan_signals = original_scan  # type: ignore[assignment]
+            bt_mod.derive_regime_consensus = original_regime  # type: ignore[assignment]
 
 
 if __name__ == "__main__":

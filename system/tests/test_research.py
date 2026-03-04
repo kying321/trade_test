@@ -200,6 +200,7 @@ class ResearchTests(unittest.TestCase):
             self.assertIsNone(err)
             self.assertFalse(df.empty)
             self.assertTrue((df["symbol"] == "BTCUSDT").all())
+            self.assertTrue((df["asset_class"] == "crypto").all())
             self.assertIn("open", df.columns)
             self.assertIn("source", df.columns)
         finally:
@@ -469,6 +470,48 @@ class ResearchTests(unittest.TestCase):
         self.assertLess(float(relaxed.get("convexity_min", 0.0)), float(normal.get("convexity_min", 0.0)))
         self.assertLessEqual(int(relaxed.get("hold_days", 99)), int(normal.get("hold_days", 0)))
         self.assertGreaterEqual(int(relaxed.get("max_daily_trades", 0)), int(normal.get("max_daily_trades", 0)))
+
+    def test_strategy_lab_candidate_generation_crypto_low_activity_relaxes_more(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        market = {
+            "trend_strength_z": 0.1,
+            "volatility_z": 0.0,
+            "tail_risk_z": 0.0,
+            "brooks_trend_bar_z": 0.1,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+        report = {
+            "news_bias_z": 0.0,
+            "report_bias_z": 0.0,
+            "news_report_agreement": 0.0,
+        }
+        low = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.20,
+            low_activity_mode=True,
+            crypto_mode=False,
+        )[0]
+        crypto_low = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.20,
+            low_activity_mode=True,
+            crypto_mode=True,
+        )[0]
+        self.assertLess(float(crypto_low.get("signal_confidence_min", 0.0)), float(low.get("signal_confidence_min", 0.0)))
+        self.assertLess(float(crypto_low.get("convexity_min", 0.0)), float(low.get("convexity_min", 0.0)))
+        self.assertLessEqual(int(crypto_low.get("hold_days", 99)), int(low.get("hold_days", 0)))
+        self.assertGreaterEqual(int(crypto_low.get("max_daily_trades", 0)), int(low.get("max_daily_trades", 0)))
 
     def test_strategy_lab_resolve_exposure_cap_prefers_feasible_ablation(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
