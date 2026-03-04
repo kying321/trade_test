@@ -2806,6 +2806,9 @@ class LieEngine:
                 "canary_order": payload.get("steps", {}).get("canary_order", {})
                 if isinstance(payload.get("steps", {}), dict)
                 else {},
+                "account_overview": payload.get("steps", {}).get("account_overview", {})
+                if isinstance(payload.get("steps", {}), dict)
+                else {},
             }
         return out
 

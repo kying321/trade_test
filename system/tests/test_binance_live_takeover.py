@@ -119,7 +119,7 @@ def test_main_records_exchange_reject_for_canary_order(tmp_path: Path, monkeypat
             }
 
         def account(self) -> dict[str, object]:
-            return {"balances": []}
+            return {"balances": [{"asset": "USDT", "free": "10.0", "locked": "0.0"}]}
 
         def user_trades(self, *, symbol: str, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, object]]:
             _ = (symbol, start_ms, end_ms, limit)
@@ -176,10 +176,107 @@ def test_main_records_exchange_reject_for_canary_order(tmp_path: Path, monkeypat
     assert str(payload.get("mode", "")) == "live_ready"
     steps = payload.get("steps", {})
     assert isinstance(steps, dict)
+    account_overview = steps.get("account_overview", {})
+    assert isinstance(account_overview, dict)
+    assert str(account_overview.get("market", "")) == "spot"
+    assert float(account_overview.get("quote_available", 0.0)) >= 10.0
     canary = steps.get("canary_order", {})
     assert isinstance(canary, dict)
     assert bool(canary.get("executed", True)) is False
     assert str(canary.get("reason", "")) == "exchange_reject"
+
+
+def test_main_spot_canary_precheck_blocks_insufficient_usdt(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+
+    class _FakeSpotClient:
+        def __init__(self, **kwargs) -> None:
+            _ = kwargs
+
+        def ping(self) -> dict[str, object]:
+            return {}
+
+        def ticker_price(self, symbol: str) -> float:
+            _ = symbol
+            return 73_000.0
+
+        def exchange_info(self, symbol: str) -> dict[str, object]:
+            return {
+                "symbols": [
+                    {
+                        "symbol": symbol,
+                        "filters": [
+                            {"filterType": "LOT_SIZE", "stepSize": "0.00001", "minQty": "0.00001"},
+                            {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                        ],
+                    }
+                ]
+            }
+
+        def account(self) -> dict[str, object]:
+            return {"balances": [{"asset": "USDT", "free": "1.0", "locked": "0.0"}]}
+
+        def user_trades(self, *, symbol: str, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, object]]:
+            _ = (symbol, start_ms, end_ms, limit)
+            return []
+
+        def realized_pnl_income(self, *, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, object]]:
+            _ = (start_ms, end_ms, limit)
+            return []
+
+        def place_market_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            quantity: float,
+            client_order_id: str,
+            quote_order_qty: float | None = None,
+        ) -> dict[str, object]:
+            _ = (symbol, side, quantity, client_order_id, quote_order_qty)
+            raise AssertionError("precheck should block order submission")
+
+    monkeypatch.setattr(mod, "BinanceSpotClient", _FakeSpotClient)
+    monkeypatch.setattr(mod, "resolve_binance_credentials", lambda allow_daemon_env_fallback: ("k", "s", "process_env"))
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump({"validation": {"micro_capture_daemon_symbols": ["BTCUSDT"]}}, sort_keys=False),
+        encoding="utf-8",
+    )
+    out_root = tmp_path / "output"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "binance_live_takeover.py",
+            "--date",
+            "2026-03-05",
+            "--config",
+            str(cfg_path),
+            "--output-root",
+            str(out_root),
+            "--market",
+            "spot",
+            "--allow-live-order",
+        ],
+    )
+    rc = mod.main()
+    assert rc == 2
+
+    payload = json.loads((out_root / "review" / "latest_binance_live_takeover.json").read_text(encoding="utf-8"))
+    steps = payload.get("steps", {})
+    assert isinstance(steps, dict)
+    account_overview = steps.get("account_overview", {})
+    assert isinstance(account_overview, dict)
+    assert str(account_overview.get("market", "")) == "spot"
+    assert float(account_overview.get("quote_available", 0.0)) == 1.0
+    canary = steps.get("canary_order", {})
+    assert isinstance(canary, dict)
+    assert bool(canary.get("executed", True)) is False
+    assert str(canary.get("reason", "")) == "precheck_insufficient_quote_balance"
 
 
 def test_detect_lie_daemon_pid_parses_ps_output(monkeypatch) -> None:

@@ -379,6 +379,7 @@ class EngineIntegrationTests(unittest.TestCase):
             "steps": {
                 "credentials": {"has_api_key": True, "has_api_secret": False},
                 "canary_order": {"executed": False, "reason": "missing_binance_api_secret"},
+                "account_overview": {"market": "spot", "quote_available": 0.0},
             },
         }
 
@@ -394,6 +395,9 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertFalse(bool(out.get("ok", True)))
         self.assertEqual(str(out.get("mode", "")), "degraded_read_only")
         self.assertEqual(str(out.get("artifact", "")), str(tmp_root / "output" / "review" / "x.json"))
+        payload = out.get("payload", {})
+        self.assertIsInstance(payload, dict)
+        self.assertEqual(str((payload or {}).get("account_overview", {}).get("market", "")), "spot")
         cmd = run_mock.call_args.args[0]
         self.assertIn("--skip-mutex", cmd)
         self.assertIn("--activate-config", cmd)

@@ -14,6 +14,7 @@ Actions:
   ensure-whitelist-gate   Assert first, then auto-resample+reassert on failure.
   live-takeover-probe     Run remote Binance takeover probe (config+evomap+telemetry, no order).
   live-takeover-canary    Run remote Binance takeover canary (includes minimal live order).
+  live-takeover-ready-check  Check whether remote account is ready for canary order (balance + creds).
   cut-local               Disable local OpenClaw launchd services.
   probe-cloud             Probe cloud host/project availability.
   compare                 Compare local/remote git heads.
@@ -249,6 +250,7 @@ remote-clean-junk
 validate-remote-config
 live-takeover-probe
 live-takeover-canary
+live-takeover-ready-check
 sample-whitelist
 sample-whitelist-gate
 assert-whitelist-gate
@@ -452,6 +454,84 @@ action_live_takeover_canary() {
   ssh_exec "set -e; wd=\$(${remote_workdir_expr}); cd \"\$wd\"; ${cred_env_arg}PYTHONPATH=src python3 scripts/binance_live_takeover.py ${date_arg} --config config.yaml --output-root output --activate-config --allow-live-order --rate-limit-per-minute ${live_takeover_rate_limit_per_minute} --timeout-ms ${live_takeover_timeout_ms} --canary-quote-usdt ${live_takeover_canary_usdt} --max-drawdown ${live_takeover_max_drawdown} --trade-window-hours ${live_takeover_trade_window_hours} --market ${live_takeover_market} ${daemon_env_arg}"
 }
 
+action_live_takeover_ready_check() {
+  local date_arg daemon_env_arg cred_env_arg probe_json tmp_json rc_probe
+  date_arg=""
+  daemon_env_arg=""
+  cred_env_arg="$(build_live_takeover_cred_env_arg)"
+  if [[ -n "${live_takeover_date}" ]]; then
+    date_arg="--date ${live_takeover_date}"
+  fi
+  if is_true "${live_takeover_allow_daemon_env_fallback}"; then
+    daemon_env_arg="--allow-daemon-env-fallback"
+  fi
+
+  set +e
+  probe_json="$(ssh_exec "set -e; wd=\$(${remote_workdir_expr}); cd \"\$wd\"; ${cred_env_arg}PYTHONPATH=src python3 scripts/binance_live_takeover.py ${date_arg} --config config.yaml --output-root output --activate-config --rate-limit-per-minute ${live_takeover_rate_limit_per_minute} --timeout-ms ${live_takeover_timeout_ms} --canary-quote-usdt ${live_takeover_canary_usdt} --max-drawdown ${live_takeover_max_drawdown} --trade-window-hours ${live_takeover_trade_window_hours} --max-trade-symbols 3 --market ${live_takeover_market} ${daemon_env_arg}" 2>/dev/null)"
+  rc_probe=$?
+  set -e
+
+  tmp_json="$(mktemp)"
+  printf '%s\n' "${probe_json}" > "${tmp_json}"
+  python3 - "${tmp_json}" "${rc_probe}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload_path = Path(sys.argv[1])
+rc_probe = int(sys.argv[2])
+try:
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(json.dumps({"ready": False, "reason": f"invalid_probe_json:{exc}", "probe_returncode": rc_probe}, ensure_ascii=False))
+    raise SystemExit(3)
+
+steps = payload.get("steps", {}) if isinstance(payload.get("steps", {}), dict) else {}
+creds = steps.get("credentials", {}) if isinstance(steps.get("credentials", {}), dict) else {}
+plan = steps.get("canary_plan", {}) if isinstance(steps.get("canary_plan", {}), dict) else {}
+acct = steps.get("account_overview", {}) if isinstance(steps.get("account_overview", {}), dict) else {}
+
+def _f(v, d=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return float(d)
+
+market = str(payload.get("market", "")).strip().lower()
+has_key = bool(creds.get("has_api_key", False))
+has_secret = bool(creds.get("has_api_secret", False))
+reason = "ready"
+ready = bool(has_key and has_secret)
+
+available = _f(acct.get("quote_available", 0.0), 0.0)
+required = _f(plan.get("effective_quote_usdt", plan.get("quote_usdt", 0.0)), 0.0)
+
+if not ready:
+    reason = "missing_api_credentials"
+elif market == "spot" and available + 1e-12 < required:
+    ready = False
+    reason = "insufficient_quote_balance"
+elif market == "futures_usdm" and available <= 0.0:
+    ready = False
+    reason = "insufficient_futures_balance"
+
+out = {
+    "ready": bool(ready),
+    "reason": str(reason),
+    "market": market or "unknown",
+    "probe_returncode": int(rc_probe),
+    "has_api_key": bool(has_key),
+    "has_api_secret": bool(has_secret),
+    "quote_available": float(available),
+    "required_quote": float(required),
+    "artifact": str(payload.get("artifact", "")),
+}
+print(json.dumps(out, ensure_ascii=False, indent=2))
+raise SystemExit(0 if ready else 3)
+PY
+  rm -f "${tmp_json}" >/dev/null 2>&1 || true
+}
+
 append_sample_record() {
   local action="$1"
   local rc="$2"
@@ -489,6 +569,7 @@ run_action_by_name() {
     validate-remote-config) action_validate_remote_config ;;
     live-takeover-probe) action_live_takeover_probe ;;
     live-takeover-canary) action_live_takeover_canary ;;
+    live-takeover-ready-check) action_live_takeover_ready_check ;;
     *)
       echo "ERROR: unknown action '${action}'" >&2
       usage

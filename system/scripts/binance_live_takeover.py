@@ -1007,6 +1007,7 @@ def main() -> int:
                     panic_close_all(output_root, reason="binance_account_transport_error", detail=str(exc))
 
                 positions_out: list[dict[str, Any]] = []
+                spot_balance_map: dict[str, float] = {}
                 symbol_pool: list[str] = []
                 for s in [symbol] + whitelist:
                     ss = str(s).upper()
@@ -1016,7 +1017,6 @@ def main() -> int:
 
                 if market == "spot":
                     balances = account.get("balances", []) if isinstance(account.get("balances", []), list) else []
-                    bal_map: dict[str, float] = {}
                     for row in balances:
                         if not isinstance(row, dict):
                             continue
@@ -1026,12 +1026,12 @@ def main() -> int:
                         qty_asset = to_float(row.get("free", 0.0), 0.0) + to_float(row.get("locked", 0.0), 0.0)
                         if qty_asset <= 1e-12:
                             continue
-                        bal_map[asset] = qty_asset
+                        spot_balance_map[asset] = qty_asset
                     for sym in symbol_pool:
                         if not sym.endswith("USDT"):
                             continue
                         base_asset = sym[:-4]
-                        qty_asset = to_float(bal_map.get(base_asset, 0.0), 0.0)
+                        qty_asset = to_float(spot_balance_map.get(base_asset, 0.0), 0.0)
                         if qty_asset <= 1e-12:
                             continue
                         px = to_float(client.ticker_price(sym), 0.0)
@@ -1048,6 +1048,21 @@ def main() -> int:
                                 "recv_ts_ms": now_epoch_ms(),
                             }
                         )
+                    base_asset = symbol[:-4] if symbol.endswith("USDT") else symbol
+                    top_assets = sorted(
+                        spot_balance_map.items(),
+                        key=lambda kv: float(kv[1]),
+                        reverse=True,
+                    )[:10]
+                    summary["steps"]["account_overview"] = {
+                        "market": "spot",
+                        "quote_asset": "USDT",
+                        "quote_available": float(to_float(spot_balance_map.get("USDT", 0.0), 0.0)),
+                        "base_asset": base_asset,
+                        "base_available": float(to_float(spot_balance_map.get(base_asset, 0.0), 0.0)),
+                        "nonzero_asset_count": int(len(spot_balance_map)),
+                        "top_assets": [{"asset": str(a), "qty": float(q)} for a, q in top_assets],
+                    }
                 else:
                     positions_in = account.get("positions", []) if isinstance(account.get("positions", []), list) else []
                     for row in positions_in:
@@ -1068,6 +1083,22 @@ def main() -> int:
                                 "recv_ts_ms": now_epoch_ms(),
                             }
                         )
+                    assets_in = account.get("assets", []) if isinstance(account.get("assets", []), list) else []
+                    quote_bal = 0.0
+                    for row in assets_in:
+                        if not isinstance(row, dict):
+                            continue
+                        if str(row.get("asset", "")).strip().upper() == "USDT":
+                            quote_bal = to_float(row.get("walletBalance", row.get("availableBalance", 0.0)), 0.0)
+                            break
+                    summary["steps"]["account_overview"] = {
+                        "market": "futures_usdm",
+                        "quote_asset": "USDT",
+                        "quote_available": float(quote_bal),
+                        "position_count": int(len(positions_out)),
+                        "total_wallet_balance": float(to_float(account.get("totalWalletBalance", 0.0), 0.0)),
+                        "available_balance": float(to_float(account.get("availableBalance", 0.0), 0.0)),
+                    }
 
                 all_trades: list[dict[str, Any]] = []
                 for sym in symbol_pool:
@@ -1188,7 +1219,39 @@ def main() -> int:
                     if qty <= 0.0:
                         panic_close_all(output_root, reason="canary_qty_invalid", detail=f"symbol={symbol}; qty={qty}")
                     budget_quote = max(0.0, float(args.canary_quote_usdt))
-                    if market == "futures_usdm" and budget_quote > 0 and effective_quote_usdt > (budget_quote * 2.0):
+                    can_place_order = True
+                    if market == "spot":
+                        if side == "BUY":
+                            available_quote = to_float(spot_balance_map.get("USDT", 0.0), 0.0)
+                            required_quote = max(budget_quote, float(lot.get("min_notional", 0.0)))
+                            if available_quote + 1e-12 < required_quote:
+                                can_place_order = False
+                                summary["steps"]["canary_order"] = {
+                                    "executed": False,
+                                    "reason": "precheck_insufficient_quote_balance",
+                                    "asset": "USDT",
+                                    "available": float(available_quote),
+                                    "required": float(required_quote),
+                                }
+                                write_json(order_log_path, summary["steps"]["canary_order"])
+                                summary["steps"]["canary_order"]["path"] = str(order_log_path)
+                                summary["ok"] = False
+                        else:
+                            base_asset = symbol[:-4] if symbol.endswith("USDT") else symbol
+                            available_base = to_float(spot_balance_map.get(base_asset, 0.0), 0.0)
+                            if available_base + 1e-12 < float(qty):
+                                can_place_order = False
+                                summary["steps"]["canary_order"] = {
+                                    "executed": False,
+                                    "reason": "precheck_insufficient_base_balance",
+                                    "asset": base_asset,
+                                    "available": float(available_base),
+                                    "required": float(qty),
+                                }
+                                write_json(order_log_path, summary["steps"]["canary_order"])
+                                summary["steps"]["canary_order"]["path"] = str(order_log_path)
+                                summary["ok"] = False
+                    if can_place_order and market == "futures_usdm" and budget_quote > 0 and effective_quote_usdt > (budget_quote * 2.0):
                         summary["steps"]["canary_order"] = {
                             "executed": False,
                             "reason": "notional_floor_above_budget",
@@ -1200,7 +1263,7 @@ def main() -> int:
                         summary["mode"] = "live_ready_budget_guarded"
                         summary["ok"] = False
                         summary["steps"]["canary_order"]["path"] = str(order_log_path)
-                    else:
+                    elif can_place_order:
                         order_ledger_path = output_root / "state" / "binance_order_idempotency.json"
                         order_keys = load_list_ledger(order_ledger_path, "order_keys")
                         order_set = set(order_keys)
