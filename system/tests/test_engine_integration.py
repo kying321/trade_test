@@ -2200,6 +2200,100 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue(any("strategy_lab_candidate_skipped=" in n for n in review.notes))
         self.assertFalse(any("strategy-lab" in str(v) for v in review.change_reasons.values()))
 
+    def test_run_review_merges_unaccepted_strategy_lab_candidate_with_relaxed_gate(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"].update(
+            {
+                "strategy_lab_merge_require_accepted": False,
+                "strategy_lab_merge_require_validation_metrics": True,
+                "strategy_lab_merge_min_validation_annual_return": -0.08,
+                "strategy_lab_merge_min_validation_trades": 2,
+                "strategy_lab_merge_min_validation_positive_window_ratio": 0.90,
+                "strategy_lab_merge_min_robustness": 0.70,
+                "strategy_lab_merge_max_validation_drawdown": 0.05,
+            }
+        )
+        if isinstance(eng.settings.validation, dict):
+            eng.settings.validation.update(eng.settings.raw["validation"])
+
+        manifest_dir = tmp_root / "output" / "artifacts" / "manifests"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        summary_dir = tmp_root / "output" / "research" / "strategy_lab_local_relaxed"
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = summary_dir / "summary.json"
+        summary_path.write_text(
+            json.dumps(
+                {
+                    "cutoff_date": "2026-02-12",
+                    "cutoff_ts": "2026-02-12T23:59:59",
+                    "bar_max_ts": "2026-02-12T15:00:00",
+                    "news_max_ts": "2026-02-12T23:59:59",
+                    "report_max_ts": "2026-02-12T23:59:59",
+                    "data_fetch_stats": {"strict_cutoff_enforced": True},
+                    "best_candidate": {
+                        "name": "crypto_tactical_relaxed_01",
+                        "accepted": False,
+                        "robustness_score": 0.78,
+                        "validation_metrics": {
+                            "annual_return": -0.03,
+                            "max_drawdown": 0.02,
+                            "positive_window_ratio": 0.95,
+                            "trades": 4,
+                        },
+                        "params": {
+                            "signal_confidence_min": 28.0,
+                            "convexity_min": 1.8,
+                            "hold_days": 2,
+                            "max_daily_trades": 5,
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (manifest_dir / "strategy_lab_20260213_000000.json").write_text(
+            json.dumps(
+                {
+                    "artifacts": {"summary": str(summary_path)},
+                    "checks": {"strict_cutoff_enforced": True},
+                    "metadata": {"cutoff_date": "2026-02-12"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        eng.run_backtest = lambda start, end: BacktestResult(  # type: ignore[method-assign]
+            start=start,
+            end=end,
+            total_return=0.10,
+            annual_return=0.05,
+            max_drawdown=0.12,
+            win_rate=0.48,
+            profit_factor=1.4,
+            expectancy=0.01,
+            trades=100,
+            violations=0,
+            positive_window_ratio=0.80,
+            equity_curve=[],
+            by_asset={},
+        )
+        eng._estimate_factor_contrib_120d = lambda as_of: {  # type: ignore[method-assign]
+            "macro": 0.2,
+            "industry": 0.2,
+            "news": 0.2,
+            "sentiment": 0.2,
+            "fundamental": 0.1,
+            "technical": 0.1,
+        }
+
+        review = eng.run_review(d)
+        self.assertFalse(any("strategy_lab_candidate_skipped=" in n for n in review.notes))
+        self.assertTrue(any("strategy_lab_candidate=" in n for n in review.notes))
+        self.assertTrue(any("strategy-lab" in str(v) for v in review.change_reasons.values()))
+        self.assertIn("signal_confidence_min", review.parameter_changes)
+
     def test_load_latest_strategy_candidate_rejects_temporal_leak(self) -> None:
         eng, tmp_root = self._make_engine()
         as_of = date(2026, 2, 13)

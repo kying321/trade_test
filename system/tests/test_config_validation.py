@@ -459,6 +459,8 @@ class ConfigValidationTests(unittest.TestCase):
                     "execution_anti_martingale_enabled": "yes",
                     "strategy_lab_merge_require_accepted": "yes",
                     "strategy_lab_merge_require_validation_metrics": "yes",
+                    "strategy_lab_merge_min_validation_annual_return": 6.0,
+                    "strategy_lab_merge_min_review_annual_return": -6.0,
                     "strategy_lab_merge_min_validation_trades": -1,
                     "strategy_lab_merge_min_validation_positive_window_ratio": 1.2,
                     "strategy_lab_merge_min_robustness": -0.1,
@@ -558,6 +560,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("validation.execution_anti_martingale_enabled", error_paths)
         self.assertIn("validation.strategy_lab_merge_require_accepted", error_paths)
         self.assertIn("validation.strategy_lab_merge_require_validation_metrics", error_paths)
+        self.assertIn("validation.strategy_lab_merge_min_validation_annual_return", error_paths)
+        self.assertIn("validation.strategy_lab_merge_min_review_annual_return", error_paths)
         self.assertIn("validation.strategy_lab_merge_min_validation_trades", error_paths)
         self.assertIn("validation.strategy_lab_merge_min_validation_positive_window_ratio", error_paths)
         self.assertIn("validation.strategy_lab_merge_min_robustness", error_paths)
@@ -1115,6 +1119,8 @@ class ConfigValidationTests(unittest.TestCase):
                     "max_drawdown_max": 0.18,
                     "strategy_lab_merge_require_accepted": "yes",
                     "strategy_lab_merge_require_validation_metrics": "yes",
+                    "strategy_lab_merge_min_validation_annual_return": 6.0,
+                    "strategy_lab_merge_min_review_annual_return": -6.0,
                     "strategy_lab_merge_min_validation_trades": -1,
                     "strategy_lab_merge_min_validation_positive_window_ratio": 1.2,
                     "strategy_lab_merge_min_robustness": -0.1,
@@ -1131,6 +1137,8 @@ class ConfigValidationTests(unittest.TestCase):
         paths = {x["path"] for x in out.get("errors", [])}
         self.assertIn("validation.strategy_lab_merge_require_accepted", paths)
         self.assertIn("validation.strategy_lab_merge_require_validation_metrics", paths)
+        self.assertIn("validation.strategy_lab_merge_min_validation_annual_return", paths)
+        self.assertIn("validation.strategy_lab_merge_min_review_annual_return", paths)
         self.assertIn("validation.strategy_lab_merge_min_validation_trades", paths)
         self.assertIn("validation.strategy_lab_merge_min_validation_positive_window_ratio", paths)
         self.assertIn("validation.strategy_lab_merge_min_robustness", paths)

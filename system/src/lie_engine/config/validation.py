@@ -271,6 +271,14 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
     if "strategy_lab_merge_min_validation_trades" in val and _as_int(val.get("strategy_lab_merge_min_validation_trades", 0)) < 0:
         issues.append(ValidationIssue("error", "validation.strategy_lab_merge_min_validation_trades", "必须 >= 0"))
     for k in (
+        "strategy_lab_merge_min_validation_annual_return",
+        "strategy_lab_merge_min_review_annual_return",
+    ):
+        if k in val:
+            v = _as_float(val.get(k, 0.0))
+            if not (-5.0 <= v <= 5.0):
+                issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [-5, 5]"))
+    for k in (
         "strategy_lab_merge_min_validation_positive_window_ratio",
         "strategy_lab_merge_min_robustness",
     ):
