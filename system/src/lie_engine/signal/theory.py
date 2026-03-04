@@ -102,21 +102,37 @@ def _ict_scores(df: pd.DataFrame) -> tuple[float, float]:
 
 
 def _brooks_scores(df: pd.DataFrame) -> tuple[float, float]:
-    if len(df) < 3:
+    if len(df) < 5:
         return 0.0, 0.0
 
     prev = df.iloc[-2]
     cur = df.iloc[-1]
     prev2 = df.iloc[-3]
+    prev3 = df.iloc[-4]
 
     open_px = _safe_float(cur.get("open"), 0.0)
     close_px = _safe_float(cur.get("close"), 0.0)
     high = _safe_float(cur.get("high"), close_px)
     low = _safe_float(cur.get("low"), close_px)
+    volume = _safe_float(cur.get("volume"), 0.0)
     body = abs(close_px - open_px)
+    atr14 = max(1e-9, _safe_float(cur.get("atr14"), high - low))
+    bar_range = max(1e-9, high - low)
     upper_wick = max(0.0, high - max(close_px, open_px))
     lower_wick = max(0.0, min(close_px, open_px) - low)
     wick_ratio = (upper_wick + lower_wick) / max(body, 1e-9)
+    close_location = _bounded((close_px - low) / bar_range, 0.0, 1.0)
+    body_share = _bounded(body / bar_range, 0.0, 1.0)
+    body_vs_atr = _bounded(body / atr14, 0.0, 1.0)
+    vol_ma20 = max(1e-9, _safe_float(cur.get("vol_ma20"), volume if volume > 0.0 else 1.0))
+    vol_support = _bounded((volume / vol_ma20 - 0.6) / 1.0, 0.0, 1.0)
+
+    trend_bar_long = 0.0
+    trend_bar_short = 0.0
+    if close_px >= open_px:
+        trend_bar_long = _bounded(close_location * body_share * body_vs_atr * (0.55 + 0.45 * vol_support), 0.0, 1.0)
+    if close_px <= open_px:
+        trend_bar_short = _bounded((1.0 - close_location) * body_share * body_vs_atr * (0.55 + 0.45 * vol_support), 0.0, 1.0)
 
     roll_high10_prev = _safe_float(prev.get("roll_high10_prev"), _safe_float(cur.get("roll_high10_prev"), 0.0))
     roll_low10_prev = _safe_float(prev.get("roll_low10_prev"), _safe_float(cur.get("roll_low10_prev"), 0.0))
@@ -128,37 +144,122 @@ def _brooks_scores(df: pd.DataFrame) -> tuple[float, float]:
 
     roll_high20 = _safe_float(cur.get("roll_high20"), close_px)
     roll_low20 = _safe_float(cur.get("roll_low20"), close_px)
+    roll_high20_prev = _safe_float(prev.get("roll_high20"), roll_high20)
+    roll_low20_prev = _safe_float(prev.get("roll_low20"), roll_low20)
     ma20 = _safe_float(cur.get("ma20"), close_px)
     ma60 = _safe_float(cur.get("ma60"), close_px)
-    breakout_pullback_long = 1.0 if close_px >= roll_high20 * 0.995 and close_px > ma20 and ma20 >= ma60 else 0.0
-    breakout_pullback_short = 1.0 if close_px <= roll_low20 * 1.005 and close_px < ma20 and ma20 <= ma60 else 0.0
+    ma_gap = abs(close_px - ma20) / atr14
+    pullback_tightness = _bounded(1.0 - ma_gap / 1.8, 0.0, 1.0)
+    breakout_pullback_long = pullback_tightness if close_px >= roll_high20 * 0.992 and close_px > ma20 and ma20 >= ma60 else 0.0
+    breakout_pullback_short = pullback_tightness if close_px <= roll_low20 * 1.008 and close_px < ma20 and ma20 <= ma60 else 0.0
+
+    pullback_seq = df.tail(6).iloc[:-1]
+    pb_close = pullback_seq["close"].to_numpy(dtype=float)
+    pb_high = pullback_seq["high"].to_numpy(dtype=float)
+    pb_low = pullback_seq["low"].to_numpy(dtype=float)
+    pb_ret = np.diff(pb_close)
+    leg_threshold = 0.12 * atr14
+    down_legs = int(np.sum(pb_ret <= -leg_threshold))
+    up_legs = int(np.sum(pb_ret >= leg_threshold))
+    prev_high = _safe_float(prev.get("high"), high)
+    prev_low = _safe_float(prev.get("low"), low)
+    pullback_span = (float(np.max(pb_high)) - float(np.min(pb_low))) if len(pb_high) and len(pb_low) else 0.0
+    pullback_noise = _bounded(pullback_span / max(2.4 * atr14, 1e-9), 0.0, 1.0)
+    reclaim_long = _bounded((close_px - prev_high) / max(0.6 * atr14, 1e-9) + 0.5, 0.0, 1.0)
+    reclaim_short = _bounded((prev_low - close_px) / max(0.6 * atr14, 1e-9) + 0.5, 0.0, 1.0)
+
+    two_legged_pullback_long = 0.0
+    if ma20 >= ma60 and close_px >= ma20 * 0.995 and down_legs >= 2 and up_legs >= 1 and close_px >= prev_high * 0.999:
+        two_legged_pullback_long = _bounded(0.35 + 0.40 * reclaim_long + 0.25 * (1.0 - pullback_noise), 0.0, 1.0)
+
+    two_legged_pullback_short = 0.0
+    if ma20 <= ma60 and close_px <= ma20 * 1.005 and up_legs >= 2 and down_legs >= 1 and close_px <= prev_low * 1.001:
+        two_legged_pullback_short = _bounded(0.35 + 0.40 * reclaim_short + 0.25 * (1.0 - pullback_noise), 0.0, 1.0)
 
     cps = candle_pattern_score(df.tail(6))
-    h2_long = 1.0 if cps >= 1.0 and close_px > _safe_float(prev.get("close"), close_px) and _safe_float(prev.get("low"), low) <= _safe_float(prev2.get("low"), low) else 0.0
-    h2_short = 1.0 if cps >= 1.0 and close_px < _safe_float(prev.get("close"), close_px) and _safe_float(prev.get("high"), high) >= _safe_float(prev2.get("high"), high) else 0.0
+    attempt2_break_long = max(
+        _safe_float(prev.get("high"), high),
+        _safe_float(prev2.get("high"), high),
+        _safe_float(prev3.get("high"), high),
+    )
+    attempt2_break_short = min(
+        _safe_float(prev.get("low"), low),
+        _safe_float(prev2.get("low"), low),
+        _safe_float(prev3.get("low"), low),
+    )
+    h2_long = (
+        1.0
+        if cps >= 1.0
+        and close_px > _safe_float(prev.get("close"), close_px)
+        and _safe_float(prev.get("low"), low) <= _safe_float(prev2.get("low"), low)
+        and close_px > attempt2_break_long * 0.998
+        else 0.0
+    )
+    h2_short = (
+        1.0
+        if cps >= 1.0
+        and close_px < _safe_float(prev.get("close"), close_px)
+        and _safe_float(prev.get("high"), high) >= _safe_float(prev2.get("high"), high)
+        and close_px < attempt2_break_short * 1.002
+        else 0.0
+    )
 
     near_lower = close_px <= roll_low20 * 1.01
     near_upper = close_px >= roll_high20 * 0.99
     rsi14 = _safe_float(cur.get("rsi14"), 50.0)
-    range_reversal_long = 1.0 if near_lower and rsi14 <= 35 and lower_wick > upper_wick * 1.2 else 0.0
-    range_reversal_short = 1.0 if near_upper and rsi14 >= 65 and upper_wick > lower_wick * 1.2 else 0.0
+    range_reversal_long = 1.0 if near_lower and rsi14 <= 35 and lower_wick > upper_wick * 1.2 and body <= atr14 * 1.4 else 0.0
+    range_reversal_short = 1.0 if near_upper and rsi14 >= 65 and upper_wick > lower_wick * 1.2 and body <= atr14 * 1.4 else 0.0
+
+    recent = df.tail(4)
+    high_steps = np.diff(recent["high"].to_numpy(dtype=float))
+    low_steps = np.diff(recent["low"].to_numpy(dtype=float))
+    micro_channel_long = _bounded(
+        0.5 * (float(np.mean(high_steps >= -1e-9)) + float(np.mean(low_steps >= -1e-9))),
+        0.0,
+        1.0,
+    )
+    micro_channel_short = _bounded(
+        0.5 * (float(np.mean(high_steps <= 1e-9)) + float(np.mean(low_steps <= 1e-9))),
+        0.0,
+        1.0,
+    )
+
+    exhaustion_long = 0.0
+    if close_px >= roll_high20_prev * 0.998:
+        upside_exhaust = _bounded((upper_wick / max(body, 1e-9) - 0.45) / 1.6, 0.0, 1.0)
+        impulse = _bounded((body / max(1.2 * atr14, 1e-9)) - 0.4, 0.0, 1.0)
+        exhaustion_long = _bounded(0.5 * upside_exhaust + 0.5 * impulse * vol_support, 0.0, 1.0)
+
+    exhaustion_short = 0.0
+    if close_px <= roll_low20_prev * 1.002:
+        downside_exhaust = _bounded((lower_wick / max(body, 1e-9) - 0.45) / 1.6, 0.0, 1.0)
+        impulse = _bounded((body / max(1.2 * atr14, 1e-9)) - 0.4, 0.0, 1.0)
+        exhaustion_short = _bounded(0.5 * downside_exhaust + 0.5 * impulse * vol_support, 0.0, 1.0)
 
     brooks_long = _weighted_mean(
         [
-            (failed_breakout_long, 0.35),
-            (breakout_pullback_long, 0.25),
-            (h2_long, 0.15),
-            (range_reversal_long, 0.25),
+            (failed_breakout_long, 0.21),
+            (breakout_pullback_long, 0.20),
+            (h2_long, 0.13),
+            (range_reversal_long, 0.16),
+            (trend_bar_long, 0.12),
+            (micro_channel_long, 0.09),
+            (two_legged_pullback_long, 0.09),
         ]
     )
     brooks_short = _weighted_mean(
         [
-            (failed_breakout_short, 0.35),
-            (breakout_pullback_short, 0.25),
-            (h2_short, 0.15),
-            (range_reversal_short, 0.25),
+            (failed_breakout_short, 0.21),
+            (breakout_pullback_short, 0.20),
+            (h2_short, 0.13),
+            (range_reversal_short, 0.16),
+            (trend_bar_short, 0.12),
+            (micro_channel_short, 0.09),
+            (two_legged_pullback_short, 0.09),
         ]
     )
+    brooks_long = _bounded(brooks_long * (1.0 - 0.55 * exhaustion_long) + 0.28 * exhaustion_short, 0.0, 1.0)
+    brooks_short = _bounded(brooks_short * (1.0 - 0.55 * exhaustion_short) + 0.28 * exhaustion_long, 0.0, 1.0)
     return brooks_long, brooks_short
 
 

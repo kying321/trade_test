@@ -266,6 +266,131 @@ class SignalTests(unittest.TestCase):
         self.assertGreater(float(enriched.confidence), float(base.confidence))
         self.assertIn("theory=", enriched.notes)
 
+    def test_theory_brooks_trendbar_microchannel_biases_long(self) -> None:
+        bars = make_bars("BTCUSDT", n=320, trend=0.10, seed=67, asset_class="future").reset_index(drop=True)
+        start = len(bars) - 4
+        anchor = float(bars.loc[start - 1, "close"])
+        for step in range(4):
+            i = start + step
+            open_px = anchor * (1.004 + 0.005 * step)
+            close_px = open_px * (1.006 + 0.001 * step)
+            low_px = open_px * 0.997
+            high_px = close_px * 1.002
+            bars.loc[i, "open"] = open_px
+            bars.loc[i, "close"] = close_px
+            bars.loc[i, "low"] = low_px
+            bars.loc[i, "high"] = high_px
+        bars.loc[len(bars) - 1, "volume"] = float(bars["volume"].tail(20).mean()) * 2.2
+
+        featured = add_common_features(bars)
+        long_result = compute_theory_confluence(
+            df=featured,
+            side=Side.LONG,
+            regime=RegimeLabel.STRONG_TREND,
+            lie_score_ratio=0.56,
+            ict_weight=0.8,
+            brooks_weight=1.8,
+            lie_weight=0.8,
+        )
+        short_result = compute_theory_confluence(
+            df=featured,
+            side=Side.SHORT,
+            regime=RegimeLabel.STRONG_TREND,
+            lie_score_ratio=0.56,
+            ict_weight=0.8,
+            brooks_weight=1.8,
+            lie_weight=0.8,
+        )
+        self.assertGreater(float(long_result.brooks_align), float(long_result.brooks_oppose))
+        self.assertGreater(float(long_result.brooks_align), 0.10)
+        self.assertGreater(float(long_result.brooks_align), float(short_result.brooks_align))
+
+    def test_theory_brooks_two_legged_pullback_supports_long(self) -> None:
+        bars = make_bars("BTCUSDT", n=320, trend=0.14, seed=68, asset_class="future").reset_index(drop=True)
+        seq_start = len(bars) - 6
+        anchor = float(bars.loc[seq_start - 1, "close"])
+        closes = [anchor * 1.010, anchor * 0.998, anchor * 1.004, anchor * 0.994, anchor * 1.001]
+        for step, close_px in enumerate(closes):
+            i = seq_start + step
+            open_px = close_px * (0.998 if step in {1, 3} else 1.001)
+            low_px = min(open_px, close_px) * 0.997
+            high_px = max(open_px, close_px) * 1.003
+            bars.loc[i, "open"] = open_px
+            bars.loc[i, "close"] = close_px
+            bars.loc[i, "low"] = low_px
+            bars.loc[i, "high"] = high_px
+        last = len(bars) - 1
+        prev_high = float(bars.loc[last - 1, "high"])
+        bars.loc[last, "open"] = prev_high * 0.998
+        bars.loc[last, "close"] = prev_high * 1.008
+        bars.loc[last, "low"] = prev_high * 0.995
+        bars.loc[last, "high"] = prev_high * 1.011
+        bars.loc[last, "volume"] = float(bars["volume"].tail(20).mean()) * 1.8
+
+        featured = add_common_features(bars)
+        long_result = compute_theory_confluence(
+            df=featured,
+            side=Side.LONG,
+            regime=RegimeLabel.STRONG_TREND,
+            lie_score_ratio=0.57,
+            ict_weight=0.7,
+            brooks_weight=2.0,
+            lie_weight=0.7,
+        )
+        short_result = compute_theory_confluence(
+            df=featured,
+            side=Side.SHORT,
+            regime=RegimeLabel.STRONG_TREND,
+            lie_score_ratio=0.57,
+            ict_weight=0.7,
+            brooks_weight=2.0,
+            lie_weight=0.7,
+        )
+        self.assertGreater(float(long_result.brooks_align), 0.12)
+        self.assertGreater(float(long_result.brooks_align), float(long_result.brooks_oppose))
+        self.assertGreater(float(long_result.brooks_align), float(short_result.brooks_align))
+
+    def test_theory_brooks_exhaustion_damps_long_alignment(self) -> None:
+        base = make_bars("BTCUSDT", n=320, trend=0.16, seed=69, asset_class="future").reset_index(drop=True)
+        stressed = base.copy(deep=True)
+        i = len(base) - 1
+        anchor = float(base.loc[i - 1, "high"])
+
+        base.loc[i, "open"] = anchor * 1.002
+        base.loc[i, "close"] = anchor * 1.009
+        base.loc[i, "low"] = anchor * 0.998
+        base.loc[i, "high"] = anchor * 1.011
+        base.loc[i, "volume"] = float(base["volume"].tail(20).mean()) * 1.2
+
+        stressed.loc[i, "open"] = anchor * 1.004
+        stressed.loc[i, "close"] = anchor * 1.030
+        stressed.loc[i, "low"] = anchor * 0.993
+        stressed.loc[i, "high"] = anchor * 1.046
+        stressed.loc[i, "volume"] = float(stressed["volume"].tail(20).mean()) * 3.2
+
+        base_featured = add_common_features(base)
+        stressed_featured = add_common_features(stressed)
+        base_result = compute_theory_confluence(
+            df=base_featured,
+            side=Side.LONG,
+            regime=RegimeLabel.STRONG_TREND,
+            lie_score_ratio=0.58,
+            ict_weight=0.8,
+            brooks_weight=1.9,
+            lie_weight=0.8,
+        )
+        stressed_result = compute_theory_confluence(
+            df=stressed_featured,
+            side=Side.LONG,
+            regime=RegimeLabel.STRONG_TREND,
+            lie_score_ratio=0.58,
+            ict_weight=0.8,
+            brooks_weight=1.9,
+            lie_weight=0.8,
+        )
+        self.assertLess(float(stressed_result.brooks_align), float(base_result.brooks_align))
+        self.assertGreater(float(stressed_result.brooks_oppose), float(base_result.brooks_oppose))
+
     def test_theory_conflict_detected_on_sweep_reclaim_failure(self) -> None:
         bars = make_bars("BTCUSDT", n=320, trend=0.12, seed=53, asset_class="future").reset_index(drop=True)
         i = len(bars) - 1

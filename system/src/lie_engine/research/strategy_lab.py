@@ -150,6 +150,153 @@ def _daily_proxy_returns(bars: pd.DataFrame) -> pd.Series:
 
 def _market_insights(bars: pd.DataFrame) -> dict[str, float]:
     ret = _daily_proxy_returns(bars)
+    out: dict[str, float] = {
+        "trend_strength_z": 0.0,
+        "volatility_z": 0.0,
+        "tail_risk_z": 0.0,
+        "mean_return": 0.0,
+        "volatility": 0.0,
+    }
+    if not ret.empty:
+        trend_raw = float(ret.rolling(20).mean().dropna().mean()) if len(ret) >= 20 else float(ret.mean())
+        vol_raw = float(ret.rolling(20).std(ddof=0).dropna().mean()) if len(ret) >= 20 else float(ret.std(ddof=0))
+        tail_raw = float(ret.quantile(0.05))
+        base_mean = float(ret.mean())
+        base_std = float(ret.std(ddof=0))
+        out.update(
+            {
+                "trend_strength_z": _safe_z(trend_raw, base_mean, base_std),
+                "volatility_z": _safe_z(vol_raw, float(ret.std(ddof=0)), float(ret.std(ddof=0))),
+                "tail_risk_z": _safe_z(tail_raw, base_mean, base_std),
+                "mean_return": base_mean,
+                "volatility": float(ret.std(ddof=0)),
+            }
+        )
+    out.update(_brooks_market_proxies(bars))
+    return out
+
+
+def _brooks_market_proxies(bars: pd.DataFrame) -> dict[str, float]:
+    if bars.empty:
+        return {
+            "brooks_trend_bar_z": 0.0,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+        }
+
+    work = bars.copy()
+    work["ts"] = pd.to_datetime(work["ts"])
+    daily = (
+        work.groupby("ts", as_index=False)
+        .agg(
+            open=("open", "mean"),
+            high=("high", "mean"),
+            low=("low", "mean"),
+            close=("close", "mean"),
+            volume=("volume", "sum"),
+        )
+        .sort_values("ts")
+        .reset_index(drop=True)
+    )
+    if len(daily) < 8:
+        return {
+            "brooks_trend_bar_z": 0.0,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+        }
+
+    prev_close = daily["close"].shift(1)
+    tr = pd.concat(
+        [
+            (daily["high"] - daily["low"]).abs(),
+            (daily["high"] - prev_close).abs(),
+            (daily["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr14 = tr.rolling(14, min_periods=5).mean().bfill().ffill()
+    bar_range = (daily["high"] - daily["low"]).replace(0.0, np.nan).abs().fillna(1e-9)
+    body = (daily["close"] - daily["open"]).abs()
+    upper_wick = daily["high"] - daily[["close", "open"]].max(axis=1)
+    lower_wick = daily[["close", "open"]].min(axis=1) - daily["low"]
+    close_loc = ((daily["close"] - daily["low"]) / bar_range).clip(0.0, 1.0)
+    body_share = (body / bar_range).clip(0.0, 1.0)
+    body_vs_atr = (body / atr14.replace(0.0, np.nan)).clip(0.0, 1.0).fillna(0.0)
+    vol_ma20 = daily["volume"].rolling(20, min_periods=5).mean().replace(0.0, np.nan).bfill().ffill()
+    vol_support = ((daily["volume"] / vol_ma20 - 0.6) / 1.0).clip(0.0, 1.0).fillna(0.0)
+
+    trend_bar_long = (
+        (daily["close"] >= daily["open"]).astype(float)
+        * close_loc
+        * body_share
+        * body_vs_atr
+        * (0.55 + 0.45 * vol_support)
+    )
+    trend_bar_short = (
+        (daily["close"] <= daily["open"]).astype(float)
+        * (1.0 - close_loc)
+        * body_share
+        * body_vs_atr
+        * (0.55 + 0.45 * vol_support)
+    )
+    trend_bar_quality = pd.Series(np.maximum(trend_bar_long.to_numpy(), trend_bar_short.to_numpy()), index=daily.index)
+
+    high_step = daily["high"].diff()
+    low_step = daily["low"].diff()
+    micro_long = 0.5 * ((high_step >= -1e-9).astype(float) + (low_step >= -1e-9).astype(float))
+    micro_short = 0.5 * ((high_step <= 1e-9).astype(float) + (low_step <= 1e-9).astype(float))
+    micro_bias = (micro_long - micro_short).fillna(0.0)
+
+    ma20 = daily["close"].rolling(20, min_periods=5).mean()
+    ma60 = daily["close"].rolling(60, min_periods=10).mean()
+    ret_px = daily["close"].diff().fillna(0.0)
+    leg_threshold = (0.12 * atr14).fillna(0.0)
+    down_leg = ((ret_px <= -leg_threshold) & (ma20 >= ma60)).astype(float)
+    up_leg = ((ret_px >= leg_threshold) & (ma20 <= ma60)).astype(float)
+    down_legs5 = down_leg.rolling(5, min_periods=3).sum()
+    up_legs5 = up_leg.rolling(5, min_periods=3).sum()
+    reclaim_long = (daily["close"] >= daily["high"].shift(1) * 0.999) & (ma20 >= ma60)
+    reclaim_short = (daily["close"] <= daily["low"].shift(1) * 1.001) & (ma20 <= ma60)
+    two_leg_long = ((down_legs5 >= 2.0) & reclaim_long).astype(float)
+    two_leg_short = ((up_legs5 >= 2.0) & reclaim_short).astype(float)
+    two_leg_bias = (two_leg_long - two_leg_short).fillna(0.0)
+
+    roll_high20_prev = daily["high"].shift(1).rolling(20, min_periods=5).max()
+    roll_low20_prev = daily["low"].shift(1).rolling(20, min_periods=5).min()
+    upside_exhaust = ((upper_wick / body.replace(0.0, np.nan) - 0.45) / 1.6).clip(0.0, 1.0).fillna(0.0)
+    downside_exhaust = ((lower_wick / body.replace(0.0, np.nan) - 0.45) / 1.6).clip(0.0, 1.0).fillna(0.0)
+    impulse = ((body / (1.2 * atr14.replace(0.0, np.nan)) - 0.4)).clip(0.0, 1.0).fillna(0.0)
+    exhaust_long = (
+        (daily["close"] >= roll_high20_prev * 0.998).astype(float) * (0.5 * upside_exhaust + 0.5 * impulse * vol_support)
+    )
+    exhaust_short = (
+        (daily["close"] <= roll_low20_prev * 1.002).astype(float) * (0.5 * downside_exhaust + 0.5 * impulse * vol_support)
+    )
+    exhaust = pd.Series(np.maximum(exhaust_long.to_numpy(), exhaust_short.to_numpy()), index=daily.index)
+
+    def _recent_z(series: pd.Series, lookback: int = 20) -> float:
+        clean = pd.Series(series).replace([np.inf, -np.inf], np.nan).dropna()
+        if clean.empty:
+            return 0.0
+        recent = float(clean.tail(lookback).mean())
+        mean = float(clean.mean())
+        std = float(clean.std(ddof=0))
+        return _safe_z(recent, mean, std)
+
+    micro_bias_recent = float(np.clip(micro_bias.tail(30).mean(), -1.0, 1.0)) if not micro_bias.empty else 0.0
+    two_leg_recent = float(np.clip(two_leg_bias.tail(40).mean(), -1.0, 1.0)) if not two_leg_bias.empty else 0.0
+    return {
+        "brooks_trend_bar_z": float(np.clip(_recent_z(trend_bar_quality, lookback=20), -4.0, 4.0)),
+        "brooks_micro_channel_bias": micro_bias_recent,
+        "brooks_two_legged_bias": two_leg_recent,
+        "brooks_exhaustion_z": float(np.clip(_recent_z(exhaust, lookback=20), -4.0, 4.0)),
+    }
+
+
+def _market_insights(bars: pd.DataFrame) -> dict[str, float]:
+    ret = _daily_proxy_returns(bars)
     if ret.empty:
         return {
             "trend_strength_z": 0.0,
@@ -157,6 +304,7 @@ def _market_insights(bars: pd.DataFrame) -> dict[str, float]:
             "tail_risk_z": 0.0,
             "mean_return": 0.0,
             "volatility": 0.0,
+            **_brooks_market_proxies(bars),
         }
     trend_raw = float(ret.rolling(20).mean().dropna().mean()) if len(ret) >= 20 else float(ret.mean())
     vol_raw = float(ret.rolling(20).std(ddof=0).dropna().mean()) if len(ret) >= 20 else float(ret.std(ddof=0))
@@ -169,6 +317,7 @@ def _market_insights(bars: pd.DataFrame) -> dict[str, float]:
         "tail_risk_z": _safe_z(tail_raw, base_mean, base_std),
         "mean_return": base_mean,
         "volatility": float(ret.std(ddof=0)),
+        **_brooks_market_proxies(bars),
     }
 
 
