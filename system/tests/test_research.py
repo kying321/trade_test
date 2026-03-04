@@ -156,6 +156,54 @@ class ResearchTests(unittest.TestCase):
             rd._fetch_one_symbol = original_fetch_one  # type: ignore[assignment]
             rd.fetch_symbol_news_and_reports = original_fetch_nr  # type: ignore[assignment]
 
+    def test_load_universe_crypto_mode_keeps_core_symbols_only(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_cons = rd.ak.index_stock_cons_csindex
+
+        def _unexpected_cons_call(symbol: str):
+            raise AssertionError(f"index constituent fetch should not run in crypto mode: {symbol}")
+
+        rd.ak.index_stock_cons_csindex = _unexpected_cons_call  # type: ignore[assignment]
+        try:
+            out = rd.load_universe(core_symbols=["btcusdt", "ETHUSDT", "btc-usdt"], max_symbols=10)
+            self.assertEqual(out, ["BTCUSDT", "ETHUSDT"])
+        finally:
+            rd.ak.index_stock_cons_csindex = original_cons  # type: ignore[assignment]
+
+    def test_fetch_one_symbol_supports_crypto_pair(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_get_provider = rd._get_binance_provider
+
+        class _FakeProvider:
+            def fetch_ohlcv(self, symbol: str, start: date, end: date, freq: str = "1d") -> pd.DataFrame:
+                return pd.DataFrame(
+                    {
+                        "ts": pd.to_datetime(["2026-02-10", "2026-02-11"]),
+                        "symbol": [symbol, symbol],
+                        "open": [100.0, 101.0],
+                        "high": [102.0, 103.0],
+                        "low": [99.0, 100.0],
+                        "close": [101.0, 102.0],
+                        "volume": [1000.0, 1200.0],
+                        "source": ["mock_binance", "mock_binance"],
+                        "asset_class": ["equity", "equity"],
+                    }
+                )
+
+        rd._get_binance_provider = lambda: _FakeProvider()  # type: ignore[assignment]
+        try:
+            symbol, df, err = rd._fetch_one_symbol("btc-usdt", date(2026, 2, 10), date(2026, 2, 11))
+            self.assertEqual(symbol, "BTCUSDT")
+            self.assertIsNone(err)
+            self.assertFalse(df.empty)
+            self.assertTrue((df["symbol"] == "BTCUSDT").all())
+            self.assertIn("open", df.columns)
+            self.assertIn("source", df.columns)
+        finally:
+            rd._get_binance_provider = original_get_provider  # type: ignore[assignment]
+
     def test_run_strategy_lab_with_mock_bundle(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
 
