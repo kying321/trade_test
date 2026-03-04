@@ -83,6 +83,40 @@ class EngineIntegrationTests(unittest.TestCase):
         report_path = Path(str(cs.get("quality_report_path", "")))
         self.assertTrue(report_path.exists())
 
+    def test_run_eod_mode_feedback_includes_theory_and_execution_runtime_params(self) -> None:
+        eng, tmp_root = self._make_engine()
+        live = tmp_root / "output" / "artifacts" / "params_live.yaml"
+        live.parent.mkdir(parents=True, exist_ok=True)
+        live.write_text(
+            yaml.safe_dump(
+                {
+                    "theory_enabled": 1,
+                    "theory_wyckoff_weight": 0.8,
+                    "theory_vpa_weight": 0.9,
+                    "execution_confirm_enabled": 1,
+                    "execution_confirm_lookahead": 3,
+                    "execution_confirm_loss_mult": 0.6,
+                    "execution_anti_martingale_enabled": 1,
+                    "execution_anti_martingale_step": 0.2,
+                },
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        mode_feedback_path = tmp_root / "output" / "daily" / "2026-02-13_mode_feedback.json"
+        payload = json.loads(mode_feedback_path.read_text(encoding="utf-8"))
+        rp = payload.get("runtime_params", {})
+        self.assertTrue(bool(rp.get("theory_enabled", False)))
+        self.assertAlmostEqual(float(rp.get("theory_wyckoff_weight", 0.0)), 0.8, places=6)
+        self.assertAlmostEqual(float(rp.get("theory_vpa_weight", 0.0)), 0.9, places=6)
+        self.assertTrue(bool(rp.get("execution_confirm_enabled", False)))
+        self.assertEqual(int(rp.get("execution_confirm_lookahead", 0)), 3)
+        self.assertAlmostEqual(float(rp.get("execution_confirm_loss_mult", 0.0)), 0.6, places=6)
+        self.assertTrue(bool(rp.get("execution_anti_martingale_enabled", False)))
+        self.assertAlmostEqual(float(rp.get("execution_anti_martingale_step", 0.0)), 0.2, places=6)
+
     def test_run_time_sync_probe_with_mock_sntp(self) -> None:
         eng, tmp_root = self._make_engine()
         eng.settings.raw.setdefault("validation", {})
@@ -2141,6 +2175,25 @@ class EngineIntegrationTests(unittest.TestCase):
                     "convexity_min": 2.2,
                     "hold_days": 9,
                     "max_daily_trades": 4,
+                    "exposure_scale": 0.17,
+                    "theory_enabled": 1,
+                    "theory_ict_weight": 1.1,
+                    "theory_brooks_weight": 1.2,
+                    "theory_lie_weight": 1.3,
+                    "theory_wyckoff_weight": 0.8,
+                    "theory_vpa_weight": 0.7,
+                    "theory_confidence_boost_max": 5.4,
+                    "theory_penalty_max": 6.2,
+                    "theory_min_confluence": 0.36,
+                    "theory_conflict_fuse": 0.70,
+                    "execution_confirm_enabled": 1,
+                    "execution_confirm_lookahead": 3,
+                    "execution_confirm_loss_mult": 0.60,
+                    "execution_confirm_win_mult": 1.00,
+                    "execution_anti_martingale_enabled": 1,
+                    "execution_anti_martingale_step": 0.20,
+                    "execution_anti_martingale_floor": 0.60,
+                    "execution_anti_martingale_ceiling": 1.40,
                 },
                 allow_unicode=True,
             ),
@@ -2180,6 +2233,15 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(int(getattr(cfg, "max_daily_trades", 0)), 4)
         self.assertAlmostEqual(float(getattr(cfg, "signal_confidence_min", 0.0)), 52.0, places=6)
         self.assertAlmostEqual(float(getattr(cfg, "convexity_min", 0.0)), 2.2, places=6)
+        self.assertAlmostEqual(float(getattr(cfg, "exposure_scale", 0.0)), 0.17, places=6)
+        self.assertTrue(bool(getattr(cfg, "theory_enabled", False)))
+        self.assertAlmostEqual(float(getattr(cfg, "theory_wyckoff_weight", 0.0)), 0.8, places=6)
+        self.assertAlmostEqual(float(getattr(cfg, "theory_vpa_weight", 0.0)), 0.7, places=6)
+        self.assertTrue(bool(getattr(cfg, "execution_confirm_enabled", False)))
+        self.assertEqual(int(getattr(cfg, "execution_confirm_lookahead", 0)), 3)
+        self.assertAlmostEqual(float(getattr(cfg, "execution_confirm_loss_mult", 0.0)), 0.60, places=6)
+        self.assertTrue(bool(getattr(cfg, "execution_anti_martingale_enabled", False)))
+        self.assertAlmostEqual(float(getattr(cfg, "execution_anti_martingale_step", 0.0)), 0.20, places=6)
 
     def test_run_mode_stress_matrix_outputs_artifacts(self) -> None:
         eng, tmp_root = self._make_engine()

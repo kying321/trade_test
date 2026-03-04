@@ -422,7 +422,78 @@ class LieEngine:
             mode = "swing"
         return mode
 
-    def _resolve_runtime_params(self, *, regime, live_params: dict[str, float]) -> dict[str, float | str]:
+    def _resolve_runtime_advanced_params(self, *, live_params: dict[str, float]) -> dict[str, float | bool]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+
+        def _num(key: str, default: float, lo: float, hi: float) -> float:
+            raw: Any
+            if key in live_params:
+                raw = live_params.get(key, default)
+            else:
+                raw = val.get(key, default)
+            try:
+                out = float(raw)
+            except (TypeError, ValueError):
+                out = float(default)
+            return self._clamp_float(out, lo, hi)
+
+        def _flag(*, live_key: str, validation_key: str, default: bool) -> bool:
+            raw: Any
+            if live_key in live_params:
+                raw = live_params.get(live_key, 1.0 if default else 0.0)
+            else:
+                raw = val.get(validation_key, default)
+            if isinstance(raw, bool):
+                return bool(raw)
+            if isinstance(raw, (int, float)):
+                return bool(float(raw) >= 0.5)
+            text = str(raw).strip().lower()
+            if text in {"1", "true", "yes", "on"}:
+                return True
+            if text in {"0", "false", "no", "off"}:
+                return False
+            return bool(default)
+
+        out: dict[str, float | bool] = {
+            "exposure_scale": _num("exposure_scale", 1.0, 0.08, 1.5),
+            "theory_enabled": _flag(
+                live_key="theory_enabled",
+                validation_key="theory_signal_enabled",
+                default=False,
+            ),
+            "theory_ict_weight": _num("theory_ict_weight", 1.0, 0.0, 2.0),
+            "theory_brooks_weight": _num("theory_brooks_weight", 1.0, 0.0, 2.0),
+            "theory_lie_weight": _num("theory_lie_weight", 1.2, 0.0, 2.0),
+            "theory_wyckoff_weight": _num("theory_wyckoff_weight", 0.0, 0.0, 2.0),
+            "theory_vpa_weight": _num("theory_vpa_weight", 0.0, 0.0, 2.0),
+            "theory_confidence_boost_max": _num("theory_confidence_boost_max", 5.0, 0.5, 20.0),
+            "theory_penalty_max": _num("theory_penalty_max", 6.0, 0.5, 20.0),
+            "theory_min_confluence": _num("theory_min_confluence", 0.38, 0.0, 1.0),
+            "theory_conflict_fuse": _num("theory_conflict_fuse", 0.72, 0.0, 1.0),
+            "execution_confirm_enabled": _flag(
+                live_key="execution_confirm_enabled",
+                validation_key="execution_confirm_enabled",
+                default=False,
+            ),
+            "execution_confirm_lookahead": float(round(_num("execution_confirm_lookahead", 2.0, 1.0, 10.0))),
+            "execution_confirm_loss_mult": _num("execution_confirm_loss_mult", 0.65, 0.0, 1.6),
+            "execution_confirm_win_mult": _num("execution_confirm_win_mult", 1.0, 0.0, 1.6),
+            "execution_anti_martingale_enabled": _flag(
+                live_key="execution_anti_martingale_enabled",
+                validation_key="execution_anti_martingale_enabled",
+                default=False,
+            ),
+            "execution_anti_martingale_step": _num("execution_anti_martingale_step", 0.20, 0.0, 0.5),
+            "execution_anti_martingale_floor": _num("execution_anti_martingale_floor", 0.60, 0.0, 2.0),
+            "execution_anti_martingale_ceiling": _num("execution_anti_martingale_ceiling", 1.40, 0.0, 2.0),
+        }
+        floor = float(out.get("execution_anti_martingale_floor", 0.60))
+        ceiling = float(out.get("execution_anti_martingale_ceiling", 1.40))
+        if floor > ceiling:
+            out["execution_anti_martingale_floor"] = float(ceiling)
+        return out
+
+    def _resolve_runtime_params(self, *, regime, live_params: dict[str, float]) -> dict[str, Any]:
         base = {
             "signal_confidence_min": self._clamp_float(
                 float(live_params.get("signal_confidence_min", self.settings.thresholds.get("signal_confidence_min", 60.0))),
@@ -437,8 +508,9 @@ class LieEngine:
             "hold_days": float(self._clamp_int(live_params.get("hold_days", 5.0), 1, 20)),
             "max_daily_trades": float(self._clamp_int(live_params.get("max_daily_trades", 2.0), 1, 5)),
         }
+        advanced = self._resolve_runtime_advanced_params(live_params=live_params)
         if not bool(self.settings.validation.get("use_mode_profiles", False)):
-            return {"mode": "base"} | base
+            return {"mode": "base"} | base | advanced
 
         mode = self._mode_from_regime(regime.consensus)
         profiles = self._resolved_mode_profiles()
@@ -454,7 +526,7 @@ class LieEngine:
             "convexity_min": self._clamp_float(merged_conv, 0.5, 5.0),
             "hold_days": float(self._clamp_int(merged_hold, 1, 20)),
             "max_daily_trades": float(self._clamp_int(merged_trades, 1, 5)),
-        }
+        } | advanced
 
     def _resolved_mode_profiles(self) -> dict[str, dict[str, float]]:
         profiles = self._default_mode_profiles()
@@ -844,6 +916,22 @@ class LieEngine:
             ("convexity_min", 1.0, 4.0, False),
             ("hold_days", 1.0, 20.0, True),
             ("max_daily_trades", 1.0, 5.0, True),
+            ("exposure_scale", 0.08, 1.50, False),
+            ("theory_ict_weight", 0.0, 2.0, False),
+            ("theory_brooks_weight", 0.0, 2.0, False),
+            ("theory_lie_weight", 0.0, 2.0, False),
+            ("theory_wyckoff_weight", 0.0, 2.0, False),
+            ("theory_vpa_weight", 0.0, 2.0, False),
+            ("theory_confidence_boost_max", 0.5, 20.0, False),
+            ("theory_penalty_max", 0.5, 20.0, False),
+            ("theory_min_confluence", 0.0, 1.0, False),
+            ("theory_conflict_fuse", 0.0, 1.0, False),
+            ("execution_confirm_loss_mult", 0.0, 1.6, False),
+            ("execution_confirm_lookahead", 1.0, 10.0, True),
+            ("execution_confirm_win_mult", 0.0, 1.6, False),
+            ("execution_anti_martingale_step", 0.0, 0.5, False),
+            ("execution_anti_martingale_floor", 0.0, 2.0, False),
+            ("execution_anti_martingale_ceiling", 0.0, 2.0, False),
         ]
         for key, lo, hi, is_int in fields:
             if key not in params:
@@ -857,6 +945,18 @@ class LieEngine:
             else:
                 review.parameter_changes[key] = float(merged)
             review.change_reasons[key] = f"融合 strategy-lab 最优候选 `{cand.get('name', 'unknown')}`（小步收敛，step={step:.2f}）"
+            updated.append(key)
+
+        bool_fields = ("theory_enabled", "execution_confirm_enabled", "execution_anti_martingale_enabled")
+        for key in bool_fields:
+            if key not in params:
+                continue
+            raw = params.get(key)
+            enabled = bool(raw)
+            if isinstance(raw, (int, float)):
+                enabled = bool(float(raw) >= 0.5)
+            review.parameter_changes[key] = 1.0 if enabled else 0.0
+            review.change_reasons[key] = f"融合 strategy-lab 最优候选 `{cand.get('name', 'unknown')}`（布尔开关同步）"
             updated.append(key)
 
         if updated:
@@ -2637,6 +2737,16 @@ class LieEngine:
             micro_confidence_boost_max=float(self.settings.validation.get("micro_confidence_boost_max", 8.0)),
             micro_penalty_max=float(self.settings.validation.get("micro_penalty_max", 10.0)),
             micro_min_trade_count=max(1, int(self.settings.validation.get("micro_min_trade_count", 30))),
+            theory_enabled=bool(runtime_params.get("theory_enabled", False)),
+            theory_ict_weight=float(runtime_params.get("theory_ict_weight", 1.0)),
+            theory_brooks_weight=float(runtime_params.get("theory_brooks_weight", 1.0)),
+            theory_lie_weight=float(runtime_params.get("theory_lie_weight", 1.2)),
+            theory_wyckoff_weight=float(runtime_params.get("theory_wyckoff_weight", 0.0)),
+            theory_vpa_weight=float(runtime_params.get("theory_vpa_weight", 0.0)),
+            theory_confidence_boost_max=float(runtime_params.get("theory_confidence_boost_max", 5.0)),
+            theory_penalty_max=float(runtime_params.get("theory_penalty_max", 6.0)),
+            theory_min_confluence=float(runtime_params.get("theory_min_confluence", 0.38)),
+            theory_conflict_fuse=float(runtime_params.get("theory_conflict_fuse", 0.72)),
         )
         market_factor_state = self._market_factor_state(sentiment=ingest.sentiment, regime=regime, bars=bars)
         micro_factor_map, micro_source_rows = self._collect_micro_factor_map_with_rows(as_of=as_of, symbols=symbols)
@@ -2765,6 +2875,25 @@ class LieEngine:
                 "convexity_min": float(runtime_params["convexity_min"]),
                 "hold_days": float(runtime_params["hold_days"]),
                 "max_daily_trades": float(runtime_params["max_daily_trades"]),
+                "exposure_scale": float(runtime_params.get("exposure_scale", 1.0)),
+                "theory_enabled": bool(runtime_params.get("theory_enabled", False)),
+                "theory_ict_weight": float(runtime_params.get("theory_ict_weight", 1.0)),
+                "theory_brooks_weight": float(runtime_params.get("theory_brooks_weight", 1.0)),
+                "theory_lie_weight": float(runtime_params.get("theory_lie_weight", 1.2)),
+                "theory_wyckoff_weight": float(runtime_params.get("theory_wyckoff_weight", 0.0)),
+                "theory_vpa_weight": float(runtime_params.get("theory_vpa_weight", 0.0)),
+                "theory_confidence_boost_max": float(runtime_params.get("theory_confidence_boost_max", 5.0)),
+                "theory_penalty_max": float(runtime_params.get("theory_penalty_max", 6.0)),
+                "theory_min_confluence": float(runtime_params.get("theory_min_confluence", 0.38)),
+                "theory_conflict_fuse": float(runtime_params.get("theory_conflict_fuse", 0.72)),
+                "execution_confirm_enabled": bool(runtime_params.get("execution_confirm_enabled", False)),
+                "execution_confirm_lookahead": int(runtime_params.get("execution_confirm_lookahead", 2)),
+                "execution_confirm_loss_mult": float(runtime_params.get("execution_confirm_loss_mult", 0.65)),
+                "execution_confirm_win_mult": float(runtime_params.get("execution_confirm_win_mult", 1.0)),
+                "execution_anti_martingale_enabled": bool(runtime_params.get("execution_anti_martingale_enabled", False)),
+                "execution_anti_martingale_step": float(runtime_params.get("execution_anti_martingale_step", 0.2)),
+                "execution_anti_martingale_floor": float(runtime_params.get("execution_anti_martingale_floor", 0.6)),
+                "execution_anti_martingale_ceiling": float(runtime_params.get("execution_anti_martingale_ceiling", 1.4)),
             },
             "today": {
                 "signals": int(len(signals)),
@@ -3304,6 +3433,45 @@ class LieEngine:
             convexity_min=convexity_min,
             max_daily_trades=0 if signal_conf >= 90.0 else max_daily_trades,
             hold_days=hold_days,
+            exposure_scale=float(runtime_params.get("exposure_scale", 1.0)),
+            theory_enabled=bool(runtime_params.get("theory_enabled", False)),
+            theory_ict_weight=float(runtime_params.get("theory_ict_weight", 1.0)),
+            theory_brooks_weight=float(runtime_params.get("theory_brooks_weight", 1.0)),
+            theory_lie_weight=float(runtime_params.get("theory_lie_weight", 1.2)),
+            theory_wyckoff_weight=float(runtime_params.get("theory_wyckoff_weight", 0.0)),
+            theory_vpa_weight=float(runtime_params.get("theory_vpa_weight", 0.0)),
+            theory_confidence_boost_max=float(runtime_params.get("theory_confidence_boost_max", 5.0)),
+            theory_penalty_max=float(runtime_params.get("theory_penalty_max", 6.0)),
+            theory_min_confluence=float(runtime_params.get("theory_min_confluence", 0.38)),
+            theory_conflict_fuse=float(runtime_params.get("theory_conflict_fuse", 0.72)),
+            execution_confirm_enabled=bool(runtime_params.get("execution_confirm_enabled", False)),
+            execution_confirm_lookahead=self._clamp_int(runtime_params.get("execution_confirm_lookahead", 2), 1, 10),
+            execution_confirm_loss_mult=self._clamp_float(
+                float(runtime_params.get("execution_confirm_loss_mult", 0.65)),
+                0.0,
+                1.6,
+            ),
+            execution_confirm_win_mult=self._clamp_float(
+                float(runtime_params.get("execution_confirm_win_mult", 1.0)),
+                0.0,
+                1.6,
+            ),
+            execution_anti_martingale_enabled=bool(runtime_params.get("execution_anti_martingale_enabled", False)),
+            execution_anti_martingale_step=self._clamp_float(
+                float(runtime_params.get("execution_anti_martingale_step", 0.2)),
+                0.0,
+                0.5,
+            ),
+            execution_anti_martingale_floor=self._clamp_float(
+                float(runtime_params.get("execution_anti_martingale_floor", 0.6)),
+                0.0,
+                2.0,
+            ),
+            execution_anti_martingale_ceiling=self._clamp_float(
+                float(runtime_params.get("execution_anti_martingale_ceiling", 1.4)),
+                0.0,
+                2.0,
+            ),
         )
 
         result = run_walk_forward_backtest(
@@ -3394,6 +3562,7 @@ class LieEngine:
         trend_thr = float(self.settings.thresholds.get("hurst_trend", 0.6))
         mean_thr = float(self.settings.thresholds.get("hurst_mean_revert", 0.4))
         atr_extreme = float(self.settings.thresholds.get("atr_extreme", 2.0))
+        runtime_advanced_defaults = self._resolve_runtime_advanced_params(live_params={})
 
         matrix_rows: list[dict[str, Any]] = []
         for w in parsed_windows:
@@ -3411,6 +3580,31 @@ class LieEngine:
                     convexity_min=float(profile.get("convexity_min", 2.0)),
                     max_daily_trades=self._clamp_int(profile.get("max_daily_trades", 2.0), 1, 5),
                     hold_days=self._clamp_int(profile.get("hold_days", 5.0), 1, 20),
+                    exposure_scale=float(runtime_advanced_defaults.get("exposure_scale", 1.0)),
+                    theory_enabled=bool(runtime_advanced_defaults.get("theory_enabled", False)),
+                    theory_ict_weight=float(runtime_advanced_defaults.get("theory_ict_weight", 1.0)),
+                    theory_brooks_weight=float(runtime_advanced_defaults.get("theory_brooks_weight", 1.0)),
+                    theory_lie_weight=float(runtime_advanced_defaults.get("theory_lie_weight", 1.2)),
+                    theory_wyckoff_weight=float(runtime_advanced_defaults.get("theory_wyckoff_weight", 0.0)),
+                    theory_vpa_weight=float(runtime_advanced_defaults.get("theory_vpa_weight", 0.0)),
+                    theory_confidence_boost_max=float(runtime_advanced_defaults.get("theory_confidence_boost_max", 5.0)),
+                    theory_penalty_max=float(runtime_advanced_defaults.get("theory_penalty_max", 6.0)),
+                    theory_min_confluence=float(runtime_advanced_defaults.get("theory_min_confluence", 0.38)),
+                    theory_conflict_fuse=float(runtime_advanced_defaults.get("theory_conflict_fuse", 0.72)),
+                    execution_confirm_enabled=bool(runtime_advanced_defaults.get("execution_confirm_enabled", False)),
+                    execution_confirm_lookahead=self._clamp_int(
+                        runtime_advanced_defaults.get("execution_confirm_lookahead", 2),
+                        1,
+                        10,
+                    ),
+                    execution_confirm_loss_mult=float(runtime_advanced_defaults.get("execution_confirm_loss_mult", 0.65)),
+                    execution_confirm_win_mult=float(runtime_advanced_defaults.get("execution_confirm_win_mult", 1.0)),
+                    execution_anti_martingale_enabled=bool(
+                        runtime_advanced_defaults.get("execution_anti_martingale_enabled", False)
+                    ),
+                    execution_anti_martingale_step=float(runtime_advanced_defaults.get("execution_anti_martingale_step", 0.2)),
+                    execution_anti_martingale_floor=float(runtime_advanced_defaults.get("execution_anti_martingale_floor", 0.6)),
+                    execution_anti_martingale_ceiling=float(runtime_advanced_defaults.get("execution_anti_martingale_ceiling", 1.4)),
                 )
                 if bars_empty:
                     result = BacktestResult(

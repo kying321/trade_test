@@ -1146,6 +1146,48 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                     )
     if "microstructure_signal_enabled" in val and not isinstance(val.get("microstructure_signal_enabled"), bool):
         issues.append(ValidationIssue("error", "validation.microstructure_signal_enabled", "必须是布尔值"))
+    if "theory_signal_enabled" in val and not isinstance(val.get("theory_signal_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.theory_signal_enabled", "必须是布尔值"))
+    if "execution_confirm_enabled" in val and not isinstance(val.get("execution_confirm_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.execution_confirm_enabled", "必须是布尔值"))
+    if "execution_anti_martingale_enabled" in val and not isinstance(val.get("execution_anti_martingale_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.execution_anti_martingale_enabled", "必须是布尔值"))
+    for k, lo, hi in (
+        ("exposure_scale", 0.08, 1.50),
+        ("theory_ict_weight", 0.0, 2.0),
+        ("theory_brooks_weight", 0.0, 2.0),
+        ("theory_lie_weight", 0.0, 2.0),
+        ("theory_wyckoff_weight", 0.0, 2.0),
+        ("theory_vpa_weight", 0.0, 2.0),
+        ("theory_confidence_boost_max", 0.5, 20.0),
+        ("theory_penalty_max", 0.5, 20.0),
+        ("theory_min_confluence", 0.0, 1.0),
+        ("theory_conflict_fuse", 0.0, 1.0),
+        ("execution_confirm_loss_mult", 0.0, 1.6),
+        ("execution_confirm_win_mult", 0.0, 1.6),
+        ("execution_anti_martingale_step", 0.0, 0.5),
+        ("execution_anti_martingale_floor", 0.0, 2.0),
+        ("execution_anti_martingale_ceiling", 0.0, 2.0),
+    ):
+        if k in val:
+            x = _as_float(val.get(k, 0.0))
+            if not (lo <= x <= hi):
+                issues.append(ValidationIssue("error", f"validation.{k}", f"必须在 [{lo}, {hi}]"))
+    if "execution_confirm_lookahead" in val:
+        x = _as_int(val.get("execution_confirm_lookahead", 0))
+        if not (1 <= x <= 10):
+            issues.append(ValidationIssue("error", "validation.execution_confirm_lookahead", "必须在 [1, 10]"))
+    if "execution_anti_martingale_floor" in val and "execution_anti_martingale_ceiling" in val:
+        floor = _as_float(val.get("execution_anti_martingale_floor", 0.0))
+        ceiling = _as_float(val.get("execution_anti_martingale_ceiling", 0.0))
+        if floor > ceiling:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.execution_anti_martingale_floor",
+                    "不能大于 execution_anti_martingale_ceiling",
+                )
+            )
     if "micro_schema_hard_fuse_enabled" in val and not isinstance(val.get("micro_schema_hard_fuse_enabled"), bool):
         issues.append(ValidationIssue("error", "validation.micro_schema_hard_fuse_enabled", "必须是布尔值"))
     if "micro_cross_source_audit_enabled" in val and not isinstance(val.get("micro_cross_source_audit_enabled"), bool):

@@ -454,6 +454,25 @@ class ConfigValidationTests(unittest.TestCase):
                 },
                 "validation": {
                     "microstructure_signal_enabled": "yes",
+                    "theory_signal_enabled": "yes",
+                    "execution_confirm_enabled": "yes",
+                    "execution_anti_martingale_enabled": "yes",
+                    "exposure_scale": 0.01,
+                    "theory_ict_weight": -0.1,
+                    "theory_brooks_weight": 3.0,
+                    "theory_lie_weight": 3.0,
+                    "theory_wyckoff_weight": -0.1,
+                    "theory_vpa_weight": 2.5,
+                    "theory_confidence_boost_max": 30.0,
+                    "theory_penalty_max": 0.1,
+                    "theory_min_confluence": -0.1,
+                    "theory_conflict_fuse": 1.1,
+                    "execution_confirm_lookahead": 0,
+                    "execution_confirm_loss_mult": 2.0,
+                    "execution_confirm_win_mult": 2.0,
+                    "execution_anti_martingale_step": 0.8,
+                    "execution_anti_martingale_floor": 1.2,
+                    "execution_anti_martingale_ceiling": 1.0,
                     "microstructure_symbols": [],
                     "microstructure_lookback_minutes": 0,
                     "micro_schema_hard_fuse_enabled": "yes",
@@ -527,6 +546,24 @@ class ConfigValidationTests(unittest.TestCase):
         error_paths = {x["path"] for x in out.get("errors", [])}
         warning_paths = {x["path"] for x in out.get("warnings", [])}
         self.assertIn("validation.microstructure_signal_enabled", error_paths)
+        self.assertIn("validation.theory_signal_enabled", error_paths)
+        self.assertIn("validation.execution_confirm_enabled", error_paths)
+        self.assertIn("validation.execution_anti_martingale_enabled", error_paths)
+        self.assertIn("validation.exposure_scale", error_paths)
+        self.assertIn("validation.theory_ict_weight", error_paths)
+        self.assertIn("validation.theory_brooks_weight", error_paths)
+        self.assertIn("validation.theory_lie_weight", error_paths)
+        self.assertIn("validation.theory_wyckoff_weight", error_paths)
+        self.assertIn("validation.theory_vpa_weight", error_paths)
+        self.assertIn("validation.theory_confidence_boost_max", error_paths)
+        self.assertIn("validation.theory_penalty_max", error_paths)
+        self.assertIn("validation.theory_min_confluence", error_paths)
+        self.assertIn("validation.theory_conflict_fuse", error_paths)
+        self.assertIn("validation.execution_confirm_lookahead", error_paths)
+        self.assertIn("validation.execution_confirm_loss_mult", error_paths)
+        self.assertIn("validation.execution_confirm_win_mult", error_paths)
+        self.assertIn("validation.execution_anti_martingale_step", error_paths)
+        self.assertIn("validation.execution_anti_martingale_floor", error_paths)
         self.assertIn("validation.microstructure_symbols", error_paths)
         self.assertIn("validation.microstructure_lookback_minutes", error_paths)
         self.assertIn("validation.micro_schema_hard_fuse_enabled", error_paths)
