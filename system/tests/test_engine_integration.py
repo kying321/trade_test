@@ -1091,6 +1091,57 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(out["slot"], "ops")
         self.assertIn("result", out)
 
+    def test_run_slot_review_uses_guarded_scheduler_path(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["scheduler_review_use_legacy"] = False
+
+        called: dict[str, object] = {}
+
+        def _fake_guarded(**kwargs):  # type: ignore[no-untyped-def]
+            called.update(kwargs)
+            return {"ok": True}
+
+        eng.run_review_cycle_guarded = _fake_guarded  # type: ignore[method-assign]
+        eng.run_review_cycle = lambda as_of, max_rounds, ops_window_days=None: {  # type: ignore[method-assign]
+            "legacy_called": True
+        }
+
+        out = eng.run_slot(as_of=d, slot="review", max_review_rounds=3)
+        self.assertEqual(out["slot"], "review")
+        result = out.get("result", {})
+        self.assertTrue(bool(result.get("ok", False)))
+        self.assertEqual(str(result.get("execution_path", "")), "guarded_scheduler")
+        self.assertEqual(called.get("as_of"), d)
+        self.assertEqual(int(called.get("max_rounds", 0)), 3)
+        self.assertTrue(bool(called.get("skip_mutex", False)))
+
+    def test_run_slot_review_can_fallback_legacy_scheduler_path(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["scheduler_review_use_legacy"] = True
+
+        called = {"legacy": 0}
+
+        def _fake_legacy(as_of, max_rounds, ops_window_days=None):  # type: ignore[no-untyped-def]
+            called["legacy"] += 1
+            return {"legacy_called": True}
+
+        def _guarded_should_not_run(**kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("guarded path should not be called")
+
+        eng.run_review_cycle = _fake_legacy  # type: ignore[method-assign]
+        eng.run_review_cycle_guarded = _guarded_should_not_run  # type: ignore[method-assign]
+
+        out = eng.run_slot(as_of=d, slot="review", max_review_rounds=2)
+        self.assertEqual(out["slot"], "review")
+        result = out.get("result", {})
+        self.assertEqual(int(called.get("legacy", 0)), 1)
+        self.assertTrue(bool(result.get("legacy_called", False)))
+        self.assertEqual(str(result.get("execution_path", "")), "legacy_scheduler")
+
     def test_run_daemon_dry_run(self) -> None:
         eng, tmp_root = self._make_engine()
         out = eng.run_daemon(poll_seconds=1, max_cycles=0, max_review_rounds=1, dry_run=True)
@@ -1129,6 +1180,52 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("ops_report", out)
         self.assertTrue(out["review_loop"].get("skipped"))
         self.assertFalse(alert.exists())
+
+    def test_run_review_cycle_guarded_includes_skip_mutex_flag(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        scripts_dir = tmp_root / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        (scripts_dir / "run_review_cycle_guarded.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+        captured: dict[str, object] = {}
+        fake_payload = {
+            "date": d.isoformat(),
+            "ok": True,
+            "steps": [],
+        }
+
+        class _FakeProc:
+            returncode = 0
+            stdout = json.dumps(fake_payload, ensure_ascii=False)
+            stderr = ""
+
+        def _fake_run(cmd, cwd, text, capture_output, env):  # type: ignore[no-untyped-def]
+            captured["cmd"] = list(cmd)
+            captured["cwd"] = str(cwd)
+            captured["env"] = dict(env)
+            return _FakeProc()
+
+        with patch("lie_engine.engine.subprocess.run", side_effect=_fake_run):
+            out = eng.run_review_cycle_guarded(
+                as_of=d,
+                max_rounds=1,
+                review_timeout_seconds=5,
+                gate_timeout_seconds=5,
+                ops_timeout_seconds=5,
+                health_timeout_seconds=5,
+                skip_mutex=True,
+                fail_fast=True,
+            )
+
+        cmd = captured.get("cmd", [])
+        self.assertIn("--skip-mutex", cmd)
+        self.assertIn("--fail-fast", cmd)
+        self.assertEqual(Path(str(captured.get("cwd", ""))).resolve(), tmp_root.resolve())
+        env = captured.get("env", {})
+        self.assertEqual(str(env.get("PYTHON", "")), sys.executable)
+        self.assertTrue(bool(out.get("ok", False)))
+        self.assertTrue(bool(out.get("skip_mutex", False)))
 
     def test_filter_model_path_bars_removes_conflicts(self) -> None:
         eng, _ = self._make_engine()

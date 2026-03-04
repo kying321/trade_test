@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 from typing import Any
 
 import numpy as np
@@ -52,6 +54,7 @@ class EngineContext:
     root: Path
     output_dir: Path
     sqlite_path: Path
+    config_path: Path
 
 
 class LieEngine:
@@ -59,9 +62,16 @@ class LieEngine:
         settings = load_settings(config_path)
         assert_valid_settings(settings)
         root = Path(config_path).resolve().parent if config_path else Path(__file__).resolve().parents[2]
+        resolved_config_path = Path(config_path).resolve() if config_path else (root / "config.yaml").resolve()
         output_dir = root / settings.paths.get("output", "output")
         sqlite_path = root / settings.paths.get("sqlite", "output/artifacts/lie_engine.db")
-        self.ctx = EngineContext(settings=settings, root=root, output_dir=output_dir, sqlite_path=sqlite_path)
+        self.ctx = EngineContext(
+            settings=settings,
+            root=root,
+            output_dir=output_dir,
+            sqlite_path=sqlite_path,
+            config_path=resolved_config_path,
+        )
 
         data_cfg = settings.raw.get("data", {}) if isinstance(settings.raw, dict) else {}
         provider_profile = str(data_cfg.get("provider_profile", "opensource_dual"))
@@ -5569,13 +5579,32 @@ class LieEngine:
         )
 
     def _scheduler_orchestrator(self) -> SchedulerOrchestrator:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        use_legacy_review = bool(val.get("scheduler_review_use_legacy", False))
+
+        def _scheduler_review_cycle(d: date, max_rounds: int) -> dict[str, Any]:
+            if use_legacy_review:
+                out = self.run_review_cycle(as_of=d, max_rounds=max_rounds)
+                if isinstance(out, dict):
+                    out.setdefault("execution_path", "legacy_scheduler")
+                return out
+            out = self.run_review_cycle_guarded(
+                as_of=d,
+                max_rounds=max_rounds,
+                review_mode="review-loop",
+                skip_mutex=True,
+            )
+            if isinstance(out, dict):
+                out.setdefault("execution_path", "guarded_scheduler")
+            return out
+
         return SchedulerOrchestrator(
             settings=self.settings,
             output_dir=self.ctx.output_dir,
             run_premarket=lambda d: self.run_premarket(d),
             run_intraday_check=lambda d, slot: self.run_intraday_check(d, slot=slot),
             run_eod=lambda d: self.run_eod(d),
-            run_review_cycle=lambda d, max_rounds: self.run_review_cycle(as_of=d, max_rounds=max_rounds),
+            run_review_cycle=_scheduler_review_cycle,
             ops_report=lambda d, window_days: self.ops_report(as_of=d, window_days=window_days),
             run_micro_capture=lambda d, symbols: self.run_micro_capture(as_of=d, symbols=symbols),
         )
@@ -5597,6 +5626,120 @@ class LieEngine:
 
     def review_until_pass(self, as_of: date, max_rounds: int = 3) -> dict[str, Any]:
         return self._release_orchestrator().review_until_pass(as_of=as_of, max_rounds=max_rounds)
+
+    @staticmethod
+    def _parse_guarded_stdout_json(stdout: str) -> dict[str, Any] | None:
+        text = str(stdout or "").strip()
+        if not text:
+            return None
+        try:
+            payload = json.loads(text)
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            pass
+        marker = "\n{"
+        pos = text.rfind(marker)
+        if pos >= 0:
+            candidate = text[pos + 1 :].strip()
+            try:
+                payload = json.loads(candidate)
+                return payload if isinstance(payload, dict) else None
+            except Exception:
+                return None
+        return None
+
+    def run_review_cycle_guarded(
+        self,
+        *,
+        as_of: date,
+        max_rounds: int = 2,
+        ops_window_days: int | None = None,
+        review_timeout_seconds: int = 180,
+        gate_timeout_seconds: int = 120,
+        ops_timeout_seconds: int = 120,
+        health_timeout_seconds: int = 90,
+        mutex_timeout_seconds: float = 5.0,
+        review_mode: str = "review-loop",
+        skip_health_check: bool = False,
+        fail_fast: bool = False,
+        skip_mutex: bool = False,
+    ) -> dict[str, Any]:
+        script_path = self.ctx.root / "scripts" / "run_review_cycle_guarded.py"
+        if not script_path.exists():
+            fallback = self.run_review_cycle(as_of=as_of, max_rounds=max_rounds, ops_window_days=ops_window_days)
+            if isinstance(fallback, dict):
+                fallback.setdefault("execution_path", "legacy_fallback_missing_script")
+                fallback.setdefault("guarded_error", f"guarded_script_missing:{script_path}")
+            return fallback
+
+        replay_days = int(self.settings.validation.get("required_stable_replay_days", 3))
+        ops_days = int(ops_window_days if ops_window_days is not None else replay_days)
+        mode = str(review_mode).strip().lower()
+        if mode not in {"review", "review-loop"}:
+            mode = "review-loop"
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--date",
+            as_of.isoformat(),
+            "--config",
+            str(self.ctx.config_path),
+            "--output-root",
+            str(self.ctx.output_dir),
+            "--max-rounds",
+            str(max(0, int(max_rounds))),
+            "--review-mode",
+            mode,
+            "--ops-window-days",
+            str(max(1, int(ops_days))),
+            "--review-timeout-seconds",
+            str(max(1, int(review_timeout_seconds))),
+            "--gate-timeout-seconds",
+            str(max(1, int(gate_timeout_seconds))),
+            "--ops-timeout-seconds",
+            str(max(1, int(ops_timeout_seconds))),
+            "--health-timeout-seconds",
+            str(max(1, int(health_timeout_seconds))),
+            "--mutex-timeout-seconds",
+            str(max(0.1, float(mutex_timeout_seconds))),
+        ]
+        if bool(skip_health_check):
+            cmd.append("--skip-health-check")
+        if bool(fail_fast):
+            cmd.append("--fail-fast")
+        if bool(skip_mutex):
+            cmd.append("--skip-mutex")
+
+        env = dict(os.environ)
+        env["PYTHON"] = sys.executable
+        proc = subprocess.run(
+            cmd,
+            cwd=self.ctx.root,
+            text=True,
+            capture_output=True,
+            env=env,
+        )
+        payload = self._parse_guarded_stdout_json(proc.stdout or "")
+        if payload is None:
+            fallback_path = self.ctx.output_dir / "review" / f"{as_of.isoformat()}_review_cycle_guarded.json"
+            payload = self._load_json_safely(fallback_path)
+
+        if not isinstance(payload, dict) or not payload:
+            payload = {
+                "date": as_of.isoformat(),
+                "ok": False,
+                "error": "guarded_payload_parse_failed",
+                "stdout_excerpt": str(proc.stdout or "")[-3000:],
+            }
+        payload["command"] = cmd
+        payload["returncode"] = int(proc.returncode)
+        payload["skip_mutex"] = bool(skip_mutex)
+        if str(proc.stderr or "").strip():
+            payload["stderr_excerpt"] = str(proc.stderr or "")[-3000:]
+        if int(proc.returncode) != 0:
+            payload["ok"] = False
+        return payload
 
     def run_review_cycle(self, as_of: date, max_rounds: int = 2, ops_window_days: int | None = None) -> dict[str, Any]:
         return self._release_orchestrator().run_review_cycle(

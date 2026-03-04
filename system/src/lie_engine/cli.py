@@ -68,6 +68,29 @@ def main() -> None:
     p_rc.add_argument("--date", required=True)
     p_rc.add_argument("--max-rounds", default="2")
     p_rc.add_argument("--ops-window-days", default=None)
+    p_rc.add_argument("--legacy", action="store_true", help="Use legacy in-process release orchestrator path")
+    p_rc.add_argument("--review-timeout-seconds", default="180")
+    p_rc.add_argument("--gate-timeout-seconds", default="120")
+    p_rc.add_argument("--ops-timeout-seconds", default="120")
+    p_rc.add_argument("--health-timeout-seconds", default="90")
+    p_rc.add_argument("--mutex-timeout-seconds", default="5.0")
+    p_rc.add_argument("--review-mode", default="review-loop", help="review | review-loop")
+    p_rc.add_argument("--skip-health-check", action="store_true")
+    p_rc.add_argument("--fail-fast", action="store_true")
+
+    p_rcg = sub.add_parser("run-review-cycle-guarded", help="Run guarded review-cycle with per-step timeouts")
+    p_rcg.add_argument("--date", required=True)
+    p_rcg.add_argument("--max-rounds", default="2")
+    p_rcg.add_argument("--ops-window-days", default="14")
+    p_rcg.add_argument("--review-timeout-seconds", default="180")
+    p_rcg.add_argument("--gate-timeout-seconds", default="120")
+    p_rcg.add_argument("--ops-timeout-seconds", default="120")
+    p_rcg.add_argument("--health-timeout-seconds", default="90")
+    p_rcg.add_argument("--mutex-timeout-seconds", default="5.0")
+    p_rcg.add_argument("--review-mode", default="review-loop", help="review | review-loop")
+    p_rcg.add_argument("--skip-health-check", action="store_true")
+    p_rcg.add_argument("--fail-fast", action="store_true")
+    p_rcg.add_argument("--skip-mutex", action="store_true")
 
     p_rs = sub.add_parser("run-slot", help="Run one scheduled slot")
     p_rs.add_argument("--date", required=True)
@@ -184,10 +207,44 @@ def main() -> None:
         result2 = eng.run_review(as_of=_parse_date(args.date))
         out = result2.to_dict()
     elif args.cmd == "run-review-cycle":
-        out = eng.run_review_cycle(
+        if bool(args.legacy):
+            out = eng.run_review_cycle(
+                as_of=_parse_date(args.date),
+                max_rounds=int(args.max_rounds),
+                ops_window_days=int(args.ops_window_days) if args.ops_window_days not in {None, "", "none", "None"} else None,
+            )
+            if isinstance(out, dict):
+                out.setdefault("execution_path", "legacy")
+        else:
+            out = eng.run_review_cycle_guarded(
+                as_of=_parse_date(args.date),
+                max_rounds=int(args.max_rounds),
+                ops_window_days=int(args.ops_window_days) if args.ops_window_days not in {None, "", "none", "None"} else None,
+                review_timeout_seconds=int(args.review_timeout_seconds),
+                gate_timeout_seconds=int(args.gate_timeout_seconds),
+                ops_timeout_seconds=int(args.ops_timeout_seconds),
+                health_timeout_seconds=int(args.health_timeout_seconds),
+                mutex_timeout_seconds=float(args.mutex_timeout_seconds),
+                review_mode=str(args.review_mode),
+                skip_health_check=bool(args.skip_health_check),
+                fail_fast=bool(args.fail_fast),
+            )
+            if isinstance(out, dict):
+                out.setdefault("execution_path", "guarded")
+    elif args.cmd == "run-review-cycle-guarded":
+        out = eng.run_review_cycle_guarded(
             as_of=_parse_date(args.date),
             max_rounds=int(args.max_rounds),
             ops_window_days=int(args.ops_window_days) if args.ops_window_days not in {None, "", "none", "None"} else None,
+            review_timeout_seconds=int(args.review_timeout_seconds),
+            gate_timeout_seconds=int(args.gate_timeout_seconds),
+            ops_timeout_seconds=int(args.ops_timeout_seconds),
+            health_timeout_seconds=int(args.health_timeout_seconds),
+            mutex_timeout_seconds=float(args.mutex_timeout_seconds),
+            review_mode=str(args.review_mode),
+            skip_health_check=bool(args.skip_health_check),
+            fail_fast=bool(args.fail_fast),
+            skip_mutex=bool(args.skip_mutex),
         )
     elif args.cmd == "run-slot":
         out = eng.run_slot(

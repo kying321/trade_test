@@ -313,6 +313,13 @@ lie run-slot --date 2026-02-13 --slot micro-capture
 # 单日全流程
 lie run-session --date 2026-02-13
 lie run-review-cycle --date 2026-02-13 --max-rounds 2
+# run-review-cycle 默认走守护执行路径（每一步有独立超时、日志与返回码）
+# 如需旧版 in-process 行为：追加 --legacy
+lie run-review-cycle --date 2026-02-13 --max-rounds 2 --legacy
+# 显式守护命令（与上面默认行为一致）
+lie run-review-cycle-guarded --date 2026-02-13 --max-rounds 2 --review-timeout-seconds 30 --gate-timeout-seconds 70 --ops-timeout-seconds 70 --ops-window-days 14
+# run-slot/run-daemon 的 review 槽默认也走 guarded（内部 skip_mutex，避免与调度锁重入）
+# 如需回退旧路径：validation.scheduler_review_use_legacy: true
 # 生产建议 max-rounds>=1；max-rounds=0 仅用于跳过复审循环的快速联调
 # 默认 review-loop 第1轮采用 fast 子样本测试，fast 通过后同轮自动补跑 full 验证
 
