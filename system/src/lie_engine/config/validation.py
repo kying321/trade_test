@@ -890,6 +890,25 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                     )
     if "ops_state_min_samples" in val and _as_int(val.get("ops_state_min_samples", 0)) < 1:
         issues.append(ValidationIssue("error", "validation.ops_state_min_samples", "必须 >= 1"))
+    if "ops_strategy_stability_gate_enabled" in val and not isinstance(
+        val.get("ops_strategy_stability_gate_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_strategy_stability_gate_enabled",
+                "必须是布尔值",
+            )
+        )
+    if "ops_strategy_stability_min_windows" in val and _as_int(val.get("ops_strategy_stability_min_windows", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.ops_strategy_stability_min_windows", "必须 >= 1"))
+    if "ops_strategy_stability_max_age_days" in val and _as_int(val.get("ops_strategy_stability_max_age_days", -1)) < 0:
+        issues.append(ValidationIssue("error", "validation.ops_strategy_stability_max_age_days", "必须 >= 0"))
+    for k in ("ops_strategy_stability_score_min", "ops_strategy_stability_trade_activity_ratio_min"):
+        if k in val:
+            v = _as_float(val.get(k, 0.0))
+            if not (0.0 <= v <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
     if "ops_mode_health_fail_days_max" in val and _as_int(val.get("ops_mode_health_fail_days_max", 0)) < 0:
         issues.append(ValidationIssue("error", "validation.ops_mode_health_fail_days_max", "必须 >= 0"))
     for k in (

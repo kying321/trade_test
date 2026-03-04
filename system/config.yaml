@@ -274,6 +274,11 @@ validation:
   ops_reconcile_require_broker_snapshot: false
   ops_reconcile_broker_contract_emit_canonical_view: true
   ops_reconcile_broker_contract_canonical_dir: "artifacts/broker_snapshot_canonical"
+  ops_strategy_stability_gate_enabled: false
+  ops_strategy_stability_score_min: 0.60
+  ops_strategy_stability_trade_activity_ratio_min: 0.60
+  ops_strategy_stability_min_windows: 2
+  ops_strategy_stability_max_age_days: 7
   ops_state_min_samples: 5
   ops_risk_multiplier_floor: 0.35
   ops_risk_multiplier_drift_max: 0.30

@@ -101,6 +101,153 @@ class ReleaseOrchestratorTests(unittest.TestCase):
         self.assertFalse(out["passed"])
         self.assertFalse(out["checks"]["mode_health_ok"])
 
+    def test_gate_report_passes_strategy_stability_gate_when_artifact_fresh(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text("pass_gate: true\n", encoding="utf-8")
+
+        research_dir = td / "research" / "strategy_stability_20260213_200000"
+        research_dir.mkdir(parents=True, exist_ok=True)
+        (research_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "end": d.isoformat(),
+                    "stability": {
+                        "score": 0.92,
+                        "trade_activity_ratio": 1.0,
+                        "accept_ratio": 1.0,
+                        "dd_ok_ratio": 1.0,
+                        "return_pos_ratio": 1.0,
+                    },
+                    "windows": [
+                        {"window_days": 365, "best_accepted": True},
+                        {"window_days": 180, "best_accepted": True},
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "ops_strategy_stability_gate_enabled": True,
+                "ops_strategy_stability_score_min": 0.80,
+                "ops_strategy_stability_trade_activity_ratio_min": 0.80,
+                "ops_strategy_stability_min_windows": 2,
+                "ops_strategy_stability_max_age_days": 3,
+            }
+        )
+
+        def _load_json(path: Path) -> dict[str, object]:
+            if not Path(path).exists():
+                return {}
+            try:
+                return json.loads(Path(path).read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(
+                as_of=as_of,
+                parameter_changes={},
+                factor_weights={},
+                defects=[],
+                pass_gate=True,
+            ),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=_load_json,
+        )
+        out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
+        self.assertTrue(bool(out["passed"]))
+        self.assertTrue(bool(out["checks"]["strategy_stability_ok"]))
+        strategy = out.get("strategy_stability", {})
+        self.assertTrue(bool(strategy.get("active", False)))
+        self.assertEqual(int((strategy.get("metrics", {}) or {}).get("window_count", 0)), 2)
+
+    def test_gate_report_fails_strategy_stability_gate_when_artifact_stale_or_weak(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        d = date(2026, 2, 13)
+        review_dir = td / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{d.isoformat()}_param_delta.yaml").write_text("pass_gate: true\n", encoding="utf-8")
+
+        research_dir = td / "research" / "strategy_stability_20260201_200000"
+        research_dir.mkdir(parents=True, exist_ok=True)
+        (research_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "end": "2026-02-01",
+                    "stability": {
+                        "score": 0.55,
+                        "trade_activity_ratio": 0.25,
+                        "accept_ratio": 0.50,
+                    },
+                    "windows": [{"window_days": 365, "best_accepted": False}],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        settings = self._make_settings()
+        settings.raw.setdefault("validation", {})
+        settings.raw["validation"].update(
+            {
+                "ops_strategy_stability_gate_enabled": True,
+                "ops_strategy_stability_score_min": 0.80,
+                "ops_strategy_stability_trade_activity_ratio_min": 0.60,
+                "ops_strategy_stability_min_windows": 2,
+                "ops_strategy_stability_max_age_days": 3,
+            }
+        )
+
+        def _load_json(path: Path) -> dict[str, object]:
+            if not Path(path).exists():
+                return {}
+            try:
+                return json.loads(Path(path).read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        orch = ReleaseOrchestrator(
+            settings=settings,
+            output_dir=td,
+            quality_snapshot=lambda as_of: {"completeness": 1.0, "unresolved_conflict_ratio": 0.0},
+            backtest_snapshot=lambda as_of: {"positive_window_ratio": 0.8, "max_drawdown": 0.1, "violations": 0},
+            run_review=lambda as_of: ReviewDelta(
+                as_of=as_of,
+                parameter_changes={},
+                factor_weights={},
+                defects=[],
+                pass_gate=True,
+            ),
+            health_check=lambda as_of, require_review: {"status": "healthy", "missing": []},
+            stable_replay_check=lambda as_of, days: {"passed": True, "replay_days": 3, "checks": []},
+            test_all=lambda: {"returncode": 0, "stderr": "", "stdout": ""},
+            load_json_safely=_load_json,
+        )
+        out = orch.gate_report(as_of=d, run_tests=False, run_review_if_missing=False)
+        self.assertFalse(bool(out["passed"]))
+        self.assertFalse(bool(out["checks"]["strategy_stability_ok"]))
+        strategy = out.get("strategy_stability", {})
+        alerts = set(strategy.get("alerts", []))
+        self.assertIn("strategy_stability_artifact_stale", alerts)
+        self.assertIn("strategy_stability_score_low", alerts)
+        self.assertIn("strategy_stability_windows_insufficient", alerts)
+
     def test_gate_report_style_drift_hard_fail_blocks_release(self) -> None:
         td = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
