@@ -8,6 +8,7 @@ docs/PROGRESS.md
 docs/DEMO_VERSIONING_BASELINE.md
 docs/TERM_ATOM_REGISTRY.md
 docs/TIME_SYNC_RUNBOOK.md
+docs/THEORY_PROCESS.md
 ```
 
 运行：
@@ -85,6 +86,14 @@ lie review --date 2026-02-13
 # strategy/research manifest 会写入时间审计字段：
 # metadata.cutoff_ts / bar_max_ts / news_max_ts / report_max_ts
 # review 加载 strategy-lab 候选时会校验上述字段不越过 cutoff（防前视）
+# strategy-lab 候选融合门禁（只采纳对风险/收益有增益的候选）：
+# validation.strategy_lab_merge_require_accepted: true
+# validation.strategy_lab_merge_require_validation_metrics: true
+# validation.strategy_lab_merge_min_validation_annual_return: 0.0
+# validation.strategy_lab_merge_max_validation_drawdown: 0.18
+# validation.strategy_lab_merge_min_validation_trades: 2
+# validation.strategy_lab_merge_min_validation_positive_window_ratio: 0.55
+# validation.strategy_lab_merge_min_robustness: 0.30
 # 评审回测窗口可配置：
 # validation.review_backtest_start_date: "2015-01-01"（默认）
 # validation.review_backtest_lookback_days: 540（可选，优先于 start_date，适合测试/快速迭代）
