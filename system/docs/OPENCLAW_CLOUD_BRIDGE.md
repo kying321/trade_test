@@ -13,6 +13,22 @@
 - `CLOUD_USER` (default: `ubuntu`)
 - `CLOUD_PROJECT_DIR` (default: `/home/ubuntu/openclaw-system`)
 - `CLOUD_PASS` (optional if key auth is configured)
+- `FENLIE_SYSTEM_ROOT` (recommended for launchd: `/Users/jokenrobot/.openclaw/workspaces/pi/fenlie-system`)
+
+## Keychain secret governance (recommended)
+- 避免在 LaunchAgent plist 明文注入 `CLOUD_PASS`。
+- 先写入 Keychain（service: `openclaw.pi.cloud_pass`）：
+```bash
+security add-generic-password -U \
+  -a "$USER" \
+  -s "openclaw.pi.cloud_pass" \
+  -w '***'
+```
+- LaunchAgent 使用：
+  - `CLOUD_PASS_KEYCHAIN_SERVICE=openclaw.pi.cloud_pass`
+  - 不设置 `CLOUD_PASS` 明文值。
+- `pi_cycle_halfhour_launchd_runner.sh` 会在 gate 前自动执行：
+  - `security find-generic-password -a "$USER" -s "$CLOUD_PASS_KEYCHAIN_SERVICE" -w`
 
 ## Command sequence (recommended)
 ```bash
@@ -89,6 +105,21 @@ scripts/openclaw_cloud_bridge.sh ensure-whitelist-gate
   - `output/review/*_openclaw_bridge_whitelist_24h.json`
   - `output/review/*_openclaw_bridge_whitelist_24h.md`
   - `output/logs/openclaw_bridge_whitelist_samples.jsonl`
+
+## Night retro (自动化复盘补全)
+- 一键生成指定时间窗复盘报告（JSON + Markdown）：
+```bash
+cd /Users/jokenrobot/Downloads/fenlie/system
+python3 scripts/pi_launchd_night_retro.py \
+  --launchd-log /Users/jokenrobot/.openclaw/logs/pi_cycle_launchd.log \
+  --sample-log /Users/jokenrobot/.openclaw/workspaces/pi/fenlie-system/output/logs/openclaw_bridge_whitelist_samples.pre_migration_20260304T030458Z.jsonl \
+  --sample-log /Users/jokenrobot/.openclaw/workspaces/pi/fenlie-system/output/logs/openclaw_bridge_whitelist_samples.jsonl \
+  --review-dir /Users/jokenrobot/.openclaw/workspaces/pi/fenlie-system/output/review \
+  --start-utc 2026-03-03T19:50:00Z \
+  --end-utc 2026-03-04T03:10:00Z \
+  --out-prefix pi_automation_night_retro
+```
+- 默认行为（不传 start/end）：回溯最近 `12h`。
 
 ## Rollback
 ```bash
