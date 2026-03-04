@@ -761,6 +761,60 @@ def _generate_candidates(
             "rationale": "高波动突破捕捉",
         },
     ]
+    if bool(crypto_mode):
+        crypto_templates: list[dict[str, Any]] = [
+            {
+                "name": "crypto_tactical",
+                "hold_days": 2,
+                "max_daily_trades": 5,
+                "signal_confidence_min": 18.0,
+                "convexity_min": 1.4,
+                "exposure_scale": 0.20,
+                "theory_ict_weight": 1.15,
+                "theory_brooks_weight": 1.25,
+                "theory_lie_weight": 0.95,
+                "theory_wyckoff_weight": 1.15,
+                "theory_vpa_weight": 1.00,
+                "theory_confidence_boost_max": 4.8,
+                "theory_penalty_max": 6.4,
+                "theory_min_confluence": 0.30,
+                "theory_conflict_fuse": 0.74,
+                "execution_confirm_enabled": True,
+                "execution_confirm_lookahead": 1,
+                "execution_confirm_loss_mult": 0.70,
+                "execution_anti_martingale_enabled": True,
+                "execution_anti_martingale_step": 0.14,
+                "execution_anti_martingale_floor": 0.66,
+                "execution_anti_martingale_ceiling": 1.34,
+                "rationale": "crypto微观结构驱动的快切",
+            },
+            {
+                "name": "crypto_swing_flow",
+                "hold_days": 3,
+                "max_daily_trades": 4,
+                "signal_confidence_min": 20.0,
+                "convexity_min": 1.5,
+                "exposure_scale": 0.22,
+                "theory_ict_weight": 1.25,
+                "theory_brooks_weight": 1.15,
+                "theory_lie_weight": 1.00,
+                "theory_wyckoff_weight": 1.10,
+                "theory_vpa_weight": 1.05,
+                "theory_confidence_boost_max": 5.1,
+                "theory_penalty_max": 6.0,
+                "theory_min_confluence": 0.32,
+                "theory_conflict_fuse": 0.76,
+                "execution_confirm_enabled": True,
+                "execution_confirm_lookahead": 1,
+                "execution_confirm_loss_mult": 0.68,
+                "execution_anti_martingale_enabled": True,
+                "execution_anti_martingale_step": 0.16,
+                "execution_anti_martingale_floor": 0.64,
+                "execution_anti_martingale_ceiling": 1.38,
+                "rationale": "crypto波段顺势+订单流过滤",
+            },
+        ]
+        base_templates = crypto_templates + base_templates
 
     trend = float(market.get("trend_strength_z", 0.0))
     vol = float(market.get("volatility_z", 0.0))
@@ -1444,6 +1498,11 @@ def run_strategy_lab(
         review_trade_gate = 2
         valid_pwr_gate = 0.70
         review_pwr_gate = 0.60
+        if bool(crypto_mode) and not bool(low_activity_mode):
+            valid_trade_gate = 2
+            review_trade_gate = 0
+            valid_pwr_gate = 0.62
+            review_pwr_gate = 0.50
         if bool(low_activity_mode):
             valid_trade_gate = 3
             review_trade_gate = 1
