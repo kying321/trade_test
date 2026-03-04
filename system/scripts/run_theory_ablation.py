@@ -41,6 +41,11 @@ class AblationCase:
     violations: int
     sharpe_like: float
     objective: float
+    theory_wyckoff_weight: float = 0.0
+    theory_vpa_weight: float = 0.0
+    execution_confirm_loss_mult: float = 0.65
+    execution_confirm_lookahead: int = 2
+    execution_anti_martingale_step: float = 0.20
 
 
 def _parse_date(raw: str) -> date:
@@ -54,18 +59,24 @@ def _parse_symbols(raw: str) -> list[str]:
     return out
 
 
-def _parse_weight_grid(raw: str) -> list[tuple[float, float, float]]:
-    out: list[tuple[float, float, float]] = []
+def _parse_weight_grid(raw: str) -> list[tuple[float, float, float, float, float]]:
+    out: list[tuple[float, float, float, float, float]] = []
     for block in [x.strip() for x in str(raw).split(";") if x.strip()]:
         parts = [p.strip() for p in block.split(":")]
-        if len(parts) != 3:
-            continue
         try:
-            out.append((float(parts[0]), float(parts[1]), float(parts[2])))
+            if len(parts) == 3:
+                out.append((float(parts[0]), float(parts[1]), float(parts[2]), 0.0, 0.0))
+            elif len(parts) == 5:
+                out.append((float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])))
         except ValueError:
             continue
     if not out:
-        return [(1.0, 1.0, 1.2), (1.2, 1.0, 1.3), (1.2, 1.1, 1.3), (1.4, 0.9, 1.2)]
+        return [
+            (1.0, 1.0, 1.2, 0.8, 0.8),
+            (1.2, 1.0, 1.3, 0.9, 0.8),
+            (1.2, 1.1, 1.3, 1.0, 0.9),
+            (1.4, 0.9, 1.2, 0.8, 1.0),
+        ]
     return out
 
 
@@ -160,10 +171,20 @@ def _run_case(
     theory_ict_weight: float,
     theory_brooks_weight: float,
     theory_lie_weight: float,
+    theory_wyckoff_weight: float,
+    theory_vpa_weight: float,
     theory_confidence_boost_max: float,
     theory_penalty_max: float,
     theory_min_confluence: float,
     theory_conflict_fuse: float,
+    execution_confirm_enabled: bool,
+    execution_confirm_lookahead: int,
+    execution_confirm_loss_mult: float,
+    execution_confirm_win_mult: float,
+    execution_anti_martingale_enabled: bool,
+    execution_anti_martingale_step: float,
+    execution_anti_martingale_floor: float,
+    execution_anti_martingale_ceiling: float,
     max_drawdown_target: float,
     drawdown_soft_band: float,
 ) -> AblationCase:
@@ -184,10 +205,20 @@ def _run_case(
             theory_ict_weight=float(theory_ict_weight),
             theory_brooks_weight=float(theory_brooks_weight),
             theory_lie_weight=float(theory_lie_weight),
+            theory_wyckoff_weight=float(theory_wyckoff_weight),
+            theory_vpa_weight=float(theory_vpa_weight),
             theory_confidence_boost_max=float(theory_confidence_boost_max),
             theory_penalty_max=float(theory_penalty_max),
             theory_min_confluence=float(theory_min_confluence),
             theory_conflict_fuse=float(theory_conflict_fuse),
+            execution_confirm_enabled=bool(execution_confirm_enabled),
+            execution_confirm_lookahead=int(execution_confirm_lookahead),
+            execution_confirm_loss_mult=float(execution_confirm_loss_mult),
+            execution_confirm_win_mult=float(execution_confirm_win_mult),
+            execution_anti_martingale_enabled=bool(execution_anti_martingale_enabled),
+            execution_anti_martingale_step=float(execution_anti_martingale_step),
+            execution_anti_martingale_floor=float(execution_anti_martingale_floor),
+            execution_anti_martingale_ceiling=float(execution_anti_martingale_ceiling),
         ),
         trend_thr=0.6,
         mean_thr=0.4,
@@ -225,6 +256,11 @@ def _run_case(
         violations=int(bt.violations),
         sharpe_like=float(sharpe_like),
         objective=float(objective),
+        theory_wyckoff_weight=float(theory_wyckoff_weight),
+        theory_vpa_weight=float(theory_vpa_weight),
+        execution_confirm_loss_mult=float(execution_confirm_loss_mult),
+        execution_confirm_lookahead=int(execution_confirm_lookahead),
+        execution_anti_martingale_step=float(execution_anti_martingale_step),
     )
 
 
@@ -574,14 +610,18 @@ def _render_markdown(
     lines.append("")
     lines.append("## Cases")
     lines.append(
-        "| name | theory | exp | ict | brooks | lie | boost | penalty | min_conf | cfuse | ann_ret | mdd | mdd_excess | breach | pwr | pf | wr | trades | viol | sharpe_like | obj |"
+        "| name | theory | exp | ict | brooks | lie | wyckoff | vpa | boost | penalty | min_conf | cfuse | conf_loss | conf_look | anti_step | ann_ret | mdd | mdd_excess | breach | pwr | pf | wr | trades | viol | sharpe_like | obj |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    )
     for c in cases:
         lines.append(
             "| "
             + f"{c.name} | {int(c.theory_enabled)} | {c.exposure_scale:.2f} | {c.theory_ict_weight:.2f} | {c.theory_brooks_weight:.2f} | {c.theory_lie_weight:.2f} | "
+            + f"{c.theory_wyckoff_weight:.2f} | {c.theory_vpa_weight:.2f} | "
             + f"{c.theory_confidence_boost_max:.2f} | {c.theory_penalty_max:.2f} | {c.theory_min_confluence:.2f} | {c.theory_conflict_fuse:.2f} | "
+            + f"{c.execution_confirm_loss_mult:.2f} | {int(c.execution_confirm_lookahead)} | {c.execution_anti_martingale_step:.2f} | "
             + f"{c.annual_return:.4f} | {c.max_drawdown:.4f} | {c.drawdown_excess:.4f} | {int(c.target_breached)} | {c.positive_window_ratio:.4f} | {c.profit_factor:.4f} | "
             + f"{c.win_rate:.4f} | {c.trades} | {c.violations} | {c.sharpe_like:.4f} | {c.objective:.4f} |"
         )
@@ -664,8 +704,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--auto-exposure-theory", action="store_true")
     parser.add_argument(
         "--weight-grid",
-        default="1.0:1.0:1.2;1.2:1.0:1.3;1.2:1.1:1.3;1.4:0.9:1.2",
-        help="semicolon-separated ict:brooks:lie triples",
+        default="1.0:1.0:1.2:0.8:0.8;1.2:1.0:1.3:0.9:0.8;1.2:1.1:1.3:1.0:0.9;1.4:0.9:1.2:0.8:1.0",
+        help="semicolon-separated ict:brooks:lie:wyckoff:vpa tuples (also accepts legacy ict:brooks:lie triples)",
     )
     parser.add_argument("--theory-confidence-boost-max", type=float, default=5.0)
     parser.add_argument("--theory-penalty-max", type=float, default=6.0)
@@ -676,6 +716,14 @@ def _parse_args() -> argparse.Namespace:
         default="5.0:6.0:0.38:0.72;6.6:4.8:0.30:0.82;4.2:7.4:0.44:0.64;5.8:5.4:0.34:0.76",
         help="semicolon-separated boost:penalty:min_conflict:conflict_fuse quadruples",
     )
+    parser.add_argument("--execution-confirm-enabled", action="store_true")
+    parser.add_argument("--execution-confirm-lookahead", type=int, default=2)
+    parser.add_argument("--execution-confirm-loss-mult", type=float, default=0.65)
+    parser.add_argument("--execution-confirm-win-mult", type=float, default=1.0)
+    parser.add_argument("--execution-anti-martingale-enabled", action="store_true")
+    parser.add_argument("--execution-anti-martingale-step", type=float, default=0.20)
+    parser.add_argument("--execution-anti-martingale-floor", type=float, default=0.60)
+    parser.add_argument("--execution-anti-martingale-ceiling", type=float, default=1.40)
     return parser.parse_args()
 
 
@@ -819,6 +867,14 @@ def main() -> int:
         "max_daily_trades": int(args.max_daily_trades),
         "hold_days": int(args.hold_days),
         "proxy_lookback": int(args.proxy_lookback),
+        "execution_confirm_enabled": bool(args.execution_confirm_enabled),
+        "execution_confirm_lookahead": int(args.execution_confirm_lookahead),
+        "execution_confirm_loss_mult": float(args.execution_confirm_loss_mult),
+        "execution_confirm_win_mult": float(args.execution_confirm_win_mult),
+        "execution_anti_martingale_enabled": bool(args.execution_anti_martingale_enabled),
+        "execution_anti_martingale_step": float(args.execution_anti_martingale_step),
+        "execution_anti_martingale_floor": float(args.execution_anti_martingale_floor),
+        "execution_anti_martingale_ceiling": float(args.execution_anti_martingale_ceiling),
         "max_drawdown_target": float(args.max_drawdown_target),
         "drawdown_soft_band": float(args.drawdown_soft_band),
     }
@@ -866,6 +922,8 @@ def main() -> int:
         theory_ict_weight=1.0,
         theory_brooks_weight=1.0,
         theory_lie_weight=1.2,
+        theory_wyckoff_weight=0.0,
+        theory_vpa_weight=0.0,
         theory_confidence_boost_max=float(args.theory_confidence_boost_max),
         theory_penalty_max=float(args.theory_penalty_max),
         theory_min_confluence=float(args.theory_min_confluence),
@@ -915,7 +973,7 @@ def main() -> int:
         return 3
     cases.append(baseline_case)
 
-    for idx, (w_ict, w_brooks, w_lie) in enumerate(weight_grid, start=1):
+    for idx, (w_ict, w_brooks, w_lie, w_wyckoff, w_vpa) in enumerate(weight_grid, start=1):
         case_name = f"weight_on_{idx:02d}"
         if fuse_triggered:
             fuse_skipped_cases.append(case_name)
@@ -928,6 +986,8 @@ def main() -> int:
             theory_ict_weight=float(w_ict),
             theory_brooks_weight=float(w_brooks),
             theory_lie_weight=float(w_lie),
+            theory_wyckoff_weight=float(w_wyckoff),
+            theory_vpa_weight=float(w_vpa),
             theory_confidence_boost_max=float(args.theory_confidence_boost_max),
             theory_penalty_max=float(args.theory_penalty_max),
             theory_min_confluence=float(args.theory_min_confluence),
@@ -936,7 +996,7 @@ def main() -> int:
         if c is not None:
             cases.append(c)
 
-    base_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
+    base_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2, 0.0, 0.0)
     for idx, (boost, penalty, min_conf, cfuse) in enumerate(gate_grid, start=1):
         case_name = f"gate_on_{idx:02d}"
         if fuse_triggered:
@@ -950,6 +1010,8 @@ def main() -> int:
             theory_ict_weight=float(base_weights[0]),
             theory_brooks_weight=float(base_weights[1]),
             theory_lie_weight=float(base_weights[2]),
+            theory_wyckoff_weight=float(base_weights[3]),
+            theory_vpa_weight=float(base_weights[4]),
             theory_confidence_boost_max=float(boost),
             theory_penalty_max=float(penalty),
             theory_min_confluence=float(min_conf),
@@ -971,6 +1033,8 @@ def main() -> int:
             theory_ict_weight=1.0,
             theory_brooks_weight=1.0,
             theory_lie_weight=1.2,
+            theory_wyckoff_weight=0.0,
+            theory_vpa_weight=0.0,
             theory_confidence_boost_max=float(args.theory_confidence_boost_max),
             theory_penalty_max=float(args.theory_penalty_max),
             theory_min_confluence=float(args.theory_min_confluence),
@@ -984,7 +1048,7 @@ def main() -> int:
         auto_high = min(1.50, float(max(auto_low, args.auto_exposure_high)))
         auto_iters = max(1, int(args.auto_exposure_iters))
         auto_theory = bool(args.auto_exposure_theory)
-        auto_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2)
+        auto_weights = weight_grid[0] if weight_grid else (1.0, 1.0, 1.2, 0.0, 0.0)
         if fuse_triggered:
             auto_exposure_cfg = {
                 "enabled": True,
@@ -1010,6 +1074,8 @@ def main() -> int:
                     theory_ict_weight=float(auto_weights[0]),
                     theory_brooks_weight=float(auto_weights[1]),
                     theory_lie_weight=float(auto_weights[2]),
+                    theory_wyckoff_weight=float(auto_weights[3]),
+                    theory_vpa_weight=float(auto_weights[4]),
                     theory_confidence_boost_max=float(args.theory_confidence_boost_max),
                     theory_penalty_max=float(args.theory_penalty_max),
                     theory_min_confluence=float(args.theory_min_confluence),

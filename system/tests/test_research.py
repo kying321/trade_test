@@ -647,6 +647,19 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(str(cfg.get("best_case", {}).get("name", "")), str(best_case.name))
         self.assertLessEqual(float(best_case.max_drawdown), 0.05)
 
+    def test_theory_ablation_weight_grid_supports_legacy_and_extended(self) -> None:
+        ab_mod = _load_theory_ablation_module()
+        legacy = ab_mod._parse_weight_grid("1.0:1.1:1.2")
+        extended = ab_mod._parse_weight_grid("1.0:1.1:1.2:0.8:0.7")
+        self.assertEqual(len(legacy), 1)
+        self.assertEqual(len(extended), 1)
+        self.assertEqual(len(legacy[0]), 5)
+        self.assertEqual(len(extended[0]), 5)
+        self.assertAlmostEqual(float(legacy[0][3]), 0.0, places=6)
+        self.assertAlmostEqual(float(legacy[0][4]), 0.0, places=6)
+        self.assertAlmostEqual(float(extended[0][3]), 0.8, places=6)
+        self.assertAlmostEqual(float(extended[0][4]), 0.7, places=6)
+
     def test_theory_ablation_execute_with_watchdog_retry_success(self) -> None:
         ab_mod = _load_theory_ablation_module()
 
