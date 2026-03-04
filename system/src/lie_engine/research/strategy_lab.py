@@ -72,6 +72,9 @@ class StrategyLabSummary:
     output_dir: str = ""
     data_fetch_stats: dict[str, Any] = field(default_factory=dict)
     term_registry: dict[str, Any] = field(default_factory=dict)
+    exposure_cap_applied: float = 0.0
+    exposure_cap_components: dict[str, Any] = field(default_factory=dict)
+    proxy_lookback_applied: int = 180
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -146,34 +149,6 @@ def _daily_proxy_returns(bars: pd.DataFrame) -> pd.Series:
     if px.empty:
         return pd.Series(dtype=float)
     return pd.Series(px["ret"].to_numpy(), index=px["ts"].dt.date.tolist()).sort_index()
-
-
-def _market_insights(bars: pd.DataFrame) -> dict[str, float]:
-    ret = _daily_proxy_returns(bars)
-    out: dict[str, float] = {
-        "trend_strength_z": 0.0,
-        "volatility_z": 0.0,
-        "tail_risk_z": 0.0,
-        "mean_return": 0.0,
-        "volatility": 0.0,
-    }
-    if not ret.empty:
-        trend_raw = float(ret.rolling(20).mean().dropna().mean()) if len(ret) >= 20 else float(ret.mean())
-        vol_raw = float(ret.rolling(20).std(ddof=0).dropna().mean()) if len(ret) >= 20 else float(ret.std(ddof=0))
-        tail_raw = float(ret.quantile(0.05))
-        base_mean = float(ret.mean())
-        base_std = float(ret.std(ddof=0))
-        out.update(
-            {
-                "trend_strength_z": _safe_z(trend_raw, base_mean, base_std),
-                "volatility_z": _safe_z(vol_raw, float(ret.std(ddof=0)), float(ret.std(ddof=0))),
-                "tail_risk_z": _safe_z(tail_raw, base_mean, base_std),
-                "mean_return": base_mean,
-                "volatility": float(ret.std(ddof=0)),
-            }
-        )
-    out.update(_brooks_market_proxies(bars))
-    return out
 
 
 def _brooks_market_proxies(bars: pd.DataFrame) -> dict[str, float]:
@@ -396,11 +371,130 @@ def _split_dates(bars: pd.DataFrame) -> tuple[date, date]:
     return train_end, valid_start
 
 
+def _latest_feasible_ablation_exposure(*, output_root: Path, start: date, end: date) -> dict[str, Any]:
+    research_dir = output_root / "research"
+    out: dict[str, Any] = {
+        "found": False,
+        "path": "",
+        "exposure_scale": 0.0,
+        "case_name": "",
+        "risk_feasible": False,
+    }
+    if not research_dir.exists():
+        return out
+
+    runs = sorted(
+        [p for p in research_dir.iterdir() if p.is_dir() and p.name.startswith("theory_ablation_")],
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    best_match: tuple[int, int, dict[str, Any]] | None = None
+    for run in runs:
+        summary_path = run / "summary.json"
+        if not summary_path.exists():
+            continue
+        try:
+            payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(payload, dict):
+            continue
+        start_raw = str(payload.get("start", ""))
+        end_raw = str(payload.get("end", ""))
+        try:
+            run_start = date.fromisoformat(start_raw)
+            run_end = date.fromisoformat(end_raw)
+        except ValueError:
+            continue
+        risk_feasible = bool(payload.get("risk_feasible", False))
+        feasible = payload.get("best_feasible_case", {})
+        if not isinstance(feasible, dict):
+            feasible = {}
+        exposure = _clip(float(feasible.get("exposure_scale", 0.0)), 0.0, 1.0)
+        if not risk_feasible or exposure <= 0.0:
+            continue
+
+        priority = 9
+        gap_days = 999999
+        if run_start == start and run_end == end:
+            priority = 0
+            gap_days = 0
+        elif run_end == end and run_start <= start:
+            priority = 1
+            gap_days = int((start - run_start).days)
+        elif run_start <= start and run_end >= end:
+            priority = 2
+            gap_days = int((start - run_start).days + (run_end - end).days)
+        else:
+            continue
+
+        candidate = {
+            "found": True,
+            "path": str(summary_path),
+            "exposure_scale": float(exposure),
+            "case_name": str(feasible.get("name", "")),
+            "risk_feasible": bool(risk_feasible),
+            "match_priority": int(priority),
+            "match_gap_days": int(gap_days),
+            "match_window_start": run_start.isoformat(),
+            "match_window_end": run_end.isoformat(),
+        }
+        key = (priority, gap_days)
+        if best_match is None or key < (best_match[0], best_match[1]):
+            best_match = (priority, gap_days, candidate)
+            if priority == 0:
+                break
+
+    if best_match is not None:
+        out.update(best_match[2])
+        return out
+    return out
+
+
+def _resolve_exposure_cap(
+    *,
+    output_root: Path,
+    start: date,
+    end: date,
+    max_drawdown_target: float,
+    market: dict[str, float],
+) -> tuple[float, dict[str, Any]]:
+    base_cap = _clip(float(max_drawdown_target) / 0.22, 0.10, 0.35)
+    ablation = _latest_feasible_ablation_exposure(output_root=output_root, start=start, end=end)
+    ablation_cap = float(base_cap)
+    if bool(ablation.get("found", False)):
+        ablation_cap = _clip(float(ablation.get("exposure_scale", 0.0)) * 1.15, 0.08, float(base_cap))
+
+    brooks_hazard = max(0.0, float(market.get("brooks_exhaustion_z", 0.0)))
+    brooks_support = max(0.0, float(market.get("brooks_trend_bar_z", 0.0))) + 0.5 * abs(float(market.get("brooks_two_legged_bias", 0.0)))
+    hazard_mult = _clip(1.0 - 0.10 * brooks_hazard + 0.03 * brooks_support, 0.75, 1.05)
+
+    raw_cap = min(float(base_cap), float(ablation_cap))
+    final_cap = _clip(raw_cap * hazard_mult, 0.08, float(base_cap))
+    components: dict[str, Any] = {
+        "base_cap": float(base_cap),
+        "ablation_cap": float(ablation_cap),
+        "hazard_multiplier": float(hazard_mult),
+        "raw_cap": float(raw_cap),
+        "ablation_found": bool(ablation.get("found", False)),
+        "ablation_case_name": str(ablation.get("case_name", "")),
+        "ablation_summary_path": str(ablation.get("path", "")),
+        "ablation_match_priority": int(ablation.get("match_priority", -1)),
+        "ablation_match_gap_days": int(ablation.get("match_gap_days", -1)),
+        "ablation_match_window_start": str(ablation.get("match_window_start", "")),
+        "ablation_match_window_end": str(ablation.get("match_window_end", "")),
+        "brooks_hazard": float(brooks_hazard),
+        "brooks_support": float(brooks_support),
+    }
+    return float(final_cap), components
+
+
 def _generate_candidates(
     market: dict[str, float],
     report: dict[str, float],
     candidate_count: int,
     exposure_cap: float = 0.35,
+    low_activity_mode: bool = False,
 ) -> list[dict[str, Any]]:
     base_templates: list[dict[str, Any]] = [
         {
@@ -504,6 +598,10 @@ def _generate_candidates(
     trend = float(market.get("trend_strength_z", 0.0))
     vol = float(market.get("volatility_z", 0.0))
     tail = float(market.get("tail_risk_z", 0.0))
+    brooks_trend_bar = float(market.get("brooks_trend_bar_z", 0.0))
+    brooks_micro_bias = float(market.get("brooks_micro_channel_bias", 0.0))
+    brooks_two_legged = float(market.get("brooks_two_legged_bias", 0.0))
+    brooks_exhaust = float(market.get("brooks_exhaustion_z", 0.0))
     news_bias = float(report.get("news_bias_z", 0.0))
     report_bias = float(report.get("report_bias_z", 0.0))
     agree = float(report.get("news_report_agreement", 0.0))
@@ -513,24 +611,80 @@ def _generate_candidates(
         tpl = base_templates[i % len(base_templates)].copy()
         regime_push = float(np.tanh(trend - 0.6 * tail))
         info_push = float(np.tanh(0.6 * report_bias + 0.4 * news_bias))
+        brooks_support = float(
+            np.tanh(
+                0.50 * max(0.0, brooks_trend_bar)
+                + 0.30 * abs(brooks_micro_bias)
+                + 0.30 * abs(brooks_two_legged)
+                - 0.55 * max(0.0, brooks_exhaust)
+            )
+        )
+        brooks_hazard = float(np.tanh(0.65 * max(0.0, brooks_exhaust) + 0.20 * max(0.0, -brooks_micro_bias)))
         conf = float(tpl["signal_confidence_min"]) - 5.0 * info_push + 2.0 * max(0.0, -agree)
+        conf += 1.4 * max(0.0, brooks_hazard) - 1.1 * max(0.0, brooks_support)
         convex = float(tpl["convexity_min"]) + 0.35 * max(0.0, vol) + 0.20 * max(0.0, -tail)
+        convex += 0.22 * max(0.0, brooks_hazard) - 0.10 * max(0.0, brooks_support)
         exposure = (
             float(tpl.get("exposure_scale", 0.60))
             + 0.10 * max(0.0, trend)
             - 0.22 * max(0.0, vol)
             - 0.25 * max(0.0, tail)
             - 0.15 * max(0.0, -agree)
+            + 0.06 * max(0.0, brooks_support)
+            - 0.10 * max(0.0, brooks_hazard)
         )
-        hold = int(round(float(tpl["hold_days"]) + 3.0 * regime_push))
-        trades = int(round(float(tpl["max_daily_trades"]) + (1.0 if abs(info_push) > 0.8 else 0.0)))
+        hold = int(round(float(tpl["hold_days"]) + 3.0 * regime_push + 1.0 * max(0.0, brooks_support) - 2.0 * max(0.0, brooks_hazard)))
+        trades = int(
+            round(
+                float(tpl["max_daily_trades"])
+                + (1.0 if abs(info_push) > 0.8 else 0.0)
+                + 0.8 * max(0.0, brooks_support)
+                - 1.2 * max(0.0, brooks_hazard)
+            )
+        )
         ict_w = float(tpl["theory_ict_weight"]) + 0.25 * max(0.0, info_push) + 0.10 * max(0.0, trend)
-        brooks_w = float(tpl["theory_brooks_weight"]) + 0.20 * max(0.0, vol) + 0.20 * max(0.0, -agree)
-        lie_w = float(tpl["theory_lie_weight"]) + 0.25 * max(0.0, trend) - 0.12 * max(0.0, vol)
-        boost = float(tpl["theory_confidence_boost_max"]) + 0.9 * max(0.0, trend) - 0.6 * max(0.0, vol)
-        penalty = float(tpl["theory_penalty_max"]) + 0.8 * max(0.0, vol) + 0.7 * max(0.0, -agree)
-        min_conf = float(tpl["theory_min_confluence"]) + 0.05 * max(0.0, vol) + 0.03 * max(0.0, -tail)
-        conflict_fuse = float(tpl["theory_conflict_fuse"]) - 0.04 * max(0.0, vol) + 0.03 * max(0.0, trend)
+        brooks_w = (
+            float(tpl["theory_brooks_weight"])
+            + 0.20 * max(0.0, vol)
+            + 0.20 * max(0.0, -agree)
+            + 0.25 * max(0.0, brooks_support)
+            - 0.20 * max(0.0, brooks_hazard)
+        )
+        lie_w = (
+            float(tpl["theory_lie_weight"])
+            + 0.25 * max(0.0, trend)
+            - 0.12 * max(0.0, vol)
+            + 0.08 * max(0.0, brooks_support)
+            - 0.10 * max(0.0, brooks_hazard)
+        )
+        boost = (
+            float(tpl["theory_confidence_boost_max"])
+            + 0.9 * max(0.0, trend)
+            - 0.6 * max(0.0, vol)
+            + 0.30 * max(0.0, brooks_support)
+            - 0.55 * max(0.0, brooks_hazard)
+        )
+        penalty = (
+            float(tpl["theory_penalty_max"])
+            + 0.8 * max(0.0, vol)
+            + 0.7 * max(0.0, -agree)
+            + 0.65 * max(0.0, brooks_hazard)
+            - 0.18 * max(0.0, brooks_support)
+        )
+        min_conf = (
+            float(tpl["theory_min_confluence"])
+            + 0.05 * max(0.0, vol)
+            + 0.03 * max(0.0, -tail)
+            + 0.03 * max(0.0, brooks_hazard)
+            - 0.02 * max(0.0, brooks_support)
+        )
+        conflict_fuse = (
+            float(tpl["theory_conflict_fuse"])
+            - 0.04 * max(0.0, vol)
+            + 0.03 * max(0.0, trend)
+            - 0.03 * max(0.0, brooks_hazard)
+            + 0.01 * max(0.0, brooks_support)
+        )
 
         tpl["signal_confidence_min"] = _clip(conf, 15.0, 72.0)
         tpl["convexity_min"] = _clip(convex, 1.0, 3.5)
@@ -544,6 +698,18 @@ def _generate_candidates(
         tpl["theory_penalty_max"] = _clip(penalty, 3.0, 10.0)
         tpl["theory_min_confluence"] = _clip(min_conf, 0.20, 0.60)
         tpl["theory_conflict_fuse"] = _clip(conflict_fuse, 0.50, 0.90)
+        tpl["brooks_support_score"] = _clip(brooks_support, -1.0, 1.0)
+        tpl["brooks_hazard_score"] = _clip(brooks_hazard, 0.0, 1.0)
+        if float(tpl["brooks_support_score"]) >= 0.25:
+            tpl["rationale"] = f"{tpl['rationale']} | Brooks顺势结构强化"
+        if float(tpl["brooks_hazard_score"]) >= 0.25:
+            tpl["rationale"] = f"{tpl['rationale']} | Brooks高潮风险抑制"
+        if bool(low_activity_mode):
+            tpl["signal_confidence_min"] = _clip(float(tpl["signal_confidence_min"]) - 4.0, 12.0, 72.0)
+            tpl["convexity_min"] = _clip(float(tpl["convexity_min"]) - 0.30, 0.9, 3.5)
+            tpl["hold_days"] = int(max(1, min(20, int(tpl["hold_days"]) - 2)))
+            tpl["max_daily_trades"] = int(max(1, min(5, int(tpl["max_daily_trades"]) + 1)))
+            tpl["rationale"] = f"{tpl['rationale']} | 低活跃窗口松绑"
         tpl["name"] = f"{tpl['name']}_{i+1:02d}"
         out.append(tpl)
     return out
@@ -571,12 +737,20 @@ def _score_candidate(
         return float(2.2 * excess + 5.0 * max(0.0, excess - dd_soft))
 
     trades_valid = int(getattr(valid_bt, "trades", 0))
-    trade_penalty = 0.0 if trades_valid >= 5 else 0.08 * float(5 - trades_valid)
+    pwr_valid = float(getattr(valid_bt, "positive_window_ratio", 0.0))
+    if trades_valid <= 0:
+        pwr_valid = 0.0
+    elif trades_valid < 5:
+        pwr_valid *= float(trades_valid) / 5.0
+
+    trade_penalty = 0.0 if trades_valid >= 5 else 0.12 * float(5 - trades_valid)
+    if trades_valid == 0:
+        trade_penalty += 0.25
     dd_penalty_valid = _dd_target_penalty(float(getattr(valid_bt, "max_drawdown", 0.0)), dd_target)
     base = float(
         0.25 * float(getattr(train_bt, "annual_return", 0.0))
         + 0.55 * float(getattr(valid_bt, "annual_return", 0.0))
-        + 0.65 * float(getattr(valid_bt, "positive_window_ratio", 0.0))
+        + 0.65 * pwr_valid
         + 0.20 * float(align_valid)
         + 0.08 * float(align_train)
         - 2.40 * float(getattr(valid_bt, "max_drawdown", 0.0))
@@ -587,12 +761,20 @@ def _score_candidate(
     if review_bt is None:
         return base
     review_trades = int(getattr(review_bt, "trades", 0))
-    review_penalty = 0.0 if review_trades >= 2 else 0.04 * float(2 - review_trades)
+    pwr_review = float(getattr(review_bt, "positive_window_ratio", 0.0))
+    if review_trades <= 0:
+        pwr_review = 0.0
+    elif review_trades < 2:
+        pwr_review *= float(review_trades) / 2.0
+
+    review_penalty = 0.0 if review_trades >= 2 else 0.08 * float(2 - review_trades)
+    if review_trades == 0:
+        review_penalty += 0.10
     dd_penalty_review = _dd_target_penalty(float(getattr(review_bt, "max_drawdown", 0.0)), dd_review_target)
     return float(
         base
         + 0.18 * float(getattr(review_bt, "annual_return", 0.0))
-        + 0.22 * float(getattr(review_bt, "positive_window_ratio", 0.0))
+        + 0.22 * pwr_review
         + 0.10 * float(align_review)
         + 0.20 * float(robustness_score)
         - 1.20 * float(getattr(review_bt, "max_drawdown", 0.0))
@@ -643,6 +825,15 @@ def _render_report(summary: StrategyLabSummary) -> str:
     lines.append(f"- 研报记录: `{summary.report_records}`")
     lines.append(f"- 复盘新闻记录: `{summary.review_news_records}`")
     lines.append(f"- 复盘研报记录: `{summary.review_report_records}`")
+    lines.append(f"- 暴露上限(应用): `{float(summary.exposure_cap_applied):.4f}`")
+    lines.append(f"- proxy_lookback(应用): `{int(summary.proxy_lookback_applied)}`")
+    if summary.exposure_cap_components:
+        lines.append(f"- 暴露上限(基线): `{float(summary.exposure_cap_components.get('base_cap', 0.0)):.4f}`")
+        lines.append(f"- 暴露上限(ablation): `{float(summary.exposure_cap_components.get('ablation_cap', 0.0)):.4f}`")
+        lines.append(f"- 暴露乘数(hazard): `{float(summary.exposure_cap_components.get('hazard_multiplier', 1.0)):.4f}`")
+        lines.append(f"- ablation_found: `{bool(summary.exposure_cap_components.get('ablation_found', False))}`")
+        if str(summary.exposure_cap_components.get("ablation_case_name", "")):
+            lines.append(f"- ablation_case: `{summary.exposure_cap_components.get('ablation_case_name', '')}`")
     lines.append("")
     lines.append("## 市场学习信号")
     for k, v in summary.market_insights.items():
@@ -762,6 +953,9 @@ def run_strategy_lab(
             output_dir=str(run_dir),
             data_fetch_stats=bundle.fetch_stats,
             term_registry=term_registry,
+            exposure_cap_applied=0.0,
+            exposure_cap_components={},
+            proxy_lookback_applied=180,
         )
         write_json(run_dir / "summary.json", summary.to_dict())
         write_markdown(run_dir / "report.md", _render_report(summary))
@@ -779,15 +973,28 @@ def run_strategy_lab(
     bars_all = pd.concat([bars, review_bars], ignore_index=True) if not review_bars.empty else bars.copy()
     bars_all = bars_all.sort_values(["ts", "symbol"]).reset_index(drop=True)
     train_end, valid_start = _split_dates(bars)
+    valid_days = int(sum(1 for d in pd.to_datetime(bars["ts"]).dt.date.tolist() if d >= valid_start))
+    low_activity_mode = bool(valid_days < 45)
+    total_days = int(len(pd.to_datetime(bars["ts"]).dt.date.unique()))
+    proxy_lookback = int(_clip(float(total_days) * 0.70, 60.0, 180.0))
+    if low_activity_mode:
+        proxy_lookback = int(min(proxy_lookback, max(50, int(valid_days * 1.6))))
 
     market = _market_insights(bars)
     report = _report_insights(bundle.news_daily, bundle.report_daily)
-    exposure_cap = _clip(valid_dd_target / 0.22, 0.10, 0.35)
+    exposure_cap, exposure_cap_components = _resolve_exposure_cap(
+        output_root=output_root,
+        start=start,
+        end=end,
+        max_drawdown_target=float(valid_dd_target),
+        market=market,
+    )
     candidates_cfg = _generate_candidates(
         market=market,
         report=report,
         candidate_count=candidate_count,
         exposure_cap=exposure_cap,
+        low_activity_mode=low_activity_mode,
     )
 
     out_candidates: list[StrategyCandidateResult] = []
@@ -800,7 +1007,7 @@ def run_strategy_lab(
             exposure_scale=float(spec.get("exposure_scale", 1.0)),
             regime_recalc_interval=5,
             signal_eval_interval=1,
-            proxy_lookback=180,
+            proxy_lookback=int(proxy_lookback),
             theory_enabled=True,
             theory_ict_weight=float(spec.get("theory_ict_weight", 1.0)),
             theory_brooks_weight=float(spec.get("theory_brooks_weight", 1.0)),
@@ -914,6 +1121,8 @@ def run_strategy_lab(
                     "theory_penalty_max": float(spec.get("theory_penalty_max", 6.0)),
                     "theory_min_confluence": float(spec.get("theory_min_confluence", 0.38)),
                     "theory_conflict_fuse": float(spec.get("theory_conflict_fuse", 0.72)),
+                    "brooks_support_score": float(spec.get("brooks_support_score", 0.0)),
+                    "brooks_hazard_score": float(spec.get("brooks_hazard_score", 0.0)),
                 },
                 train_metrics={
                     "annual_return": float(train_bt.annual_return),
@@ -978,6 +1187,9 @@ def run_strategy_lab(
         output_dir=str(run_dir),
         data_fetch_stats=bundle.fetch_stats,
         term_registry=term_registry,
+        exposure_cap_applied=float(exposure_cap),
+        exposure_cap_components=exposure_cap_components,
+        proxy_lookback_applied=int(proxy_lookback),
     )
 
     write_json(run_dir / "summary.json", summary.to_dict())

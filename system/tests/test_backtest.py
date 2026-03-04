@@ -9,11 +9,16 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lie_engine.backtest.engine import BacktestConfig, _compute_metrics, run_event_backtest
+from lie_engine.backtest.engine import BacktestConfig, _compute_metrics, _proxy_history_min_points, run_event_backtest
 from tests.helpers import make_multi_symbol_bars
 
 
 class BacktestTests(unittest.TestCase):
+    def test_proxy_history_min_points_scales_with_lookback(self) -> None:
+        self.assertEqual(_proxy_history_min_points(180), 130)
+        self.assertEqual(_proxy_history_min_points(90), 65)
+        self.assertEqual(_proxy_history_min_points(40), 50)
+
     def test_backtest_runs(self) -> None:
         bars = make_multi_symbol_bars()
         result = run_event_backtest(

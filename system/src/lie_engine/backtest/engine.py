@@ -35,6 +35,11 @@ class BacktestConfig:
 SHORTABLE_ASSET = {"future", "option", "hedge"}
 
 
+def _proxy_history_min_points(proxy_lookback: int) -> int:
+    lookback = max(10, int(proxy_lookback))
+    return int(max(50, min(130, round(0.72 * lookback))))
+
+
 def _compute_metrics(equity: pd.Series, trades: pd.DataFrame, window_returns: list[float]) -> tuple[float, float, float, float, float, float, int, float]:
     if equity.empty:
         return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0)
@@ -127,7 +132,7 @@ def run_event_backtest(
 
         if last_regime is None or (i % max(1, cfg.regime_recalc_interval) == 0):
             market_proxy = hist.groupby("ts", as_index=False)["close"].mean().sort_values("ts").tail(cfg.proxy_lookback)
-            if len(market_proxy) < 130:
+            if len(market_proxy) < _proxy_history_min_points(int(cfg.proxy_lookback)):
                 equity_points.append({"date": d.isoformat(), "equity": equity})
                 continue
 
