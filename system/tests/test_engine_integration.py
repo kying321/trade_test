@@ -2321,6 +2321,10 @@ class EngineIntegrationTests(unittest.TestCase):
     def test_run_review_skips_strategy_lab_candidate_when_merge_gate_fails(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["strategy_lab_merge_min_validation_annual_return"] = 0.0
+        if isinstance(eng.settings.validation, dict):
+            eng.settings.validation.update(eng.settings.raw["validation"])
         manifest_dir = tmp_root / "output" / "artifacts" / "manifests"
         manifest_dir.mkdir(parents=True, exist_ok=True)
         summary_dir = tmp_root / "output" / "research" / "strategy_lab_local"

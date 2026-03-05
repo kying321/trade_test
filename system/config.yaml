@@ -99,7 +99,7 @@ validation:
   strategy_lab_merge_step: 0.18
   strategy_lab_merge_require_accepted: false
   strategy_lab_merge_require_validation_metrics: true
-  strategy_lab_merge_min_validation_annual_return: -0.08
+  strategy_lab_merge_min_validation_annual_return: 0.00
   strategy_lab_merge_min_validation_trades: 2
   strategy_lab_merge_min_validation_positive_window_ratio: 0.90
   strategy_lab_merge_min_robustness: 0.70

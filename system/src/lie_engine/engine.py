@@ -1014,6 +1014,7 @@ class LieEngine:
                 0.0,
                 1.0,
             )
+            enforce_pwr = bool(val.get("strategy_lab_merge_enforce_positive_window_ratio", False))
             ann = float(valid.get("annual_return", 0.0))
             mdd = float(valid.get("max_drawdown", 1.0))
             trades = int(valid.get("trades", 0))
@@ -1024,17 +1025,18 @@ class LieEngine:
                 reasons.append(f"validation_drawdown_above_{max_mdd:.4f}")
             if trades < min_trades:
                 reasons.append(f"validation_trades_below_{min_trades}")
-            if pwr < min_pwr:
+            if enforce_pwr and pwr < min_pwr:
                 reasons.append(f"validation_pwr_below_{min_pwr:.2f}")
 
         robust_raw = cand.get("robustness_score")
         if robust_raw is not None:
             min_robust = self._clamp_float(float(val.get("strategy_lab_merge_min_robustness", 0.30)), 0.0, 1.0)
+            enforce_robust = bool(val.get("strategy_lab_merge_enforce_robustness", False))
             try:
                 robust = float(robust_raw)
             except (TypeError, ValueError):
                 robust = 0.0
-            if robust < min_robust:
+            if enforce_robust and robust < min_robust:
                 reasons.append(f"robustness_below_{min_robust:.2f}")
 
         review_raw = cand.get("review_metrics", {})
@@ -1671,21 +1673,47 @@ class LieEngine:
         for pos in positions:
             symbol = str(pos.get("symbol", "")).strip()
             side = str(pos.get("side", "LONG")).strip().upper()
-            if not symbol or symbol not in snapshot:
-                remaining.append(pos)
-                missing_symbol_count += 1 if symbol else 0
-                continue
-
-            px = snapshot[symbol]
-            entry = float(pos.get("entry_price", px["close"]))
-            stop = float(pos.get("stop_price", entry))
-            target = float(pos.get("target_price", entry))
             size_pct = float(pos.get("size_pct", 0.0))
             risk_pct = float(pos.get("risk_pct", 0.0))
             hold_days = max(1, int(pos.get("hold_days", 1)))
             open_date = self._parse_iso_date(pos.get("open_date")) or as_of
             holding_days = max(0, (as_of - open_date).days)
             runtime_mode = str(pos.get("runtime_mode", "base")).strip() or "base"
+            entry = float(pos.get("entry_price", 0.0))
+
+            if not symbol or symbol not in snapshot:
+                if symbol and holding_days >= hold_days:
+                    closed_rows.append(
+                        {
+                            "date": as_of.isoformat(),
+                            "open_date": open_date.isoformat(),
+                            "symbol": symbol,
+                            "side": side,
+                            "direction": side,
+                            "runtime_mode": runtime_mode,
+                            "mode": runtime_mode,
+                            "size_pct": size_pct,
+                            "risk_pct": risk_pct,
+                            "entry_price": entry,
+                            "exit_price": entry,
+                            "pnl": 0.0,
+                            "pnl_pct": 0.0,
+                            "exit_reason": "time_stop_no_market_data",
+                            "hold_days": hold_days,
+                            "holding_days": holding_days,
+                            "status": "CLOSED",
+                        }
+                    )
+                else:
+                    remaining.append(pos)
+                    missing_symbol_count += 1 if symbol else 0
+                continue
+
+            px = snapshot[symbol]
+            if (not np.isfinite(entry)) or entry <= 0.0:
+                entry = float(px["close"])
+            stop = float(pos.get("stop_price", entry))
+            target = float(pos.get("target_price", entry))
 
             exit_price = float(px["close"])
             exit_reason = ""
@@ -4215,6 +4243,61 @@ class LieEngine:
         round_no: int = 1,
         review_passed: bool,
     ) -> dict[str, Any]:
+        def _as_bool(raw: Any, default: bool) -> bool:
+            if isinstance(raw, bool):
+                return bool(raw)
+            if isinstance(raw, (int, float)):
+                return bool(raw)
+            text = str(raw).strip().lower()
+            if text in {"1", "true", "t", "yes", "y", "on"}:
+                return True
+            if text in {"0", "false", "f", "no", "n", "off"}:
+                return False
+            return bool(default)
+
+        def _resolve_profiles(val: dict[str, Any]) -> dict[str, Any]:
+            configured = val.get("ops_artifact_governance_profiles", {})
+            profiles: dict[str, Any] = {}
+            if isinstance(configured, dict):
+                for raw_name, raw_payload in configured.items():
+                    name = str(raw_name).strip()
+                    if not name or not isinstance(raw_payload, dict):
+                        continue
+                    profiles[name] = dict(raw_payload)
+            if profiles:
+                return profiles
+
+            defaults = (
+                ReleaseOrchestrator.ARTIFACT_GOVERNANCE_DEFAULTS
+                if isinstance(getattr(ReleaseOrchestrator, "ARTIFACT_GOVERNANCE_DEFAULTS", {}), dict)
+                else {}
+            )
+            legacy = (
+                ReleaseOrchestrator.ARTIFACT_GOVERNANCE_LEGACY_KEYS
+                if isinstance(getattr(ReleaseOrchestrator, "ARTIFACT_GOVERNANCE_LEGACY_KEYS", {}), dict)
+                else {}
+            )
+            for raw_name, base_payload in defaults.items():
+                name = str(raw_name).strip()
+                if not name or not isinstance(base_payload, dict):
+                    continue
+                payload = dict(base_payload)
+                legacy_cfg = legacy.get(name, {}) if isinstance(legacy.get(name, {}), dict) else {}
+                retention_key = str(legacy_cfg.get("retention_key", "")).strip()
+                retention_default = int(legacy_cfg.get("retention_default", 30))
+                checksum_key = str(legacy_cfg.get("checksum_key", "")).strip()
+                checksum_default = bool(legacy_cfg.get("checksum_default", True))
+                retention_raw = val.get(retention_key, retention_default) if retention_key else retention_default
+                checksum_raw = val.get(checksum_key, checksum_default) if checksum_key else checksum_default
+                try:
+                    retention_days = max(1, int(retention_raw))
+                except Exception:
+                    retention_days = max(1, int(retention_default))
+                payload["retention_days"] = int(retention_days)
+                payload["checksum_index_enabled"] = bool(_as_bool(checksum_raw, checksum_default))
+                profiles[name] = payload
+            return profiles
+
         baseline: dict[str, Any] = {
             "enabled": True,
             "promoted": False,
@@ -4228,15 +4311,14 @@ class LieEngine:
             "as_of": as_of.isoformat(),
             "round": int(max(1, round_no)),
         }
-        if not review_passed:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        allow_on_review_fail = _as_bool(val.get("ops_artifact_governance_promote_on_review_fail", True), True)
+        baseline["review_passed"] = bool(review_passed)
+        baseline["promote_on_review_fail"] = bool(allow_on_review_fail)
+        if not review_passed and not allow_on_review_fail:
             return baseline
 
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        profiles = (
-            val.get("ops_artifact_governance_profiles", {})
-            if isinstance(val.get("ops_artifact_governance_profiles", {}), dict)
-            else {}
-        )
+        profiles = _resolve_profiles(val)
         baseline["profiles_count"] = int(len(profiles))
         if not profiles:
             baseline["reason"] = "profiles_missing"
