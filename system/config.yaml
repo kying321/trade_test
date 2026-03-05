@@ -82,7 +82,7 @@ validation:
   binance_live_takeover_on_micro_capture: true
   binance_live_takeover_on_eod: true
   binance_live_takeover_activate_config: true
-  binance_live_takeover_allow_live_order: false
+  binance_live_takeover_allow_live_order: true
   binance_live_takeover_allow_daemon_env_fallback: true
   binance_live_takeover_market: "spot"  # futures_usdm | spot
   binance_live_takeover_rate_limit_per_minute: 10
