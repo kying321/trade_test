@@ -4,3 +4,6 @@ PyYAML>=6.0
 akshare>=1.18.0
 yfinance>=0.2.66
 tqdm>=4.66
+
+[dev]
+pytest>=9.0
