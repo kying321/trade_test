@@ -141,56 +141,65 @@ read_key_from_openclaw_json() {
   [[ -f "$json_file" ]] || return 1
   jq -r '
     [
-      .skills.entries.openai.apiKey // empty,
-      .skills.entries.openrouter.apiKey // empty,
-      .skills.entries["google-antigravity"].apiKey // empty,
-      .skills.entries["google-gemini"].apiKey // empty
+      {source:"OPENCLAW_JSON:skills.entries.openai.apiKey",value:(.skills.entries.openai.apiKey // empty)},
+      {source:"OPENCLAW_JSON:skills.entries.openrouter.apiKey",value:(.skills.entries.openrouter.apiKey // empty)},
+      {source:"OPENCLAW_JSON:skills.entries.google-antigravity.apiKey",value:(.skills.entries["google-antigravity"].apiKey // empty)},
+      {source:"OPENCLAW_JSON:skills.entries.google-gemini.apiKey",value:(.skills.entries["google-gemini"].apiKey // empty)}
     ]
-    | map(select(type == "string" and length > 0))
-    | .[0] // empty
+    | .[]
+    | select(.value | type == "string" and length > 0)
+    | [.source, .value] | @tsv
   ' "$json_file" 2>/dev/null || true
 }
 
-api_key=""
-api_key_source="$api_key_env"
+declare -a api_keys=()
+declare -a api_key_sources=()
+
+append_api_key_candidate() {
+  local key="$1"
+  local source="$2"
+  local i
+  [[ -n "$key" ]] || return 0
+  for i in "${!api_keys[@]}"; do
+    if [[ "${api_keys[$i]}" == "$key" ]]; then
+      return 0
+    fi
+  done
+  api_keys+=("$key")
+  api_key_sources+=("$source")
+}
 
 # Priority 1: process env vars.
-api_key="${!api_key_env:-}"
-if [[ -z "$api_key" && "$api_key_env" == "NEWAPI_API_KEY" ]]; then
-  api_key="${X666_API_KEY:-}"
-  if [[ -n "$api_key" ]]; then
-    api_key_source="X666_API_KEY"
-  fi
+append_api_key_candidate "${!api_key_env:-}" "$api_key_env"
+if [[ "$api_key_env" == "NEWAPI_API_KEY" ]]; then
+  append_api_key_candidate "${X666_API_KEY:-}" "X666_API_KEY"
 fi
 
 # Priority 2: ~/.openclaw/.env fallback.
-if [[ -z "$api_key" ]]; then
-  openclaw_env="${HOME}/.openclaw/.env"
-  api_key="$(read_key_from_env_file "$openclaw_env" "$api_key_env" || true)"
-  if [[ -z "$api_key" && "$api_key_env" == "NEWAPI_API_KEY" ]]; then
-    api_key="$(read_key_from_env_file "$openclaw_env" "X666_API_KEY" || true)"
-    if [[ -n "$api_key" ]]; then
-      api_key_source="OPENCLAW_ENV:X666_API_KEY"
-    fi
-  elif [[ -n "$api_key" ]]; then
-    api_key_source="OPENCLAW_ENV:${api_key_env}"
-  fi
+openclaw_env="${HOME}/.openclaw/.env"
+append_api_key_candidate "$(read_key_from_env_file "$openclaw_env" "$api_key_env" || true)" "OPENCLAW_ENV:${api_key_env}"
+if [[ "$api_key_env" == "NEWAPI_API_KEY" ]]; then
+  append_api_key_candidate "$(read_key_from_env_file "$openclaw_env" "X666_API_KEY" || true)" "OPENCLAW_ENV:X666_API_KEY"
 fi
 
 # Priority 3: ~/.openclaw/openclaw.json skill entries.
-if [[ -z "$api_key" ]]; then
+if (( ${#api_keys[@]} == 0 )); then
   openclaw_json="${HOME}/.openclaw/openclaw.json"
-  api_key="$(read_key_from_openclaw_json "$openclaw_json" || true)"
-  if [[ -n "$api_key" ]]; then
-    api_key_source="OPENCLAW_JSON:skills.entries"
-  fi
+  while IFS=$'\t' read -r key_source key_value; do
+    append_api_key_candidate "$key_value" "$key_source"
+  done < <(read_key_from_openclaw_json "$openclaw_json")
 fi
 
-if [[ -z "$api_key" ]]; then
+if (( ${#api_keys[@]} == 0 )); then
   echo "ERROR: missing API key; set ${api_key_env} (or X666_API_KEY), or configure ~/.openclaw/.env / ~/.openclaw/openclaw.json." >&2
   exit 2
 fi
-api_key_env="$api_key_source"
+api_key="${api_keys[0]}"
+api_key_env="${api_key_sources[0]}"
+api_key_sources_csv="$(
+  IFS=','
+  echo "${api_key_sources[*]}"
+)"
 
 normalize_model_name() {
   local raw="$1"
@@ -278,6 +287,7 @@ run_probe() {
   local request_ts payload response curl_rc http_status body head_snippet prompt_tokens
   local ok err_kind err_message transient_failure retried
   local attempt max_attempts attempt_count sleep_seconds
+  local api_key_idx api_key_for_attempt api_key_source_for_attempt
 
   payload="$(jq -nc \
     --arg model "$effective_model" \
@@ -290,6 +300,9 @@ run_probe() {
   retried=false
   while (( attempt <= max_attempts )); do
     attempt_count=$attempt
+    api_key_idx=$(( (attempt - 1) % ${#api_keys[@]} ))
+    api_key_for_attempt="${api_keys[$api_key_idx]}"
+    api_key_source_for_attempt="${api_key_sources[$api_key_idx]}"
     bucket_acquire
     request_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -300,7 +313,7 @@ run_probe() {
         --max-time 5 \
         -A "fenlie-model-probe/1.0" \
         "${endpoint}" \
-        -H "Authorization: Bearer ${api_key}" \
+        -H "Authorization: Bearer ${api_key_for_attempt}" \
         -H 'Content-Type: application/json' \
         --data-raw "${payload}" \
         -w '\nHTTPSTATUS:%{http_code}\n'
@@ -354,7 +367,9 @@ run_probe() {
     --arg timestamp_utc "$request_ts" \
     --arg requested_model "$requested_model" \
     --arg effective_model "$effective_model" \
+    --arg api_key_source "$api_key_source_for_attempt" \
     --argjson sample_index "$sample_index" \
+    --argjson api_key_slot "$((api_key_idx + 1))" \
     --argjson attempts "$attempt_count" \
     --argjson max_attempts "$max_attempts" \
     --argjson curl_rc "$curl_rc" \
@@ -369,6 +384,8 @@ run_probe() {
     '{
       timestamp_utc:$timestamp_utc,
       sample_index:$sample_index,
+      api_key_source:(if $api_key_source=="" then null else $api_key_source end),
+      api_key_slot:$api_key_slot,
       requested_model:$requested_model,
       effective_model:$effective_model,
       curl_rc:$curl_rc,
@@ -407,6 +424,7 @@ jq -s \
   --arg base_url "${base_url%/}" \
   --arg endpoint "$endpoint" \
   --arg api_key_env "$api_key_env" \
+  --arg api_key_sources_csv "$api_key_sources_csv" \
   --arg required_models_csv "$required_models_effective_csv" \
   --arg optional_models_csv "$optional_models_effective_csv" \
   --argjson timeout_ms 5000 \
@@ -482,6 +500,8 @@ jq -s \
       base_url:$base_url,
       endpoint:$endpoint,
       api_key_env:$api_key_env,
+      api_key_sources:(split_csv($api_key_sources_csv)),
+      api_key_candidate_count:(split_csv($api_key_sources_csv) | length),
       policy:{
         timeout_ms:$timeout_ms,
         retry_transient:$retry_transient,
@@ -528,6 +548,7 @@ jq -s \
   echo "- base_url: \`${base_url%/}\`"
   echo "- endpoint: \`${endpoint}\`"
   echo "- api_key_env: \`${api_key_env}\`"
+  echo "- api_key_sources: \`${api_key_sources_csv}\`"
   echo "- timeout_ms: \`5000\`"
   echo "- retry_transient: \`${retry_transient}\`"
   echo "- retry_backoff_ms: \`${retry_backoff_ms}\`"
@@ -551,10 +572,17 @@ echo "$artifact_json"
 
 probe_status="$(jq -r '.gate.status // "fail"' "$artifact_json")"
 if [[ "$probe_status" == "fail" || "$probe_status" == "empty" ]]; then
+  isolation_config="${repo_root}/system/config.yaml"
   echo "CRITICAL: Live Models failed connectivity check. Triggering ISOLATION." >&2
-  if [[ -f "${repo_root}/config.yaml" ]]; then
-      sed -i.bak 's/binance_live_takeover_enabled: true/binance_live_takeover_enabled: false/g' "${repo_root}/config.yaml"
-      echo "Live Takeover isolated via config.yaml modification." >&2
+  if [[ -f "$isolation_config" ]]; then
+      if grep -Eq '^[[:space:]]*binance_live_takeover_enabled:[[:space:]]*true([[:space:]]*#.*)?$' "$isolation_config"; then
+          sed -i.bak 's/^\([[:space:]]*binance_live_takeover_enabled:[[:space:]]*\)true/\1false/' "$isolation_config"
+          echo "Live Takeover isolated via system/config.yaml modification." >&2
+      else
+          echo "Live Takeover already isolated in system/config.yaml." >&2
+      fi
+  else
+      echo "WARN: system/config.yaml missing; isolation skip." >&2
   fi
   exit 1
 fi
