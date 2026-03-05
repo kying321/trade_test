@@ -15,6 +15,7 @@ Actions:
   live-takeover-probe     Run remote Binance takeover probe (config+evomap+telemetry, no order).
   live-takeover-canary    Run remote Binance takeover canary (includes minimal live order).
   live-takeover-ready-check  Check whether remote account is ready for canary order (balance + creds).
+  live-takeover-autopilot  Ready-check first, place canary only when ready; otherwise skip gracefully.
   cut-local               Disable local OpenClaw launchd services.
   probe-cloud             Probe cloud host/project availability.
   compare                 Compare local/remote git heads.
@@ -211,14 +212,39 @@ ssh_opts=(
 ssh_exec() {
   local remote_cmd="$1"
   local -a opts
+  local rc
   opts=("${ssh_opts[@]}")
   if [[ -z "${cloud_pass}" ]]; then
     opts+=(-o BatchMode=yes)
   fi
   if [[ -n "${cloud_pass}" ]] && command -v sshpass >/dev/null 2>&1; then
+    set +e
     SSHPASS="${cloud_pass}" sshpass -e ssh "${opts[@]}" "${cloud_user}@${cloud_host}" "${remote_cmd}"
+    rc=$?
+    set -e
+    if (( rc == 255 )); then
+      sleep 1
+      set +e
+      SSHPASS="${cloud_pass}" sshpass -e ssh "${opts[@]}" "${cloud_user}@${cloud_host}" "${remote_cmd}"
+      rc=$?
+      set -e
+      return ${rc}
+    fi
+    return ${rc}
   else
+    set +e
     ssh "${opts[@]}" "${cloud_user}@${cloud_host}" "${remote_cmd}"
+    rc=$?
+    set -e
+    if (( rc == 255 )); then
+      sleep 1
+      set +e
+      ssh "${opts[@]}" "${cloud_user}@${cloud_host}" "${remote_cmd}"
+      rc=$?
+      set -e
+      return ${rc}
+    fi
+    return ${rc}
   fi
 }
 
@@ -251,6 +277,7 @@ validate-remote-config
 live-takeover-probe
 live-takeover-canary
 live-takeover-ready-check
+live-takeover-autopilot
 sample-whitelist
 sample-whitelist-gate
 assert-whitelist-gate
@@ -532,6 +559,50 @@ PY
   rm -f "${tmp_json}" >/dev/null 2>&1 || true
 }
 
+action_live_takeover_autopilot() {
+  local ready_json rc_ready
+  set +e
+  ready_json="$(action_live_takeover_ready_check 2>/dev/null)"
+  rc_ready=$?
+  set -e
+
+  if (( rc_ready == 0 )); then
+    echo "${ready_json}"
+    action_live_takeover_canary
+    return $?
+  fi
+  if (( rc_ready == 3 )); then
+    python3 - "${ready_json}" <<'PY'
+import json
+import sys
+
+text = str(sys.argv[1] if len(sys.argv) > 1 else "").strip()
+try:
+    payload = json.loads(text) if text else {}
+except Exception:
+    payload = {}
+out = {
+    "executed": False,
+    "ready": bool(payload.get("ready", False)),
+    "reason": str(payload.get("reason", "not_ready")),
+    "market": str(payload.get("market", "unknown")),
+    "quote_available": float(payload.get("quote_available", 0.0) or 0.0),
+    "required_quote": float(payload.get("required_quote", 0.0) or 0.0),
+    "action": "live-takeover-autopilot",
+    "status": "skipped_not_ready",
+    "probe_returncode": int(payload.get("probe_returncode", 3) or 3),
+}
+print(json.dumps(out, ensure_ascii=False, indent=2))
+PY
+    return 0
+  fi
+  echo "FUSE: live-takeover-ready-check failed unexpectedly (rc=${rc_ready})." >&2
+  if [[ -n "${ready_json}" ]]; then
+    echo "${ready_json}" >&2
+  fi
+  return 2
+}
+
 append_sample_record() {
   local action="$1"
   local rc="$2"
@@ -570,6 +641,7 @@ run_action_by_name() {
     live-takeover-probe) action_live_takeover_probe ;;
     live-takeover-canary) action_live_takeover_canary ;;
     live-takeover-ready-check) action_live_takeover_ready_check ;;
+    live-takeover-autopilot) action_live_takeover_autopilot ;;
     *)
       echo "ERROR: unknown action '${action}'" >&2
       usage
