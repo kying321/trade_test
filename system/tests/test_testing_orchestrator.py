@@ -87,6 +87,42 @@ class TestingOrchestratorTests(unittest.TestCase):
         self.assertIn("__timeout__", list(out.get("failed_tests", [])))
         self.assertIn("error=test_timeout", str(out.get("summary_line", "")))
 
+    def test_test_all_timeout_override_is_passed_to_subprocess(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+
+        class _Proc:
+            returncode = 0
+            stdout = "Ran 1 test in 0.001s\n\nOK\n"
+            stderr = ""
+
+        with patch("lie_engine.orchestration.testing.subprocess.run", return_value=_Proc()) as mock_run:
+            orch = TestingOrchestrator(root=td, output_dir=td, timeout_seconds=600)
+            out = orch.test_all(timeout_seconds=120)
+
+        self.assertEqual(int(out.get("returncode", 1)), 0)
+        self.assertEqual(int(out.get("timeout_seconds", 0)), 120)
+        called_timeout = mock_run.call_args.kwargs.get("timeout")
+        self.assertEqual(int(called_timeout), 120)
+
+    def test_test_all_timeout_override_is_clamped_to_min_30(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+
+        class _Proc:
+            returncode = 0
+            stdout = "Ran 1 test in 0.001s\n\nOK\n"
+            stderr = ""
+
+        with patch("lie_engine.orchestration.testing.subprocess.run", return_value=_Proc()) as mock_run:
+            orch = TestingOrchestrator(root=td, output_dir=td, timeout_seconds=600)
+            out = orch.test_all(timeout_seconds=5)
+
+        self.assertEqual(int(out.get("returncode", 1)), 0)
+        self.assertEqual(int(out.get("timeout_seconds", 0)), 30)
+        called_timeout = mock_run.call_args.kwargs.get("timeout")
+        self.assertEqual(int(called_timeout), 30)
+
 
 if __name__ == "__main__":
     unittest.main()
