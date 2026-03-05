@@ -96,6 +96,24 @@ class TestingOrchestrator:
             return None
 
     @staticmethod
+    def _estimate_progress_count(stdout: str, stderr: str) -> int:
+        text = f"{stderr}\n{stdout}"
+        count = 0
+        for line in text.splitlines():
+            txt = line.strip()
+            if re.search(r"\.\.\.\s+(ok|FAIL|ERROR|skipped.*)$", txt):
+                count += 1
+        return int(count)
+
+    @staticmethod
+    def _as_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    @staticmethod
     def _excerpt(text: str, max_lines: int = 24) -> str:
         lines = text.splitlines()
         if len(lines) <= max_lines:
@@ -147,20 +165,24 @@ class TestingOrchestrator:
                 timeout=effective_timeout_seconds,
             )
             returncode = int(proc.returncode)
-            stdout = str(proc.stdout)
-            stderr = str(proc.stderr)
+            stdout = self._as_text(proc.stdout)
+            stderr = self._as_text(proc.stderr)
         except subprocess.TimeoutExpired as exc:
             timed_out = True
             returncode = 124
-            stdout = str(exc.stdout or "")
-            stderr = str(exc.stderr or "")
+            stdout = self._as_text(exc.stdout)
+            stderr = self._as_text(exc.stderr)
             stderr = (stderr + "\n" if stderr else "") + f"error=test_timeout; timeout_seconds={effective_timeout_seconds}"
         failed_tests = self._extract_failed_tests(stdout, stderr)
         if timed_out:
             failed_tests.append("__timeout__")
         ran_count = self._extract_ran_count(stdout, stderr)
+        progress_count = self._estimate_progress_count(stdout, stderr)
         if ran_count is None:
-            ran_count = tests_selected if fast else 0
+            if timed_out and progress_count > 0:
+                ran_count = progress_count
+            else:
+                ran_count = tests_selected if fast else 0
         summary_line = (
             f"error={'none' if returncode == 0 else ('test_timeout' if timed_out else 'test_failure')};"
             + f" mode={'fast' if fast else 'full'};"
