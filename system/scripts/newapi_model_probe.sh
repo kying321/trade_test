@@ -114,6 +114,47 @@ if [[ -z "$repo_root" ]]; then
   exit 2
 fi
 
+mutex_lock_path="${repo_root}/system/output/state/run-halfhour-pulse.lock"
+mutex_timeout_seconds=5
+mutex_lock_acquired=0
+
+release_run_halfhour_mutex() {
+  local lock_pid=""
+  if (( mutex_lock_acquired != 1 )); then
+    return 0
+  fi
+  if [[ -f "$mutex_lock_path" ]]; then
+    lock_pid="$(cat "$mutex_lock_path" 2>/dev/null || true)"
+    if [[ "$lock_pid" == "$$" ]]; then
+      rm -f "$mutex_lock_path" 2>/dev/null || true
+    fi
+  fi
+  mutex_lock_acquired=0
+}
+
+acquire_run_halfhour_mutex() {
+  local deadline now lock_pid
+  mkdir -p "$(dirname "$mutex_lock_path")"
+  deadline=$(( $(date +%s) + mutex_timeout_seconds ))
+  while true; do
+    if ( set -o noclobber; echo "$$" > "$mutex_lock_path" ) 2>/dev/null; then
+      mutex_lock_acquired=1
+      return 0
+    fi
+    lock_pid="$(cat "$mutex_lock_path" 2>/dev/null || true)"
+    if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -f "$mutex_lock_path" 2>/dev/null || true
+      continue
+    fi
+    now="$(date +%s)"
+    if (( now >= deadline )); then
+      echo "ERROR: run-halfhour-pulse mutex timeout: ${mutex_timeout_seconds}s" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
 read_key_from_env_file() {
   local env_file="$1"
   local var_name="$2"
@@ -245,7 +286,11 @@ bucket_acquire() {
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "${repo_root}/${output_dir}"
 tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
+cleanup_probe_runtime() {
+  rm -rf "$tmpdir" 2>/dev/null || true
+  release_run_halfhour_mutex
+}
+trap cleanup_probe_runtime EXIT
 results_jsonl="${tmpdir}/records.jsonl"
 
 endpoint="${base_url%/}/v1/chat/completions"
@@ -574,6 +619,10 @@ probe_status="$(jq -r '.gate.status // "fail"' "$artifact_json")"
 if [[ "$probe_status" == "fail" || "$probe_status" == "empty" ]]; then
   isolation_config="${repo_root}/system/config.yaml"
   echo "CRITICAL: Live Models failed connectivity check. Triggering ISOLATION." >&2
+  if ! acquire_run_halfhour_mutex; then
+      echo "ERROR: failed to acquire run-halfhour-pulse lock; isolation aborted." >&2
+      exit 1
+  fi
   if [[ -f "$isolation_config" ]]; then
       if grep -Eq '^[[:space:]]*binance_live_takeover_enabled:[[:space:]]*true([[:space:]]*#.*)?$' "$isolation_config"; then
           sed -i.bak 's/^\([[:space:]]*binance_live_takeover_enabled:[[:space:]]*\)true/\1false/' "$isolation_config"
@@ -584,5 +633,6 @@ if [[ "$probe_status" == "fail" || "$probe_status" == "empty" ]]; then
   else
       echo "WARN: system/config.yaml missing; isolation skip." >&2
   fi
+  release_run_halfhour_mutex
   exit 1
 fi
