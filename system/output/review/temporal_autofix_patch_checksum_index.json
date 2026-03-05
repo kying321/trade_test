@@ -1,9 +1,29 @@
 {
-  "generated_for_date": "2026-03-02",
+  "generated_for_date": "2026-03-05",
   "retention_days": 30,
   "rotated_out_dates": [],
-  "entry_count": 5,
+  "entry_count": 7,
   "entries": [
+    {
+      "date": "2026-03-05",
+      "json": "/Users/jokenrobot/Downloads/fenlie/system/output/review/2026-03-05_temporal_autofix_patch.json",
+      "json_sha256": "0c339192df6ab8d542a57c80f1b409721937f8b1c27b2a53789e65cdf1b4144a",
+      "json_bytes": 3122,
+      "md": "/Users/jokenrobot/Downloads/fenlie/system/output/review/2026-03-05_temporal_autofix_patch.md",
+      "md_sha256": "950dc0a6bf21706acde42e81e9ba637cb98a650a1a93bd8e89b51b86984e8483",
+      "md_bytes": 1850,
+      "pair_complete": true
+    },
+    {
+      "date": "2026-03-04",
+      "json": "/Users/jokenrobot/Downloads/fenlie/system/output/review/2026-03-04_temporal_autofix_patch.json",
+      "json_sha256": "16b592a93f56a602edf3a3a938389156dae786e1573ff5fe2a3c67b939634c93",
+      "json_bytes": 3122,
+      "md": "/Users/jokenrobot/Downloads/fenlie/system/output/review/2026-03-04_temporal_autofix_patch.md",
+      "md_sha256": "0f1953396e6adc48ecaa9dc06c75901cd4faab6bdd6f9bf39d7cab344fcd771d",
+      "md_bytes": 1850,
+      "pair_complete": true
+    },
     {
       "date": "2026-03-02",
       "json": "/Users/jokenrobot/Downloads/fenlie/system/output/review/2026-03-02_temporal_autofix_patch.json",

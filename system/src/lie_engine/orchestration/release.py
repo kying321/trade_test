@@ -5503,6 +5503,12 @@ class ReleaseOrchestrator:
             0.35,
         )
         micro_capture_cross_source_fail_ratio_max = min(1.0, max(0.0, micro_capture_cross_source_fail_ratio_max))
+        # Only enforce micro-capture time-sync quality when time-sync monitoring/probing is enabled.
+        micro_capture_time_sync_enforced = bool(
+            system_time_sync_monitor_enabled
+            or bool(val.get("system_time_sync_probe_enabled", False))
+            or bool(val.get("micro_time_sync_hard_fuse_enabled", False))
+        )
 
         rows = self._load_mode_feedback_series(as_of=as_of, window_days=window_days)
         samples = len(rows)
@@ -5557,7 +5563,10 @@ class ReleaseOrchestrator:
             and (
                 self._safe_float(x.get("micro_capture_pass_ratio", 0.0), 0.0) < micro_capture_pass_ratio_min
                 or self._safe_float(x.get("micro_capture_schema_ok_ratio", 0.0), 0.0) < micro_capture_schema_ok_ratio_min
-                or self._safe_float(x.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0) < micro_capture_time_sync_ok_ratio_min
+                or (
+                    micro_capture_time_sync_enforced
+                    and self._safe_float(x.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0) < micro_capture_time_sync_ok_ratio_min
+                )
                 or self._safe_float(x.get("micro_capture_cross_source_fail_ratio", 0.0), 0.0)
                 > micro_capture_cross_source_fail_ratio_max
             )
@@ -5716,6 +5725,7 @@ class ReleaseOrchestrator:
                 "ops_micro_capture_pass_ratio_min": micro_capture_pass_ratio_min,
                 "ops_micro_capture_schema_ok_ratio_min": micro_capture_schema_ok_ratio_min,
                 "ops_micro_capture_time_sync_ok_ratio_min": micro_capture_time_sync_ok_ratio_min,
+                "ops_micro_capture_time_sync_enforced": micro_capture_time_sync_enforced,
                 "ops_micro_capture_cross_source_fail_ratio_max": micro_capture_cross_source_fail_ratio_max,
                 "ops_system_time_sync_monitor_enabled": system_time_sync_monitor_enabled,
                 "ops_system_time_sync_fail_days_max": system_time_sync_fail_days_max,

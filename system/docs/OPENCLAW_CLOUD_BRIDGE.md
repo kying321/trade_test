@@ -46,6 +46,10 @@ scripts/openclaw_cloud_bridge.sh sync-apply
 scripts/openclaw_cloud_bridge.sh remote-clean-junk
 scripts/openclaw_cloud_bridge.sh validate-remote-config
 scripts/openclaw_cloud_bridge.sh tunnel-down
+scripts/openclaw_cloud_bridge.sh live-takeover-probe
+scripts/openclaw_cloud_bridge.sh live-takeover-canary
+scripts/openclaw_cloud_bridge.sh live-takeover-ready-check
+scripts/openclaw_cloud_bridge.sh live-takeover-autopilot
 scripts/openclaw_cloud_bridge.sh sample-whitelist
 scripts/openclaw_cloud_bridge.sh sample-whitelist-gate
 scripts/openclaw_cloud_bridge.sh assert-whitelist-gate
@@ -56,6 +60,46 @@ scripts/openclaw_cloud_bridge.sh ensure-whitelist-gate
 - `127.0.0.1:19999` -> cloud `127.0.0.1:9999` (adaptor)
 - `127.0.0.1:18000` -> cloud `127.0.0.1:8000` (api)
 - `127.0.0.1:15173` -> cloud `127.0.0.1:5173` (dashboard)
+
+## Live takeover (Binance + evoMap)
+- 远端执行（不下单，仅激活配置/策略/成交回流探测）：
+```bash
+cd /Users/jokenrobot/Downloads/fenlie/system
+LIVE_TAKEOVER_CANARY_USDT=5 \
+LIVE_TAKEOVER_MAX_DRAWDOWN=0.05 \
+LIVE_TAKEOVER_RATE_LIMIT_PER_MINUTE=10 \
+LIVE_TAKEOVER_MARKET=spot \
+LIVE_TAKEOVER_FORWARD_LOCAL_CREDS=true \
+scripts/openclaw_cloud_bridge.sh live-takeover-probe
+```
+- 远端执行（最小资金 canary 实盘，受幂等键保护）：
+```bash
+cd /Users/jokenrobot/Downloads/fenlie/system
+LIVE_TAKEOVER_CANARY_USDT=5 \
+LIVE_TAKEOVER_MAX_DRAWDOWN=0.05 \
+LIVE_TAKEOVER_RATE_LIMIT_PER_MINUTE=10 \
+LIVE_TAKEOVER_MARKET=spot \
+LIVE_TAKEOVER_FORWARD_LOCAL_CREDS=true \
+scripts/openclaw_cloud_bridge.sh live-takeover-canary
+```
+- canary 前置就绪检查（余额/凭据）：
+```bash
+cd /Users/jokenrobot/Downloads/fenlie/system
+LIVE_TAKEOVER_MARKET=spot \
+scripts/openclaw_cloud_bridge.sh live-takeover-ready-check
+```
+- 自动化接管（先检查，满足条件再 canary 下单；不满足则跳过并返回结构化原因）：
+```bash
+cd /Users/jokenrobot/Downloads/fenlie/system
+LIVE_TAKEOVER_MARKET=spot \
+scripts/openclaw_cloud_bridge.sh live-takeover-autopilot
+```
+- 产物：
+  - `output/review/*_binance_live_takeover.json`
+  - `output/artifacts/evomap/*_strategy.json`
+  - `output/artifacts/broker_live_inbox/YYYY-MM-DD.json`（仅在 Binance signed 凭据完整时生成）
+  - `output/artifacts/binance_live_trades/YYYY-MM-DD.json`
+  - `output/artifacts/binance_live_income/YYYY-MM-DD.json`
 
 ## Sync policy
 - Sync scope: `src/`, `scripts/`, `docs/`, `tests/`, `config.yaml`, `pyproject.toml`
