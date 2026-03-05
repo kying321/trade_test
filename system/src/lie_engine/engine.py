@@ -20,7 +20,7 @@ import yaml
 from lie_engine.backtest import BacktestConfig, run_walk_forward_backtest
 from lie_engine.config import SystemSettings, assert_valid_settings, load_settings
 from lie_engine.data import DataBus, build_provider_stack
-from lie_engine.data.storage import append_sqlite, write_csv, write_json, write_markdown
+from lie_engine.data.storage import append_sqlite, write_csv, write_json, write_markdown, get_sqlite_conn
 from lie_engine.models import BacktestResult, NewsEvent, RegimeLabel, RegimeState, ReviewDelta, TradePlan
 from lie_engine.orchestration import (
     ArchitectureOrchestrator,
@@ -1235,7 +1235,7 @@ class LieEngine:
             return pd.DataFrame(columns=["date", "symbol", "pnl"])
 
         query = f"SELECT * FROM executed_plans ORDER BY rowid DESC LIMIT {int(n)}"
-        with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+        with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
             try:
                 df = pd.read_sql_query(query, conn)
             except Exception:
@@ -1815,7 +1815,7 @@ class LieEngine:
     def _symbol_exposure_snapshot(self) -> tuple[dict[str, float], dict[str, float], float]:
         if not self.ctx.sqlite_path.exists():
             return {}, {}, 0.0
-        with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+        with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
             try:
                 pos = pd.read_sql_query(
                     "SELECT symbol, size_pct, status FROM latest_positions "
@@ -2081,7 +2081,7 @@ class LieEngine:
         cap = max(100, int(cap_ms))
         cutoff = (as_of - timedelta(days=lb)).isoformat()
         try:
-            with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+            with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
                 df = pd.read_sql_query(
                     (
                         "SELECT max_missing_left_ms, max_missing_right_ms "
@@ -2405,7 +2405,7 @@ class LieEngine:
         if self.ctx.sqlite_path.exists():
             cutoff = (as_of - timedelta(days=lb)).isoformat()
             try:
-                with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+                with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
                     hist = pd.read_sql_query(
                         "SELECT * FROM cross_source_audit_daily WHERE as_of >= ? ORDER BY as_of ASC",
                         conn,
@@ -2634,7 +2634,7 @@ class LieEngine:
             }
         cutoff = (as_of - timedelta(days=max(1, int(lookback_days)))).isoformat()
         try:
-            with closing(sqlite3.connect(self.ctx.sqlite_path)) as conn:
+            with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
                 df = pd.read_sql_query(
                     (
                         "SELECT pass, cross_source_fail_ratio, selected_schema_ok_ratio, "

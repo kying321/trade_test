@@ -12,7 +12,7 @@ from typing import Any, Callable, ClassVar
 import yaml
 
 from lie_engine.config import SystemSettings
-from lie_engine.data.storage import write_json, write_markdown
+from lie_engine.data.storage import write_json, write_markdown, get_sqlite_conn
 from lie_engine.models import ReviewDelta
 from lie_engine.orchestration.artifact_governance import apply_dated_artifact_governance
 
@@ -3400,7 +3400,7 @@ class ReleaseOrchestrator:
         has_executed_plans = False
         if db_path.exists():
             try:
-                conn = sqlite3.connect(db_path)
+                conn = get_sqlite_conn(db_path)
                 has_latest_positions = self._sqlite_table_exists(conn, "latest_positions")
                 has_executed_plans = self._sqlite_table_exists(conn, "executed_plans")
             except Exception:
@@ -4523,7 +4523,7 @@ class ReleaseOrchestrator:
             "ORDER BY date ASC"
         )
         try:
-            with closing(sqlite3.connect(db_path)) as conn:
+            with closing(get_sqlite_conn(db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 with closing(conn.cursor()) as cur:
                     cur.execute(sql, (start.isoformat(), as_of.isoformat()))
