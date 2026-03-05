@@ -35,9 +35,26 @@ class EngineIntegrationTests(unittest.TestCase):
         cfg_data["validation"]["review_backtest_lookback_days"] = 540
         cfg_data["validation"]["style_drift_adaptive_enabled"] = False
         cfg_data["validation"]["micro_cross_source_build_missing_provider"] = False
+        cfg_data["validation"]["binance_live_takeover_enabled"] = False
         cfg_path = tmp_root / "config.yaml"
         cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
         return LieEngine(config_path=cfg_path), tmp_root
+
+    def _write_active_baseline(self, tmp_root: Path, payload: dict[str, object]) -> Path:
+        active_baseline = (
+            tmp_root
+            / "output"
+            / "artifacts"
+            / "baselines"
+            / "artifact_governance"
+            / "active_baseline.yaml"
+        )
+        active_baseline.parent.mkdir(parents=True, exist_ok=True)
+        active_baseline.write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        return active_baseline
 
     def test_run_eod_outputs_contract_files(self) -> None:
         eng, tmp_root = self._make_engine()
@@ -82,6 +99,40 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("quality_report_path", cs)
         report_path = Path(str(cs.get("quality_report_path", "")))
         self.assertTrue(report_path.exists())
+
+    def test_run_eod_mode_feedback_includes_theory_and_execution_runtime_params(self) -> None:
+        eng, tmp_root = self._make_engine()
+        live = tmp_root / "output" / "artifacts" / "params_live.yaml"
+        live.parent.mkdir(parents=True, exist_ok=True)
+        live.write_text(
+            yaml.safe_dump(
+                {
+                    "theory_enabled": 1,
+                    "theory_wyckoff_weight": 0.8,
+                    "theory_vpa_weight": 0.9,
+                    "execution_confirm_enabled": 1,
+                    "execution_confirm_lookahead": 3,
+                    "execution_confirm_loss_mult": 0.6,
+                    "execution_anti_martingale_enabled": 1,
+                    "execution_anti_martingale_step": 0.2,
+                },
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        mode_feedback_path = tmp_root / "output" / "daily" / "2026-02-13_mode_feedback.json"
+        payload = json.loads(mode_feedback_path.read_text(encoding="utf-8"))
+        rp = payload.get("runtime_params", {})
+        self.assertTrue(bool(rp.get("theory_enabled", False)))
+        self.assertAlmostEqual(float(rp.get("theory_wyckoff_weight", 0.0)), 0.8, places=6)
+        self.assertAlmostEqual(float(rp.get("theory_vpa_weight", 0.0)), 0.9, places=6)
+        self.assertTrue(bool(rp.get("execution_confirm_enabled", False)))
+        self.assertEqual(int(rp.get("execution_confirm_lookahead", 0)), 3)
+        self.assertAlmostEqual(float(rp.get("execution_confirm_loss_mult", 0.0)), 0.6, places=6)
+        self.assertTrue(bool(rp.get("execution_anti_martingale_enabled", False)))
+        self.assertAlmostEqual(float(rp.get("execution_anti_martingale_step", 0.0)), 0.2, places=6)
 
     def test_run_time_sync_probe_with_mock_sntp(self) -> None:
         eng, tmp_root = self._make_engine()
@@ -296,6 +347,64 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertFalse(src.empty)
         self.assertFalse(sel.empty)
         self.assertFalse(cross.empty)
+
+    def test_run_binance_live_takeover_skips_when_trigger_disabled(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw["validation"]["binance_live_takeover_enabled"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_on_micro_capture"] = False
+
+        out = eng._run_binance_live_takeover(as_of=d, trigger="micro_capture", skip_mutex=True)
+        self.assertTrue(bool(out.get("enabled", False)))
+        self.assertFalse(bool(out.get("executed", True)))
+        self.assertEqual(str(out.get("mode", "")), "trigger_disabled")
+
+    def test_run_binance_live_takeover_builds_skip_mutex_command(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw["validation"]["binance_live_takeover_enabled"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_on_micro_capture"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_allow_daemon_env_fallback"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_allow_live_order"] = False
+        eng.settings.raw["validation"]["binance_live_takeover_activate_config"] = True
+        eng.settings.raw["validation"]["binance_live_takeover_market"] = "spot"
+
+        script_path = tmp_root / "scripts" / "binance_live_takeover.py"
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text("print('ok')\n", encoding="utf-8")
+
+        fake_payload = {
+            "mode": "degraded_read_only",
+            "artifact": str(tmp_root / "output" / "review" / "x.json"),
+            "steps": {
+                "credentials": {"has_api_key": True, "has_api_secret": False},
+                "canary_order": {"executed": False, "reason": "missing_binance_api_secret"},
+                "account_overview": {"market": "spot", "quote_available": 0.0},
+            },
+        }
+
+        class _Proc:
+            returncode = 2
+            stdout = json.dumps(fake_payload, ensure_ascii=False)
+            stderr = ""
+
+        with patch("lie_engine.engine.subprocess.run", return_value=_Proc()) as run_mock:
+            out = eng._run_binance_live_takeover(as_of=d, trigger="micro_capture", skip_mutex=True)
+
+        self.assertTrue(bool(out.get("executed", False)))
+        self.assertFalse(bool(out.get("ok", True)))
+        self.assertEqual(str(out.get("mode", "")), "degraded_read_only")
+        self.assertEqual(str(out.get("artifact", "")), str(tmp_root / "output" / "review" / "x.json"))
+        payload = out.get("payload", {})
+        self.assertIsInstance(payload, dict)
+        self.assertEqual(str((payload or {}).get("account_overview", {}).get("market", "")), "spot")
+        cmd = run_mock.call_args.args[0]
+        self.assertIn("--skip-mutex", cmd)
+        self.assertIn("--activate-config", cmd)
+        self.assertIn("--allow-daemon-env-fallback", cmd)
+        self.assertNotIn("--allow-live-order", cmd)
+        self.assertIn("--market", cmd)
+        self.assertIn("spot", cmd)
 
     def test_market_factor_state_includes_cross_section_style(self) -> None:
         eng, _ = self._make_engine()
@@ -869,6 +978,28 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(by_symbol.get("300750", 0.0)), 5.0, places=6)
         self.assertAlmostEqual(float(total), 5.0, places=6)
 
+    def test_symbol_exposure_snapshot_coerces_string_size_pct(self) -> None:
+        eng, _ = self._make_engine()
+        db_path = eng.ctx.sqlite_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("CREATE TABLE latest_positions (date TEXT, symbol TEXT, size_pct TEXT, status TEXT)")
+            conn.execute(
+                "INSERT INTO latest_positions (date, symbol, size_pct, status) VALUES ('2026-02-14', 'BTCUSDT', '2.5', 'ACTIVE')"
+            )
+            conn.execute(
+                "INSERT INTO latest_positions (date, symbol, size_pct, status) VALUES ('2026-02-14', 'ETHUSDT', 'bad', 'ACTIVE')"
+            )
+            conn.execute(
+                "INSERT INTO latest_positions (date, symbol, size_pct, status) VALUES ('2026-02-14', 'SOLUSDT', '1.2', 'CLOSED')"
+            )
+            conn.commit()
+        by_symbol, _, total = eng._symbol_exposure_snapshot()
+        self.assertAlmostEqual(float(by_symbol.get("BTCUSDT", 0.0)), 2.5, places=6)
+        self.assertAlmostEqual(float(by_symbol.get("ETHUSDT", 0.0)), 0.0, places=6)
+        self.assertNotIn("SOLUSDT", by_symbol)
+        self.assertAlmostEqual(float(total), 2.5, places=6)
+
     def test_run_slot_and_session(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
@@ -887,16 +1018,18 @@ class EngineIntegrationTests(unittest.TestCase):
     def test_run_slot_micro_capture_alias(self) -> None:
         eng, _ = self._make_engine()
         d = date(2026, 2, 13)
-        eng.run_micro_capture = lambda as_of, symbols=None: {  # type: ignore[method-assign]
+        eng.run_micro_capture = lambda as_of, symbols=None, live_takeover_skip_mutex=False: {  # type: ignore[method-assign]
             "as_of": as_of.isoformat(),
             "symbols": list(symbols or []),
             "status": "ok",
             "pass": True,
+            "live_takeover_skip_mutex": bool(live_takeover_skip_mutex),
         }
         out = eng.run_slot(as_of=d, slot="micro-capture")
         self.assertEqual(out["slot"], "micro-capture")
         result = out.get("result", {})
         self.assertEqual(str(result.get("as_of", "")), "2026-02-13")
+        self.assertTrue(bool(result.get("live_takeover_skip_mutex", False)))
 
     def test_run_premarket_includes_source_confidence(self) -> None:
         eng, _ = self._make_engine()
@@ -1057,6 +1190,57 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(out["slot"], "ops")
         self.assertIn("result", out)
 
+    def test_run_slot_review_uses_guarded_scheduler_path(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["scheduler_review_use_legacy"] = False
+
+        called: dict[str, object] = {}
+
+        def _fake_guarded(**kwargs):  # type: ignore[no-untyped-def]
+            called.update(kwargs)
+            return {"ok": True}
+
+        eng.run_review_cycle_guarded = _fake_guarded  # type: ignore[method-assign]
+        eng.run_review_cycle = lambda as_of, max_rounds, ops_window_days=None: {  # type: ignore[method-assign]
+            "legacy_called": True
+        }
+
+        out = eng.run_slot(as_of=d, slot="review", max_review_rounds=3)
+        self.assertEqual(out["slot"], "review")
+        result = out.get("result", {})
+        self.assertTrue(bool(result.get("ok", False)))
+        self.assertEqual(str(result.get("execution_path", "")), "guarded_scheduler")
+        self.assertEqual(called.get("as_of"), d)
+        self.assertEqual(int(called.get("max_rounds", 0)), 3)
+        self.assertTrue(bool(called.get("skip_mutex", False)))
+
+    def test_run_slot_review_can_fallback_legacy_scheduler_path(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["scheduler_review_use_legacy"] = True
+
+        called = {"legacy": 0}
+
+        def _fake_legacy(as_of, max_rounds, ops_window_days=None):  # type: ignore[no-untyped-def]
+            called["legacy"] += 1
+            return {"legacy_called": True}
+
+        def _guarded_should_not_run(**kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("guarded path should not be called")
+
+        eng.run_review_cycle = _fake_legacy  # type: ignore[method-assign]
+        eng.run_review_cycle_guarded = _guarded_should_not_run  # type: ignore[method-assign]
+
+        out = eng.run_slot(as_of=d, slot="review", max_review_rounds=2)
+        self.assertEqual(out["slot"], "review")
+        result = out.get("result", {})
+        self.assertEqual(int(called.get("legacy", 0)), 1)
+        self.assertTrue(bool(result.get("legacy_called", False)))
+        self.assertEqual(str(result.get("execution_path", "")), "legacy_scheduler")
+
     def test_run_daemon_dry_run(self) -> None:
         eng, tmp_root = self._make_engine()
         out = eng.run_daemon(poll_seconds=1, max_cycles=0, max_review_rounds=1, dry_run=True)
@@ -1095,6 +1279,52 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("ops_report", out)
         self.assertTrue(out["review_loop"].get("skipped"))
         self.assertFalse(alert.exists())
+
+    def test_run_review_cycle_guarded_includes_skip_mutex_flag(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        scripts_dir = tmp_root / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        (scripts_dir / "run_review_cycle_guarded.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+        captured: dict[str, object] = {}
+        fake_payload = {
+            "date": d.isoformat(),
+            "ok": True,
+            "steps": [],
+        }
+
+        class _FakeProc:
+            returncode = 0
+            stdout = json.dumps(fake_payload, ensure_ascii=False)
+            stderr = ""
+
+        def _fake_run(cmd, cwd, text, capture_output, env):  # type: ignore[no-untyped-def]
+            captured["cmd"] = list(cmd)
+            captured["cwd"] = str(cwd)
+            captured["env"] = dict(env)
+            return _FakeProc()
+
+        with patch("lie_engine.engine.subprocess.run", side_effect=_fake_run):
+            out = eng.run_review_cycle_guarded(
+                as_of=d,
+                max_rounds=1,
+                review_timeout_seconds=5,
+                gate_timeout_seconds=5,
+                ops_timeout_seconds=5,
+                health_timeout_seconds=5,
+                skip_mutex=True,
+                fail_fast=True,
+            )
+
+        cmd = captured.get("cmd", [])
+        self.assertIn("--skip-mutex", cmd)
+        self.assertIn("--fail-fast", cmd)
+        self.assertEqual(Path(str(captured.get("cwd", ""))).resolve(), tmp_root.resolve())
+        env = captured.get("env", {})
+        self.assertEqual(str(env.get("PYTHON", "")), sys.executable)
+        self.assertTrue(bool(out.get("ok", False)))
+        self.assertTrue(bool(out.get("skip_mutex", False)))
 
     def test_filter_model_path_bars_removes_conflicts(self) -> None:
         eng, _ = self._make_engine()
@@ -1373,11 +1603,15 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_baseline_rollback_drill_preflight_lints_anchor_profile_subschema(self) -> None:
         eng, tmp_root = self._make_engine()
-        d1 = date(2026, 2, 13)
-        d2 = date(2026, 2, 14)
         d3 = date(2026, 2, 15)
-        eng.run_review(d1)
-        eng.run_review(d2)
+        self._write_active_baseline(
+            tmp_root,
+            {
+                "as_of": "2026-02-14",
+                "profiles": ["seed_profile"],
+                "snapshot_path": "output/artifacts/baselines/artifact_governance/history/seed.yaml",
+            },
+        )
 
         invalid_anchor = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "history" / "invalid_profile_schema_anchor.yaml"
         invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
@@ -1419,11 +1653,15 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_baseline_rollback_drill_preflight_lints_anchor_profile_path_fields(self) -> None:
         eng, tmp_root = self._make_engine()
-        d1 = date(2026, 2, 13)
-        d2 = date(2026, 2, 14)
         d3 = date(2026, 2, 15)
-        eng.run_review(d1)
-        eng.run_review(d2)
+        self._write_active_baseline(
+            tmp_root,
+            {
+                "as_of": "2026-02-14",
+                "profiles": ["seed_profile"],
+                "snapshot_path": "output/artifacts/baselines/artifact_governance/history/seed.yaml",
+            },
+        )
 
         invalid_anchor = tmp_root / "output" / "artifacts" / "baselines" / "artifact_governance" / "history" / "invalid_profile_path_fields_anchor.yaml"
         invalid_anchor.parent.mkdir(parents=True, exist_ok=True)
@@ -1632,19 +1870,14 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_baseline_rollback_drill_preflight_lints_mixed_path_and_non_path_fields_in_stable_order(self) -> None:
         eng, tmp_root = self._make_engine()
-        d1 = date(2026, 2, 13)
-        d2 = date(2026, 2, 14)
         d3 = date(2026, 2, 15)
-        eng.run_review(d1)
-        eng.run_review(d2)
-
-        active_baseline = (
-            tmp_root
-            / "output"
-            / "artifacts"
-            / "baselines"
-            / "artifact_governance"
-            / "active_baseline.yaml"
+        active_baseline = self._write_active_baseline(
+            tmp_root,
+            {
+                "as_of": "2026-02-14",
+                "profiles": ["seed_profile"],
+                "snapshot_path": "output/artifacts/baselines/artifact_governance/history/seed.yaml",
+            },
         )
         self.assertTrue(active_baseline.exists())
         active_payload = yaml.safe_load(active_baseline.read_text(encoding="utf-8"))
@@ -1759,19 +1992,14 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_baseline_rollback_drill_preflight_lints_mixed_missing_required_and_profile_path_errors_in_source_first_order(self) -> None:
         eng, tmp_root = self._make_engine()
-        d1 = date(2026, 2, 13)
-        d2 = date(2026, 2, 14)
         d3 = date(2026, 2, 15)
-        eng.run_review(d1)
-        eng.run_review(d2)
-
-        active_baseline = (
-            tmp_root
-            / "output"
-            / "artifacts"
-            / "baselines"
-            / "artifact_governance"
-            / "active_baseline.yaml"
+        active_baseline = self._write_active_baseline(
+            tmp_root,
+            {
+                "as_of": "2026-02-14",
+                "profiles": ["seed_profile"],
+                "snapshot_path": "output/artifacts/baselines/artifact_governance/history/seed.yaml",
+            },
         )
         self.assertTrue(active_baseline.exists())
         active_payload = yaml.safe_load(active_baseline.read_text(encoding="utf-8"))
@@ -2093,6 +2321,10 @@ class EngineIntegrationTests(unittest.TestCase):
     def test_run_review_skips_strategy_lab_candidate_when_merge_gate_fails(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["strategy_lab_merge_min_validation_annual_return"] = 0.0
+        if isinstance(eng.settings.validation, dict):
+            eng.settings.validation.update(eng.settings.raw["validation"])
         manifest_dir = tmp_root / "output" / "artifacts" / "manifests"
         manifest_dir.mkdir(parents=True, exist_ok=True)
         summary_dir = tmp_root / "output" / "research" / "strategy_lab_local"
@@ -2318,6 +2550,25 @@ class EngineIntegrationTests(unittest.TestCase):
                     "convexity_min": 2.2,
                     "hold_days": 9,
                     "max_daily_trades": 4,
+                    "exposure_scale": 0.17,
+                    "theory_enabled": 1,
+                    "theory_ict_weight": 1.1,
+                    "theory_brooks_weight": 1.2,
+                    "theory_lie_weight": 1.3,
+                    "theory_wyckoff_weight": 0.8,
+                    "theory_vpa_weight": 0.7,
+                    "theory_confidence_boost_max": 5.4,
+                    "theory_penalty_max": 6.2,
+                    "theory_min_confluence": 0.36,
+                    "theory_conflict_fuse": 0.70,
+                    "execution_confirm_enabled": 1,
+                    "execution_confirm_lookahead": 3,
+                    "execution_confirm_loss_mult": 0.60,
+                    "execution_confirm_win_mult": 1.00,
+                    "execution_anti_martingale_enabled": 1,
+                    "execution_anti_martingale_step": 0.20,
+                    "execution_anti_martingale_floor": 0.60,
+                    "execution_anti_martingale_ceiling": 1.40,
                 },
                 allow_unicode=True,
             ),
@@ -2357,6 +2608,15 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(int(getattr(cfg, "max_daily_trades", 0)), 4)
         self.assertAlmostEqual(float(getattr(cfg, "signal_confidence_min", 0.0)), 52.0, places=6)
         self.assertAlmostEqual(float(getattr(cfg, "convexity_min", 0.0)), 2.2, places=6)
+        self.assertAlmostEqual(float(getattr(cfg, "exposure_scale", 0.0)), 0.17, places=6)
+        self.assertTrue(bool(getattr(cfg, "theory_enabled", False)))
+        self.assertAlmostEqual(float(getattr(cfg, "theory_wyckoff_weight", 0.0)), 0.8, places=6)
+        self.assertAlmostEqual(float(getattr(cfg, "theory_vpa_weight", 0.0)), 0.7, places=6)
+        self.assertTrue(bool(getattr(cfg, "execution_confirm_enabled", False)))
+        self.assertEqual(int(getattr(cfg, "execution_confirm_lookahead", 0)), 3)
+        self.assertAlmostEqual(float(getattr(cfg, "execution_confirm_loss_mult", 0.0)), 0.60, places=6)
+        self.assertTrue(bool(getattr(cfg, "execution_anti_martingale_enabled", False)))
+        self.assertAlmostEqual(float(getattr(cfg, "execution_anti_martingale_step", 0.0)), 0.20, places=6)
 
     def test_run_mode_stress_matrix_outputs_artifacts(self) -> None:
         eng, tmp_root = self._make_engine()

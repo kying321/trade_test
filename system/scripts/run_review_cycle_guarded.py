@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from contextlib import nullcontext
 from datetime import date, datetime
 import json
 import os
@@ -96,10 +97,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--date", required=True, help="YYYY-MM-DD")
     parser.add_argument("--config", default="config.yaml", help="Path to config file.")
     parser.add_argument("--output-root", default="output", help="Output root path.")
+    parser.add_argument("--max-rounds", type=int, default=2, help="Max rounds for review-loop.")
+    parser.add_argument(
+        "--review-mode",
+        choices=("review", "review-loop"),
+        default="review-loop",
+        help="Use one-shot review or review-loop before gate/ops.",
+    )
     parser.add_argument("--ops-window-days", type=int, default=14)
     parser.add_argument("--review-timeout-seconds", type=int, default=180)
     parser.add_argument("--gate-timeout-seconds", type=int, default=120)
     parser.add_argument("--ops-timeout-seconds", type=int, default=120)
+    parser.add_argument("--health-timeout-seconds", type=int, default=90)
+    parser.add_argument("--skip-health-check", action="store_true", help="Skip final health-check step.")
+    parser.add_argument("--fail-fast", action="store_true", help="Stop on first timeout/non-zero step.")
+    parser.add_argument("--skip-mutex", action="store_true", help="Skip run-halfhour-pulse mutex (for parent-held lock path).")
     parser.add_argument("--mutex-timeout-seconds", type=float, default=5.0)
     return parser.parse_args()
 
@@ -115,26 +127,33 @@ def main() -> int:
 
     env = dict(os.environ)
     env["PYTHONPATH"] = "src"
+    python_exec = str(env.get("PYTHON", "")).strip() or "python3"
+
+    review_mode = str(args.review_mode).strip().lower()
+    review_step_name = "review_loop" if review_mode == "review-loop" else "review"
+    review_cmd = [
+        python_exec,
+        "-m",
+        "lie_engine.cli",
+        "--config",
+        str(args.config),
+        review_mode,
+        "--date",
+        as_of.isoformat(),
+    ]
+    if review_mode == "review-loop":
+        review_cmd.extend(["--max-rounds", str(max(0, int(args.max_rounds)))])
 
     steps = [
         (
-            "review",
-            [
-                "python",
-                "-m",
-                "lie_engine.cli",
-                "--config",
-                str(args.config),
-                "review",
-                "--date",
-                as_of.isoformat(),
-            ],
+            review_step_name,
+            review_cmd,
             int(args.review_timeout_seconds),
         ),
         (
             "gate_report",
             [
-                "python",
+                python_exec,
                 "-m",
                 "lie_engine.cli",
                 "--config",
@@ -148,7 +167,7 @@ def main() -> int:
         (
             "ops_report",
             [
-                "python",
+                python_exec,
                 "-m",
                 "lie_engine.cli",
                 "--config",
@@ -162,20 +181,40 @@ def main() -> int:
             int(args.ops_timeout_seconds),
         ),
     ]
+    if not bool(args.skip_health_check):
+        steps.append(
+            (
+                "health_check",
+                [
+                    python_exec,
+                    "-m",
+                    "lie_engine.cli",
+                    "--config",
+                    str(args.config),
+                    "health-check",
+                    "--date",
+                    as_of.isoformat(),
+                ],
+                int(args.health_timeout_seconds),
+            )
+        )
 
     results: list[dict[str, Any]] = []
     started_at = datetime.now().isoformat()
-    with _run_halfhour_mutex(output_root=output_root, timeout_seconds=float(args.mutex_timeout_seconds)):
+    lock_cm = nullcontext() if bool(args.skip_mutex) else _run_halfhour_mutex(output_root=output_root, timeout_seconds=float(args.mutex_timeout_seconds))
+    with lock_cm:
         for name, cmd, timeout_s in steps:
-            results.append(
-                _run_step(
-                    name=name,
-                    cmd=cmd,
-                    timeout_seconds=timeout_s,
-                    logs_dir=logs_dir,
-                    env=env,
-                )
+            step_out = _run_step(
+                name=name,
+                cmd=cmd,
+                timeout_seconds=timeout_s,
+                logs_dir=logs_dir,
+                env=env,
             )
+            results.append(step_out)
+            step_failed = bool(step_out.get("timed_out", False)) or int(step_out.get("returncode", 1)) != 0
+            if bool(args.fail_fast) and step_failed:
+                break
 
     ok = all((not bool(x.get("timed_out", False))) and int(x.get("returncode", 1)) == 0 for x in results)
     payload = {

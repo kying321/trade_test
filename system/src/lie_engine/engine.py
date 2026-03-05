@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 from typing import Any
 
 import numpy as np
@@ -52,6 +54,7 @@ class EngineContext:
     root: Path
     output_dir: Path
     sqlite_path: Path
+    config_path: Path
 
 
 class LieEngine:
@@ -59,9 +62,16 @@ class LieEngine:
         settings = load_settings(config_path)
         assert_valid_settings(settings)
         root = Path(config_path).resolve().parent if config_path else Path(__file__).resolve().parents[2]
+        resolved_config_path = Path(config_path).resolve() if config_path else (root / "config.yaml").resolve()
         output_dir = root / settings.paths.get("output", "output")
         sqlite_path = root / settings.paths.get("sqlite", "output/artifacts/lie_engine.db")
-        self.ctx = EngineContext(settings=settings, root=root, output_dir=output_dir, sqlite_path=sqlite_path)
+        self.ctx = EngineContext(
+            settings=settings,
+            root=root,
+            output_dir=output_dir,
+            sqlite_path=sqlite_path,
+            config_path=resolved_config_path,
+        )
 
         data_cfg = settings.raw.get("data", {}) if isinstance(settings.raw, dict) else {}
         provider_profile = str(data_cfg.get("provider_profile", "opensource_dual"))
@@ -422,7 +432,78 @@ class LieEngine:
             mode = "swing"
         return mode
 
-    def _resolve_runtime_params(self, *, regime, live_params: dict[str, float]) -> dict[str, float | str]:
+    def _resolve_runtime_advanced_params(self, *, live_params: dict[str, float]) -> dict[str, float | bool]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+
+        def _num(key: str, default: float, lo: float, hi: float) -> float:
+            raw: Any
+            if key in live_params:
+                raw = live_params.get(key, default)
+            else:
+                raw = val.get(key, default)
+            try:
+                out = float(raw)
+            except (TypeError, ValueError):
+                out = float(default)
+            return self._clamp_float(out, lo, hi)
+
+        def _flag(*, live_key: str, validation_key: str, default: bool) -> bool:
+            raw: Any
+            if live_key in live_params:
+                raw = live_params.get(live_key, 1.0 if default else 0.0)
+            else:
+                raw = val.get(validation_key, default)
+            if isinstance(raw, bool):
+                return bool(raw)
+            if isinstance(raw, (int, float)):
+                return bool(float(raw) >= 0.5)
+            text = str(raw).strip().lower()
+            if text in {"1", "true", "yes", "on"}:
+                return True
+            if text in {"0", "false", "no", "off"}:
+                return False
+            return bool(default)
+
+        out: dict[str, float | bool] = {
+            "exposure_scale": _num("exposure_scale", 1.0, 0.08, 1.5),
+            "theory_enabled": _flag(
+                live_key="theory_enabled",
+                validation_key="theory_signal_enabled",
+                default=False,
+            ),
+            "theory_ict_weight": _num("theory_ict_weight", 1.0, 0.0, 2.0),
+            "theory_brooks_weight": _num("theory_brooks_weight", 1.0, 0.0, 2.0),
+            "theory_lie_weight": _num("theory_lie_weight", 1.2, 0.0, 2.0),
+            "theory_wyckoff_weight": _num("theory_wyckoff_weight", 0.0, 0.0, 2.0),
+            "theory_vpa_weight": _num("theory_vpa_weight", 0.0, 0.0, 2.0),
+            "theory_confidence_boost_max": _num("theory_confidence_boost_max", 5.0, 0.5, 20.0),
+            "theory_penalty_max": _num("theory_penalty_max", 6.0, 0.5, 20.0),
+            "theory_min_confluence": _num("theory_min_confluence", 0.38, 0.0, 1.0),
+            "theory_conflict_fuse": _num("theory_conflict_fuse", 0.72, 0.0, 1.0),
+            "execution_confirm_enabled": _flag(
+                live_key="execution_confirm_enabled",
+                validation_key="execution_confirm_enabled",
+                default=False,
+            ),
+            "execution_confirm_lookahead": float(round(_num("execution_confirm_lookahead", 2.0, 1.0, 10.0))),
+            "execution_confirm_loss_mult": _num("execution_confirm_loss_mult", 0.65, 0.0, 1.6),
+            "execution_confirm_win_mult": _num("execution_confirm_win_mult", 1.0, 0.0, 1.6),
+            "execution_anti_martingale_enabled": _flag(
+                live_key="execution_anti_martingale_enabled",
+                validation_key="execution_anti_martingale_enabled",
+                default=False,
+            ),
+            "execution_anti_martingale_step": _num("execution_anti_martingale_step", 0.20, 0.0, 0.5),
+            "execution_anti_martingale_floor": _num("execution_anti_martingale_floor", 0.60, 0.0, 2.0),
+            "execution_anti_martingale_ceiling": _num("execution_anti_martingale_ceiling", 1.40, 0.0, 2.0),
+        }
+        floor = float(out.get("execution_anti_martingale_floor", 0.60))
+        ceiling = float(out.get("execution_anti_martingale_ceiling", 1.40))
+        if floor > ceiling:
+            out["execution_anti_martingale_floor"] = float(ceiling)
+        return out
+
+    def _resolve_runtime_params(self, *, regime, live_params: dict[str, float]) -> dict[str, Any]:
         base = {
             "signal_confidence_min": self._clamp_float(
                 float(live_params.get("signal_confidence_min", self.settings.thresholds.get("signal_confidence_min", 60.0))),
@@ -437,8 +518,9 @@ class LieEngine:
             "hold_days": float(self._clamp_int(live_params.get("hold_days", 5.0), 1, 20)),
             "max_daily_trades": float(self._clamp_int(live_params.get("max_daily_trades", 2.0), 1, 5)),
         }
+        advanced = self._resolve_runtime_advanced_params(live_params=live_params)
         if not bool(self.settings.validation.get("use_mode_profiles", False)):
-            return {"mode": "base"} | base
+            return {"mode": "base"} | base | advanced
 
         mode = self._mode_from_regime(regime.consensus)
         profiles = self._resolved_mode_profiles()
@@ -454,7 +536,7 @@ class LieEngine:
             "convexity_min": self._clamp_float(merged_conv, 0.5, 5.0),
             "hold_days": float(self._clamp_int(merged_hold, 1, 20)),
             "max_daily_trades": float(self._clamp_int(merged_trades, 1, 5)),
-        }
+        } | advanced
 
     def _resolved_mode_profiles(self) -> dict[str, dict[str, float]]:
         profiles = self._default_mode_profiles()
@@ -853,6 +935,22 @@ class LieEngine:
             ("convexity_min", 1.0, 4.0, False),
             ("hold_days", 1.0, 20.0, True),
             ("max_daily_trades", 1.0, 5.0, True),
+            ("exposure_scale", 0.08, 1.50, False),
+            ("theory_ict_weight", 0.0, 2.0, False),
+            ("theory_brooks_weight", 0.0, 2.0, False),
+            ("theory_lie_weight", 0.0, 2.0, False),
+            ("theory_wyckoff_weight", 0.0, 2.0, False),
+            ("theory_vpa_weight", 0.0, 2.0, False),
+            ("theory_confidence_boost_max", 0.5, 20.0, False),
+            ("theory_penalty_max", 0.5, 20.0, False),
+            ("theory_min_confluence", 0.0, 1.0, False),
+            ("theory_conflict_fuse", 0.0, 1.0, False),
+            ("execution_confirm_loss_mult", 0.0, 1.6, False),
+            ("execution_confirm_lookahead", 1.0, 10.0, True),
+            ("execution_confirm_win_mult", 0.0, 1.6, False),
+            ("execution_anti_martingale_step", 0.0, 0.5, False),
+            ("execution_anti_martingale_floor", 0.0, 2.0, False),
+            ("execution_anti_martingale_ceiling", 0.0, 2.0, False),
         ]
         for key, lo, hi, is_int in fields:
             if key not in params:
@@ -866,6 +964,18 @@ class LieEngine:
             else:
                 review.parameter_changes[key] = float(merged)
             review.change_reasons[key] = f"融合 strategy-lab 最优候选 `{cand.get('name', 'unknown')}`（小步收敛，step={step:.2f}）"
+            updated.append(key)
+
+        bool_fields = ("theory_enabled", "execution_confirm_enabled", "execution_anti_martingale_enabled")
+        for key in bool_fields:
+            if key not in params:
+                continue
+            raw = params.get(key)
+            enabled = bool(raw)
+            if isinstance(raw, (int, float)):
+                enabled = bool(float(raw) >= 0.5)
+            review.parameter_changes[key] = 1.0 if enabled else 0.0
+            review.change_reasons[key] = f"融合 strategy-lab 最优候选 `{cand.get('name', 'unknown')}`（布尔开关同步）"
             updated.append(key)
 
         if updated:
@@ -904,6 +1014,7 @@ class LieEngine:
                 0.0,
                 1.0,
             )
+            enforce_pwr = bool(val.get("strategy_lab_merge_enforce_positive_window_ratio", False))
             ann = float(valid.get("annual_return", 0.0))
             mdd = float(valid.get("max_drawdown", 1.0))
             trades = int(valid.get("trades", 0))
@@ -914,17 +1025,18 @@ class LieEngine:
                 reasons.append(f"validation_drawdown_above_{max_mdd:.4f}")
             if trades < min_trades:
                 reasons.append(f"validation_trades_below_{min_trades}")
-            if pwr < min_pwr:
+            if enforce_pwr and pwr < min_pwr:
                 reasons.append(f"validation_pwr_below_{min_pwr:.2f}")
 
         robust_raw = cand.get("robustness_score")
         if robust_raw is not None:
             min_robust = self._clamp_float(float(val.get("strategy_lab_merge_min_robustness", 0.30)), 0.0, 1.0)
+            enforce_robust = bool(val.get("strategy_lab_merge_enforce_robustness", False))
             try:
                 robust = float(robust_raw)
             except (TypeError, ValueError):
                 robust = 0.0
-            if robust < min_robust:
+            if enforce_robust and robust < min_robust:
                 reasons.append(f"robustness_below_{min_robust:.2f}")
 
         review_raw = cand.get("review_metrics", {})
@@ -1561,21 +1673,47 @@ class LieEngine:
         for pos in positions:
             symbol = str(pos.get("symbol", "")).strip()
             side = str(pos.get("side", "LONG")).strip().upper()
-            if not symbol or symbol not in snapshot:
-                remaining.append(pos)
-                missing_symbol_count += 1 if symbol else 0
-                continue
-
-            px = snapshot[symbol]
-            entry = float(pos.get("entry_price", px["close"]))
-            stop = float(pos.get("stop_price", entry))
-            target = float(pos.get("target_price", entry))
             size_pct = float(pos.get("size_pct", 0.0))
             risk_pct = float(pos.get("risk_pct", 0.0))
             hold_days = max(1, int(pos.get("hold_days", 1)))
             open_date = self._parse_iso_date(pos.get("open_date")) or as_of
             holding_days = max(0, (as_of - open_date).days)
             runtime_mode = str(pos.get("runtime_mode", "base")).strip() or "base"
+            entry = float(pos.get("entry_price", 0.0))
+
+            if not symbol or symbol not in snapshot:
+                if symbol and holding_days >= hold_days:
+                    closed_rows.append(
+                        {
+                            "date": as_of.isoformat(),
+                            "open_date": open_date.isoformat(),
+                            "symbol": symbol,
+                            "side": side,
+                            "direction": side,
+                            "runtime_mode": runtime_mode,
+                            "mode": runtime_mode,
+                            "size_pct": size_pct,
+                            "risk_pct": risk_pct,
+                            "entry_price": entry,
+                            "exit_price": entry,
+                            "pnl": 0.0,
+                            "pnl_pct": 0.0,
+                            "exit_reason": "time_stop_no_market_data",
+                            "hold_days": hold_days,
+                            "holding_days": holding_days,
+                            "status": "CLOSED",
+                        }
+                    )
+                else:
+                    remaining.append(pos)
+                    missing_symbol_count += 1 if symbol else 0
+                continue
+
+            px = snapshot[symbol]
+            if (not np.isfinite(entry)) or entry <= 0.0:
+                entry = float(px["close"])
+            stop = float(pos.get("stop_price", entry))
+            target = float(pos.get("target_price", entry))
 
             exit_price = float(px["close"])
             exit_reason = ""
@@ -1692,8 +1830,17 @@ class LieEngine:
         if pos.empty:
             return {}, {}, 0.0
 
+        pos["symbol"] = pos["symbol"].astype(str)
+        pos["status"] = pos["status"].astype(str).str.upper()
+        pos["size_pct"] = pd.to_numeric(pos["size_pct"], errors="coerce").fillna(0.0)
         pos = pos[pos["status"] == "ACTIVE"]
-        by_symbol = pos.groupby("symbol")["size_pct"].sum().to_dict()
+        by_symbol_raw = pos.groupby("symbol")["size_pct"].sum().to_dict()
+        by_symbol: dict[str, float] = {}
+        for sym, val in by_symbol_raw.items():
+            sym_s = str(sym).strip()
+            if not sym_s:
+                continue
+            by_symbol[sym_s] = float(val)
         theme_map = self._theme_map()
         by_theme: dict[str, float] = {}
         for sym, val in by_symbol.items():
@@ -2520,7 +2667,186 @@ class LieEngine:
             "avg_selected_time_sync_ok_ratio": float(np.clip(time_vals.mean(), 0.0, 1.0)),
         }
 
-    def run_micro_capture(self, *, as_of: date, symbols: list[str] | None = None) -> dict[str, Any]:
+    def _binance_live_takeover_settings(self) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        order_side_raw = str(val.get("binance_live_takeover_order_side", "")).strip().upper()
+        if order_side_raw not in {"BUY", "SELL"}:
+            order_side_raw = ""
+        return {
+            "enabled": bool(val.get("binance_live_takeover_enabled", False)),
+            "on_micro_capture": bool(val.get("binance_live_takeover_on_micro_capture", True)),
+            "on_eod": bool(val.get("binance_live_takeover_on_eod", True)),
+            "activate_config": bool(val.get("binance_live_takeover_activate_config", True)),
+            "allow_live_order": bool(val.get("binance_live_takeover_allow_live_order", False)),
+            "allow_daemon_env_fallback": bool(val.get("binance_live_takeover_allow_daemon_env_fallback", True)),
+            "market": str(val.get("binance_live_takeover_market", "futures_usdm")).strip().lower(),
+            "rate_limit_per_minute": max(1, int(val.get("binance_live_takeover_rate_limit_per_minute", 10))),
+            "timeout_ms": int(min(5000, max(100, int(val.get("binance_live_takeover_timeout_ms", 5000))))),
+            "exec_timeout_seconds": int(min(300, max(5, int(val.get("binance_live_takeover_exec_timeout_seconds", 45))))),
+            "canary_quote_usdt": max(0.1, float(val.get("binance_live_takeover_canary_quote_usdt", 5.0))),
+            "max_drawdown": self._clamp_float(float(val.get("binance_live_takeover_max_drawdown", 0.05)), 0.01, 0.5),
+            "trade_window_hours": max(1, int(val.get("binance_live_takeover_trade_window_hours", 24))),
+            "max_trade_symbols": max(1, int(val.get("binance_live_takeover_max_trade_symbols", 3))),
+            "order_symbol": str(val.get("binance_live_takeover_order_symbol", "")).strip().upper(),
+            "order_side": order_side_raw,
+        }
+
+    def _run_binance_live_takeover(
+        self,
+        *,
+        as_of: date,
+        trigger: str,
+        skip_mutex: bool = False,
+    ) -> dict[str, Any]:
+        cfg = self._binance_live_takeover_settings()
+        enabled = bool(cfg.get("enabled", False))
+        trigger_key = str(trigger).strip().lower()
+        trigger_enabled = bool(cfg.get("on_micro_capture", True)) if trigger_key == "micro_capture" else bool(cfg.get("on_eod", True))
+
+        out: dict[str, Any] = {
+            "enabled": bool(enabled),
+            "trigger": trigger_key,
+            "trigger_enabled": bool(trigger_enabled),
+            "executed": False,
+            "ok": True,
+            "mode": "disabled",
+            "artifact": "",
+            "returncode": 0,
+            "reason": "disabled",
+        }
+        if not enabled:
+            return out
+        if not trigger_enabled:
+            out["mode"] = "trigger_disabled"
+            out["reason"] = f"trigger_{trigger_key}_disabled"
+            return out
+
+        script_path = self.ctx.root / "scripts" / "binance_live_takeover.py"
+        if not script_path.exists():
+            out["ok"] = False
+            out["mode"] = "script_missing"
+            out["reason"] = f"script_missing:{script_path}"
+            return out
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--date",
+            as_of.isoformat(),
+            "--config",
+            str(self.ctx.config_path),
+            "--output-root",
+            str(self.ctx.output_dir),
+            "--rate-limit-per-minute",
+            str(int(cfg.get("rate_limit_per_minute", 10))),
+            "--timeout-ms",
+            str(int(cfg.get("timeout_ms", 5000))),
+            "--canary-quote-usdt",
+            str(float(cfg.get("canary_quote_usdt", 5.0))),
+            "--max-drawdown",
+            str(float(cfg.get("max_drawdown", 0.05))),
+            "--trade-window-hours",
+            str(int(cfg.get("trade_window_hours", 24))),
+            "--max-trade-symbols",
+            str(int(cfg.get("max_trade_symbols", 3))),
+        ]
+        market = str(cfg.get("market", "futures_usdm")).strip().lower()
+        if market not in {"futures_usdm", "spot"}:
+            market = "futures_usdm"
+        cmd.extend(["--market", market])
+        if bool(cfg.get("activate_config", True)):
+            cmd.append("--activate-config")
+        if bool(cfg.get("allow_live_order", False)):
+            cmd.append("--allow-live-order")
+        if bool(cfg.get("allow_daemon_env_fallback", True)):
+            cmd.append("--allow-daemon-env-fallback")
+        order_symbol = str(cfg.get("order_symbol", "")).strip().upper()
+        if order_symbol:
+            cmd.extend(["--order-symbol", order_symbol])
+        order_side = str(cfg.get("order_side", "")).strip().upper()
+        if order_side in {"BUY", "SELL"}:
+            cmd.extend(["--order-side", order_side])
+        if bool(skip_mutex):
+            cmd.append("--skip-mutex")
+
+        env = dict(os.environ)
+        env["PYTHON"] = sys.executable
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=self.ctx.root,
+                text=True,
+                capture_output=True,
+                timeout=int(cfg.get("exec_timeout_seconds", 45)),
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            out.update(
+                {
+                    "executed": True,
+                    "ok": False,
+                    "mode": "timeout",
+                    "reason": "timeout",
+                    "returncode": 124,
+                    "command": cmd,
+                }
+            )
+            return out
+        except Exception as exc:
+            out.update(
+                {
+                    "executed": True,
+                    "ok": False,
+                    "mode": "invoke_error",
+                    "reason": str(exc),
+                    "returncode": 1,
+                    "command": cmd,
+                }
+            )
+            return out
+
+        payload = self._parse_guarded_stdout_json(str(proc.stdout or ""))
+        if not isinstance(payload, dict):
+            payload = {}
+        if not payload:
+            latest = self.ctx.output_dir / "review" / "latest_binance_live_takeover.json"
+            payload = self._load_json_safely(latest)
+        mode = str(payload.get("mode", "unknown")).strip() if isinstance(payload, dict) else "unknown"
+        artifact = str(payload.get("artifact", "")).strip() if isinstance(payload, dict) else ""
+        out.update(
+            {
+                "executed": True,
+                "ok": int(proc.returncode) == 0,
+                "mode": mode or "unknown",
+                "reason": "ok" if int(proc.returncode) == 0 else f"returncode_{int(proc.returncode)}",
+                "artifact": artifact,
+                "returncode": int(proc.returncode),
+                "command": cmd,
+            }
+        )
+        if str(proc.stderr or "").strip():
+            out["stderr_excerpt"] = str(proc.stderr or "")[-2000:]
+        if isinstance(payload, dict):
+            out["payload"] = {
+                "credentials": payload.get("steps", {}).get("credentials", {})
+                if isinstance(payload.get("steps", {}), dict)
+                else {},
+                "canary_order": payload.get("steps", {}).get("canary_order", {})
+                if isinstance(payload.get("steps", {}), dict)
+                else {},
+                "account_overview": payload.get("steps", {}).get("account_overview", {})
+                if isinstance(payload.get("steps", {}), dict)
+                else {},
+            }
+        return out
+
+    def run_micro_capture(
+        self,
+        *,
+        as_of: date,
+        symbols: list[str] | None = None,
+        live_takeover_skip_mutex: bool = False,
+    ) -> dict[str, Any]:
         target_symbols = self._resolve_micro_capture_symbols(symbols=symbols)
         micro_factor_map, micro_source_rows = self._collect_micro_factor_map_with_rows(
             as_of=as_of,
@@ -2614,6 +2940,11 @@ class LieEngine:
         artifact_dir = self.ctx.output_dir / "artifacts" / "micro_capture"
         artifact_path = artifact_dir / f"{stamp}_micro_capture.json"
         write_json(artifact_path, capture_payload)
+        live_takeover = self._run_binance_live_takeover(
+            as_of=as_of,
+            trigger="micro_capture",
+            skip_mutex=bool(live_takeover_skip_mutex),
+        )
 
         append_sqlite(
             self.ctx.sqlite_path,
@@ -2641,6 +2972,11 @@ class LieEngine:
                         "selected_schema_ok_ratio": float(schema_ok_ratio),
                         "selected_time_sync_ok_ratio": float(time_sync_ok_ratio),
                         "selected_sync_ok_ratio": float(sync_ok_ratio),
+                        "live_takeover_enabled": bool(live_takeover.get("enabled", False)),
+                        "live_takeover_executed": bool(live_takeover.get("executed", False)),
+                        "live_takeover_ok": bool(live_takeover.get("ok", False)),
+                        "live_takeover_mode": str(live_takeover.get("mode", "")),
+                        "live_takeover_artifact": str(live_takeover.get("artifact", "")),
                         "artifact_path": str(artifact_path),
                     }
                 ]
@@ -2696,10 +3032,11 @@ class LieEngine:
             "symbols": list(target_symbols),
             "summary": dict(capture_payload.get("summary", {})),
             "rolling_7d": rolling,
+            "live_takeover": live_takeover,
             "artifact": str(artifact_path),
         }
 
-    def run_eod(self, as_of: date) -> dict[str, Any]:
+    def run_eod(self, as_of: date, live_takeover_skip_mutex: bool = False) -> dict[str, Any]:
         symbols = self._core_symbols()
         bars, ingest = self._run_ingestion(as_of, symbols)
         paper_exec = self._settle_open_paper_positions(as_of=as_of, bars=bars)
@@ -2714,6 +3051,16 @@ class LieEngine:
             micro_confidence_boost_max=float(self.settings.validation.get("micro_confidence_boost_max", 8.0)),
             micro_penalty_max=float(self.settings.validation.get("micro_penalty_max", 10.0)),
             micro_min_trade_count=max(1, int(self.settings.validation.get("micro_min_trade_count", 30))),
+            theory_enabled=bool(runtime_params.get("theory_enabled", False)),
+            theory_ict_weight=float(runtime_params.get("theory_ict_weight", 1.0)),
+            theory_brooks_weight=float(runtime_params.get("theory_brooks_weight", 1.0)),
+            theory_lie_weight=float(runtime_params.get("theory_lie_weight", 1.2)),
+            theory_wyckoff_weight=float(runtime_params.get("theory_wyckoff_weight", 0.0)),
+            theory_vpa_weight=float(runtime_params.get("theory_vpa_weight", 0.0)),
+            theory_confidence_boost_max=float(runtime_params.get("theory_confidence_boost_max", 5.0)),
+            theory_penalty_max=float(runtime_params.get("theory_penalty_max", 6.0)),
+            theory_min_confluence=float(runtime_params.get("theory_min_confluence", 0.38)),
+            theory_conflict_fuse=float(runtime_params.get("theory_conflict_fuse", 0.72)),
         )
         market_factor_state = self._market_factor_state(sentiment=ingest.sentiment, regime=regime, bars=bars)
         micro_factor_map, micro_source_rows = self._collect_micro_factor_map_with_rows(as_of=as_of, symbols=symbols)
@@ -2842,6 +3189,25 @@ class LieEngine:
                 "convexity_min": float(runtime_params["convexity_min"]),
                 "hold_days": float(runtime_params["hold_days"]),
                 "max_daily_trades": float(runtime_params["max_daily_trades"]),
+                "exposure_scale": float(runtime_params.get("exposure_scale", 1.0)),
+                "theory_enabled": bool(runtime_params.get("theory_enabled", False)),
+                "theory_ict_weight": float(runtime_params.get("theory_ict_weight", 1.0)),
+                "theory_brooks_weight": float(runtime_params.get("theory_brooks_weight", 1.0)),
+                "theory_lie_weight": float(runtime_params.get("theory_lie_weight", 1.2)),
+                "theory_wyckoff_weight": float(runtime_params.get("theory_wyckoff_weight", 0.0)),
+                "theory_vpa_weight": float(runtime_params.get("theory_vpa_weight", 0.0)),
+                "theory_confidence_boost_max": float(runtime_params.get("theory_confidence_boost_max", 5.0)),
+                "theory_penalty_max": float(runtime_params.get("theory_penalty_max", 6.0)),
+                "theory_min_confluence": float(runtime_params.get("theory_min_confluence", 0.38)),
+                "theory_conflict_fuse": float(runtime_params.get("theory_conflict_fuse", 0.72)),
+                "execution_confirm_enabled": bool(runtime_params.get("execution_confirm_enabled", False)),
+                "execution_confirm_lookahead": int(runtime_params.get("execution_confirm_lookahead", 2)),
+                "execution_confirm_loss_mult": float(runtime_params.get("execution_confirm_loss_mult", 0.65)),
+                "execution_confirm_win_mult": float(runtime_params.get("execution_confirm_win_mult", 1.0)),
+                "execution_anti_martingale_enabled": bool(runtime_params.get("execution_anti_martingale_enabled", False)),
+                "execution_anti_martingale_step": float(runtime_params.get("execution_anti_martingale_step", 0.2)),
+                "execution_anti_martingale_floor": float(runtime_params.get("execution_anti_martingale_floor", 0.6)),
+                "execution_anti_martingale_ceiling": float(runtime_params.get("execution_anti_martingale_ceiling", 1.4)),
             },
             "today": {
                 "signals": int(len(signals)),
@@ -3166,6 +3532,11 @@ class LieEngine:
         )
         active_positions = list(paper_exec.get("remaining_positions", [])) + open_positions
         self._save_open_paper_positions(as_of=as_of, positions=active_positions)
+        live_takeover = self._run_binance_live_takeover(
+            as_of=as_of,
+            trigger="eod",
+            skip_mutex=bool(live_takeover_skip_mutex),
+        )
         broker_snapshot_path = self._resolve_and_write_broker_snapshot(
             as_of=as_of,
             active_positions=active_positions,
@@ -3182,6 +3553,7 @@ class LieEngine:
                 "positions": str(positions_path),
                 "mode_feedback": str(mode_feedback_path),
                 "broker_snapshot": broker_snapshot_ref,
+                "live_takeover": str(live_takeover.get("artifact", "")),
                 "cross_source_alignment": str(cross_source_audit.get("artifact_path", "")),
                 "cross_source_quality_report": str(cross_source_report_path),
                 "system_time_sync_probe": str(system_time_sync_probe.get("artifact_path", "")),
@@ -3198,10 +3570,12 @@ class LieEngine:
                 "closed_trades": int((paper_exec.get("summary", {}) or {}).get("closed_count", 0)),
                 "closed_pnl": float((paper_exec.get("summary", {}) or {}).get("closed_pnl", 0.0)),
                 "open_positions": int(len(active_positions)),
+                "live_takeover_ok": bool(live_takeover.get("ok", False)),
             },
             checks={
                 "quality_passed": bool(ingest.quality.passed),
                 "trade_blocked": bool(guard.trade_blocked),
+                "live_takeover_executed": bool(live_takeover.get("executed", False)),
             },
         )
 
@@ -3225,6 +3599,7 @@ class LieEngine:
             "closed_pnl": float((paper_exec.get("summary", {}) or {}).get("closed_pnl", 0.0)),
             "open_positions": int(len(active_positions)),
             "broker_snapshot": broker_snapshot_ref,
+            "live_takeover": live_takeover,
             "cross_source_quality_report": str(cross_source_report_path),
             "system_time_sync_probe": str(system_time_sync_probe.get("artifact_path", "")),
         }
@@ -3381,6 +3756,45 @@ class LieEngine:
             convexity_min=convexity_min,
             max_daily_trades=0 if signal_conf >= 90.0 else max_daily_trades,
             hold_days=hold_days,
+            exposure_scale=float(runtime_params.get("exposure_scale", 1.0)),
+            theory_enabled=bool(runtime_params.get("theory_enabled", False)),
+            theory_ict_weight=float(runtime_params.get("theory_ict_weight", 1.0)),
+            theory_brooks_weight=float(runtime_params.get("theory_brooks_weight", 1.0)),
+            theory_lie_weight=float(runtime_params.get("theory_lie_weight", 1.2)),
+            theory_wyckoff_weight=float(runtime_params.get("theory_wyckoff_weight", 0.0)),
+            theory_vpa_weight=float(runtime_params.get("theory_vpa_weight", 0.0)),
+            theory_confidence_boost_max=float(runtime_params.get("theory_confidence_boost_max", 5.0)),
+            theory_penalty_max=float(runtime_params.get("theory_penalty_max", 6.0)),
+            theory_min_confluence=float(runtime_params.get("theory_min_confluence", 0.38)),
+            theory_conflict_fuse=float(runtime_params.get("theory_conflict_fuse", 0.72)),
+            execution_confirm_enabled=bool(runtime_params.get("execution_confirm_enabled", False)),
+            execution_confirm_lookahead=self._clamp_int(runtime_params.get("execution_confirm_lookahead", 2), 1, 10),
+            execution_confirm_loss_mult=self._clamp_float(
+                float(runtime_params.get("execution_confirm_loss_mult", 0.65)),
+                0.0,
+                1.6,
+            ),
+            execution_confirm_win_mult=self._clamp_float(
+                float(runtime_params.get("execution_confirm_win_mult", 1.0)),
+                0.0,
+                1.6,
+            ),
+            execution_anti_martingale_enabled=bool(runtime_params.get("execution_anti_martingale_enabled", False)),
+            execution_anti_martingale_step=self._clamp_float(
+                float(runtime_params.get("execution_anti_martingale_step", 0.2)),
+                0.0,
+                0.5,
+            ),
+            execution_anti_martingale_floor=self._clamp_float(
+                float(runtime_params.get("execution_anti_martingale_floor", 0.6)),
+                0.0,
+                2.0,
+            ),
+            execution_anti_martingale_ceiling=self._clamp_float(
+                float(runtime_params.get("execution_anti_martingale_ceiling", 1.4)),
+                0.0,
+                2.0,
+            ),
         )
 
         result = run_walk_forward_backtest(
@@ -3471,6 +3885,7 @@ class LieEngine:
         trend_thr = float(self.settings.thresholds.get("hurst_trend", 0.6))
         mean_thr = float(self.settings.thresholds.get("hurst_mean_revert", 0.4))
         atr_extreme = float(self.settings.thresholds.get("atr_extreme", 2.0))
+        runtime_advanced_defaults = self._resolve_runtime_advanced_params(live_params={})
 
         matrix_rows: list[dict[str, Any]] = []
         for w in parsed_windows:
@@ -3488,6 +3903,31 @@ class LieEngine:
                     convexity_min=float(profile.get("convexity_min", 2.0)),
                     max_daily_trades=self._clamp_int(profile.get("max_daily_trades", 2.0), 1, 5),
                     hold_days=self._clamp_int(profile.get("hold_days", 5.0), 1, 20),
+                    exposure_scale=float(runtime_advanced_defaults.get("exposure_scale", 1.0)),
+                    theory_enabled=bool(runtime_advanced_defaults.get("theory_enabled", False)),
+                    theory_ict_weight=float(runtime_advanced_defaults.get("theory_ict_weight", 1.0)),
+                    theory_brooks_weight=float(runtime_advanced_defaults.get("theory_brooks_weight", 1.0)),
+                    theory_lie_weight=float(runtime_advanced_defaults.get("theory_lie_weight", 1.2)),
+                    theory_wyckoff_weight=float(runtime_advanced_defaults.get("theory_wyckoff_weight", 0.0)),
+                    theory_vpa_weight=float(runtime_advanced_defaults.get("theory_vpa_weight", 0.0)),
+                    theory_confidence_boost_max=float(runtime_advanced_defaults.get("theory_confidence_boost_max", 5.0)),
+                    theory_penalty_max=float(runtime_advanced_defaults.get("theory_penalty_max", 6.0)),
+                    theory_min_confluence=float(runtime_advanced_defaults.get("theory_min_confluence", 0.38)),
+                    theory_conflict_fuse=float(runtime_advanced_defaults.get("theory_conflict_fuse", 0.72)),
+                    execution_confirm_enabled=bool(runtime_advanced_defaults.get("execution_confirm_enabled", False)),
+                    execution_confirm_lookahead=self._clamp_int(
+                        runtime_advanced_defaults.get("execution_confirm_lookahead", 2),
+                        1,
+                        10,
+                    ),
+                    execution_confirm_loss_mult=float(runtime_advanced_defaults.get("execution_confirm_loss_mult", 0.65)),
+                    execution_confirm_win_mult=float(runtime_advanced_defaults.get("execution_confirm_win_mult", 1.0)),
+                    execution_anti_martingale_enabled=bool(
+                        runtime_advanced_defaults.get("execution_anti_martingale_enabled", False)
+                    ),
+                    execution_anti_martingale_step=float(runtime_advanced_defaults.get("execution_anti_martingale_step", 0.2)),
+                    execution_anti_martingale_floor=float(runtime_advanced_defaults.get("execution_anti_martingale_floor", 0.6)),
+                    execution_anti_martingale_ceiling=float(runtime_advanced_defaults.get("execution_anti_martingale_ceiling", 1.4)),
                 )
                 if bars_empty:
                     result = BacktestResult(
@@ -3803,6 +4243,61 @@ class LieEngine:
         round_no: int = 1,
         review_passed: bool,
     ) -> dict[str, Any]:
+        def _as_bool(raw: Any, default: bool) -> bool:
+            if isinstance(raw, bool):
+                return bool(raw)
+            if isinstance(raw, (int, float)):
+                return bool(raw)
+            text = str(raw).strip().lower()
+            if text in {"1", "true", "t", "yes", "y", "on"}:
+                return True
+            if text in {"0", "false", "f", "no", "n", "off"}:
+                return False
+            return bool(default)
+
+        def _resolve_profiles(val: dict[str, Any]) -> dict[str, Any]:
+            configured = val.get("ops_artifact_governance_profiles", {})
+            profiles: dict[str, Any] = {}
+            if isinstance(configured, dict):
+                for raw_name, raw_payload in configured.items():
+                    name = str(raw_name).strip()
+                    if not name or not isinstance(raw_payload, dict):
+                        continue
+                    profiles[name] = dict(raw_payload)
+            if profiles:
+                return profiles
+
+            defaults = (
+                ReleaseOrchestrator.ARTIFACT_GOVERNANCE_DEFAULTS
+                if isinstance(getattr(ReleaseOrchestrator, "ARTIFACT_GOVERNANCE_DEFAULTS", {}), dict)
+                else {}
+            )
+            legacy = (
+                ReleaseOrchestrator.ARTIFACT_GOVERNANCE_LEGACY_KEYS
+                if isinstance(getattr(ReleaseOrchestrator, "ARTIFACT_GOVERNANCE_LEGACY_KEYS", {}), dict)
+                else {}
+            )
+            for raw_name, base_payload in defaults.items():
+                name = str(raw_name).strip()
+                if not name or not isinstance(base_payload, dict):
+                    continue
+                payload = dict(base_payload)
+                legacy_cfg = legacy.get(name, {}) if isinstance(legacy.get(name, {}), dict) else {}
+                retention_key = str(legacy_cfg.get("retention_key", "")).strip()
+                retention_default = int(legacy_cfg.get("retention_default", 30))
+                checksum_key = str(legacy_cfg.get("checksum_key", "")).strip()
+                checksum_default = bool(legacy_cfg.get("checksum_default", True))
+                retention_raw = val.get(retention_key, retention_default) if retention_key else retention_default
+                checksum_raw = val.get(checksum_key, checksum_default) if checksum_key else checksum_default
+                try:
+                    retention_days = max(1, int(retention_raw))
+                except Exception:
+                    retention_days = max(1, int(retention_default))
+                payload["retention_days"] = int(retention_days)
+                payload["checksum_index_enabled"] = bool(_as_bool(checksum_raw, checksum_default))
+                profiles[name] = payload
+            return profiles
+
         baseline: dict[str, Any] = {
             "enabled": True,
             "promoted": False,
@@ -3816,15 +4311,14 @@ class LieEngine:
             "as_of": as_of.isoformat(),
             "round": int(max(1, round_no)),
         }
-        if not review_passed:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        allow_on_review_fail = _as_bool(val.get("ops_artifact_governance_promote_on_review_fail", True), True)
+        baseline["review_passed"] = bool(review_passed)
+        baseline["promote_on_review_fail"] = bool(allow_on_review_fail)
+        if not review_passed and not allow_on_review_fail:
             return baseline
 
-        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
-        profiles = (
-            val.get("ops_artifact_governance_profiles", {})
-            if isinstance(val.get("ops_artifact_governance_profiles", {}), dict)
-            else {}
-        )
+        profiles = _resolve_profiles(val)
         baseline["profiles_count"] = int(len(profiles))
         if not profiles:
             baseline["reason"] = "profiles_missing"
@@ -5375,15 +5869,38 @@ class LieEngine:
         )
 
     def _scheduler_orchestrator(self) -> SchedulerOrchestrator:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        use_legacy_review = bool(val.get("scheduler_review_use_legacy", False))
+
+        def _scheduler_review_cycle(d: date, max_rounds: int) -> dict[str, Any]:
+            if use_legacy_review:
+                out = self.run_review_cycle(as_of=d, max_rounds=max_rounds)
+                if isinstance(out, dict):
+                    out.setdefault("execution_path", "legacy_scheduler")
+                return out
+            out = self.run_review_cycle_guarded(
+                as_of=d,
+                max_rounds=max_rounds,
+                review_mode="review-loop",
+                skip_mutex=True,
+            )
+            if isinstance(out, dict):
+                out.setdefault("execution_path", "guarded_scheduler")
+            return out
+
         return SchedulerOrchestrator(
             settings=self.settings,
             output_dir=self.ctx.output_dir,
             run_premarket=lambda d: self.run_premarket(d),
             run_intraday_check=lambda d, slot: self.run_intraday_check(d, slot=slot),
-            run_eod=lambda d: self.run_eod(d),
-            run_review_cycle=lambda d, max_rounds: self.run_review_cycle(as_of=d, max_rounds=max_rounds),
+            run_eod=lambda d: self.run_eod(d, live_takeover_skip_mutex=True),
+            run_review_cycle=_scheduler_review_cycle,
             ops_report=lambda d, window_days: self.ops_report(as_of=d, window_days=window_days),
-            run_micro_capture=lambda d, symbols: self.run_micro_capture(as_of=d, symbols=symbols),
+            run_micro_capture=lambda d, symbols: self.run_micro_capture(
+                as_of=d,
+                symbols=symbols,
+                live_takeover_skip_mutex=True,
+            ),
         )
 
     def gate_report(
@@ -5403,6 +5920,120 @@ class LieEngine:
 
     def review_until_pass(self, as_of: date, max_rounds: int = 3) -> dict[str, Any]:
         return self._release_orchestrator().review_until_pass(as_of=as_of, max_rounds=max_rounds)
+
+    @staticmethod
+    def _parse_guarded_stdout_json(stdout: str) -> dict[str, Any] | None:
+        text = str(stdout or "").strip()
+        if not text:
+            return None
+        try:
+            payload = json.loads(text)
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            pass
+        marker = "\n{"
+        pos = text.rfind(marker)
+        if pos >= 0:
+            candidate = text[pos + 1 :].strip()
+            try:
+                payload = json.loads(candidate)
+                return payload if isinstance(payload, dict) else None
+            except Exception:
+                return None
+        return None
+
+    def run_review_cycle_guarded(
+        self,
+        *,
+        as_of: date,
+        max_rounds: int = 2,
+        ops_window_days: int | None = None,
+        review_timeout_seconds: int = 180,
+        gate_timeout_seconds: int = 120,
+        ops_timeout_seconds: int = 120,
+        health_timeout_seconds: int = 90,
+        mutex_timeout_seconds: float = 5.0,
+        review_mode: str = "review-loop",
+        skip_health_check: bool = False,
+        fail_fast: bool = False,
+        skip_mutex: bool = False,
+    ) -> dict[str, Any]:
+        script_path = self.ctx.root / "scripts" / "run_review_cycle_guarded.py"
+        if not script_path.exists():
+            fallback = self.run_review_cycle(as_of=as_of, max_rounds=max_rounds, ops_window_days=ops_window_days)
+            if isinstance(fallback, dict):
+                fallback.setdefault("execution_path", "legacy_fallback_missing_script")
+                fallback.setdefault("guarded_error", f"guarded_script_missing:{script_path}")
+            return fallback
+
+        replay_days = int(self.settings.validation.get("required_stable_replay_days", 3))
+        ops_days = int(ops_window_days if ops_window_days is not None else replay_days)
+        mode = str(review_mode).strip().lower()
+        if mode not in {"review", "review-loop"}:
+            mode = "review-loop"
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--date",
+            as_of.isoformat(),
+            "--config",
+            str(self.ctx.config_path),
+            "--output-root",
+            str(self.ctx.output_dir),
+            "--max-rounds",
+            str(max(0, int(max_rounds))),
+            "--review-mode",
+            mode,
+            "--ops-window-days",
+            str(max(1, int(ops_days))),
+            "--review-timeout-seconds",
+            str(max(1, int(review_timeout_seconds))),
+            "--gate-timeout-seconds",
+            str(max(1, int(gate_timeout_seconds))),
+            "--ops-timeout-seconds",
+            str(max(1, int(ops_timeout_seconds))),
+            "--health-timeout-seconds",
+            str(max(1, int(health_timeout_seconds))),
+            "--mutex-timeout-seconds",
+            str(max(0.1, float(mutex_timeout_seconds))),
+        ]
+        if bool(skip_health_check):
+            cmd.append("--skip-health-check")
+        if bool(fail_fast):
+            cmd.append("--fail-fast")
+        if bool(skip_mutex):
+            cmd.append("--skip-mutex")
+
+        env = dict(os.environ)
+        env["PYTHON"] = sys.executable
+        proc = subprocess.run(
+            cmd,
+            cwd=self.ctx.root,
+            text=True,
+            capture_output=True,
+            env=env,
+        )
+        payload = self._parse_guarded_stdout_json(proc.stdout or "")
+        if payload is None:
+            fallback_path = self.ctx.output_dir / "review" / f"{as_of.isoformat()}_review_cycle_guarded.json"
+            payload = self._load_json_safely(fallback_path)
+
+        if not isinstance(payload, dict) or not payload:
+            payload = {
+                "date": as_of.isoformat(),
+                "ok": False,
+                "error": "guarded_payload_parse_failed",
+                "stdout_excerpt": str(proc.stdout or "")[-3000:],
+            }
+        payload["command"] = cmd
+        payload["returncode"] = int(proc.returncode)
+        payload["skip_mutex"] = bool(skip_mutex)
+        if str(proc.stderr or "").strip():
+            payload["stderr_excerpt"] = str(proc.stderr or "")[-3000:]
+        if int(proc.returncode) != 0:
+            payload["ok"] = False
+        return payload
 
     def run_review_cycle(self, as_of: date, max_rounds: int = 2, ops_window_days: int | None = None) -> dict[str, Any]:
         return self._release_orchestrator().run_review_cycle(

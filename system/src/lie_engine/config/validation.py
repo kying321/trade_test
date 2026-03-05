@@ -940,6 +940,25 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                     )
     if "ops_state_min_samples" in val and _as_int(val.get("ops_state_min_samples", 0)) < 1:
         issues.append(ValidationIssue("error", "validation.ops_state_min_samples", "必须 >= 1"))
+    if "ops_strategy_stability_gate_enabled" in val and not isinstance(
+        val.get("ops_strategy_stability_gate_enabled"), bool
+    ):
+        issues.append(
+            ValidationIssue(
+                "error",
+                "validation.ops_strategy_stability_gate_enabled",
+                "必须是布尔值",
+            )
+        )
+    if "ops_strategy_stability_min_windows" in val and _as_int(val.get("ops_strategy_stability_min_windows", 0)) < 1:
+        issues.append(ValidationIssue("error", "validation.ops_strategy_stability_min_windows", "必须 >= 1"))
+    if "ops_strategy_stability_max_age_days" in val and _as_int(val.get("ops_strategy_stability_max_age_days", -1)) < 0:
+        issues.append(ValidationIssue("error", "validation.ops_strategy_stability_max_age_days", "必须 >= 0"))
+    for k in ("ops_strategy_stability_score_min", "ops_strategy_stability_trade_activity_ratio_min"):
+        if k in val:
+            v = _as_float(val.get(k, 0.0))
+            if not (0.0 <= v <= 1.0):
+                issues.append(ValidationIssue("error", f"validation.{k}", "必须在 [0, 1]"))
     if "ops_mode_health_fail_days_max" in val and _as_int(val.get("ops_mode_health_fail_days_max", 0)) < 0:
         issues.append(ValidationIssue("error", "validation.ops_mode_health_fail_days_max", "必须 >= 0"))
     for k in (
@@ -1177,6 +1196,48 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                     )
     if "microstructure_signal_enabled" in val and not isinstance(val.get("microstructure_signal_enabled"), bool):
         issues.append(ValidationIssue("error", "validation.microstructure_signal_enabled", "必须是布尔值"))
+    if "theory_signal_enabled" in val and not isinstance(val.get("theory_signal_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.theory_signal_enabled", "必须是布尔值"))
+    if "execution_confirm_enabled" in val and not isinstance(val.get("execution_confirm_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.execution_confirm_enabled", "必须是布尔值"))
+    if "execution_anti_martingale_enabled" in val and not isinstance(val.get("execution_anti_martingale_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.execution_anti_martingale_enabled", "必须是布尔值"))
+    for k, lo, hi in (
+        ("exposure_scale", 0.08, 1.50),
+        ("theory_ict_weight", 0.0, 2.0),
+        ("theory_brooks_weight", 0.0, 2.0),
+        ("theory_lie_weight", 0.0, 2.0),
+        ("theory_wyckoff_weight", 0.0, 2.0),
+        ("theory_vpa_weight", 0.0, 2.0),
+        ("theory_confidence_boost_max", 0.5, 20.0),
+        ("theory_penalty_max", 0.5, 20.0),
+        ("theory_min_confluence", 0.0, 1.0),
+        ("theory_conflict_fuse", 0.0, 1.0),
+        ("execution_confirm_loss_mult", 0.0, 1.6),
+        ("execution_confirm_win_mult", 0.0, 1.6),
+        ("execution_anti_martingale_step", 0.0, 0.5),
+        ("execution_anti_martingale_floor", 0.0, 2.0),
+        ("execution_anti_martingale_ceiling", 0.0, 2.0),
+    ):
+        if k in val:
+            x = _as_float(val.get(k, 0.0))
+            if not (lo <= x <= hi):
+                issues.append(ValidationIssue("error", f"validation.{k}", f"必须在 [{lo}, {hi}]"))
+    if "execution_confirm_lookahead" in val:
+        x = _as_int(val.get("execution_confirm_lookahead", 0))
+        if not (1 <= x <= 10):
+            issues.append(ValidationIssue("error", "validation.execution_confirm_lookahead", "必须在 [1, 10]"))
+    if "execution_anti_martingale_floor" in val and "execution_anti_martingale_ceiling" in val:
+        floor = _as_float(val.get("execution_anti_martingale_floor", 0.0))
+        ceiling = _as_float(val.get("execution_anti_martingale_ceiling", 0.0))
+        if floor > ceiling:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "validation.execution_anti_martingale_floor",
+                    "不能大于 execution_anti_martingale_ceiling",
+                )
+            )
     if "micro_schema_hard_fuse_enabled" in val and not isinstance(val.get("micro_schema_hard_fuse_enabled"), bool):
         issues.append(ValidationIssue("error", "validation.micro_schema_hard_fuse_enabled", "必须是布尔值"))
     if "micro_cross_source_audit_enabled" in val and not isinstance(val.get("micro_cross_source_audit_enabled"), bool):
@@ -1398,9 +1459,59 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
                             f"validation.micro_capture_daemon_symbols[{i}]",
                             "元素不能为空",
                         )
-                    )
+                        )
         else:
             issues.append(ValidationIssue("error", "validation.micro_capture_daemon_symbols", "必须是字符串或列表"))
+    if "binance_live_takeover_enabled" in val and not isinstance(val.get("binance_live_takeover_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.binance_live_takeover_enabled", "必须是布尔值"))
+    if "binance_live_takeover_on_micro_capture" in val and not isinstance(val.get("binance_live_takeover_on_micro_capture"), bool):
+        issues.append(ValidationIssue("error", "validation.binance_live_takeover_on_micro_capture", "必须是布尔值"))
+    if "binance_live_takeover_on_eod" in val and not isinstance(val.get("binance_live_takeover_on_eod"), bool):
+        issues.append(ValidationIssue("error", "validation.binance_live_takeover_on_eod", "必须是布尔值"))
+    if "binance_live_takeover_activate_config" in val and not isinstance(val.get("binance_live_takeover_activate_config"), bool):
+        issues.append(ValidationIssue("error", "validation.binance_live_takeover_activate_config", "必须是布尔值"))
+    if "binance_live_takeover_allow_live_order" in val and not isinstance(val.get("binance_live_takeover_allow_live_order"), bool):
+        issues.append(ValidationIssue("error", "validation.binance_live_takeover_allow_live_order", "必须是布尔值"))
+    if "binance_live_takeover_allow_daemon_env_fallback" in val and not isinstance(val.get("binance_live_takeover_allow_daemon_env_fallback"), bool):
+        issues.append(ValidationIssue("error", "validation.binance_live_takeover_allow_daemon_env_fallback", "必须是布尔值"))
+    if "binance_live_takeover_market" in val:
+        market = str(val.get("binance_live_takeover_market", "")).strip().lower()
+        if market not in {"futures_usdm", "spot"}:
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_market", "必须是 futures_usdm/spot"))
+    if "binance_live_takeover_rate_limit_per_minute" in val:
+        x = _as_int(val.get("binance_live_takeover_rate_limit_per_minute", 0))
+        if not (1 <= x <= 60):
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_rate_limit_per_minute", "必须在 [1, 60]"))
+    if "binance_live_takeover_timeout_ms" in val:
+        x = _as_int(val.get("binance_live_takeover_timeout_ms", 0))
+        if not (100 <= x <= 5000):
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_timeout_ms", "必须在 [100, 5000]"))
+    if "binance_live_takeover_exec_timeout_seconds" in val:
+        x = _as_int(val.get("binance_live_takeover_exec_timeout_seconds", 0))
+        if not (5 <= x <= 300):
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_exec_timeout_seconds", "必须在 [5, 300]"))
+    if "binance_live_takeover_canary_quote_usdt" in val:
+        x = _as_float(val.get("binance_live_takeover_canary_quote_usdt", 0.0))
+        if not (0.1 <= x <= 1_000_000):
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_canary_quote_usdt", "必须在 [0.1, 1000000]"))
+    if "binance_live_takeover_max_drawdown" in val:
+        x = _as_float(val.get("binance_live_takeover_max_drawdown", 0.0))
+        if not (0.01 <= x <= 0.5):
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_max_drawdown", "必须在 [0.01, 0.5]"))
+    if "binance_live_takeover_trade_window_hours" in val:
+        x = _as_int(val.get("binance_live_takeover_trade_window_hours", 0))
+        if not (1 <= x <= 1680):
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_trade_window_hours", "必须在 [1, 1680]"))
+    if "binance_live_takeover_max_trade_symbols" in val:
+        x = _as_int(val.get("binance_live_takeover_max_trade_symbols", 0))
+        if not (1 <= x <= 20):
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_max_trade_symbols", "必须在 [1, 20]"))
+    if "binance_live_takeover_order_symbol" in val and not isinstance(val.get("binance_live_takeover_order_symbol"), str):
+        issues.append(ValidationIssue("error", "validation.binance_live_takeover_order_symbol", "必须是字符串"))
+    if "binance_live_takeover_order_side" in val:
+        side = str(val.get("binance_live_takeover_order_side", "")).strip().upper()
+        if side and side not in {"BUY", "SELL"}:
+            issues.append(ValidationIssue("error", "validation.binance_live_takeover_order_side", "必须是 BUY/SELL 或空"))
     if "ops_system_time_sync_monitor_enabled" in val and not isinstance(val.get("ops_system_time_sync_monitor_enabled"), bool):
         issues.append(ValidationIssue("error", "validation.ops_system_time_sync_monitor_enabled", "必须是布尔值"))
     if "ops_system_time_sync_fail_days_max" in val and _as_int(val.get("ops_system_time_sync_fail_days_max", -1)) < 0:

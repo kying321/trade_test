@@ -16,7 +16,7 @@ universe:
     - {symbol: "RB2605", asset_class: "future", theme: "复苏"}
   max_dynamic_additions: 5
 data:
-  provider_profile: "opensource_dual"
+  provider_profile: "dual_binance_bybit_public"
 thresholds:
   hurst_trend: 0.6
   hurst_mean_revert: 0.4
@@ -49,7 +49,13 @@ validation:
   micro_cross_source_primary: "binance_spot_public"
   micro_cross_source_secondary: "bybit_spot_public"
   micro_cross_source_symbols: ["BTCUSDT", "ETHUSDT"]
+  micro_cross_source_align_seconds: 120
+  micro_cross_source_window_ms: 200
+  micro_cross_source_trade_limit: 300
+  micro_cross_source_tolerance_ms: 5000
   micro_cross_source_min_rows_per_side: 1
+  micro_continuous_gap_ms: 12000
+  micro_min_trade_count: 20
   micro_cross_source_adaptive_gap_enabled: true
   micro_cross_source_gap_freq_multiplier: 2.0
   micro_cross_source_gap_hist_window_days: 30
@@ -72,12 +78,28 @@ validation:
   micro_capture_daemon_enabled: true
   micro_capture_daemon_interval_minutes: 30
   micro_capture_daemon_symbols: ["BTCUSDT", "ETHUSDT"]
+  binance_live_takeover_enabled: true
+  binance_live_takeover_on_micro_capture: true
+  binance_live_takeover_on_eod: true
+  binance_live_takeover_activate_config: true
+  binance_live_takeover_allow_live_order: true
+  binance_live_takeover_allow_daemon_env_fallback: true
+  binance_live_takeover_market: "spot"  # futures_usdm | spot
+  binance_live_takeover_rate_limit_per_minute: 10
+  binance_live_takeover_timeout_ms: 5000
+  binance_live_takeover_exec_timeout_seconds: 45
+  binance_live_takeover_canary_quote_usdt: 5.0
+  binance_live_takeover_max_drawdown: 0.05
+  binance_live_takeover_trade_window_hours: 24
+  binance_live_takeover_max_trade_symbols: 3
+  binance_live_takeover_order_symbol: ""
+  binance_live_takeover_order_side: ""
   microstructure_symbols: ["BTCUSDT", "ETHUSDT"]
   review_use_strategy_lab: true
   strategy_lab_merge_step: 0.18
   strategy_lab_merge_require_accepted: false
   strategy_lab_merge_require_validation_metrics: true
-  strategy_lab_merge_min_validation_annual_return: -0.08
+  strategy_lab_merge_min_validation_annual_return: 0.00
   strategy_lab_merge_min_validation_trades: 2
   strategy_lab_merge_min_validation_positive_window_ratio: 0.90
   strategy_lab_merge_min_robustness: 0.70
@@ -283,6 +305,11 @@ validation:
   ops_reconcile_require_broker_snapshot: false
   ops_reconcile_broker_contract_emit_canonical_view: true
   ops_reconcile_broker_contract_canonical_dir: "artifacts/broker_snapshot_canonical"
+  ops_strategy_stability_gate_enabled: false
+  ops_strategy_stability_score_min: 0.60
+  ops_strategy_stability_trade_activity_ratio_min: 0.60
+  ops_strategy_stability_min_windows: 2
+  ops_strategy_stability_max_age_days: 7
   ops_state_min_samples: 5
   ops_risk_multiplier_floor: 0.35
   ops_risk_multiplier_drift_max: 0.30
@@ -300,8 +327,8 @@ validation:
   ops_system_time_sync_fail_days_max: 2
   ops_system_time_sync_inactive_days_max: 5
   ops_system_time_sync_min_ok_sources: 1
-  broker_snapshot_source_mode: "paper_engine"  # paper_engine | live_adapter | hybrid_prefer_live
-  broker_snapshot_live_mapping_profile: "generic"  # generic | ibkr | binance | ctp
+  broker_snapshot_source_mode: "hybrid_prefer_live"  # paper_engine | live_adapter | hybrid_prefer_live
+  broker_snapshot_live_mapping_profile: "binance"  # generic | ibkr | binance | ctp
   broker_snapshot_live_inbox: "output/artifacts/broker_live_inbox"
   broker_snapshot_live_fallback_to_paper: true
   execution_min_risk_multiplier: 0.20

@@ -529,6 +529,12 @@ class ReleaseOrchestrator:
         state_active = bool(state_stability.get("active", False))
         state_checks = state_stability.get("checks", {}) if isinstance(state_stability.get("checks", {}), dict) else {}
         state_stability_ok = all(bool(v) for v in state_checks.values()) if state_active else True
+        strategy_stability = self._strategy_stability_metrics(as_of=as_of)
+        strategy_active = bool(strategy_stability.get("active", False))
+        strategy_checks = (
+            strategy_stability.get("checks", {}) if isinstance(strategy_stability.get("checks", {}), dict) else {}
+        )
+        strategy_stability_ok = all(bool(v) for v in strategy_checks.values()) if strategy_active else True
         temporal_audit = self._temporal_audit_metrics(as_of=as_of)
         temporal_active = bool(temporal_audit.get("active", False))
         temporal_checks = temporal_audit.get("checks", {}) if isinstance(temporal_audit.get("checks", {}), dict) else {}
@@ -639,6 +645,7 @@ class ReleaseOrchestrator:
             "review_pass_gate": review_pass,
             "mode_health_ok": mode_health_ok,
             "state_stability_ok": state_stability_ok,
+            "strategy_stability_ok": strategy_stability_ok,
             "temporal_audit_ok": temporal_audit_ok,
             "slot_anomaly_ok": slot_anomaly_ok,
             "mode_drift_ok": mode_drift_ok,
@@ -662,6 +669,7 @@ class ReleaseOrchestrator:
             as_of=as_of,
             checks=checks,
             state_stability=state_stability,
+            strategy_stability=strategy_stability,
             temporal_audit=temporal_audit,
             slot_anomaly=slot_anomaly,
             mode_drift=mode_drift,
@@ -684,6 +692,7 @@ class ReleaseOrchestrator:
             "health": health,
             "stable_replay": replay,
             "state_stability": state_stability,
+            "strategy_stability": strategy_stability,
             "temporal_audit": temporal_audit,
             "slot_anomaly": slot_anomaly,
             "mode_drift": mode_drift,
@@ -745,6 +754,178 @@ class ReleaseOrchestrator:
             "path": str(latest),
             "returncode": payload.get("returncode"),
             "has_output": bool(payload.get("stdout") or payload.get("stderr") or payload.get("stdout_excerpt") or payload.get("stderr_excerpt")),
+        }
+
+    def _strategy_stability_metrics(self, *, as_of: date) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        gate_enabled = bool(val.get("ops_strategy_stability_gate_enabled", False))
+        score_min = min(
+            1.0,
+            max(0.0, self._safe_float(val.get("ops_strategy_stability_score_min", 0.60), 0.60)),
+        )
+        trade_activity_ratio_min = min(
+            1.0,
+            max(
+                0.0,
+                self._safe_float(
+                    val.get("ops_strategy_stability_trade_activity_ratio_min", 0.60),
+                    0.60,
+                ),
+            ),
+        )
+        min_windows = max(1, int(self._safe_float(val.get("ops_strategy_stability_min_windows", 2), 2)))
+        max_age_days = max(0, int(self._safe_float(val.get("ops_strategy_stability_max_age_days", 7), 7)))
+
+        checks = {
+            "artifact_found_ok": True,
+            "freshness_ok": True,
+            "score_ok": True,
+            "trade_activity_ok": True,
+            "min_windows_ok": True,
+        }
+        metrics: dict[str, Any] = {
+            "score": 0.0,
+            "trade_activity_ratio": 0.0,
+            "accept_ratio": 0.0,
+            "dd_ok_ratio": 0.0,
+            "return_pos_ratio": 0.0,
+            "window_count": 0,
+            "window_accept_count": 0,
+            "end_date": "",
+            "age_days": None,
+            "source_path": "",
+        }
+        alerts: list[str] = []
+        if not gate_enabled:
+            return {
+                "active": False,
+                "checks": checks,
+                "metrics": metrics,
+                "thresholds": {
+                    "ops_strategy_stability_gate_enabled": bool(gate_enabled),
+                    "ops_strategy_stability_score_min": float(score_min),
+                    "ops_strategy_stability_trade_activity_ratio_min": float(trade_activity_ratio_min),
+                    "ops_strategy_stability_min_windows": int(min_windows),
+                    "ops_strategy_stability_max_age_days": int(max_age_days),
+                },
+                "alerts": alerts,
+            }
+
+        research_dir = self.output_dir / "research"
+        candidates = sorted(research_dir.glob("strategy_stability_*/summary.json"), reverse=True)
+        selected_path: Path | None = None
+        selected_payload: dict[str, Any] = {}
+        fallback_path: Path | None = None
+        fallback_payload: dict[str, Any] = {}
+        for path in candidates:
+            payload = self.load_json_safely(path)
+            if not isinstance(payload, dict) or not payload:
+                continue
+            end_raw = str(payload.get("end", "")).strip()
+            end_date: date | None = None
+            if end_raw:
+                try:
+                    end_date = date.fromisoformat(end_raw)
+                except ValueError:
+                    end_date = None
+            if fallback_path is None:
+                fallback_path = path
+                fallback_payload = payload
+            if end_date is not None and end_date <= as_of:
+                selected_path = path
+                selected_payload = payload
+                break
+        if selected_path is None and fallback_path is not None:
+            selected_path = fallback_path
+            selected_payload = fallback_payload
+
+        checks["artifact_found_ok"] = bool(selected_path is not None and selected_payload)
+        if not checks["artifact_found_ok"]:
+            checks["freshness_ok"] = False
+            checks["score_ok"] = False
+            checks["trade_activity_ok"] = False
+            checks["min_windows_ok"] = False
+            alerts.append("strategy_stability_artifact_missing")
+            return {
+                "active": True,
+                "checks": checks,
+                "metrics": metrics,
+                "thresholds": {
+                    "ops_strategy_stability_gate_enabled": bool(gate_enabled),
+                    "ops_strategy_stability_score_min": float(score_min),
+                    "ops_strategy_stability_trade_activity_ratio_min": float(trade_activity_ratio_min),
+                    "ops_strategy_stability_min_windows": int(min_windows),
+                    "ops_strategy_stability_max_age_days": int(max_age_days),
+                },
+                "alerts": alerts,
+            }
+
+        stability = (
+            selected_payload.get("stability", {})
+            if isinstance(selected_payload.get("stability", {}), dict)
+            else {}
+        )
+        windows = (
+            selected_payload.get("windows", [])
+            if isinstance(selected_payload.get("windows", []), list)
+            else []
+        )
+        score = self._safe_float(stability.get("score", 0.0), 0.0)
+        trade_activity_ratio = self._safe_float(stability.get("trade_activity_ratio", 0.0), 0.0)
+        accept_ratio = self._safe_float(stability.get("accept_ratio", 0.0), 0.0)
+        dd_ok_ratio = self._safe_float(stability.get("dd_ok_ratio", 0.0), 0.0)
+        return_pos_ratio = self._safe_float(stability.get("return_pos_ratio", 0.0), 0.0)
+        window_accept_count = sum(1 for x in windows if bool((x or {}).get("best_accepted", False)))
+
+        end_raw = str(selected_payload.get("end", "")).strip()
+        end_date: date | None = None
+        if end_raw:
+            try:
+                end_date = date.fromisoformat(end_raw)
+            except ValueError:
+                end_date = None
+        age_days: int | None = None
+        if end_date is not None:
+            age_days = (as_of - end_date).days
+
+        checks["freshness_ok"] = bool(age_days is not None and age_days >= 0 and age_days <= max_age_days)
+        checks["score_ok"] = bool(score >= score_min)
+        checks["trade_activity_ok"] = bool(trade_activity_ratio >= trade_activity_ratio_min)
+        checks["min_windows_ok"] = bool(len(windows) >= min_windows)
+
+        if not checks["freshness_ok"]:
+            alerts.append("strategy_stability_artifact_stale")
+        if not checks["score_ok"]:
+            alerts.append("strategy_stability_score_low")
+        if not checks["trade_activity_ok"]:
+            alerts.append("strategy_stability_trade_activity_low")
+        if not checks["min_windows_ok"]:
+            alerts.append("strategy_stability_windows_insufficient")
+
+        metrics = {
+            "score": float(score),
+            "trade_activity_ratio": float(trade_activity_ratio),
+            "accept_ratio": float(accept_ratio),
+            "dd_ok_ratio": float(dd_ok_ratio),
+            "return_pos_ratio": float(return_pos_ratio),
+            "window_count": int(len(windows)),
+            "window_accept_count": int(window_accept_count),
+            "end_date": str(end_date.isoformat()) if end_date is not None else "",
+            "age_days": int(age_days) if age_days is not None else None,
+            "source_path": str(selected_path),
+        }
+        return {
+            "active": True,
+            "checks": checks,
+            "metrics": metrics,
+            "thresholds": {
+                "ops_strategy_stability_gate_enabled": bool(gate_enabled),
+                "ops_strategy_stability_score_min": float(score_min),
+                "ops_strategy_stability_trade_activity_ratio_min": float(trade_activity_ratio_min),
+                "ops_strategy_stability_min_windows": int(min_windows),
+                "ops_strategy_stability_max_age_days": int(max_age_days),
+            },
+            "alerts": alerts,
         }
 
     def _load_review_loop_history_series(self, *, as_of: date, window_days: int) -> list[dict[str, Any]]:
@@ -4218,6 +4399,7 @@ class ReleaseOrchestrator:
         as_of: date,
         checks: dict[str, Any],
         state_stability: dict[str, Any],
+        strategy_stability: dict[str, Any],
         temporal_audit: dict[str, Any],
         slot_anomaly: dict[str, Any],
         mode_drift: dict[str, Any],
@@ -4242,6 +4424,9 @@ class ReleaseOrchestrator:
         if not bool(checks.get("state_stability_ok", True)):
             score += 2
             reason_codes.append("state_stability")
+        if not bool(checks.get("strategy_stability_ok", True)):
+            score += 2
+            reason_codes.append("strategy_stability")
         if not bool(checks.get("temporal_audit_ok", True)):
             score += 2
             reason_codes.append("temporal_audit")
@@ -4293,6 +4478,11 @@ class ReleaseOrchestrator:
             action = "rollback_now_and_lock_parameter_updates"
 
         state_alerts = state_stability.get("alerts", []) if isinstance(state_stability.get("alerts", []), list) else []
+        strategy_alerts = (
+            strategy_stability.get("alerts", [])
+            if isinstance(strategy_stability.get("alerts", []), list)
+            else []
+        )
         temporal_alerts = temporal_audit.get("alerts", []) if isinstance(temporal_audit.get("alerts", []), list) else []
         slot_alerts = slot_anomaly.get("alerts", []) if isinstance(slot_anomaly.get("alerts", []), list) else []
         drift_alerts = mode_drift.get("alerts", []) if isinstance(mode_drift.get("alerts", []), list) else []
@@ -4310,8 +4500,9 @@ class ReleaseOrchestrator:
             "target_anchor": target_anchor,
             "anchor_ready": bool(anchor_ready),
             "cooldown_days": 3 if level == "hard" else (1 if level == "soft" else 0),
-            "candidates": candidates[:10],
+            "candidates": candidates[:10],  # keep report compact
             "alerts": list(state_alerts[:2])
+            + list(strategy_alerts[:2])
             + list(temporal_alerts[:2])
             + list(slot_alerts[:2])
             + list(drift_alerts[:2])
@@ -5546,6 +5737,16 @@ class ReleaseOrchestrator:
         state_stability = self._state_stability_metrics(as_of=as_of)
         state_checks = state_stability.get("checks", {}) if isinstance(state_stability.get("checks", {}), dict) else {}
         state_all_ok = all(bool(v) for v in state_checks.values())
+        strategy_stability = (
+            gate.get("strategy_stability", {})
+            if isinstance(gate.get("strategy_stability", {}), dict)
+            else {}
+        )
+        strategy_checks = (
+            strategy_stability.get("checks", {})
+            if isinstance(strategy_stability.get("checks", {}), dict)
+            else {}
+        )
         temporal_audit = gate.get("temporal_audit", {}) if isinstance(gate.get("temporal_audit", {}), dict) else {}
         temporal_active = bool(temporal_audit.get("active", False))
         temporal_checks = (
@@ -5697,6 +5898,7 @@ class ReleaseOrchestrator:
                 "history_count": len(scheduler_state.get("history", [])),
             },
             "state_stability": state_stability,
+            "strategy_stability": strategy_stability,
             "temporal_audit": temporal_audit,
             "slot_anomaly": slot_anomaly,
             "mode_drift": mode_drift,
@@ -5759,6 +5961,33 @@ class ReleaseOrchestrator:
         )
         lines.append(f"- alerts: `{', '.join(state_stability.get('alerts', [])) if state_stability.get('alerts') else 'NONE'}`")
         for k, v in state_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
+        lines.append("## 策略稳定性门禁")
+        lines.append(f"- active: `{strategy_stability.get('active', False)}`")
+        strategy_metrics = (
+            strategy_stability.get("metrics", {})
+            if isinstance(strategy_stability.get("metrics", {}), dict)
+            else {}
+        )
+        lines.append(
+            "- score/trade_activity/windows: "
+            + f"`{self._safe_float(strategy_metrics.get('score', 0.0), 0.0):.4f}` / "
+            + f"`{self._safe_float(strategy_metrics.get('trade_activity_ratio', 0.0), 0.0):.2%}` / "
+            + f"`{int(self._safe_float(strategy_metrics.get('window_count', 0), 0))}`"
+        )
+        lines.append(
+            "- end_date/age_days: "
+            + f"`{str(strategy_metrics.get('end_date', '') or 'N/A')}` / "
+            + f"`{strategy_metrics.get('age_days', 'N/A')}`"
+        )
+        lines.append(
+            f"- source_path: `{str(strategy_metrics.get('source_path', '') or 'N/A')}`"
+        )
+        lines.append(
+            f"- alerts: `{', '.join(strategy_stability.get('alerts', [])) if strategy_stability.get('alerts') else 'NONE'}`"
+        )
+        for k, v in strategy_checks.items():
             lines.append(f"- `{k}`: `{v}`")
         lines.append("")
         lines.append("## 时间审计")
@@ -6383,6 +6612,53 @@ class ReleaseOrchestrator:
                     "code": "MODE_DRIFT",
                     "message": "实盘与回测模式表现出现漂移",
                     "action": "先核验 live/backtest 口径一致性，再收紧该模式参数并复跑近窗回测。",
+                }
+            )
+        if not bool(checks.get("strategy_stability_ok", True)):
+            strategy_payload = (
+                gate.get("strategy_stability", {})
+                if isinstance(gate.get("strategy_stability", {}), dict)
+                else {}
+            )
+            strategy_metrics = (
+                strategy_payload.get("metrics", {})
+                if isinstance(strategy_payload.get("metrics", {}), dict)
+                else {}
+            )
+            strategy_thresholds = (
+                strategy_payload.get("thresholds", {})
+                if isinstance(strategy_payload.get("thresholds", {}), dict)
+                else {}
+            )
+            defects.append(
+                {
+                    "category": "model",
+                    "code": "STRATEGY_STABILITY_GATE",
+                    "message": (
+                        "滚动策略稳定性门禁未达标："
+                        + f"score={self._safe_float(strategy_metrics.get('score', 0.0), 0.0):.3f}, "
+                        + f"trade_activity={self._safe_float(strategy_metrics.get('trade_activity_ratio', 0.0), 0.0):.2%}"
+                    ),
+                    "action": (
+                        "优先重跑 strategy_stability 并修复低活跃/低一致性窗口后再放行；"
+                        + "必要时降低候选参数漂移并提高最低成交覆盖。"
+                    ),
+                    "details": {
+                        "source_path": str(strategy_metrics.get("source_path", "")),
+                        "end_date": str(strategy_metrics.get("end_date", "")),
+                        "age_days": strategy_metrics.get("age_days"),
+                        "score_min": self._safe_float(
+                            strategy_thresholds.get("ops_strategy_stability_score_min", 0.0),
+                            0.0,
+                        ),
+                        "trade_activity_ratio_min": self._safe_float(
+                            strategy_thresholds.get(
+                                "ops_strategy_stability_trade_activity_ratio_min",
+                                0.0,
+                            ),
+                            0.0,
+                        ),
+                    },
                 }
             )
         if not bool(checks.get("style_drift_ok", True)):
@@ -7487,6 +7763,11 @@ class ReleaseOrchestrator:
                 f"优先修复 mode_drift 缺陷并重跑 lie ops-report --date {as_of.isoformat()} --window-days 7",
                 "确认 live/backtest 口径一致后再放开模式自适应更新",
             ] + [x for x in next_actions if x not in default_actions] + default_actions
+        if any(str(x.get("code", "")).startswith("STRATEGY_") for x in defects):
+            next_actions = [
+                "优先重跑 strategy_stability 并刷新稳定性工件（score/trade_activity/windows）。",
+                f"刷新后重跑 lie gate-report --date {as_of.isoformat()}，确认 strategy_stability_ok=true。",
+            ] + [x for x in next_actions if x not in default_actions] + default_actions
         if any(str(x.get("code", "")).startswith("RECONCILE_") for x in defects):
             next_actions = [
                 f"优先修复 reconcile_drift 缺陷并重跑 lie ops-report --date {as_of.isoformat()} --window-days 7",
@@ -7741,6 +8022,18 @@ class ReleaseOrchestrator:
             style_drift = gate.get("style_drift", {}) if isinstance(gate.get("style_drift", {}), dict) else {}
             style_drift_active = bool(style_drift.get("active", False))
             style_drift_ok = bool(style_drift.get("gate_ok", True))
+            strategy_stability = (
+                gate.get("strategy_stability", {})
+                if isinstance(gate.get("strategy_stability", {}), dict)
+                else {}
+            )
+            strategy_checks = (
+                strategy_stability.get("checks", {})
+                if isinstance(strategy_stability.get("checks", {}), dict)
+                else {}
+            )
+            strategy_active = bool(strategy_stability.get("active", False))
+            strategy_ok = all(bool(v) for v in strategy_checks.values()) if strategy_active else True
             stress_matrix_trend = (
                 gate.get("stress_matrix_trend", {})
                 if isinstance(gate.get("stress_matrix_trend", {}), dict)
@@ -7912,6 +8205,9 @@ class ReleaseOrchestrator:
                     "style_drift_active": style_drift_active,
                     "style_drift_ok": style_drift_ok,
                     "style_drift_alerts": list(style_drift.get("alerts", [])),
+                    "strategy_stability_active": strategy_active,
+                    "strategy_stability_ok": strategy_ok,
+                    "strategy_stability_alerts": list(strategy_stability.get("alerts", [])),
                     "stress_matrix_trend_active": stress_active,
                     "stress_matrix_trend_ok": stress_ok,
                     "stress_matrix_trend_alerts": list(stress_matrix_trend.get("alerts", [])),

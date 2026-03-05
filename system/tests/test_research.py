@@ -544,7 +544,6 @@ class ResearchTests(unittest.TestCase):
         )
         self.assertTrue(str(crypto[0].get("name", "")).startswith("crypto_tactical_"))
         self.assertTrue(str(crypto[1].get("name", "")).startswith("crypto_swing_flow_"))
-
     def test_strategy_lab_resolve_exposure_cap_prefers_feasible_ablation(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
 
