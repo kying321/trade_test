@@ -75,7 +75,7 @@ validation:
   micro_capture_daemon_enabled: true
   micro_capture_daemon_interval_minutes: 30
   micro_capture_daemon_symbols: ["BTCUSDT", "ETHUSDT"]
-  binance_live_takeover_enabled: true
+  binance_live_takeover_enabled: false
   binance_live_takeover_on_micro_capture: true
   binance_live_takeover_on_eod: true
   binance_live_takeover_activate_config: true
