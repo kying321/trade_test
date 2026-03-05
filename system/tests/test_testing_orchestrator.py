@@ -123,6 +123,25 @@ class TestingOrchestratorTests(unittest.TestCase):
         called_timeout = mock_run.call_args.kwargs.get("timeout")
         self.assertEqual(int(called_timeout), 30)
 
+    def test_test_all_timeout_bytes_output_is_decoded_and_progress_counted(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+
+        timeout_exc = subprocess.TimeoutExpired(cmd=["python", "-m", "unittest"], timeout=30)
+        timeout_exc.stdout = b""
+        timeout_exc.stderr = b"test_a ... ok\ntest_b ... FAIL\n"
+
+        with patch("lie_engine.orchestration.testing.subprocess.run", side_effect=timeout_exc):
+            orch = TestingOrchestrator(root=td, output_dir=td, timeout_seconds=60)
+            out = orch.test_all(timeout_seconds=30)
+
+        self.assertEqual(int(out.get("returncode", 0)), 124)
+        self.assertTrue(bool(out.get("timed_out", False)))
+        self.assertEqual(int(out.get("tests_ran", 0)), 2)
+        self.assertIn("test_b", list(out.get("failed_tests", [])))
+        self.assertIn("__timeout__", list(out.get("failed_tests", [])))
+        self.assertIn("error=test_timeout", str(out.get("stderr_excerpt", "")))
+
 
 if __name__ == "__main__":
     unittest.main()
