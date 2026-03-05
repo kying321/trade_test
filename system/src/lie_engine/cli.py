@@ -142,6 +142,7 @@ def main() -> None:
     p_ta.add_argument("--fast-shard-index", default="0", help="Shard index for parallel agents")
     p_ta.add_argument("--fast-shard-total", default="1", help="Shard total for parallel agents")
     p_ta.add_argument("--fast-seed", default="lie-fast-v1", help="Deterministic sampling seed")
+    p_ta.add_argument("--timeout-seconds", default=None, help="Optional per-run timeout override (>=30)")
 
     p_loop = sub.add_parser("review-loop", help="Run review->tests loop until pass or max rounds")
     p_loop.add_argument("--date", required=True)
@@ -300,6 +301,11 @@ def main() -> None:
             fast_shard_index=int(args.fast_shard_index),
             fast_shard_total=int(args.fast_shard_total),
             fast_seed=str(args.fast_seed),
+            timeout_seconds=(
+                int(args.timeout_seconds)
+                if args.timeout_seconds not in {None, "", "none", "None"}
+                else None
+            ),
         )
     elif args.cmd == "review-loop":
         out = eng.review_until_pass(as_of=_parse_date(args.date), max_rounds=int(args.max_rounds))

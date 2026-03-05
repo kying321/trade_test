@@ -5811,6 +5811,7 @@ class LieEngine:
         fast_shard_index: int = 0,
         fast_shard_total: int = 1,
         fast_seed: str = "lie-fast-v1",
+        timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         return self._testing_orchestrator().test_all(
             fast=fast,
@@ -5818,6 +5819,7 @@ class LieEngine:
             fast_shard_index=fast_shard_index,
             fast_shard_total=fast_shard_total,
             fast_seed=fast_seed,
+            timeout_seconds=timeout_seconds,
         )
 
     def stable_replay_check(self, as_of: date, days: int | None = None) -> dict[str, Any]:

@@ -113,10 +113,11 @@ class TestingOrchestrator:
         fast_shard_index: int = 0,
         fast_shard_total: int = 1,
         fast_seed: str = "lie-fast-v1",
+        timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         env = dict(os.environ)
         env["PYTHONWARNINGS"] = "ignore::ResourceWarning"
-        timeout_seconds = max(30, int(self.timeout_seconds))
+        effective_timeout_seconds = max(30, int(timeout_seconds)) if timeout_seconds is not None else max(30, int(self.timeout_seconds))
         tests_discovered = 0
         tests_selected = 0
         cmd: list[str]
@@ -143,7 +144,7 @@ class TestingOrchestrator:
                 text=True,
                 capture_output=True,
                 env=env,
-                timeout=timeout_seconds,
+                timeout=effective_timeout_seconds,
             )
             returncode = int(proc.returncode)
             stdout = str(proc.stdout)
@@ -153,7 +154,7 @@ class TestingOrchestrator:
             returncode = 124
             stdout = str(exc.stdout or "")
             stderr = str(exc.stderr or "")
-            stderr = (stderr + "\n" if stderr else "") + f"error=test_timeout; timeout_seconds={timeout_seconds}"
+            stderr = (stderr + "\n" if stderr else "") + f"error=test_timeout; timeout_seconds={effective_timeout_seconds}"
         failed_tests = self._extract_failed_tests(stdout, stderr)
         if timed_out:
             failed_tests.append("__timeout__")
@@ -184,7 +185,7 @@ class TestingOrchestrator:
             "tests_discovered": int(tests_discovered),
             "tests_selected": int(tests_selected if fast else ran_count),
             "tests_ran": int(ran_count),
-            "timeout_seconds": int(timeout_seconds),
+            "timeout_seconds": int(effective_timeout_seconds),
             "timed_out": bool(timed_out),
         }
         log_path = self.output_dir / "logs" / f"tests_{datetime.now():%Y%m%d_%H%M%S}.json"
@@ -205,7 +206,7 @@ class TestingOrchestrator:
             "summary_line": summary_line,
             "stdout_excerpt": self._excerpt(stdout),
             "stderr_excerpt": self._excerpt(stderr),
-            "timeout_seconds": int(timeout_seconds),
+            "timeout_seconds": int(effective_timeout_seconds),
             "timed_out": bool(timed_out),
             "log_path": str(log_path),
         }
