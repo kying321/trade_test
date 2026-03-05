@@ -20,6 +20,8 @@ lie micro-capture --date 2026-02-13 --symbols BTCUSDT,ETHUSDT
 lie test-all
 # 快速子样本测试（确定性）
 lie test-all --fast --fast-ratio 0.10
+# 单次运行超时覆盖（避免 full 模式长时间挂起）
+lie test-all --timeout-seconds 600
 # 并行分片（多智能体协作时可覆盖全量）
 lie test-all --fast --fast-ratio 1.0 --fast-shard-index 0 --fast-shard-total 4
 lie validate-config
@@ -272,6 +274,8 @@ lie review --date 2026-02-13
 # 字段建议：open_positions 或 positions[], closed_pnl
 # test timeout guard:
 # validation.test_all_timeout_seconds: 1800
+# 可临时覆盖（不改配置）：
+# lie test-all --timeout-seconds 120
 # review-loop timeout fallback（full 超时后自动降级到 deterministic fast shard）:
 # validation.review_loop_timeout_fallback_enabled: true
 # validation.review_loop_timeout_fallback_ratio: 0.08
