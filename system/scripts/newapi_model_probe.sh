@@ -16,6 +16,11 @@ Options:
   --retry-transient N     Retries for transient failures (default: 1)
   --retry-backoff-ms N    Backoff between transient retries in ms (default: 300)
   --max-tokens N          max_tokens for ping request (default: 8)
+  --isolation-config-path PATH
+                          Config path to flip `binance_live_takeover_enabled` on hard fail
+                          (default: system/config.yaml; supports absolute path)
+  --disable-isolation-write
+                          Do not mutate config on hard fail (still exits 1)
   --output-dir PATH       Artifact dir relative to repo root (default: system/output/review)
   -h, --help              Show help
 
@@ -34,6 +39,8 @@ samples=3
 retry_transient=1
 retry_backoff_ms=300
 max_tokens=8
+isolation_config_path="system/config.yaml"
+isolation_write_enabled=true
 output_dir="system/output/review"
 
 while [[ $# -gt 0 ]]; do
@@ -74,6 +81,13 @@ while [[ $# -gt 0 ]]; do
       shift
       max_tokens="${1:-8}"
       ;;
+    --isolation-config-path)
+      shift
+      isolation_config_path="${1:-system/config.yaml}"
+      ;;
+    --disable-isolation-write)
+      isolation_write_enabled=false
+      ;;
     --output-dir)
       shift
       output_dir="${1:-system/output/review}"
@@ -105,6 +119,14 @@ if ! [[ "$retry_backoff_ms" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$max_tokens" =~ ^[0-9]+$ ]] || (( max_tokens <= 0 )); then
   echo "ERROR: --max-tokens must be a positive integer." >&2
+  exit 2
+fi
+if [[ "$isolation_write_enabled" != "true" && "$isolation_write_enabled" != "false" ]]; then
+  echo "ERROR: internal isolation_write_enabled must be true/false." >&2
+  exit 2
+fi
+if [[ -z "${isolation_config_path// }" ]]; then
+  echo "ERROR: --isolation-config-path must not be empty." >&2
   exit 2
 fi
 
@@ -470,6 +492,8 @@ jq -s \
   --arg endpoint "$endpoint" \
   --arg api_key_env "$api_key_env" \
   --arg api_key_sources_csv "$api_key_sources_csv" \
+  --arg isolation_config_path "$isolation_config_path" \
+  --argjson isolation_write_enabled "$isolation_write_enabled" \
   --arg required_models_csv "$required_models_effective_csv" \
   --arg optional_models_csv "$optional_models_effective_csv" \
   --argjson timeout_ms 5000 \
@@ -551,6 +575,8 @@ jq -s \
         timeout_ms:$timeout_ms,
         retry_transient:$retry_transient,
         retry_backoff_ms:$retry_backoff_ms,
+        isolation_config_path:$isolation_config_path,
+        isolation_write_enabled:$isolation_write_enabled,
         model_tiers:{
           required:$required,
           optional:$optional
@@ -597,6 +623,8 @@ jq -s \
   echo "- timeout_ms: \`5000\`"
   echo "- retry_transient: \`${retry_transient}\`"
   echo "- retry_backoff_ms: \`${retry_backoff_ms}\`"
+  echo "- isolation_config_path: \`${isolation_config_path}\`"
+  echo "- isolation_write_enabled: \`${isolation_write_enabled}\`"
   echo "- required_models: \`${required_models_effective_csv}\`"
   echo "- optional_models: \`${optional_models_effective_csv}\`"
   echo "- token_bucket: \`capacity=${bucket_capacity}, refill_every=${bucket_refill_interval_sec}s\`"
@@ -617,8 +645,16 @@ echo "$artifact_json"
 
 probe_status="$(jq -r '.gate.status // "fail"' "$artifact_json")"
 if [[ "$probe_status" == "fail" || "$probe_status" == "empty" ]]; then
-  isolation_config="${repo_root}/system/config.yaml"
+  if [[ "$isolation_config_path" == /* ]]; then
+    isolation_config="$isolation_config_path"
+  else
+    isolation_config="${repo_root}/${isolation_config_path}"
+  fi
   echo "CRITICAL: Live Models failed connectivity check. Triggering ISOLATION." >&2
+  if [[ "$isolation_write_enabled" != "true" ]]; then
+      echo "Isolation config write disabled by flag; skip mutation." >&2
+      exit 1
+  fi
   if ! acquire_run_halfhour_mutex; then
       echo "ERROR: failed to acquire run-halfhour-pulse lock; isolation aborted." >&2
       exit 1
@@ -626,12 +662,12 @@ if [[ "$probe_status" == "fail" || "$probe_status" == "empty" ]]; then
   if [[ -f "$isolation_config" ]]; then
       if grep -Eq '^[[:space:]]*binance_live_takeover_enabled:[[:space:]]*true([[:space:]]*#.*)?$' "$isolation_config"; then
           sed -i.bak 's/^\([[:space:]]*binance_live_takeover_enabled:[[:space:]]*\)true/\1false/' "$isolation_config"
-          echo "Live Takeover isolated via system/config.yaml modification." >&2
+          echo "Live Takeover isolated via ${isolation_config} modification." >&2
       else
-          echo "Live Takeover already isolated in system/config.yaml." >&2
+          echo "Live Takeover already isolated in ${isolation_config}." >&2
       fi
   else
-      echo "WARN: system/config.yaml missing; isolation skip." >&2
+      echo "WARN: isolation config missing (${isolation_config}); skip." >&2
   fi
   release_run_halfhour_mutex
   exit 1

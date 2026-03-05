@@ -350,6 +350,8 @@ lie stress-matrix --date 2026-02-13 --modes ultra_short,swing,long
 # Key 优先级：环境变量 NEWAPI_API_KEY/X666_API_KEY -> ~/.openclaw/.env -> ~/.openclaw/openclaw.json
 # 默认门禁：gpt-5.3-codex(required)，gemini-3.1-pro-preview-bs(optional)
 # optional 失败会标记 gate.status=degraded 但不阻断（exit 0）；required 缺失/失败会 exit 1
+# 默认隔离写入：hard-fail 时会尝试把 validation.binance_live_takeover_enabled 置为 false
+# 测试/演练可加 --disable-isolation-write（仅返回失败码，不改配置）
 bash system/scripts/newapi_model_probe.sh \
   --samples 2 \
   --models gpt-5.3-codex,gemini-3.1-pro-preview-bs \
@@ -357,6 +359,8 @@ bash system/scripts/newapi_model_probe.sh \
   --optional-models gemini-3.1-pro-preview-bs \
   --retry-transient 1 \
   --retry-backoff-ms 300
+# 可选：自定义隔离写入目标（默认 system/config.yaml）
+bash system/scripts/newapi_model_probe.sh --isolation-config-path /tmp/probe_isolation.yaml --disable-isolation-write
 # Binance 公共市场数据抽样（L2 + aggTrades）
 python3 system/scripts/binance_micro_sample.py --symbol BTCUSDT --minutes 10 --depth 20 --limit 500
 # Binance + Bybit 同窗对齐抽样（跨源 L2 / 逐笔）
