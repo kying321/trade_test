@@ -29,12 +29,16 @@ class EngineIntegrationTests(unittest.TestCase):
 
         cfg_data = yaml.safe_load((project_root / "config.yaml").read_text(encoding="utf-8"))
         cfg_data["paths"] = {"output": "output", "sqlite": "output/artifacts/lie_engine.db"}
+        cfg_data.setdefault("data", {})
+        cfg_data["data"]["provider_profile"] = "opensource_primary"
         cfg_data.setdefault("validation", {})
         cfg_data["validation"]["review_autorun_strategy_lab_if_missing"] = False
         cfg_data["validation"]["use_mode_profiles"] = False
         cfg_data["validation"]["review_backtest_lookback_days"] = 540
         cfg_data["validation"]["style_drift_adaptive_enabled"] = False
         cfg_data["validation"]["micro_cross_source_build_missing_provider"] = False
+        cfg_data["validation"]["system_time_sync_probe_enabled"] = False
+        cfg_data["validation"]["system_time_sync_hard_fuse_enabled"] = False
         cfg_data["validation"]["binance_live_takeover_enabled"] = False
         cfg_path = tmp_root / "config.yaml"
         cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
