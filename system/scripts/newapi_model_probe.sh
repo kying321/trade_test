@@ -551,5 +551,10 @@ echo "$artifact_json"
 
 probe_status="$(jq -r '.gate.status // "fail"' "$artifact_json")"
 if [[ "$probe_status" == "fail" || "$probe_status" == "empty" ]]; then
+  echo "CRITICAL: Live Models failed connectivity check. Triggering ISOLATION." >&2
+  if [[ -f "${repo_root}/config.yaml" ]]; then
+      sed -i.bak 's/binance_live_takeover_enabled: true/binance_live_takeover_enabled: false/g' "${repo_root}/config.yaml"
+      echo "Live Takeover isolated via config.yaml modification." >&2
+  fi
   exit 1
 fi

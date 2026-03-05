@@ -64,8 +64,8 @@ validation:
   micro_time_sync_max_offset_ms: 5
   micro_time_sync_max_rtt_ms: 120
   micro_time_sync_min_samples: 1
-  system_time_sync_probe_enabled: false
-  system_time_sync_hard_fuse_enabled: false
+  system_time_sync_probe_enabled: true
+  system_time_sync_hard_fuse_enabled: true
   system_time_sync_primary_source: "time.google.com"
   system_time_sync_secondary_source: "time.cloudflare.com"
   system_time_sync_probe_timeout_seconds: 5.0

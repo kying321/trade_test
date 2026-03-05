@@ -4,9 +4,30 @@ from contextlib import closing
 from pathlib import Path
 import json
 import sqlite3
+import time
 from typing import Any
 
 import pandas as pd
+
+
+def get_sqlite_conn(db_path: Path | str, max_retries: int = 3) -> sqlite3.Connection:
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            conn = sqlite3.connect(db_path, timeout=15.0)
+            # Enable WAL mode for better concurrency
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout = 15000;")
+            return conn
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() or "busy" in str(e).lower():
+                last_err = e
+                time.sleep(2 ** attempt)
+            else:
+                raise
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("Failed to connect to sqlite")
 
 
 def ensure_parent(path: Path) -> None:
@@ -48,7 +69,7 @@ def append_sqlite(db_path: Path, table: str, df: pd.DataFrame) -> None:
             data[col] = data[col].apply(
                 lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, (list, dict)) else x
             )
-    with closing(sqlite3.connect(db_path)) as conn:
+    with closing(get_sqlite_conn(db_path)) as conn:
         with closing(conn.cursor()) as cur:
             cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table,))
             exists = cur.fetchone() is not None
