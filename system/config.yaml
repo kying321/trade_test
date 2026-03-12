@@ -27,6 +27,27 @@ risk:
   max_theme_pct: 25.0
   safety_bucket_pct: 85.0
   convexity_bucket_pct: 15.0
+shortline:
+  status: "policy_ready"
+  structure_timeframe: "4h"
+  execution_timeframe: "15m"
+  structure_engine: "fixed_range_volume_profile_proxy"
+  structure_reference: "vpvr_concepts_deterministic_proxy"
+  profile_lookback_bars: 120
+  profile_value_area_pct: 0.70
+  location_priority: ["HVN", "POC"]
+  avoid_location: "LVN"
+  flow_confirmation_engine: "cvd_lite"
+  flow_confirmation_role: "confirm_and_veto_only"
+  flow_confirmation_half_life_seconds: 180
+  trigger_stack:
+    - "4h_profile_location"
+    - "15m_cvd_divergence_or_confirmation"
+    - "15m_reversal_or_breakout_candle"
+  supported_symbols: ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
+  caution_symbols: ["PAXGUSDT"]
+  unsupported_binance_spot_symbols: ["XAGUSDT", "XAUTUSDT"]
+  metals_note: "Binance spot metals support is proxy-grade: PAXGUSDT is supported; XAGUSDT and XAUTUSDT are not listed."
 validation:
   data_completeness_min: 0.99
   unresolved_conflict_max: 0.005
@@ -45,7 +66,7 @@ validation:
   micro_cross_source_build_missing_provider: true
   micro_cross_source_primary: "binance_spot_public"
   micro_cross_source_secondary: "bybit_spot_public"
-  micro_cross_source_symbols: ["BTCUSDT", "ETHUSDT"]
+  micro_cross_source_symbols: ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
   micro_cross_source_align_seconds: 120
   micro_cross_source_window_ms: 200
   micro_cross_source_trade_limit: 300
@@ -74,13 +95,20 @@ validation:
   system_time_sync_min_ok_sources: 1
   micro_capture_daemon_enabled: true
   micro_capture_daemon_interval_minutes: 30
-  micro_capture_daemon_symbols: ["BTCUSDT", "ETHUSDT"]
+  micro_capture_daemon_symbols: ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
   binance_live_takeover_enabled: false
   binance_live_takeover_on_micro_capture: true
   binance_live_takeover_on_eod: true
   binance_live_takeover_activate_config: true
   binance_live_takeover_allow_live_order: true
   binance_live_takeover_allow_daemon_env_fallback: true
+  backup_web_intel_enabled: true
+  backup_web_intel_artifact_path: "state/backup_web_intel.json"
+  backup_web_intel_max_age_seconds: 7200
+  backup_web_intel_block_on_no_trade: true
+  backup_web_intel_block_on_bias_conflict: true
+  backup_web_intel_block_severities: ["high"]
+  backup_web_intel_required_authority: "risk_only"
   binance_live_takeover_market: "spot"  # futures_usdm | spot
   binance_live_takeover_rate_limit_per_minute: 10
   binance_live_takeover_timeout_ms: 5000
@@ -91,10 +119,10 @@ validation:
   binance_live_takeover_max_trade_symbols: 3
   binance_live_takeover_order_symbol: ""
   binance_live_takeover_order_side: ""
-  microstructure_symbols: ["BTCUSDT", "ETHUSDT"]
+  microstructure_symbols: ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
   review_use_strategy_lab: true
   strategy_lab_merge_step: 0.18
-  strategy_lab_merge_require_accepted: false
+  strategy_lab_merge_require_accepted: true
   strategy_lab_merge_require_validation_metrics: true
   strategy_lab_merge_min_validation_annual_return: 0.00
   strategy_lab_merge_min_validation_trades: 2

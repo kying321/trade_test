@@ -13,7 +13,7 @@ import yaml
 
 from lie_engine.backtest.engine import BacktestConfig, run_event_backtest
 from lie_engine.data.storage import write_json, write_markdown
-from lie_engine.research.modes import MODE_SPACES, ModeSpace
+from lie_engine.research.modes import DIRECT_MARKET_ASSET_CLASSES, MODE_SPACES, ModeSpace, adapt_mode_space
 from lie_engine.research.real_data import RealDataBundle, load_real_data_bundle
 
 
@@ -42,6 +42,8 @@ class ModeOptimizationSummary:
     budget_seconds: float
     elapsed_seconds: float
     trial_log_path: str
+    best_by_symbol: dict[str, dict[str, float | int]] = field(default_factory=dict)
+    best_by_symbol_regime: dict[str, dict[str, dict[str, float | int]]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -69,6 +71,7 @@ class ResearchRunSummary:
     review_news_records: int
     review_report_records: int
     data_fetch_stats: dict[str, Any]
+    proxy_lookback_applied: int = 180
     mode_summaries: list[ModeOptimizationSummary] = field(default_factory=list)
     output_dir: str = ""
 
@@ -82,8 +85,29 @@ def _clip(v: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, v)))
 
 
-def _sample_params(rng: np.random.Generator, space: ModeSpace, best: dict[str, float | int] | None) -> dict[str, float | int]:
+def _sample_params(
+    rng: np.random.Generator,
+    space: ModeSpace,
+    best: dict[str, float | int] | None,
+    *,
+    trial_idx: int = 1,
+) -> dict[str, float | int]:
     if not best:
+        if int(trial_idx) == 1 and float(space.confidence_min) <= 18.0:
+            hold = int(space.hold_days_min)
+            trades = int(space.trades_max)
+            conf = float(np.clip(space.confidence_min + 1.5, space.confidence_min, space.confidence_max))
+            conv = float(np.clip(space.convexity_min + 0.18, space.convexity_min, space.convexity_max))
+            nw = 0.25
+            rw = 0.25
+            return {
+                "hold_days": hold,
+                "max_daily_trades": trades,
+                "signal_confidence_min": conf,
+                "convexity_min": conv,
+                "news_weight": nw,
+                "report_weight": rw,
+            }
         hold = int(rng.integers(space.hold_days_min, space.hold_days_max + 1))
         trades = int(rng.integers(space.trades_min, space.trades_max + 1))
         # Bias early exploration toward tradable regions (lower confidence/convexity) to avoid zero-trade cold start.
@@ -184,6 +208,27 @@ def _recent_factor_pressure(
     return float(np.clip((recent_mean - base_mean) / base_std, -4.0, 4.0))
 
 
+def _resolve_proxy_lookback(
+    *,
+    bars: pd.DataFrame,
+    asset_classes: set[str] | None = None,
+    info_available: bool = True,
+) -> int:
+    if bars.empty:
+        return 180
+    total_days = int(len(pd.to_datetime(bars["ts"]).dt.date.unique()))
+    lookback = int(np.clip(float(total_days) * 0.70, 60.0, 180.0))
+    classes = {str(x).strip().lower() for x in (asset_classes or set()) if str(x).strip()}
+    direct_market_mode = bool(classes) and classes.issubset(DIRECT_MARKET_ASSET_CLASSES)
+    if not bool(info_available):
+        lookback = int(min(lookback, max(72, int(total_days * 0.80))))
+    if direct_market_mode:
+        lookback = int(min(lookback, max(72, int(total_days * 0.78))))
+    if direct_market_mode and not bool(info_available):
+        lookback = int(max(72, min(lookback, 120)))
+    return int(max(60, min(180, lookback)))
+
+
 def _optimize_one_mode(
     *,
     mode: str,
@@ -197,6 +242,7 @@ def _optimize_one_mode(
     max_trials: int,
     rng: np.random.Generator,
     out_dir: Path,
+    proxy_lookback: int = 180,
 ) -> ModeOptimizationSummary:
     mode_dir = out_dir / mode
     mode_dir.mkdir(parents=True, exist_ok=True)
@@ -205,13 +251,15 @@ def _optimize_one_mode(
     best_score = -1e18
     best_params: dict[str, float | int] | None = None
     best_metrics: dict[str, float | int] = {}
+    best_by_symbol: dict[str, dict[str, float | int]] = {}
+    best_by_symbol_regime: dict[str, dict[str, dict[str, float | int]]] = {}
 
     trial_idx = 0
     start_ts = time.time()
     while trial_idx < max_trials and time.time() < deadline_ts:
         trial_idx += 1
         t0 = time.time()
-        params = _sample_params(rng=rng, space=space, best=best_params)
+        params = _sample_params(rng=rng, space=space, best=best_params, trial_idx=trial_idx)
 
         # Use news/report pressure to dynamically calibrate confidence gate.
         recent_days = 20
@@ -230,7 +278,7 @@ def _optimize_one_mode(
             hold_days=int(params["hold_days"]),
             regime_recalc_interval=5,
             signal_eval_interval=1,
-            proxy_lookback=180,
+            proxy_lookback=int(proxy_lookback),
         )
         bt = run_event_backtest(
             bars=bars,
@@ -252,7 +300,7 @@ def _optimize_one_mode(
                     hold_days=int(params["hold_days"]),
                     regime_recalc_interval=5,
                     signal_eval_interval=1,
-                    proxy_lookback=180,
+                    proxy_lookback=int(proxy_lookback),
                 )
                 bt_retry = run_event_backtest(
                     bars=bars,
@@ -311,6 +359,30 @@ def _optimize_one_mode(
                 "factor_alignment": fa,
                 "score": score,
             }
+            best_by_symbol = {
+                str(symbol): {
+                    "total_pnl": float(stats.get("total_pnl", 0.0) or 0.0),
+                    "avg_pnl": float(stats.get("avg_pnl", 0.0) or 0.0),
+                    "trade_count": int(stats.get("trade_count", 0) or 0),
+                    "win_rate": float(stats.get("win_rate", 0.0) or 0.0),
+                }
+                for symbol, stats in (bt.by_symbol or {}).items()
+                if isinstance(stats, dict)
+            }
+            best_by_symbol_regime = {
+                str(symbol): {
+                    str(regime_name): {
+                        "total_pnl": float(regime_stats.get("total_pnl", 0.0) or 0.0),
+                        "avg_pnl": float(regime_stats.get("avg_pnl", 0.0) or 0.0),
+                        "trade_count": int(regime_stats.get("trade_count", 0) or 0),
+                        "win_rate": float(regime_stats.get("win_rate", 0.0) or 0.0),
+                    }
+                    for regime_name, regime_stats in stats.items()
+                    if isinstance(regime_stats, dict)
+                }
+                for symbol, stats in (bt.by_symbol_regime or {}).items()
+                if isinstance(stats, dict)
+            }
 
     trials_df = pd.DataFrame(
         [
@@ -339,6 +411,8 @@ def _optimize_one_mode(
         best_score=float(best_score if best_score > -1e17 else 0.0),
         best_params=best_params or {},
         best_metrics=best_metrics,
+        best_by_symbol=best_by_symbol,
+        best_by_symbol_regime=best_by_symbol_regime,
         budget_seconds=float(max(0.0, deadline_ts - start_ts)),
         elapsed_seconds=float(time.time() - start_ts),
         trial_log_path=str(trial_log),
@@ -361,6 +435,7 @@ def _render_report(summary: ResearchRunSummary) -> str:
     lines.append(f"- 复盘窗口天数: `{summary.review_days}`")
     lines.append(f"- 覆盖标的数: `{summary.universe_count}`")
     lines.append(f"- 行情记录数: `{summary.bars_rows}`")
+    lines.append(f"- proxy lookback: `{summary.proxy_lookback_applied}`")
     lines.append(f"- 复盘行情记录数: `{summary.review_bars_rows}`")
     lines.append(f"- 复盘行情最大时间戳(>截止日): `{summary.review_bar_max_ts}`")
     lines.append(f"- 回测新闻记录数(<=截止日): `{summary.news_records}`")
@@ -377,6 +452,8 @@ def _render_report(summary: ResearchRunSummary) -> str:
         lines.append(f"- best_score: `{item.best_score:.6f}`")
         lines.append(f"- best_params: `{item.best_params}`")
         lines.append(f"- best_metrics: `{item.best_metrics}`")
+        lines.append(f"- best_by_symbol: `{item.best_by_symbol}`")
+        lines.append(f"- best_by_symbol_regime: `{item.best_by_symbol_regime}`")
         lines.append(f"- trial_log: `{item.trial_log_path}`")
         lines.append("")
     lines.append("## 说明")
@@ -455,6 +532,9 @@ def run_research_backtest(
     rng = np.random.default_rng(seed)
 
     mode_summaries: list[ModeOptimizationSummary] = []
+    asset_classes = {str(x).strip().lower() for x in bars["asset_class"].dropna().unique().tolist()} if not bars.empty else set()
+    info_available = bool(bundle.news_records > 0 or bundle.report_records > 0)
+    proxy_lookback = _resolve_proxy_lookback(bars=bars, asset_classes=asset_classes, info_available=info_available)
     mode_names = [m.strip() for m in (modes or ["ultra_short", "swing", "long"]) if str(m).strip()]
     mode_names = [m for m in mode_names if m in MODE_SPACES]
     if not mode_names:
@@ -466,7 +546,11 @@ def run_research_backtest(
         mode_budget_end = time.time() + remain / max(1, len(mode_names) - i)
         summary = _optimize_one_mode(
             mode=mode,
-            space=MODE_SPACES[mode],
+            space=adapt_mode_space(
+                MODE_SPACES[mode],
+                asset_classes=asset_classes,
+                info_available=info_available,
+            ),
             bars=bars,
             start=start,
             end=end,
@@ -476,6 +560,7 @@ def run_research_backtest(
             max_trials=max_trials_per_mode,
             rng=rng,
             out_dir=run_dir,
+            proxy_lookback=proxy_lookback,
         )
         mode_summaries.append(summary)
 
@@ -504,11 +589,27 @@ def run_research_backtest(
         review_news_records=int(bundle.review_news_records),
         review_report_records=int(bundle.review_report_records),
         data_fetch_stats=bundle.fetch_stats,
+        proxy_lookback_applied=int(proxy_lookback),
         mode_summaries=mode_summaries,
         output_dir=str(run_dir),
     )
 
     write_json(run_dir / "summary.json", run_summary.to_dict())
     write_markdown(run_dir / "report.md", _render_report(run_summary))
-    write_markdown(run_dir / "best_params.yaml", yaml.safe_dump({m.mode: {"best_params": m.best_params, "best_metrics": m.best_metrics} for m in mode_summaries}, allow_unicode=True, sort_keys=False))
+    write_markdown(
+        run_dir / "best_params.yaml",
+        yaml.safe_dump(
+            {
+                m.mode: {
+                    "best_params": m.best_params,
+                    "best_metrics": m.best_metrics,
+                    "best_by_symbol": m.best_by_symbol,
+                    "best_by_symbol_regime": m.best_by_symbol_regime,
+                }
+                for m in mode_summaries
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+    )
     return run_summary

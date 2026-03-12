@@ -278,10 +278,13 @@ class EngineIntegrationTests(unittest.TestCase):
                     "queue_imbalance": 0.2,
                     "ofi_norm": 0.1,
                     "micro_alignment": 0.15,
+                    "cvd_context_mode": "continuation",
+                    "cvd_context_note": "delta_confirms_directional_price_result",
+                    "cvd_trust_tier_hint": "single_exchange_ok",
                     "max_trade_gap_ms": 200,
                     "sync_skew_ms": 8.0,
                     "time_sync_available": True,
-                    "time_sync_ok": True,
+                    "time_sync_ok": False,
                     "time_sync_offset_ms": 1,
                     "time_sync_rtt_ms": 40,
                     "time_sync_max_offset_ms": 5,
@@ -342,14 +345,29 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(str(out.get("status", "")), "ok")
         artifact_path = Path(str(out.get("artifact", "")))
         self.assertTrue(artifact_path.exists())
+        selected = out.get("selected_micro", [])
+        self.assertTrue(isinstance(selected, list) and selected)
+        self.assertIn("cvd_context_mode", selected[0])
+        self.assertIn("cvd_trust_tier_hint", selected[0])
+        self.assertIn("cvd_veto_hint", selected[0])
+        self.assertEqual(str(selected[0]["cvd_trust_tier_hint"]), "single_exchange_low")
+        self.assertIn("time_sync_risk", str(selected[0]["cvd_context_note"]))
+        semantics = out.get("cvd_semantics", {})
+        self.assertIn("context_counts", semantics)
+        self.assertIn("trust_counts", semantics)
+        self.assertEqual(int(semantics["trust_counts"]["single_exchange_low"]), 1)
         with closing(sqlite3.connect(tmp_root / "output" / "artifacts" / "lie_engine.db")) as conn:
             runs = pd.read_sql_query("SELECT status, pass, symbols_selected FROM micro_capture_runs", conn)
             src = pd.read_sql_query("SELECT symbol, source FROM micro_capture_source_state", conn)
-            sel = pd.read_sql_query("SELECT symbol, source FROM micro_capture_symbol_state", conn)
+            sel = pd.read_sql_query(
+                "SELECT symbol, source, cvd_context_mode, cvd_trust_tier_hint, cvd_veto_hint FROM micro_capture_symbol_state",
+                conn,
+            )
             cross = pd.read_sql_query("SELECT symbol, audit_status FROM micro_capture_cross_source", conn)
         self.assertFalse(runs.empty)
         self.assertFalse(src.empty)
         self.assertFalse(sel.empty)
+        self.assertEqual(str(sel.iloc[0]["cvd_trust_tier_hint"]), "single_exchange_low")
         self.assertFalse(cross.empty)
 
     def test_run_binance_live_takeover_skips_when_trigger_disabled(self) -> None:
@@ -428,6 +446,7 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("value_preference", state)
         self.assertIn("size_preference", state)
         self.assertIn("dividend_preference", state)
+        self.assertIn("flow_quality_pressure", state)
         self.assertGreaterEqual(float(state.get("style_sample_size", 0.0)), 4.0)
         self.assertGreaterEqual(float(state.get("style_weight", 0.0)), 0.2)
         self.assertLessEqual(float(state.get("style_weight", 0.0)), 0.55)
@@ -870,6 +889,48 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(row.get("market_price", 0.0)), 51000.0, places=6)
         self.assertAlmostEqual(float(row.get("notional", 0.0)), 38250.0, places=6)
 
+    def test_run_eod_live_adapter_filters_dust_positions_from_binance_snapshot(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["broker_snapshot_source_mode"] = "live_adapter"
+        eng.settings.raw["validation"]["broker_snapshot_live_inbox"] = "output/artifacts/broker_live_inbox"
+        eng.settings.raw["validation"]["broker_snapshot_live_fallback_to_paper"] = False
+        eng.settings.raw["validation"]["broker_snapshot_live_mapping_profile"] = "binance"
+        eng.settings.raw["validation"]["broker_snapshot_live_min_position_notional_abs"] = 1.0
+
+        inbox = tmp_root / "output" / "artifacts" / "broker_live_inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        (inbox / "2026-02-13.json").write_text(
+            json.dumps(
+                {
+                    "broker": "binance_spot",
+                    "summary": {"open_positions": 1, "closed_count": 0, "realized_pnl": 0.0},
+                    "account": {
+                        "positions": [
+                            {
+                                "symbol": "BTCUSDT",
+                                "positionAmt": "0.00001314",
+                                "entryPrice": "0",
+                                "markPrice": "69196.84",
+                                "positionSide": "BOTH",
+                                "state": "OPEN",
+                            }
+                        ]
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        out = eng.run_eod(d)
+        broker_path = Path(str(out.get("broker_snapshot", "")))
+        payload = json.loads(broker_path.read_text(encoding="utf-8"))
+        self.assertEqual(int(payload.get("open_positions", 0)), 0)
+        self.assertEqual(payload.get("positions", []), [])
+        self.assertEqual(int(payload.get("stats", {}).get("positions_rows_filtered_dust", 0)), 1)
+
     def test_run_eod_live_adapter_uses_ibkr_mapping_profile(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
@@ -1004,6 +1065,18 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertNotIn("SOLUSDT", by_symbol)
         self.assertAlmostEqual(float(total), 2.5, places=6)
 
+    def test_run_eod_replaces_latest_positions_snapshot_for_same_day(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        eng.run_eod(d)
+        csv_path = tmp_root / "output" / "daily" / "2026-02-13_positions.csv"
+        csv_rows = len(pd.read_csv(csv_path))
+        with closing(sqlite3.connect(eng.ctx.sqlite_path)) as conn:
+            cur = conn.execute("SELECT COUNT(*) FROM latest_positions WHERE date = ?", (d.isoformat(),))
+            db_rows = int(cur.fetchone()[0])
+        self.assertEqual(db_rows, csv_rows)
+
     def test_run_slot_and_session(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
@@ -1098,6 +1171,62 @@ class EngineIntegrationTests(unittest.TestCase):
         eng.settings.raw["validation"]["review_backtest_start_date"] = "2030-01-01"
         self.assertEqual(eng._review_backtest_start(as_of=d), date(2015, 1, 1))
 
+    def test_backtest_snapshot_falls_back_to_recent_artifact_within_age(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 14)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["ops_backtest_snapshot_max_age_days"] = 2
+        start = eng._review_backtest_start(as_of=d)
+        path = tmp_root / "output" / "artifacts" / f"backtest_{start.isoformat()}_2026-02-13.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "start": start.isoformat(),
+                    "end": "2026-02-13",
+                    "positive_window_ratio": 0.91,
+                    "max_drawdown": 0.11,
+                    "violations": 0,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        payload = eng._backtest_snapshot(d)
+        self.assertEqual(float(payload.get("positive_window_ratio", 0.0)), 0.91)
+        self.assertEqual(float(payload.get("max_drawdown", 0.0)), 0.11)
+        self.assertEqual(int(payload.get("violations", 1)), 0)
+        self.assertEqual(str(payload.get("snapshot_end", "")), "2026-02-13")
+        self.assertFalse(bool(payload.get("snapshot_exact_match", True)))
+        self.assertTrue(bool(payload.get("snapshot_fresh_enough", False)))
+        self.assertEqual(int(payload.get("snapshot_age_days", -1)), 1)
+
+    def test_backtest_snapshot_rejects_stale_recent_artifact(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 14)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["ops_backtest_snapshot_max_age_days"] = 1
+        start = eng._review_backtest_start(as_of=d)
+        path = tmp_root / "output" / "artifacts" / f"backtest_{start.isoformat()}_2026-02-12.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "start": start.isoformat(),
+                    "end": "2026-02-12",
+                    "positive_window_ratio": 0.91,
+                    "max_drawdown": 0.11,
+                    "violations": 0,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        payload = eng._backtest_snapshot(d)
+        self.assertEqual(payload, {})
+
     def test_gate_report_clears_stale_alert_on_pass(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
@@ -1132,6 +1261,36 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("rollback_recommendation", report)
         self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_ops_report.json").exists())
         self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_ops_report.md").exists())
+
+    def test_ops_report_uses_cached_stable_replay_gate_mode(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        eng.run_review(d)
+
+        def _raise_if_called(as_of, days=None):  # type: ignore[no-untyped-def]
+            raise AssertionError("execute stable replay should be skipped for ops report")
+
+        eng.stable_replay_check = _raise_if_called  # type: ignore[method-assign]
+
+        report = eng.ops_report(as_of=d, window_days=2)
+        gate_payload = json.loads((tmp_root / "output" / "review" / "2026-02-13_gate_report.json").read_text(encoding="utf-8"))
+
+        self.assertIn("status", report)
+        self.assertEqual(str(gate_payload.get("stable_replay_mode", "")), "cached")
+        self.assertEqual(str((gate_payload.get("stable_replay", {}) or {}).get("mode", "")), "cached_health_only")
+
+    def test_ops_report_exposes_live_gate_summary(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        eng.run_review(d)
+        report = eng.ops_report(as_of=d, window_days=2)
+        live_gate = report.get("live_gate", {})
+        self.assertIn("ok", live_gate)
+        self.assertIn("blocking_reason_codes", live_gate)
+        self.assertIn("required_checks", live_gate)
+        self.assertIn("state_stability_live", report)
 
     def test_state_stability_flags_micro_capture_degraded_days(self) -> None:
         eng, tmp_root = self._make_engine()

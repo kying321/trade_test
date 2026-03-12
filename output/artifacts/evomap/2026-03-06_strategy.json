@@ -1,0 +1,28 @@
+{
+  "strategy_id": "evomap_binance_canary_v1",
+  "generated_at_utc": "2026-03-05T16:38:18Z",
+  "as_of": "2026-03-06",
+  "objective": "maximize_long_term_sharpe_under_drawdown_cap",
+  "selection": {
+    "symbol": "BTCUSDT",
+    "side": "SELL",
+    "signal_confidence": 0.0,
+    "signal_source": "fallback_no_signals"
+  },
+  "risk": {
+    "max_drawdown_hard": 0.05,
+    "canary_quote_usdt": 5.0,
+    "max_concurrent_positions": 1,
+    "hard_kill_on_transport_fail": true
+  },
+  "execution": {
+    "rate_limit_per_minute": 10,
+    "request_timeout_ms": 5000,
+    "idempotency_required": true,
+    "mutex_protocol": "run-halfhour-pulse"
+  },
+  "whitelist": [
+    "BTCUSDT",
+    "ETHUSDT"
+  ]
+}

@@ -355,6 +355,7 @@ def run_event_backtest(
                 {
                     "date": d.isoformat(),
                     "symbol": sig.symbol,
+                    "regime": regime.consensus.value,
                     "side": sig.side.value,
                     "asset_class": asset_class,
                     "hit_target": bool(hit_target),
@@ -391,8 +392,31 @@ def run_event_backtest(
     ) = _compute_metrics(eq_df["equity"], tr_df, window_returns)
 
     by_asset = {}
+    by_symbol: dict[str, dict[str, float | int]] = {}
+    by_symbol_regime: dict[str, dict[str, dict[str, float | int]]] = {}
     if not tr_df.empty:
         by_asset = tr_df.groupby("asset_class")["pnl"].mean().to_dict()
+        by_symbol = {
+            str(symbol): {
+                "total_pnl": float(group["pnl"].sum()),
+                "avg_pnl": float(group["pnl"].mean()),
+                "trade_count": int(len(group)),
+                "win_rate": float((group["pnl"] > 0).mean()),
+            }
+            for symbol, group in tr_df.groupby("symbol")
+        }
+        by_symbol_regime = {
+            str(symbol): {
+                str(regime_name): {
+                    "total_pnl": float(group["pnl"].sum()),
+                    "avg_pnl": float(group["pnl"].mean()),
+                    "trade_count": int(len(group)),
+                    "win_rate": float((group["pnl"] > 0).mean()),
+                }
+                for regime_name, group in symbol_group.groupby("regime")
+            }
+            for symbol, symbol_group in tr_df.groupby("symbol")
+        }
 
     violations = 0
     if max_drawdown > 0.18:
@@ -412,4 +436,6 @@ def run_event_backtest(
         positive_window_ratio=positive_window_ratio,
         equity_curve=eq_df.to_dict(orient="records"),
         by_asset=by_asset,
+        by_symbol=by_symbol,
+        by_symbol_regime=by_symbol_regime,
     )

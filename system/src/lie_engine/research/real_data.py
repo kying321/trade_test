@@ -55,6 +55,11 @@ NEGATIVE_KWS = (
 
 _BINANCE_DAILY_PROVIDER_LOCK = threading.Lock()
 _BINANCE_DAILY_PROVIDER: BinanceSpotPublicProvider | None = None
+_YF_REQUEST_LOCK = threading.Lock()
+_YF_REQUEST_RATE_PER_MINUTE = 120.0
+_YF_REQUEST_BUCKET_CAPACITY = 5.0
+_YF_REQUEST_TOKENS = _YF_REQUEST_BUCKET_CAPACITY
+_YF_REQUEST_LAST_REFILL = time.monotonic()
 
 
 @dataclass(slots=True)
@@ -127,11 +132,39 @@ def _normalize_symbol(raw: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", str(raw or "").upper())
 
 
+COMMODITY_PROXY_DEFS: dict[str, dict[str, Any]] = {
+    "XAUUSD": {"yf": "GC=F", "aliases": ["GOLD", "GC", "GCF"]},
+    "XAGUSD": {"yf": "SI=F", "aliases": ["SILVER", "SI", "SIF"]},
+    "WTIUSD": {"yf": "CL=F", "aliases": ["WTI", "CRUDE", "OIL", "CL", "CLF"]},
+    "BRENTUSD": {"yf": "BZ=F", "aliases": ["BRENT", "BZ", "BZF"]},
+    "NATGAS": {"yf": "NG=F", "aliases": ["NG", "NATURALGAS", "NATGASUSD", "NGF"]},
+    "COPPER": {"yf": "HG=F", "aliases": ["HG", "HGF", "COPPERUSD"]},
+}
+COMMODITY_PROXY_INDEX: dict[str, str] = {}
+for _canonical, _meta in COMMODITY_PROXY_DEFS.items():
+    COMMODITY_PROXY_INDEX[_normalize_symbol(_canonical)] = _canonical
+    for _alias in _meta.get("aliases", []):
+        COMMODITY_PROXY_INDEX[_normalize_symbol(str(_alias))] = _canonical
+
+
 def _is_crypto_symbol(symbol: str) -> bool:
     sym = _normalize_symbol(symbol)
     if not CRYPTO_PAIR_RE.match(sym):
         return False
     return any(sym.endswith(q) and len(sym) > len(q) + 1 for q in CRYPTO_QUOTES)
+
+
+def _commodity_proxy_symbol(symbol: str) -> str | None:
+    return COMMODITY_PROXY_INDEX.get(_normalize_symbol(symbol))
+
+
+def _is_commodity_proxy_symbol(symbol: str) -> bool:
+    return _commodity_proxy_symbol(symbol) is not None
+
+
+def _is_direct_market_symbol(symbol: str) -> bool:
+    sym = _normalize_symbol(symbol)
+    return bool(FUTURE_RE.match(sym) or _is_crypto_symbol(sym) or _is_commodity_proxy_symbol(sym))
 
 
 def _get_binance_provider() -> BinanceSpotPublicProvider:
@@ -147,12 +180,50 @@ def _get_binance_provider() -> BinanceSpotPublicProvider:
     return _BINANCE_DAILY_PROVIDER
 
 
+def _take_yfinance_token() -> None:
+    global _YF_REQUEST_TOKENS, _YF_REQUEST_LAST_REFILL
+    refill_rate = _YF_REQUEST_RATE_PER_MINUTE / 60.0
+    while True:
+        wait_seconds = 0.0
+        with _YF_REQUEST_LOCK:
+            now_mono = time.monotonic()
+            elapsed = max(0.0, now_mono - _YF_REQUEST_LAST_REFILL)
+            if elapsed > 0.0:
+                _YF_REQUEST_TOKENS = min(
+                    _YF_REQUEST_BUCKET_CAPACITY,
+                    _YF_REQUEST_TOKENS + elapsed * refill_rate,
+                )
+                _YF_REQUEST_LAST_REFILL = now_mono
+            if _YF_REQUEST_TOKENS >= 1.0:
+                _YF_REQUEST_TOKENS -= 1.0
+                return
+            wait_seconds = max(0.01, (1.0 - _YF_REQUEST_TOKENS) / max(1e-9, refill_rate))
+        time.sleep(min(wait_seconds, 0.25))
+
+
+def _yfinance_download(*args: Any, **kwargs: Any) -> pd.DataFrame:
+    _take_yfinance_token()
+    kwargs.setdefault("timeout", 5)
+    return yf.download(*args, **kwargs)
+
+
 def _symbol_to_yf(symbol: str) -> str:
     if symbol.startswith("6") or symbol.startswith("5"):
         return f"{symbol}.SS"
     if symbol.startswith(("0", "3", "1", "2")):
         return f"{symbol}.SZ"
     return symbol
+
+
+def _crypto_symbol_to_yf(symbol: str) -> str | None:
+    sym = _normalize_symbol(symbol)
+    stable_quotes = ("USDT", "USDC", "BUSD", "FDUSD")
+    for quote in stable_quotes:
+        if sym.endswith(quote) and len(sym) > len(quote) + 1:
+            base = sym[: -len(quote)]
+            if base:
+                return f"{base}-USD"
+    return None
 
 
 def _normalize_ohlcv(df: pd.DataFrame, symbol: str, asset_class: str, ts_col: str, open_col: str, high_col: str, low_col: str, close_col: str, volume_col: str, source: str) -> pd.DataFrame:
@@ -203,7 +274,15 @@ def fetch_equity_daily(symbol: str, start: date, end: date) -> pd.DataFrame:
         return _retry_call(_ak, retries=3)
     except Exception:
         ticker = _symbol_to_yf(symbol)
-        raw = yf.download(ticker, start=str(start), end=str(end), interval="1d", auto_adjust=False, progress=False, group_by="column")
+        raw = _yfinance_download(
+            ticker,
+            start=str(start),
+            end=str(end),
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            group_by="column",
+        )
         if raw.empty:
             return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
         if isinstance(raw.columns, pd.MultiIndex):
@@ -212,6 +291,8 @@ def fetch_equity_daily(symbol: str, start: date, end: date) -> pd.DataFrame:
         raw.columns = [str(c) for c in raw.columns]
         cols = {str(c).lower(): str(c) for c in raw.columns}
         date_col = cols.get("date", "Date")
+        if date_col not in raw.columns and "index" in raw.columns:
+            date_col = "index"
         open_col = cols.get("open", "Open")
         high_col = cols.get("high", "High")
         low_col = cols.get("low", "Low")
@@ -268,12 +349,100 @@ def fetch_crypto_daily(symbol: str, start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
     provider = _get_binance_provider()
     df = provider.fetch_ohlcv(symbol=sym, start=start, end=end, freq="1d")
-    if df is None or df.empty:
+    if df is not None and not df.empty:
+        out = df.copy()
+        out["symbol"] = sym
+        out["asset_class"] = "crypto"
+        return out
+
+    ticker = _crypto_symbol_to_yf(sym)
+    if not ticker:
         return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
-    out = df.copy()
-    out["symbol"] = sym
-    out["asset_class"] = "crypto"
-    return out
+    raw = _yfinance_download(
+        ticker,
+        start=str(start),
+        end=str(end + timedelta(days=1)),
+        interval="1d",
+        auto_adjust=False,
+        progress=False,
+        group_by="column",
+    )
+    if raw.empty:
+        return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = [str(c[0]) for c in raw.columns]
+    raw = raw.reset_index()
+    raw.columns = [str(c) for c in raw.columns]
+    cols = {str(c).lower(): str(c) for c in raw.columns}
+    date_col = cols.get("date", "Date")
+    if date_col not in raw.columns and "index" in raw.columns:
+        date_col = "index"
+    open_col = cols.get("open", "Open")
+    high_col = cols.get("high", "High")
+    low_col = cols.get("low", "Low")
+    close_col = cols.get("close", "Close")
+    volume_col = cols.get("volume", "Volume")
+    if any(c not in raw.columns for c in [date_col, open_col, high_col, low_col, close_col, volume_col]):
+        return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    return _normalize_ohlcv(
+        raw,
+        symbol=sym,
+        asset_class="crypto",
+        ts_col=date_col,
+        open_col=open_col,
+        high_col=high_col,
+        low_col=low_col,
+        close_col=close_col,
+        volume_col=volume_col,
+        source=f"yfinance:{ticker}",
+    )
+
+
+def fetch_commodity_proxy_daily(symbol: str, start: date, end: date) -> pd.DataFrame:
+    canonical = _commodity_proxy_symbol(symbol)
+    if not canonical:
+        return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    ticker = str(COMMODITY_PROXY_DEFS.get(canonical, {}).get("yf", "")).strip()
+    if not ticker:
+        return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    raw = _yfinance_download(
+        ticker,
+        start=str(start),
+        end=str(end + timedelta(days=1)),
+        interval="1d",
+        auto_adjust=False,
+        progress=False,
+        group_by="column",
+    )
+    if raw.empty:
+        return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = [str(c[0]) for c in raw.columns]
+    raw = raw.reset_index()
+    raw.columns = [str(c) for c in raw.columns]
+    cols = {str(c).lower(): str(c) for c in raw.columns}
+    date_col = cols.get("date", "Date")
+    if date_col not in raw.columns and "index" in raw.columns:
+        date_col = "index"
+    open_col = cols.get("open", "Open")
+    high_col = cols.get("high", "High")
+    low_col = cols.get("low", "Low")
+    close_col = cols.get("close", "Close")
+    volume_col = cols.get("volume", "Volume")
+    if any(c not in raw.columns for c in [date_col, open_col, high_col, low_col, close_col, volume_col]):
+        return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+    return _normalize_ohlcv(
+        raw,
+        symbol=canonical,
+        asset_class="future",
+        ts_col=date_col,
+        open_col=open_col,
+        high_col=high_col,
+        low_col=low_col,
+        close_col=close_col,
+        volume_col=volume_col,
+        source=f"yfinance:{ticker}",
+    )
 
 
 def _fetch_one_symbol(symbol: str, start: date, end: date) -> tuple[str, pd.DataFrame, str | None]:
@@ -285,6 +454,9 @@ def _fetch_one_symbol(symbol: str, start: date, end: date) -> tuple[str, pd.Data
         if FUTURE_RE.match(normalized_symbol):
             df = fetch_future_daily(normalized_symbol, start, end)
             return normalized_symbol, df, None
+        if _is_commodity_proxy_symbol(normalized_symbol):
+            df = fetch_commodity_proxy_daily(normalized_symbol, start, end)
+            return _commodity_proxy_symbol(normalized_symbol) or normalized_symbol, df, None
         if _is_crypto_symbol(normalized_symbol):
             df = fetch_crypto_daily(normalized_symbol, start, end)
             return normalized_symbol, df, None
@@ -376,8 +548,8 @@ def load_universe(core_symbols: list[str], max_symbols: int = 120) -> list[str]:
         out.append(sym)
         seen.add(sym)
 
-    # Crypto mode: keep user core symbols only, avoid equity index contamination.
-    if out and all(_is_crypto_symbol(s) for s in out):
+    # Direct market mode: keep explicitly requested crypto / futures / commodity proxies only.
+    if out and all(_is_direct_market_symbol(s) for s in out):
         return out[:max_symbols]
 
     candidates: list[str] = []
@@ -421,7 +593,7 @@ def load_real_data_bundle(
     review_end = cutoff + timedelta(days=review_days) if include_post_review and review_days > 0 else cutoff
 
     cache_key_src = (
-        "v5|"
+        "v6|"
         f"{start.isoformat()}|{end.isoformat()}|{cutoff.isoformat()}|{review_end.isoformat()}|"
         f"{max_symbols}|{report_symbol_cap}|{include_post_review}|{','.join(sorted(core_symbols))}"
     )

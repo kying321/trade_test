@@ -515,6 +515,7 @@ class ReleaseOrchestrator:
         as_of: date,
         run_tests: bool = False,
         run_review_if_missing: bool = True,
+        stable_replay_mode: str = "execute",
     ) -> dict[str, Any]:
         d = as_of.isoformat()
         review_delta_path = self.output_dir / "review" / f"{d}_param_delta.yaml"
@@ -524,7 +525,15 @@ class ReleaseOrchestrator:
         quality = self.quality_snapshot(as_of)
         backtest = self.backtest_snapshot(as_of)
         health = self.health_check(as_of, True)
-        replay = self.stable_replay_check(as_of, None)
+        stable_replay_mode_norm = str(stable_replay_mode or "execute").strip().lower()
+        if stable_replay_mode_norm == "cached":
+            replay = self._stable_replay_health_snapshot(as_of=as_of, days=None)
+        else:
+            stable_replay_mode_norm = "execute"
+            replay = self.stable_replay_check(as_of, None)
+            if isinstance(replay, dict):
+                replay = dict(replay)
+                replay.setdefault("mode", "execute_run_eod")
         state_stability = self._state_stability_metrics(as_of=as_of)
         state_active = bool(state_stability.get("active", False))
         state_checks = state_stability.get("checks", {}) if isinstance(state_stability.get("checks", {}), dict) else {}
@@ -629,15 +638,45 @@ class ReleaseOrchestrator:
 
         completeness = float(quality.get("completeness", 0.0))
         unresolved = float(quality.get("unresolved_conflict_ratio", 1.0))
-        positive_ratio = float(backtest.get("positive_window_ratio", 0.0))
-        max_drawdown = float(backtest.get("max_drawdown", 1.0))
-        violations = int(backtest.get("violations", 999))
+        backtest_snapshot_ready = bool(backtest) and bool(backtest.get("snapshot_fresh_enough", True))
+        positive_ratio_raw = backtest.get("positive_window_ratio") if isinstance(backtest, dict) else None
+        max_drawdown_raw = backtest.get("max_drawdown") if isinstance(backtest, dict) else None
+        violations_raw = backtest.get("violations") if isinstance(backtest, dict) else None
+        positive_ratio = float(positive_ratio_raw) if positive_ratio_raw is not None else None
+        max_drawdown = float(max_drawdown_raw) if max_drawdown_raw is not None else None
+        violations = int(violations_raw) if violations_raw is not None else None
+        backtest_metrics_ready = (
+            backtest_snapshot_ready
+            and positive_ratio is not None
+            and max_drawdown is not None
+            and violations is not None
+        )
 
         completeness_ok = completeness >= float(self.settings.validation.get("data_completeness_min", 0.99))
         unresolved_ok = unresolved <= float(self.settings.validation.get("unresolved_conflict_max", 0.005))
-        positive_ok = positive_ratio >= float(self.settings.validation.get("positive_window_ratio_min", 0.70))
-        drawdown_ok = max_drawdown <= float(self.settings.validation.get("max_drawdown_max", 0.18))
-        violations_ok = violations == 0
+        positive_ok = (
+            positive_ratio >= float(self.settings.validation.get("positive_window_ratio_min", 0.70))
+            if backtest_metrics_ready and positive_ratio is not None
+            else True
+        )
+        drawdown_ok = (
+            max_drawdown <= float(self.settings.validation.get("max_drawdown_max", 0.18))
+            if backtest_metrics_ready and max_drawdown is not None
+            else True
+        )
+        # The current backtest engine increments violations only for the same
+        # max_drawdown breach checked by drawdown_ok. Deduplicate that overlap
+        # here so one drawdown failure does not become two live blockers.
+        drawdown_violation_overlap = (
+            violations is not None and violations > 0 and not drawdown_ok
+            if backtest_metrics_ready
+            else False
+        )
+        violations_ok = (
+            violations == 0 or drawdown_violation_overlap
+            if backtest_metrics_ready and violations is not None
+            else True
+        )
         health_ok = bool(health.get("status") == "healthy")
         replay_ok = bool(replay.get("passed", False))
 
@@ -661,6 +700,7 @@ class ReleaseOrchestrator:
             "stable_replay_ok": replay_ok,
             "data_completeness_ok": completeness_ok,
             "unresolved_conflict_ok": unresolved_ok,
+            "backtest_snapshot_ok": backtest_metrics_ready,
             "positive_window_ratio_ok": positive_ok,
             "max_drawdown_ok": drawdown_ok,
             "risk_violations_ok": violations_ok,
@@ -688,9 +728,16 @@ class ReleaseOrchestrator:
                 "positive_window_ratio": positive_ratio,
                 "max_drawdown": max_drawdown,
                 "violations": violations,
+                "drawdown_violation_overlap": drawdown_violation_overlap,
+                "backtest_snapshot_ready": backtest_snapshot_ready,
+                "backtest_metrics_ready": backtest_metrics_ready,
+                "backtest_snapshot_path": str(backtest.get("snapshot_path", "")) if isinstance(backtest, dict) else "",
+                "backtest_snapshot_end": str(backtest.get("snapshot_end", "")) if isinstance(backtest, dict) else "",
+                "backtest_snapshot_age_days": backtest.get("snapshot_age_days") if isinstance(backtest, dict) else None,
             },
             "health": health,
             "stable_replay": replay,
+            "stable_replay_mode": stable_replay_mode_norm,
             "state_stability": state_stability,
             "strategy_stability": strategy_stability,
             "temporal_audit": temporal_audit,
@@ -718,6 +765,216 @@ class ReleaseOrchestrator:
         report_path = self.output_dir / "review" / f"{d}_gate_report.json"
         write_json(report_path, out)
         return out
+
+    def _stable_replay_health_snapshot(
+        self,
+        *,
+        as_of: date,
+        days: int | None = None,
+        require_review_latest: bool = True,
+    ) -> dict[str, Any]:
+        replay_days = int(days or self.settings.validation.get("required_stable_replay_days", 3))
+        replay_days = max(1, replay_days)
+
+        checks: list[dict[str, Any]] = []
+        all_passed = True
+        for i in range(replay_days):
+            target = as_of - timedelta(days=i)
+            health = self.health_check(target, require_review=bool(require_review_latest and i == 0))
+            day_ok = bool(health.get("status") == "healthy")
+            checks.append(
+                {
+                    "date": target.isoformat(),
+                    "ok": day_ok,
+                    "health": health,
+                    "replayed": False,
+                }
+            )
+            if not day_ok:
+                all_passed = False
+
+        return {
+            "as_of": as_of.isoformat(),
+            "replay_days": replay_days,
+            "passed": all_passed,
+            "checks": checks,
+            "mode": "cached_health_only" if require_review_latest else "cached_runtime_health_only",
+        }
+
+    @staticmethod
+    def _ops_failed_gate_checks(gate: dict[str, Any]) -> list[str]:
+        checks = gate.get("checks", {}) if isinstance(gate.get("checks", {}), dict) else {}
+        failed = [str(key) for key, value in checks.items() if not bool(value)]
+        return sorted(failed)
+
+    @staticmethod
+    def _state_stability_live_gate_check_map() -> dict[str, str]:
+        # Live execution only blocks on operational safety regressions here.
+        return {
+            "micro_schema_fail_days_ok": "micro_schema",
+            "cross_source_fail_days_ok": "cross_source_integrity",
+            "cross_source_inactive_days_ok": "cross_source_coverage",
+            "system_time_sync_fail_days_ok": "system_time_sync",
+            "system_time_sync_inactive_days_ok": "system_time_sync_coverage",
+            "micro_capture_multiplier_floor_ok": "micro_capture_multiplier",
+        }
+
+    def _state_stability_live_gate_summary(self, *, state_stability: dict[str, Any]) -> dict[str, Any]:
+        checks = (
+            state_stability.get("checks", {})
+            if isinstance(state_stability.get("checks", {}), dict)
+            else {}
+        )
+        active = bool(state_stability.get("active", False))
+        check_map = self._state_stability_live_gate_check_map()
+        live_checks = {key: bool(checks.get(key, True)) for key in check_map}
+        failed_checks = [key for key, value in live_checks.items() if not value]
+        ignored_failed_checks = [
+            str(key)
+            for key, value in checks.items()
+            if not bool(value) and str(key) not in check_map
+        ]
+        return {
+            "active": active,
+            "scope": "operational_only",
+            "ok": all(live_checks.values()) if active else True,
+            "checks": live_checks,
+            "failed_checks": failed_checks,
+            "blocking_reason_codes": [check_map[key] for key in failed_checks],
+            "ignored_failed_checks": ignored_failed_checks,
+        }
+
+    def _ops_live_gate_summary(
+        self,
+        *,
+        gate: dict[str, Any],
+        ops_status: str,
+        live_runtime_health: dict[str, Any],
+        live_runtime_replay: dict[str, Any],
+        state_stability_live: dict[str, Any],
+    ) -> dict[str, Any]:
+        gate_checks = gate.get("checks", {}) if isinstance(gate.get("checks", {}), dict) else {}
+        rollback = (
+            gate.get("rollback_recommendation", {})
+            if isinstance(gate.get("rollback_recommendation", {}), dict)
+            else {}
+        )
+        runtime_health_ok = bool(live_runtime_health.get("status") == "healthy")
+        runtime_replay_ok = bool(live_runtime_replay.get("passed", False))
+        state_stability_live_ok = bool(state_stability_live.get("ok", True))
+        state_stability_live_reason_codes = [
+            str(x)
+            for x in (
+                state_stability_live.get("blocking_reason_codes", [])
+                if isinstance(state_stability_live.get("blocking_reason_codes", []), list)
+                else []
+            )
+            if str(x).strip()
+        ]
+        required_check_map = {
+            "mode_health_ok": "mode_health",
+            "runtime_health_ok": "runtime_health",
+            "runtime_replay_ok": "runtime_replay",
+            "state_stability_ok": "state_stability",
+            "reconcile_drift_ok": "reconcile_drift",
+            "artifact_governance_ok": "artifact_governance",
+        }
+        required_checks = {
+            "mode_health_ok": bool(gate_checks.get("mode_health_ok", False)),
+            "runtime_health_ok": runtime_health_ok,
+            "runtime_replay_ok": runtime_replay_ok,
+            "state_stability_ok": state_stability_live_ok,
+            "reconcile_drift_ok": bool(gate_checks.get("reconcile_drift_ok", False)),
+            "artifact_governance_ok": bool(gate_checks.get("artifact_governance_ok", False)),
+        }
+        blocking_reason_codes: list[str] = []
+        for key, reason_code in required_check_map.items():
+            if not bool(required_checks.get(key, False)):
+                blocking_reason_codes.append(reason_code)
+        if not state_stability_live_ok:
+            for code in state_stability_live_reason_codes:
+                if code not in blocking_reason_codes:
+                    blocking_reason_codes.append(code)
+
+        rollback_active = bool(rollback.get("active", False))
+        rollback_level = str(rollback.get("level", "none") or "none").strip().lower()
+        rollback_reason_codes = [
+            str(x)
+            for x in (rollback.get("reason_codes", []) if isinstance(rollback.get("reason_codes", []), list) else [])
+            if str(x).strip()
+        ]
+        rollback_anchor_ready = bool(rollback.get("anchor_ready", True))
+        live_blocking_rollback_codes = {
+            "risk_violations",
+            "max_drawdown",
+            "state_stability",
+            "strategy_stability",
+            "temporal_audit",
+            "mode_drift",
+            "style_drift",
+            "reconcile_drift",
+            "slot_anomaly",
+            "tests",
+        }
+        rollback_blocking_codes: list[str] = []
+        for code in rollback_reason_codes:
+            if code not in live_blocking_rollback_codes:
+                continue
+            if code == "state_stability" and state_stability_live_ok:
+                continue
+            rollback_blocking_codes.append(code)
+        if rollback_active and rollback_level == "hard" and rollback_blocking_codes:
+            blocking_reason_codes.append("rollback_hard")
+        if rollback_active and not rollback_anchor_ready:
+            blocking_reason_codes.append("rollback_anchor_missing")
+        for code in rollback_blocking_codes:
+            if code not in blocking_reason_codes:
+                blocking_reason_codes.append(code)
+
+        gate_failed_checks = self._ops_failed_gate_checks(gate)
+        gate_check_codes = {
+            "mode_health_ok": "mode_health",
+            "state_stability_ok": "state_stability",
+            "reconcile_drift_ok": "reconcile_drift",
+            "artifact_governance_ok": "artifact_governance",
+            "backtest_snapshot_ok": "backtest_snapshot",
+            "risk_violations_ok": "risk_violations",
+            "max_drawdown_ok": "max_drawdown",
+            "strategy_stability_ok": "strategy_stability",
+            "temporal_audit_ok": "temporal_audit",
+            "mode_drift_ok": "mode_drift",
+            "style_drift_ok": "style_drift",
+            "slot_anomaly_ok": "slot_anomaly",
+            "tests_ok": "tests",
+        }
+        for check_name in gate_failed_checks:
+            if check_name == "state_stability_ok" and state_stability_live_ok:
+                continue
+            mapped = gate_check_codes.get(check_name)
+            if mapped and mapped not in blocking_reason_codes:
+                blocking_reason_codes.append(mapped)
+
+        if blocking_reason_codes and str(ops_status or "").strip().lower() == "red" and "ops_status_red" not in blocking_reason_codes:
+            blocking_reason_codes.append("ops_status_red")
+
+        deduped_reason_codes: list[str] = []
+        for code in blocking_reason_codes:
+            if code not in deduped_reason_codes:
+                deduped_reason_codes.append(code)
+
+        return {
+            "ok": len(deduped_reason_codes) == 0,
+            "required_checks": required_checks,
+            "gate_failed_checks": gate_failed_checks,
+            "blocking_reason_codes": deduped_reason_codes,
+            "state_stability_live": state_stability_live,
+            "rollback_active": rollback_active,
+            "rollback_level": rollback_level,
+            "rollback_anchor_ready": rollback_anchor_ready,
+            "rollback_action": str(rollback.get("action", "")),
+            "rollback_reason_codes": rollback_blocking_codes,
+            "ops_status": str(ops_status or ""),
+        }
 
     def _run_tests(
         self,
@@ -3294,6 +3551,102 @@ class ReleaseOrchestrator:
             "open_positions": int(open_positions_int),
         }
 
+    @staticmethod
+    def _sqlite_row_keys(row: sqlite3.Row | dict[str, Any]) -> list[str]:
+        if isinstance(row, sqlite3.Row):
+            return [str(x) for x in row.keys()]
+        if isinstance(row, dict):
+            return [str(x) for x in row.keys()]
+        return []
+
+    @classmethod
+    def _sqlite_row_value(cls, row: sqlite3.Row | dict[str, Any], key: str) -> Any:
+        if isinstance(row, sqlite3.Row):
+            try:
+                return row[key]
+            except Exception:
+                return None
+        if isinstance(row, dict):
+            return row.get(key)
+        return None
+
+    @classmethod
+    def _sqlite_row_value_norm(cls, row: sqlite3.Row | dict[str, Any], key: str) -> str:
+        raw = cls._sqlite_row_value(row, key)
+        if raw is None:
+            return ""
+        if isinstance(raw, bool):
+            return "1" if raw else "0"
+        if isinstance(raw, int):
+            return str(int(raw))
+        if isinstance(raw, float):
+            if not math.isfinite(raw):
+                return "nan"
+            return format(round(float(raw), 12), ".12g")
+        return str(raw).strip()
+
+    def _latest_positions_day_count(self, *, conn: sqlite3.Connection, day: str) -> int:
+        with closing(conn.cursor()) as cur:
+            cur.execute("SELECT * FROM latest_positions WHERE date = ?", (day,))
+            rows = cur.fetchall()
+        seen: set[tuple[tuple[str, str], ...]] = set()
+        for row in rows:
+            keys = [key for key in self._sqlite_row_keys(row) if key.lower() != "rowid"]
+            dedupe_key = tuple((key, self._sqlite_row_value_norm(row, key)) for key in sorted(keys))
+            seen.add(dedupe_key)
+        return int(len(seen))
+
+    def _executed_plans_day_summary(self, *, conn: sqlite3.Connection, day: str) -> tuple[int, float]:
+        with closing(conn.cursor()) as cur:
+            cur.execute(
+                "SELECT * FROM executed_plans WHERE date = ? AND (status = 'CLOSED' OR status IS NULL)",
+                (day,),
+            )
+            rows = cur.fetchall()
+
+        count = 0
+        pnl_total = 0.0
+        seen: set[tuple[Any, ...]] = set()
+        for row in rows:
+            open_date = self._sqlite_row_value_norm(row, "open_date")
+            if open_date and open_date > day:
+                continue
+            live_event_id = self._sqlite_row_value_norm(row, "live_event_id")
+            if live_event_id:
+                dedupe_key: tuple[Any, ...] = ("live_event_id", live_event_id)
+            else:
+                key_cols = [
+                    "date",
+                    "open_date",
+                    "symbol",
+                    "side",
+                    "direction",
+                    "runtime_mode",
+                    "mode",
+                    "size_pct",
+                    "risk_pct",
+                    "entry_price",
+                    "exit_price",
+                    "pnl",
+                    "pnl_pct",
+                    "exit_reason",
+                    "hold_days",
+                    "holding_days",
+                    "status",
+                    "source",
+                ]
+                dedupe_key = tuple(
+                    (key, self._sqlite_row_value_norm(row, key))
+                    for key in key_cols
+                    if key in self._sqlite_row_keys(row)
+                )
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            count += 1
+            pnl_total += self._safe_float(self._sqlite_row_value(row, "pnl"), 0.0)
+        return int(count), float(pnl_total)
+
     def _reconcile_drift_metrics(self, *, as_of: date) -> dict[str, Any]:
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         window_days = max(1, int(val.get("ops_reconcile_window_days", 7)))
@@ -3401,6 +3754,7 @@ class ReleaseOrchestrator:
         if db_path.exists():
             try:
                 conn = get_sqlite_conn(db_path)
+                conn.row_factory = sqlite3.Row
                 has_latest_positions = self._sqlite_table_exists(conn, "latest_positions")
                 has_executed_plans = self._sqlite_table_exists(conn, "executed_plans")
             except Exception:
@@ -3500,13 +3854,7 @@ class ReleaseOrchestrator:
 
             if conn is not None and has_latest_positions:
                 try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            "SELECT COUNT(*) FROM latest_positions WHERE date = ?",
-                            (dstr,),
-                        )
-                        row = cur.fetchone()
-                        plan_db_count = int(row[0] if row else 0)
+                    plan_db_count = self._latest_positions_day_count(conn=conn, day=dstr)
                 except Exception:
                     plan_db_count = None
             if plan_db_count is None:
@@ -3518,15 +3866,7 @@ class ReleaseOrchestrator:
 
             if conn is not None and has_executed_plans:
                 try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            "SELECT COUNT(*), COALESCE(SUM(pnl), 0.0) FROM executed_plans "
-                            "WHERE date = ? AND (status = 'CLOSED' OR status IS NULL)",
-                            (dstr,),
-                        )
-                        row = cur.fetchone()
-                        closed_db_count = int(row[0] if row else 0)
-                        closed_db_pnl = self._safe_float(row[1] if row else 0.0, 0.0)
+                    closed_db_count, closed_db_pnl = self._executed_plans_day_summary(conn=conn, day=dstr)
                 except Exception:
                     closed_db_count = None
                     closed_db_pnl = None
@@ -5743,7 +6083,12 @@ class ReleaseOrchestrator:
 
         scheduler_state = self.load_json_safely(self.output_dir / "logs" / "scheduler_state.json")
         latest_tests = self._latest_test_result()
-        gate = self.gate_report(as_of=as_of, run_tests=False, run_review_if_missing=False)
+        gate = self.gate_report(
+            as_of=as_of,
+            run_tests=False,
+            run_review_if_missing=False,
+            stable_replay_mode="cached",
+        )
         state_stability = self._state_stability_metrics(as_of=as_of)
         state_checks = state_stability.get("checks", {}) if isinstance(state_stability.get("checks", {}), dict) else {}
         state_all_ok = all(bool(v) for v in state_checks.values())
@@ -5895,12 +6240,24 @@ class ReleaseOrchestrator:
         ):
             status = "yellow"
 
+        live_runtime_health = self.health_check(as_of, False)
+        live_runtime_replay = self._stable_replay_health_snapshot(
+            as_of=as_of,
+            days=None,
+            require_review_latest=False,
+        )
+        state_stability_live = self._state_stability_live_gate_summary(
+            state_stability=state_stability,
+        )
+
         summary = {
             "date": d,
             "status": status,
             "window_days": wd,
             "health_ratio": health_ratio,
             "gate_passed": gate["passed"],
+            "gate_checks": gate.get("checks", {}) if isinstance(gate.get("checks", {}), dict) else {},
+            "gate_failed_checks": self._ops_failed_gate_checks(gate),
             "latest_tests": latest_tests,
             "scheduler": {
                 "date": scheduler_state.get("date"),
@@ -5908,6 +6265,7 @@ class ReleaseOrchestrator:
                 "history_count": len(scheduler_state.get("history", [])),
             },
             "state_stability": state_stability,
+            "state_stability_live": state_stability_live,
             "strategy_stability": strategy_stability,
             "temporal_audit": temporal_audit,
             "slot_anomaly": slot_anomaly,
@@ -5921,7 +6279,16 @@ class ReleaseOrchestrator:
             "artifact_governance": artifact_governance,
             "rollback_recommendation": rollback_rec,
             "history": history,
+            "live_runtime_health": live_runtime_health,
+            "live_runtime_replay": live_runtime_replay,
         }
+        summary["live_gate"] = self._ops_live_gate_summary(
+            gate=gate,
+            ops_status=status,
+            live_runtime_health=live_runtime_health,
+            live_runtime_replay=live_runtime_replay,
+            state_stability_live=state_stability_live,
+        )
 
         report_json = self.output_dir / "review" / f"{d}_ops_report.json"
         write_json(report_json, summary)
@@ -5935,9 +6302,38 @@ class ReleaseOrchestrator:
         lines.append(f"- 最近测试: `{latest_tests.get('returncode', 'N/A')}`")
         lines.append(f"- 调度已执行槽位: `{', '.join(summary['scheduler']['executed_slots']) if summary['scheduler']['executed_slots'] else 'NONE'}`")
         lines.append("")
+        live_gate = summary.get("live_gate", {}) if isinstance(summary.get("live_gate", {}), dict) else {}
+        lines.append("## Live Gate")
+        lines.append(f"- ok: `{bool(live_gate.get('ok', False))}`")
+        lines.append(f"- ops_status: `{str(live_gate.get('ops_status', '') or 'N/A')}`")
+        lines.append(f"- rollback(level/active/anchor_ready): `{str(live_gate.get('rollback_level', 'none'))}` / `{bool(live_gate.get('rollback_active', False))}` / `{bool(live_gate.get('rollback_anchor_ready', True))}`")
+        lines.append(f"- blocking_reason_codes: `{', '.join(live_gate.get('blocking_reason_codes', [])) if live_gate.get('blocking_reason_codes') else 'NONE'}`")
+        lines.append(f"- gate_failed_checks: `{', '.join(live_gate.get('gate_failed_checks', [])) if live_gate.get('gate_failed_checks') else 'NONE'}`")
+        live_runtime_health = summary.get('live_runtime_health', {}) if isinstance(summary.get('live_runtime_health', {}), dict) else {}
+        live_runtime_replay = summary.get('live_runtime_replay', {}) if isinstance(summary.get('live_runtime_replay', {}), dict) else {}
+        lines.append(f"- runtime_health: `{str(live_runtime_health.get('status', 'unknown'))}`")
+        lines.append(f"- runtime_replay: `{bool(live_runtime_replay.get('passed', False))}` mode=`{str(live_runtime_replay.get('mode', '') or 'N/A')}`")
+        live_required_checks = live_gate.get('required_checks', {}) if isinstance(live_gate.get('required_checks', {}), dict) else {}
+        for k, v in live_required_checks.items():
+            lines.append(f"- `{k}`: `{v}`")
+        lines.append("")
         lines.append("## 状态稳定性")
         lines.append(f"- active: `{state_stability.get('active', False)}`")
         lines.append(f"- samples: `{state_stability.get('samples', 0)}` / min=`{state_stability.get('min_samples', 0)}`")
+        state_stability_live = summary.get("state_stability_live", {}) if isinstance(summary.get("state_stability_live", {}), dict) else {}
+        lines.append(
+            "- live_scope/ok: "
+            + f"`{str(state_stability_live.get('scope', 'N/A'))}` / "
+            + f"`{bool(state_stability_live.get('ok', False))}`"
+        )
+        lines.append(
+            "- live_failed_checks: "
+            + f"`{', '.join(state_stability_live.get('failed_checks', [])) if state_stability_live.get('failed_checks') else 'NONE'}`"
+        )
+        lines.append(
+            "- live_ignored_failed_checks: "
+            + f"`{', '.join(state_stability_live.get('ignored_failed_checks', [])) if state_stability_live.get('ignored_failed_checks') else 'NONE'}`"
+        )
         metrics = state_stability.get("metrics", {}) if isinstance(state_stability.get("metrics", {}), dict) else {}
         lines.append(
             "- switch_rate: "
@@ -6714,6 +7110,15 @@ class ReleaseOrchestrator:
                     "code": "POSITIVE_WINDOW_RATIO",
                     "message": "样本外正收益窗口占比不达标",
                     "action": "收缩信号阈值与仓位，先做局部回测再跑全量 walk-forward。",
+                }
+            )
+        if not bool(checks.get("backtest_snapshot_ok", True)):
+            defects.append(
+                {
+                    "category": "data",
+                    "code": "BACKTEST_SNAPSHOT",
+                    "message": "当前回测快照缺失、超龄或指标字段不完整",
+                    "action": "先补齐最新 backtest snapshot，再重新生成 gate/ops/handoff，避免把缺快照误判成 max_drawdown。",
                 }
             )
         if not bool(checks.get("max_drawdown_ok", True)):

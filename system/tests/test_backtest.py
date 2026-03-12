@@ -199,6 +199,12 @@ class BacktestTests(unittest.TestCase):
             )
             self.assertGreater(int(result.trades), 0)
             self.assertIn("crypto", result.by_asset)
+            self.assertTrue(bool(result.by_symbol))
+            stats = next(iter(result.by_symbol.values()))
+            self.assertGreaterEqual(int(stats["trade_count"]), 1)
+            self.assertTrue(bool(result.by_symbol_regime))
+            regime_stats = next(iter(result.by_symbol_regime.values()))
+            self.assertTrue(bool(regime_stats))
         finally:
             bt_mod.scan_signals = original_scan  # type: ignore[assignment]
             bt_mod.derive_regime_consensus = original_regime  # type: ignore[assignment]

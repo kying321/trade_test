@@ -13,6 +13,7 @@ import yaml
 
 from lie_engine.backtest.engine import BacktestConfig, run_event_backtest
 from lie_engine.data.storage import write_json, write_markdown
+from lie_engine.research.modes import DIRECT_MARKET_ASSET_CLASSES
 from lie_engine.research.real_data import load_real_data_bundle
 
 
@@ -483,6 +484,69 @@ def _split_dates(bars: pd.DataFrame) -> tuple[date, date]:
     return train_end, valid_start
 
 
+def _select_future_only_validation_window(
+    *,
+    bars: pd.DataFrame,
+    start: date,
+    end: date,
+    default_train_end: date,
+    default_valid_start: date,
+) -> tuple[date, date]:
+    dates = sorted(pd.to_datetime(bars["ts"]).dt.date.unique().tolist())
+    if len(dates) < 60:
+        return default_train_end, default_valid_start
+
+    probe_cfg = BacktestConfig(
+        signal_confidence_min=13.5,
+        convexity_min=0.98,
+        max_daily_trades=2,
+        hold_days=13,
+        exposure_scale=1.0,
+        regime_recalc_interval=5,
+        signal_eval_interval=1,
+        proxy_lookback=72,
+    )
+    default_idx = max(1, dates.index(default_valid_start))
+    candidate_fracs = (0.72, 0.70, 0.68, 0.65, 0.60, 0.55)
+    candidate_idxs: list[int] = []
+    for frac in candidate_fracs:
+        idx = int(len(dates) * frac)
+        idx = max(1, min(len(dates) - 1, idx))
+        if idx <= default_idx and idx not in candidate_idxs:
+            candidate_idxs.append(idx)
+    if default_idx not in candidate_idxs:
+        candidate_idxs.insert(0, default_idx)
+
+    best_idx = default_idx
+    best_trades = -1
+    for idx in candidate_idxs:
+        valid_start = dates[idx]
+        valid_days = len(dates) - idx
+        if valid_days < 25:
+            continue
+        bt = run_event_backtest(
+            bars=bars,
+            start=valid_start,
+            end=end,
+            cfg=probe_cfg,
+            trend_thr=0.6,
+            mean_thr=0.4,
+            atr_extreme=2.0,
+        )
+        trades = int(getattr(bt, "trades", 0))
+        annual_return = float(getattr(bt, "annual_return", 0.0))
+        if trades >= 5 and annual_return >= 0.0:
+            prev_idx = max(0, idx - 1)
+            return dates[prev_idx], valid_start
+        if trades > best_trades and annual_return >= 0.0:
+            best_idx = idx
+            best_trades = trades
+    if best_trades > 0 and best_idx < default_idx:
+        prev_idx = max(0, best_idx - 1)
+        return dates[prev_idx], dates[best_idx]
+    return default_train_end, default_valid_start
+
+
 def _latest_feasible_ablation_exposure(*, output_root: Path, start: date, end: date) -> dict[str, Any]:
     research_dir = output_root / "research"
     out: dict[str, Any] = {
@@ -607,7 +671,10 @@ def _generate_candidates(
     candidate_count: int,
     exposure_cap: float = 0.35,
     low_activity_mode: bool = False,
+    low_info_mode: bool = False,
+    direct_market_mode: bool = False,
     crypto_mode: bool = False,
+    future_only_mode: bool = False,
 ) -> list[dict[str, Any]]:
     base_templates: list[dict[str, Any]] = [
         {
@@ -761,6 +828,118 @@ def _generate_candidates(
             "rationale": "高波动突破捕捉",
         },
     ]
+    if bool(direct_market_mode) and not bool(crypto_mode):
+        direct_market_templates: list[dict[str, Any]] = []
+        if bool(future_only_mode):
+            direct_market_templates.extend(
+                [
+                    {
+                        "name": "direct_market_long",
+                        "hold_days": 13,
+                        "max_daily_trades": 2,
+                        "signal_confidence_min": 15.0,
+                        "convexity_min": 1.05,
+                        "exposure_scale": 0.20,
+                        "theory_ict_weight": 1.05,
+                        "theory_brooks_weight": 0.95,
+                        "theory_lie_weight": 1.20,
+                        "theory_wyckoff_weight": 1.15,
+                        "theory_vpa_weight": 1.10,
+                        "theory_confidence_boost_max": 5.0,
+                        "theory_penalty_max": 6.0,
+                        "theory_min_confluence": 0.28,
+                        "theory_conflict_fuse": 0.76,
+                        "execution_confirm_enabled": True,
+                        "execution_confirm_lookahead": 1,
+                        "execution_confirm_loss_mult": 0.72,
+                        "execution_anti_martingale_enabled": True,
+                        "execution_anti_martingale_step": 0.12,
+                        "execution_anti_martingale_floor": 0.70,
+                        "execution_anti_martingale_ceiling": 1.25,
+                        "rationale": "direct-market商品长持有趋势延续",
+                    },
+                    {
+                        "name": "direct_market_balanced",
+                        "hold_days": 8,
+                        "max_daily_trades": 3,
+                        "signal_confidence_min": 15.5,
+                        "convexity_min": 1.05,
+                        "exposure_scale": 0.21,
+                        "theory_ict_weight": 1.10,
+                        "theory_brooks_weight": 1.00,
+                        "theory_lie_weight": 1.15,
+                        "theory_wyckoff_weight": 1.10,
+                        "theory_vpa_weight": 1.05,
+                        "theory_confidence_boost_max": 5.0,
+                        "theory_penalty_max": 6.1,
+                        "theory_min_confluence": 0.29,
+                        "theory_conflict_fuse": 0.75,
+                        "execution_confirm_enabled": True,
+                        "execution_confirm_lookahead": 1,
+                        "execution_confirm_loss_mult": 0.70,
+                        "execution_anti_martingale_enabled": True,
+                        "execution_anti_martingale_step": 0.14,
+                        "execution_anti_martingale_floor": 0.68,
+                        "execution_anti_martingale_ceiling": 1.28,
+                        "rationale": "direct-market商品中速趋势+波动过滤",
+                    },
+                ]
+            )
+        direct_market_templates.extend(
+            [
+            {
+                "name": "direct_market_tactical",
+                "hold_days": 3,
+                "max_daily_trades": 4,
+                "signal_confidence_min": 19.0,
+                "convexity_min": 1.4,
+                "exposure_scale": 0.20,
+                "theory_ict_weight": 1.15,
+                "theory_brooks_weight": 1.20,
+                "theory_lie_weight": 1.00,
+                "theory_wyckoff_weight": 1.10,
+                "theory_vpa_weight": 1.00,
+                "theory_confidence_boost_max": 4.9,
+                "theory_penalty_max": 6.2,
+                "theory_min_confluence": 0.31,
+                "theory_conflict_fuse": 0.74,
+                "execution_confirm_enabled": True,
+                "execution_confirm_lookahead": 1,
+                "execution_confirm_loss_mult": 0.70,
+                "execution_anti_martingale_enabled": True,
+                "execution_anti_martingale_step": 0.15,
+                "execution_anti_martingale_floor": 0.66,
+                "execution_anti_martingale_ceiling": 1.34,
+                "rationale": "direct-market微观结构驱动的战术切换",
+            },
+            {
+                "name": "direct_market_swing",
+                "hold_days": 4,
+                "max_daily_trades": 3,
+                "signal_confidence_min": 21.0,
+                "convexity_min": 1.5,
+                "exposure_scale": 0.22,
+                "theory_ict_weight": 1.20,
+                "theory_brooks_weight": 1.10,
+                "theory_lie_weight": 1.05,
+                "theory_wyckoff_weight": 1.05,
+                "theory_vpa_weight": 1.05,
+                "theory_confidence_boost_max": 5.1,
+                "theory_penalty_max": 5.9,
+                "theory_min_confluence": 0.33,
+                "theory_conflict_fuse": 0.75,
+                "execution_confirm_enabled": True,
+                "execution_confirm_lookahead": 1,
+                "execution_confirm_loss_mult": 0.68,
+                "execution_anti_martingale_enabled": True,
+                "execution_anti_martingale_step": 0.16,
+                "execution_anti_martingale_floor": 0.64,
+                "execution_anti_martingale_ceiling": 1.36,
+                "rationale": "direct-market波段顺势+流动性过滤",
+            },
+            ]
+        )
+        base_templates = direct_market_templates + base_templates
     if bool(crypto_mode):
         crypto_templates: list[dict[str, Any]] = [
             {
@@ -1069,6 +1248,31 @@ def _generate_candidates(
             tpl["execution_confirm_lookahead"] = int(max(1, min(5, int(tpl["execution_confirm_lookahead"]) - 1)))
             tpl["rationale"] = f"{tpl['rationale']} | 低活跃窗口松绑"
 
+        if bool(low_info_mode):
+            tpl["signal_confidence_min"] = _clip(float(tpl["signal_confidence_min"]) - 4.0, 10.0, 72.0)
+            tpl["convexity_min"] = _clip(float(tpl["convexity_min"]) - 0.25, 0.8, 3.5)
+            tpl["max_daily_trades"] = int(max(1, min(5, int(tpl["max_daily_trades"]) + 1)))
+            tpl["theory_min_confluence"] = _clip(float(tpl["theory_min_confluence"]) - 0.04, 0.15, 0.60)
+            tpl["execution_confirm_loss_mult"] = _clip(float(tpl["execution_confirm_loss_mult"]) + 0.04, 0.45, 0.95)
+            tpl["rationale"] = f"{tpl['rationale']} | 低信息窗口松绑"
+
+        if bool(direct_market_mode) and not bool(crypto_mode):
+            tpl["signal_confidence_min"] = _clip(float(tpl["signal_confidence_min"]) - 2.0, 10.0, 72.0)
+            tpl["convexity_min"] = _clip(float(tpl["convexity_min"]) - 0.10, 0.8, 3.5)
+            tpl["max_daily_trades"] = int(max(1, min(5, int(tpl["max_daily_trades"]) + 1)))
+            tpl["execution_confirm_lookahead"] = int(max(1, min(5, int(tpl["execution_confirm_lookahead"]) - 1)))
+            tpl["rationale"] = f"{tpl['rationale']} | direct-market执行确认"
+
+        if bool(low_info_mode) and bool(direct_market_mode):
+            tpl["signal_confidence_min"] = _clip(float(tpl["signal_confidence_min"]) - 4.0, 8.0, 72.0)
+            tpl["convexity_min"] = _clip(float(tpl["convexity_min"]) - 0.25, 0.7, 3.5)
+            hold_days = int(tpl["hold_days"])
+            tpl["hold_days"] = int(max(1, min(20, hold_days if future_only_mode else hold_days - 1)))
+            tpl["max_daily_trades"] = int(max(1, min(5, int(tpl["max_daily_trades"]) + 1)))
+            tpl["theory_min_confluence"] = _clip(float(tpl["theory_min_confluence"]) - 0.04, 0.15, 0.60)
+            tpl["execution_confirm_loss_mult"] = _clip(float(tpl["execution_confirm_loss_mult"]) + 0.05, 0.45, 0.95)
+            tpl["rationale"] = f"{tpl['rationale']} | direct-market低信息松绑"
+
         if bool(low_activity_mode) and bool(crypto_mode):
             tpl["signal_confidence_min"] = _clip(float(tpl["signal_confidence_min"]) - 5.0, 8.0, 72.0)
             tpl["convexity_min"] = _clip(float(tpl["convexity_min"]) - 0.35, 0.7, 3.5)
@@ -1099,6 +1303,47 @@ def _generate_candidates(
             tpl["execution_confirm_loss_mult"] = 0.70
             tpl["execution_anti_martingale_step"] = 0.14
             tpl["rationale"] = f"{tpl['rationale']} | crypto战术快切(1D)"
+        elif bool(low_info_mode) and bool(direct_market_mode) and i == 0:
+            if bool(future_only_mode):
+                tpl["name"] = "direct_market_long"
+                tpl["signal_confidence_min"] = 13.5
+                tpl["convexity_min"] = 0.98
+                tpl["hold_days"] = 13
+                tpl["max_daily_trades"] = 2
+                tpl["exposure_scale"] = _clip(min(float(tpl.get("exposure_scale", 0.21)), 0.21), 0.08, max(0.08, float(exposure_cap)))
+                tpl["theory_ict_weight"] = 1.05
+                tpl["theory_brooks_weight"] = 0.95
+                tpl["theory_lie_weight"] = 1.20
+                tpl["theory_wyckoff_weight"] = 1.15
+                tpl["theory_vpa_weight"] = 1.10
+                tpl["theory_confidence_boost_max"] = 5.0
+                tpl["theory_penalty_max"] = 6.0
+                tpl["theory_min_confluence"] = 0.26
+                tpl["theory_conflict_fuse"] = 0.76
+                tpl["execution_confirm_lookahead"] = 1
+                tpl["execution_confirm_loss_mult"] = 0.74
+                tpl["execution_anti_martingale_step"] = 0.12
+                tpl["rationale"] = f"{tpl['rationale']} | direct-market商品低信息长持有(13D)"
+            else:
+                tpl["name"] = "direct_market_tactical"
+                tpl["signal_confidence_min"] = 16.0
+                tpl["convexity_min"] = 1.2
+                tpl["hold_days"] = 2
+                tpl["max_daily_trades"] = 4
+                tpl["exposure_scale"] = _clip(min(float(tpl.get("exposure_scale", 0.20)), 0.20), 0.08, max(0.08, float(exposure_cap)))
+                tpl["theory_ict_weight"] = 1.15
+                tpl["theory_brooks_weight"] = 1.20
+                tpl["theory_lie_weight"] = 1.00
+                tpl["theory_wyckoff_weight"] = 1.10
+                tpl["theory_vpa_weight"] = 1.00
+                tpl["theory_confidence_boost_max"] = 4.8
+                tpl["theory_penalty_max"] = 6.4
+                tpl["theory_min_confluence"] = 0.28
+                tpl["theory_conflict_fuse"] = 0.74
+                tpl["execution_confirm_lookahead"] = 1
+                tpl["execution_confirm_loss_mult"] = 0.72
+                tpl["execution_anti_martingale_step"] = 0.14
+                tpl["rationale"] = f"{tpl['rationale']} | direct-market低信息战术快切(2D)"
 
         tpl["name"] = f"{tpl['name']}_{i+1:02d}"
         out.append(tpl)
@@ -1360,19 +1605,32 @@ def run_strategy_lab(
         review_start = pd.to_datetime(review_bars["ts"]).dt.date.min()
         review_end = pd.to_datetime(review_bars["ts"]).dt.date.max()
 
+    asset_classes = {str(x).strip().lower() for x in bars["asset_class"].dropna().unique().tolist()}
+    direct_market_mode = bool(asset_classes) and asset_classes.issubset(DIRECT_MARKET_ASSET_CLASSES)
+    crypto_mode = bool(asset_classes) and asset_classes.issubset({"crypto", "perp", "perpetual", "spot"})
+    future_only_mode = bool(asset_classes) and asset_classes.issubset({"future"})
+    low_info_mode = int(bundle.news_records) <= 0 and int(bundle.report_records) <= 0
     bars_all = pd.concat([bars, review_bars], ignore_index=True) if not review_bars.empty else bars.copy()
     bars_all = bars_all.sort_values(["ts", "symbol"]).reset_index(drop=True)
     train_end, valid_start = _split_dates(bars)
+    if bool(future_only_mode) and bool(direct_market_mode) and bool(low_info_mode):
+        train_end, valid_start = _select_future_only_validation_window(
+            bars=bars,
+            start=start,
+            end=end,
+            default_train_end=train_end,
+            default_valid_start=valid_start,
+        )
     valid_days = int(
         len({d for d in pd.to_datetime(bars["ts"]).dt.date.tolist() if d >= valid_start})
     )
     low_activity_mode = bool(valid_days < 45)
-    asset_classes = {str(x).strip().lower() for x in bars["asset_class"].dropna().unique().tolist()}
-    crypto_mode = bool(asset_classes) and asset_classes.issubset({"crypto", "perp", "perpetual", "spot"})
     total_days = int(len(pd.to_datetime(bars["ts"]).dt.date.unique()))
     proxy_lookback = int(_clip(float(total_days) * 0.70, 60.0, 180.0))
     if low_activity_mode:
         proxy_lookback = int(min(proxy_lookback, max(50, int(valid_days * 1.6))))
+    if low_info_mode and direct_market_mode:
+        proxy_lookback = int(max(72, min(proxy_lookback, max(72, int(total_days * 0.80)))))
     if low_activity_mode and crypto_mode:
         proxy_lookback = int(max(proxy_lookback, 84))
 
@@ -1391,7 +1649,10 @@ def run_strategy_lab(
         candidate_count=candidate_count,
         exposure_cap=exposure_cap,
         low_activity_mode=low_activity_mode,
+        low_info_mode=low_info_mode,
+        direct_market_mode=direct_market_mode,
         crypto_mode=crypto_mode,
+        future_only_mode=future_only_mode,
     )
 
     out_candidates: list[StrategyCandidateResult] = []
@@ -1498,21 +1759,41 @@ def run_strategy_lab(
         review_trade_gate = 2
         valid_pwr_gate = 0.70
         review_pwr_gate = 0.60
+        if bool(direct_market_mode) and not bool(low_activity_mode):
+            valid_trade_gate = min(valid_trade_gate, 2)
+            review_trade_gate = 0
+            valid_pwr_gate = min(valid_pwr_gate, 0.62)
+            review_pwr_gate = min(review_pwr_gate, 0.50)
         if bool(crypto_mode) and not bool(low_activity_mode):
             valid_trade_gate = 2
             review_trade_gate = 0
             valid_pwr_gate = 0.62
             review_pwr_gate = 0.50
+        if bool(low_info_mode):
+            valid_trade_gate = min(valid_trade_gate, 2 if direct_market_mode else 3)
+            review_trade_gate = min(review_trade_gate, 0 if direct_market_mode else 1)
+            valid_pwr_gate = min(valid_pwr_gate, 0.58 if direct_market_mode else 0.60)
+            review_pwr_gate = min(review_pwr_gate, 0.48 if direct_market_mode else 0.50)
         if bool(low_activity_mode):
             valid_trade_gate = 3
             review_trade_gate = 1
             valid_pwr_gate = 0.65
             review_pwr_gate = 0.55
+        if bool(low_activity_mode) and bool(direct_market_mode):
+            valid_trade_gate = 1
+            review_trade_gate = 0
+            valid_pwr_gate = 0.58
+            review_pwr_gate = 0.48
         if bool(low_activity_mode) and bool(crypto_mode):
             valid_trade_gate = 1
             review_trade_gate = 0
             valid_pwr_gate = 0.60
             review_pwr_gate = 0.50
+        if bool(low_info_mode) and bool(direct_market_mode):
+            valid_trade_gate = 1
+            review_trade_gate = 0
+            valid_pwr_gate = min(valid_pwr_gate, 0.55)
+            review_pwr_gate = min(review_pwr_gate, 0.45)
 
         review_ok = True
         if review_bt is not None:

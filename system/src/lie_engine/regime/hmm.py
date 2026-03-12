@@ -23,10 +23,15 @@ def _build_features(df: pd.DataFrame) -> np.ndarray:
     dvol20 = vol.pct_change(20)
     feat = pd.concat([r5, sigma20, dvol20], axis=1)
     feat.columns = ["r5", "sigma20", "dvol20"]
-    feat = feat.dropna()
+    feat = feat.replace([np.inf, -np.inf], np.nan).dropna()
     if feat.empty:
         return np.empty((0, 3), dtype=float)
     x = feat.to_numpy(dtype=float)
+    if x.size == 0:
+        return np.empty((0, 3), dtype=float)
+    x = x[np.all(np.isfinite(x), axis=1)]
+    if x.size == 0:
+        return np.empty((0, 3), dtype=float)
     mu = x.mean(axis=0)
     sd = x.std(axis=0)
     sd = np.where(sd < 1e-6, 1.0, sd)

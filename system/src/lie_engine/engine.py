@@ -120,6 +120,22 @@ class LieEngine:
         return float(max(lo, min(hi, v)))
 
     @staticmethod
+    def _normalize_cvd_semantics(state: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(state, dict):
+            return {}
+        normalized = dict(state)
+        trust = str(normalized.get("cvd_trust_tier_hint", "unavailable")).strip() or "unavailable"
+        note = str(normalized.get("cvd_context_note", "")).strip()
+        time_sync_ok = bool(normalized.get("time_sync_ok", True))
+        if (not time_sync_ok) and trust in {"single_exchange_ok", "cross_exchange_confirmed"}:
+            normalized["cvd_trust_tier_hint"] = "single_exchange_low"
+            note_parts = [part for part in note.split("|") if str(part).strip()]
+            if "time_sync_risk" not in note_parts:
+                note_parts.append("time_sync_risk")
+            normalized["cvd_context_note"] = "|".join(note_parts) if note_parts else "time_sync_risk"
+        return normalized
+
+    @staticmethod
     def _clamp_int(v: float | int, lo: int, hi: int) -> int:
         return int(max(lo, min(hi, int(round(float(v))))))
 
@@ -1061,9 +1077,84 @@ class LieEngine:
         path = self.ctx.output_dir / "artifacts" / f"{as_of.isoformat()}_quality.json"
         return self._load_json_safely(path)
 
+    def _resolve_backtest_snapshot_path(self, *, as_of: date) -> tuple[Path | None, dict[str, Any]]:
+        start = self._review_backtest_start(as_of=as_of)
+        preferred = self.ctx.output_dir / "artifacts" / f"backtest_{start.isoformat()}_{as_of.isoformat()}.json"
+        max_age_days = max(
+            0,
+            int(
+                self.settings.validation.get(
+                    "ops_backtest_snapshot_max_age_days",
+                    self.settings.validation.get("required_stable_replay_days", 3),
+                )
+            ),
+        )
+        if preferred.exists():
+            return preferred, {
+                "snapshot_start": start.isoformat(),
+                "snapshot_end": as_of.isoformat(),
+                "snapshot_path": str(preferred),
+                "snapshot_age_days": 0,
+                "snapshot_exact_match": True,
+                "snapshot_fresh_enough": True,
+                "snapshot_max_age_days": int(max_age_days),
+            }
+
+        candidates: list[tuple[date, Path]] = []
+        prefix = f"backtest_{start.isoformat()}_"
+        for path in (self.ctx.output_dir / "artifacts").glob(f"{prefix}*.json"):
+            suffix = path.stem[len(prefix) :]
+            try:
+                end_date = date.fromisoformat(suffix)
+            except ValueError:
+                continue
+            if end_date <= as_of:
+                candidates.append((end_date, path))
+        if not candidates:
+            return None, {
+                "snapshot_start": start.isoformat(),
+                "snapshot_end": "",
+                "snapshot_path": "",
+                "snapshot_age_days": None,
+                "snapshot_exact_match": False,
+                "snapshot_fresh_enough": False,
+                "snapshot_max_age_days": int(max_age_days),
+            }
+
+        candidates.sort(key=lambda item: item[0])
+        end_date, path = candidates[-1]
+        age_days = (as_of - end_date).days
+        fresh_enough = age_days <= max_age_days
+        if not fresh_enough:
+            return None, {
+                "snapshot_start": start.isoformat(),
+                "snapshot_end": end_date.isoformat(),
+                "snapshot_path": str(path),
+                "snapshot_age_days": int(age_days),
+                "snapshot_exact_match": False,
+                "snapshot_fresh_enough": False,
+                "snapshot_max_age_days": int(max_age_days),
+            }
+        return path, {
+            "snapshot_start": start.isoformat(),
+            "snapshot_end": end_date.isoformat(),
+            "snapshot_path": str(path),
+            "snapshot_age_days": int(age_days),
+            "snapshot_exact_match": False,
+            "snapshot_fresh_enough": True,
+            "snapshot_max_age_days": int(max_age_days),
+        }
+
     def _backtest_snapshot(self, as_of: date) -> dict[str, Any]:
-        path = self.ctx.output_dir / "artifacts" / f"backtest_{date(2015, 1, 1).isoformat()}_{as_of.isoformat()}.json"
-        return self._load_json_safely(path)
+        path, meta = self._resolve_backtest_snapshot_path(as_of=as_of)
+        if path is None:
+            return {}
+        payload = self._load_json_safely(path)
+        if not payload:
+            return {}
+        out = dict(payload)
+        out.update(meta)
+        return out
 
     @staticmethod
     def _filter_model_path_bars(bars: pd.DataFrame) -> pd.DataFrame:
@@ -1422,12 +1513,18 @@ class LieEngine:
         as_of: date,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         profile, mapping = self._resolve_live_mapping_profile()
         positions_key_paths = mapping.get("positions", ["positions"])
         positions_raw = self._pick_first(payload, positions_key_paths if isinstance(positions_key_paths, list) else ["positions"])
         positions_in = positions_raw if isinstance(positions_raw, list) else []
         pf = mapping.get("position_fields", {}) if isinstance(mapping.get("position_fields", {}), dict) else {}
+        min_position_notional_abs = max(
+            0.0,
+            self._to_float(val.get("broker_snapshot_live_min_position_notional_abs", 1.0), 1.0),
+        )
         positions: list[dict[str, Any]] = []
+        filtered_dust_rows = 0
         for row in positions_in:
             if not isinstance(row, dict):
                 continue
@@ -1448,6 +1545,9 @@ class LieEngine:
             notional = self._to_float(notional_raw, 0.0)
             if abs(notional) <= 1e-12 and qty > 0 and market_price > 0:
                 notional = qty * market_price
+            if qty > 0.0 and abs(notional) < min_position_notional_abs:
+                filtered_dust_rows += 1
+                continue
             positions.append(
                 {
                     "symbol": str(symbol_raw or ""),
@@ -1461,6 +1561,10 @@ class LieEngine:
             )
         open_positions_raw = self._pick_first(payload, mapping.get("open_positions", ["open_positions"]))
         open_positions = int(round(self._to_float(open_positions_raw, len(positions))))
+        if positions_in and filtered_dust_rows > 0:
+            open_positions = int(len(positions))
+        else:
+            open_positions = max(open_positions, int(len(positions)))
         open_positions = max(0, open_positions)
         closed_pnl_raw = self._pick_first(payload, mapping.get("closed_pnl", ["closed_pnl"]))
         closed_count_raw = self._pick_first(payload, mapping.get("closed_count", ["closed_count"]))
@@ -1484,6 +1588,8 @@ class LieEngine:
                 "raw_path": str(self._broker_snapshot_live_inbox_path(as_of)),
                 "positions_rows_in": int(len(positions_in)),
                 "positions_rows_out": int(len(positions)),
+                "positions_rows_filtered_dust": int(filtered_dust_rows),
+                "min_position_notional_abs": float(min_position_notional_abs),
             },
         }
 
@@ -1504,6 +1610,39 @@ class LieEngine:
                 "positions": positions,
             },
         )
+
+    def _replace_latest_positions_snapshot(self, *, as_of: date, plans_df: pd.DataFrame) -> None:
+        dstr = as_of.isoformat()
+        if self.ctx.sqlite_path.exists():
+            with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", ("latest_positions",))
+                    if cur.fetchone() is not None:
+                        cur.execute("DELETE FROM latest_positions WHERE date = ?", (dstr,))
+                        conn.commit()
+        if plans_df is None or len(plans_df.columns) == 0:
+            return
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "latest_positions",
+            plans_df.assign(date=dstr),
+        )
+
+    def _replace_closed_paper_executions(self, *, as_of: date, closed_df: pd.DataFrame) -> None:
+        dstr = as_of.isoformat()
+        if self.ctx.sqlite_path.exists():
+            with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", ("executed_plans",))
+                    if cur.fetchone() is not None:
+                        cur.execute(
+                            "DELETE FROM executed_plans WHERE date = ? AND (status = 'CLOSED' OR status IS NULL)",
+                            (dstr,),
+                        )
+                        conn.commit()
+        if closed_df is None or closed_df.empty:
+            return
+        append_sqlite(self.ctx.sqlite_path, "executed_plans", closed_df)
 
     def _write_paper_broker_snapshot(
         self,
@@ -1677,6 +1816,8 @@ class LieEngine:
             risk_pct = float(pos.get("risk_pct", 0.0))
             hold_days = max(1, int(pos.get("hold_days", 1)))
             open_date = self._parse_iso_date(pos.get("open_date")) or as_of
+            if open_date > as_of:
+                continue
             holding_days = max(0, (as_of - open_date).days)
             runtime_mode = str(pos.get("runtime_mode", "base")).strip() or "base"
             entry = float(pos.get("entry_price", 0.0))
@@ -1769,8 +1910,7 @@ class LieEngine:
             )
 
         closed_df = pd.DataFrame(closed_rows)
-        if not closed_df.empty:
-            append_sqlite(self.ctx.sqlite_path, "executed_plans", closed_df)
+        self._replace_closed_paper_executions(as_of=as_of, closed_df=closed_df)
 
         return {
             "closed_df": closed_df,
@@ -2003,6 +2143,7 @@ class LieEngine:
                 state["time_sync_max_offset_ms"] = int(time_sync_max_offset_ms)
                 state["time_sync_max_rtt_ms"] = int(time_sync_max_rtt_ms)
                 state["time_sync_hard_fuse_enabled"] = bool(time_sync_hard_fuse)
+                state = self._normalize_cvd_semantics(state)
                 rank = float(state.get("evidence_score", 0.0))
                 rank += 0.10 if schema_ok else -0.20
                 rank += 0.10 if sync_ok else -0.10
@@ -2865,6 +3006,14 @@ class LieEngine:
         for symbol, state in micro_factor_map.items():
             if not isinstance(state, dict):
                 continue
+            state = self._normalize_cvd_semantics(state)
+            cvd_context_mode = str(state.get("cvd_context_mode", "unclear")).strip()
+            cvd_trust_tier_hint = str(state.get("cvd_trust_tier_hint", "unavailable")).strip()
+            cvd_veto_hint = ""
+            if cvd_trust_tier_hint == "single_exchange_low":
+                cvd_veto_hint = "low_sample_or_gap_risk"
+            elif cvd_context_mode in {"absorption", "failed_auction"}:
+                cvd_veto_hint = "effort_result_divergence"
             selected_rows.append(
                 {
                     "symbol": str(symbol),
@@ -2878,6 +3027,18 @@ class LieEngine:
                     "queue_imbalance": float(state.get("queue_imbalance", 0.0)),
                     "ofi_norm": float(state.get("ofi_norm", 0.0)),
                     "micro_alignment": float(state.get("micro_alignment", 0.0)),
+                    "buy_qty": float(state.get("buy_qty", 0.0)),
+                    "sell_qty": float(state.get("sell_qty", 0.0)),
+                    "net_qty": float(state.get("net_qty", 0.0)),
+                    "trade_notional": float(state.get("trade_notional", 0.0)),
+                    "cvd_delta_ratio": float(state.get("cvd_delta_ratio", 0.0)),
+                    "cvd_price_move_pct": float(state.get("cvd_price_move_pct", 0.0)),
+                    "cvd_range_pct": float(state.get("cvd_range_pct", 0.0)),
+                    "cvd_effort_result_ratio": float(state.get("cvd_effort_result_ratio", 0.0)),
+                    "cvd_context_mode": cvd_context_mode,
+                    "cvd_context_note": str(state.get("cvd_context_note", "")),
+                    "cvd_trust_tier_hint": cvd_trust_tier_hint,
+                    "cvd_veto_hint": cvd_veto_hint,
                     "max_trade_gap_ms": int(state.get("max_trade_gap_ms", 0)),
                     "sync_skew_ms": float(state.get("sync_skew_ms", 0.0)),
                     "time_sync_available": bool(state.get("time_sync_available", False)),
@@ -2897,6 +3058,17 @@ class LieEngine:
             sum(1 for r in selected_rows if bool(r.get("time_sync_ok", False))) / max(1, selected_count)
         )
         sync_ok_ratio = float(sum(1 for r in selected_rows if bool(r.get("sync_ok", False))) / max(1, selected_count))
+        cvd_context_counts: dict[str, int] = {}
+        cvd_trust_counts: dict[str, int] = {}
+        cvd_veto_hint_counts: dict[str, int] = {}
+        for row in selected_rows:
+            context = str(row.get("cvd_context_mode", "unclear")).strip() or "unclear"
+            trust = str(row.get("cvd_trust_tier_hint", "unavailable")).strip() or "unavailable"
+            veto_hint = str(row.get("cvd_veto_hint", "")).strip()
+            cvd_context_counts[context] = int(cvd_context_counts.get(context, 0)) + 1
+            cvd_trust_counts[trust] = int(cvd_trust_counts.get(trust, 0)) + 1
+            if veto_hint:
+                cvd_veto_hint_counts[veto_hint] = int(cvd_veto_hint_counts.get(veto_hint, 0)) + 1
 
         cross_active = bool(cross_source_audit.get("active", False))
         cross_status = str(cross_source_audit.get("status", ""))
@@ -2930,6 +3102,11 @@ class LieEngine:
                 "system_time_sync_pass": bool(system_time_sync_probe.get("pass", False)),
                 "system_time_sync_ok_sources": int(system_time_sync_probe.get("ok_sources", 0)),
                 "system_time_sync_available_sources": int(system_time_sync_probe.get("available_sources", 0)),
+            },
+            "cvd_semantics": {
+                "context_counts": cvd_context_counts,
+                "trust_counts": cvd_trust_counts,
+                "veto_hint_counts": cvd_veto_hint_counts,
             },
             "selected_micro": selected_rows,
             "source_rows": list(micro_source_rows),
@@ -3031,6 +3208,8 @@ class LieEngine:
             "pass": bool(capture_pass),
             "symbols": list(target_symbols),
             "summary": dict(capture_payload.get("summary", {})),
+            "cvd_semantics": dict(capture_payload.get("cvd_semantics", {})),
+            "selected_micro": list(selected_rows),
             "rolling_7d": rolling,
             "live_takeover": live_takeover,
             "artifact": str(artifact_path),
@@ -3519,11 +3698,7 @@ class LieEngine:
         )
 
         # latest positions snapshot for risk budgeting
-        append_sqlite(
-            self.ctx.sqlite_path,
-            "latest_positions",
-            plans_df.assign(date=as_of.isoformat()),
-        )
+        self._replace_latest_positions_snapshot(as_of=as_of, plans_df=plans_df)
         open_positions = self._build_open_positions_from_plans(
             as_of=as_of,
             plans=plans,
@@ -5170,7 +5345,7 @@ class LieEngine:
                 columns=[
                     "ts",
                     "symbol",
-                    "fwd_ret1",
+                    "ret1_obs",
                     "momentum_score",
                     "value_score",
                     "size_score",
@@ -5183,13 +5358,13 @@ class LieEngine:
         work["ts"] = pd.to_datetime(work["ts"], errors="coerce")
         work = work.dropna(subset=["ts"]).sort_values(["symbol", "ts"]).reset_index(drop=True)
         if work.empty:
-            return pd.DataFrame(columns=["ts", "symbol", "fwd_ret1", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
+            return pd.DataFrame(columns=["ts", "symbol", "ret1_obs", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
 
         work["close"] = pd.to_numeric(work["close"], errors="coerce")
         work["volume"] = pd.to_numeric(work["volume"], errors="coerce")
         work = work.dropna(subset=["close"])
         if work.empty:
-            return pd.DataFrame(columns=["ts", "symbol", "fwd_ret1", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
+            return pd.DataFrame(columns=["ts", "symbol", "ret1_obs", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
 
         by_symbol = work.groupby("symbol", group_keys=False)
         work["ret1"] = by_symbol["close"].pct_change()
@@ -5199,7 +5374,8 @@ class LieEngine:
 
         turnover = work["close"] * work["volume"].fillna(0.0)
         work["turnover20"] = turnover.groupby(work["symbol"]).transform(lambda s: s.rolling(20, min_periods=10).mean())
-        work["fwd_ret1"] = by_symbol["close"].shift(-1) / work["close"] - 1.0
+        # Deterministic non-lookahead label: observed one-step return.
+        work["ret1_obs"] = work["ret1"]
 
         if "market_cap" in work.columns:
             mc = pd.to_numeric(work["market_cap"], errors="coerce")
@@ -5237,18 +5413,18 @@ class LieEngine:
         keep_cols = [
             "ts",
             "symbol",
-            "fwd_ret1",
+            "ret1_obs",
             "momentum_score",
             "value_score",
             "size_score",
             "dividend_score",
             "crowd_score",
         ]
-        panel = work[keep_cols].replace([np.inf, -np.inf], np.nan).dropna(subset=["fwd_ret1"])
+        panel = work[keep_cols].replace([np.inf, -np.inf], np.nan).dropna(subset=["ret1_obs"])
         return panel
 
     @staticmethod
-    def _bucket_spread(day_df: pd.DataFrame, score_col: str, ret_col: str = "fwd_ret1") -> float | None:
+    def _bucket_spread(day_df: pd.DataFrame, score_col: str, ret_col: str = "ret1_obs") -> float | None:
         if day_df.empty or score_col not in day_df.columns or ret_col not in day_df.columns:
             return None
         frame = day_df[[score_col, ret_col]].dropna()
@@ -5308,7 +5484,7 @@ class LieEngine:
         spreads_by_style: dict[str, list[float]] = {k: [] for k in style_map}
         for _, day_df in daily:
             for style, col in style_map.items():
-                spread = self._bucket_spread(day_df, score_col=col, ret_col="fwd_ret1")
+                spread = self._bucket_spread(day_df, score_col=col, ret_col="ret1_obs")
                 if spread is not None and np.isfinite(spread):
                     spreads_by_style[style].append(float(spread))
 
@@ -5563,15 +5739,25 @@ class LieEngine:
             0.0,
             1.5,
         )
+        flow_quality_pressure = self._clamp_float(
+            0.22
+            + 0.22 * (crypto_stress / 1.5)
+            + 0.16 * self._clamp_float((btc_spread_bps - 2.0) / 20.0, 0.0, 1.0)
+            + 0.12 * self._clamp_float((btc_funding_abs - 0.0002) * 2000.0, 0.0, 1.0),
+            0.0,
+            1.5,
+        )
         valuation_pressure = self._clamp_float(valuation_pressure + 0.20 * crypto_stress, 0.0, 1.5)
         momentum_preference = self._clamp_float(momentum_preference - 0.10 * crypto_stress, 0.0, 1.5)
         crowding_aversion = self._clamp_float(crowding_aversion + 0.35 * crypto_stress, 0.0, 1.5)
         small_cap_pressure = self._clamp_float(small_cap_pressure + 0.22 * crypto_stress, 0.0, 1.5)
+        flow_quality_pressure = self._clamp_float(flow_quality_pressure + 0.20 * crypto_stress, 0.0, 1.5)
 
         if regime.consensus in {RegimeLabel.RANGE, RegimeLabel.UNCERTAIN, RegimeLabel.DOWNTREND}:
             valuation_pressure = self._clamp_float(valuation_pressure + 0.12, 0.0, 1.5)
             small_cap_pressure = self._clamp_float(small_cap_pressure + 0.10, 0.0, 1.5)
             dividend_preference = self._clamp_float(dividend_preference + 0.08, 0.0, 1.5)
+            flow_quality_pressure = self._clamp_float(flow_quality_pressure + 0.10, 0.0, 1.5)
 
         style_value = self._clamp_float(0.30 + 0.90 * float(style_state.get("value_preference", 0.50)), 0.0, 1.5)
         style_mom = self._clamp_float(float(style_state.get("momentum_preference", 0.55)), 0.0, 1.5)
@@ -5608,6 +5794,11 @@ class LieEngine:
             0.0,
             1.5,
         )
+        flow_quality_pressure = self._clamp_float(
+            (1.0 - style_weight) * flow_quality_pressure + style_weight * (0.25 + 0.55 * style_crowd),
+            0.0,
+            1.5,
+        )
 
         return {
             "valuation_pressure": float(valuation_pressure),
@@ -5615,6 +5806,7 @@ class LieEngine:
             "crowding_aversion": float(crowding_aversion),
             "small_cap_pressure": float(small_cap_pressure),
             "dividend_preference": float(dividend_preference),
+            "flow_quality_pressure": float(flow_quality_pressure),
             "style_weight": float(style_weight),
             "style_signal_strength": float(style_strength),
             "style_sample_size": float(style_state.get("style_sample_size", 0.0)),
@@ -5910,11 +6102,13 @@ class LieEngine:
         as_of: date,
         run_tests: bool = False,
         run_review_if_missing: bool = True,
+        stable_replay_mode: str = "execute",
     ) -> dict[str, Any]:
         return self._release_orchestrator().gate_report(
             as_of=as_of,
             run_tests=run_tests,
             run_review_if_missing=run_review_if_missing,
+            stable_replay_mode=stable_replay_mode,
         )
 
     def ops_report(self, as_of: date, window_days: int = 7) -> dict[str, Any]:

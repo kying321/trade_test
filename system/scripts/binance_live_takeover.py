@@ -103,6 +103,24 @@ class PanicTriggered(RuntimeError):
     pass
 
 
+def is_transport_fatal_exception(exc: BaseException) -> bool:
+    msg = str(exc).strip().lower()
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    if "http_409" in msg or "409 conflict" in msg:
+        return True
+    fatal_tokens = (
+        "socket",
+        "broken pipe",
+        "connection reset",
+        "connection refused",
+        "timed out",
+        "network is unreachable",
+        "kex_exchange_identification",
+    )
+    return any(tok in msg for tok in fatal_tokens)
+
+
 def panic_close_all(output_root: Path, *, reason: str, detail: str = "") -> None:
     marker = {
         "ts_utc": now_utc_iso(),
@@ -398,20 +416,14 @@ class BinanceSpotClient:
         client_order_id: str,
         quote_order_qty: float | None = None,
     ) -> dict[str, Any]:
+        _ = quote_order_qty
         params: dict[str, Any] = {
             "symbol": symbol,
             "side": side,
             "type": "MARKET",
             "newClientOrderId": client_order_id,
+            "quantity": f"{quantity:.8f}",
         }
-        if side.upper() == "BUY":
-            q = float(quote_order_qty if quote_order_qty is not None else 0.0)
-            if q > 0.0:
-                params["quoteOrderQty"] = f"{q:.8f}"
-            else:
-                params["quantity"] = f"{quantity:.8f}"
-        else:
-            params["quantity"] = f"{quantity:.8f}"
         out = self._request(method="POST", path="/api/v3/order", params=params, signed=True)
         return out if isinstance(out, dict) else {}
 
@@ -467,10 +479,24 @@ def latest_signals_path(output_root: Path, target_date: date) -> Path | None:
     return None
 
 
+def _missing_canary_selection(*, source: str, reason: str, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "symbol": "",
+        "side": "",
+        "confidence": 0.0,
+        "source": str(source),
+        "reason": str(reason),
+        "signal_missing": True,
+    }
+    for key, value in extra.items():
+        payload[str(key)] = value
+    return payload
+
+
 def choose_canary_signal(output_root: Path, target_date: date, whitelist: list[str]) -> dict[str, Any]:
     path = latest_signals_path(output_root, target_date)
     if path is None:
-        return {"symbol": whitelist[0], "side": "BUY", "confidence": 0.0, "source": "fallback_no_signals"}
+        return _missing_canary_selection(source="no_signal_artifact", reason="no_latest_signal_artifact")
     payload = read_json(path, [])
     rows = payload if isinstance(payload, list) else []
     best: dict[str, Any] | None = None
@@ -498,10 +524,139 @@ def choose_canary_signal(output_root: Path, target_date: date, whitelist: list[s
                 "confidence": conf,
                 "source": str(path),
                 "signal_side": side_raw,
+                "signal_missing": False,
             }
     if best is None:
-        return {"symbol": whitelist[0], "side": "BUY", "confidence": 0.0, "source": "fallback_no_whitelist_hit"}
+        return _missing_canary_selection(source=str(path), reason="no_whitelist_signal_match")
     return best
+
+
+def latest_tickets_path(output_root: Path) -> Path | None:
+    review_dir = output_root / "review"
+    candidates = sorted(review_dir.glob("*_signal_to_order_tickets.json"), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def choose_canary_ticket(output_root: Path, whitelist: list[str]) -> dict[str, Any]:
+    path = latest_tickets_path(output_root)
+    if path is None:
+        return _missing_canary_selection(source="no_ticket_artifact", reason="no_latest_ticket_artifact")
+    payload = read_json(path, {})
+    rows = payload.get("tickets", []) if isinstance(payload, dict) else []
+    best: dict[str, Any] | None = None
+    best_score = -1e18
+    best_blocked: dict[str, Any] | None = None
+    best_blocked_score = -1e18
+    wl = set(str(x).upper() for x in whitelist)
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        symbol = str(raw.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        if wl and symbol not in wl:
+            continue
+        signal = raw.get("signal", {}) if isinstance(raw.get("signal", {}), dict) else {}
+        execution = raw.get("execution", {}) if isinstance(raw.get("execution", {}), dict) else {}
+        side_raw = str(signal.get("side", "")).strip().upper()
+        if side_raw not in {"LONG", "BUY", "B", "SHORT", "SELL", "S"}:
+            continue
+        reasons = [str(x) for x in raw.get("reasons", []) if str(x)]
+        stale = "stale_signal" in reasons
+        not_found = "signal_not_found" in reasons
+        only_size_blocked = bool(reasons) and all(x == "size_below_min_notional" for x in reasons)
+        allowed = bool(raw.get("allowed", False))
+        execution_mode = str(execution.get("mode", "")).strip().upper()
+        if execution_mode == "HEDGE_ONLY":
+            continue
+        if stale or not_found:
+            continue
+        side = "BUY" if side_raw in {"LONG", "BUY", "B"} else "SELL"
+        confidence = to_float(signal.get("confidence", 0.0), 0.0)
+        convexity = to_float(signal.get("convexity_ratio", 0.0), 0.0)
+        score = max(0.0, confidence) * max(0.0, convexity)
+        blocked_candidate = {
+            "symbol": symbol,
+            "side": side,
+            "confidence": confidence,
+            "convexity_ratio": convexity,
+            "source": str(path),
+            "ticket_allowed": bool(allowed),
+            "ticket_reasons": reasons,
+            "ticket_execution_mode": execution_mode,
+            "signal_side": side_raw,
+            "signal_date": str(raw.get("date", "")),
+            "age_days": int(to_int(raw.get("age_days", -1), -1)),
+        }
+        if side == "BUY":
+            score += 0.01
+        if not allowed and not only_size_blocked:
+            if score > best_blocked_score:
+                best_blocked_score = score
+                best_blocked = blocked_candidate
+            continue
+        if score <= best_score:
+            continue
+        best_score = score
+        best = blocked_candidate | {"reason": "", "signal_missing": False}
+    if best is None:
+        return _missing_canary_selection(
+            source=str(path),
+            reason="no_actionable_ticket",
+            blocked_candidate=best_blocked,
+        )
+    return best
+
+
+def load_recent_risk_fuse(output_root: Path, *, max_age_seconds: int) -> dict[str, Any]:
+    path = output_root / "state" / "live_risk_fuse.json"
+    if not path.exists():
+        return {
+            "path": str(path),
+            "status": "missing",
+            "allowed": True,
+            "fresh": False,
+            "age_seconds": None,
+            "reasons": [],
+        }
+    payload = read_json(path, None)
+    if not isinstance(payload, dict):
+        return {
+            "path": str(path),
+            "status": "invalid",
+            "allowed": False,
+            "fresh": True,
+            "age_seconds": 0.0,
+            "reasons": ["invalid_risk_fuse_payload"],
+        }
+    updated_text = str(payload.get("updated_at_utc", "")).strip()
+    updated_dt: datetime | None = None
+    if updated_text:
+        try:
+            updated_dt = datetime.fromisoformat(updated_text.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except Exception:
+            updated_dt = None
+    if updated_dt is None:
+        try:
+            updated_dt = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except Exception:
+            updated_dt = datetime.now(timezone.utc)
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - updated_dt).total_seconds())
+    fresh = age_seconds <= max(1, int(max_age_seconds))
+    allowed = bool(payload.get("allowed", False))
+    status = str(payload.get("status", "unknown"))
+    reasons = [str(x) for x in payload.get("reasons", []) if str(x)]
+    return {
+        "path": str(path),
+        "status": status if fresh else "stale",
+        "allowed": bool(allowed) if fresh else True,
+        "fresh": bool(fresh),
+        "age_seconds": float(age_seconds),
+        "reasons": reasons,
+        "artifact": str(payload.get("artifact", "")),
+        "checksum": str(payload.get("checksum", "")),
+        "backup_intel": payload.get("backup_intel", {}) if isinstance(payload.get("backup_intel", {}), dict) else {},
+    }
 
 
 def infer_lot_constraints(exchange_info: dict[str, Any], symbol: str) -> dict[str, float]:
@@ -755,10 +910,12 @@ def build_evomap_strategy(
         "as_of": as_of.isoformat(),
         "objective": "maximize_long_term_sharpe_under_drawdown_cap",
         "selection": {
-            "symbol": str(signal.get("symbol", "BTCUSDT")),
-            "side": str(signal.get("side", "BUY")),
+            "symbol": str(signal.get("symbol", "")).upper(),
+            "side": str(signal.get("side", "")).upper(),
             "signal_confidence": to_float(signal.get("confidence", 0.0), 0.0),
             "signal_source": str(signal.get("source", "")),
+            "signal_missing": bool(signal.get("signal_missing", False)),
+            "selection_reason": str(signal.get("reason", "")),
         },
         "risk": {
             "max_drawdown_hard": float(max_drawdown),
@@ -855,6 +1012,8 @@ def main() -> int:
     parser.add_argument("--allow-daemon-env-fallback", action="store_true")
     parser.add_argument("--order-symbol", default="")
     parser.add_argument("--order-side", choices=["BUY", "SELL"], default="")
+    parser.add_argument("--order-quantity", type=float, default=0.0, help="Optional explicit order quantity override.")
+    parser.add_argument("--risk-fuse-max-age-seconds", type=int, default=300)
     parser.add_argument("--mutex-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--skip-mutex", action="store_true", help="Skip run-halfhour-pulse mutex when parent lock is already held.")
     args = parser.parse_args()
@@ -902,11 +1061,42 @@ def main() -> int:
             cfg = load_config(cfg_path)
 
             whitelist = load_whitelist_symbols(cfg)
-            signal = choose_canary_signal(output_root=output_root, target_date=as_of, whitelist=whitelist)
-            if str(args.order_symbol).strip():
+            signal = choose_canary_ticket(output_root=output_root, whitelist=whitelist)
+            explicit_symbol_override = bool(str(args.order_symbol).strip())
+            if explicit_symbol_override:
                 signal["symbol"] = str(args.order_symbol).strip().upper()
+                signal["signal_missing"] = False
+                signal["reason"] = "manual_symbol_override"
             if str(args.order_side).strip():
                 signal["side"] = str(args.order_side).strip().upper()
+            summary["steps"]["signal_selection"] = {
+                "symbol": str(signal.get("symbol", "")).upper(),
+                "side": str(signal.get("side", "")).upper(),
+                "confidence": float(to_float(signal.get("confidence", 0.0), 0.0)),
+                "source": str(signal.get("source", "")),
+                "reason": str(signal.get("reason", "")),
+                "signal_missing": bool(signal.get("signal_missing", False)),
+                "selection_kind": "ticket",
+            }
+            if "convexity_ratio" in signal:
+                summary["steps"]["signal_selection"]["convexity_ratio"] = float(to_float(signal.get("convexity_ratio", 0.0), 0.0))
+            if isinstance(signal.get("ticket_reasons"), list):
+                summary["steps"]["signal_selection"]["ticket_reasons"] = [str(x) for x in signal.get("ticket_reasons", []) if str(x)]
+            if str(signal.get("ticket_execution_mode", "")).strip():
+                summary["steps"]["signal_selection"]["ticket_execution_mode"] = str(signal.get("ticket_execution_mode", "")).strip()
+            if str(signal.get("signal_side", "")).strip():
+                summary["steps"]["signal_selection"]["signal_side"] = str(signal.get("signal_side", "")).strip()
+            if str(signal.get("signal_date", "")).strip():
+                summary["steps"]["signal_selection"]["signal_date"] = str(signal.get("signal_date", "")).strip()
+            if int(to_int(signal.get("age_days", -1), -1)) >= 0:
+                summary["steps"]["signal_selection"]["age_days"] = int(to_int(signal.get("age_days", -1), -1))
+            blocked_candidate = signal.get("blocked_candidate")
+            if isinstance(blocked_candidate, dict):
+                summary["steps"]["signal_selection"]["blocked_candidate"] = blocked_candidate
+            summary["steps"]["risk_guard"] = load_recent_risk_fuse(
+                output_root=output_root,
+                max_age_seconds=max(1, int(args.risk_fuse_max_age_seconds)),
+            )
 
             evomap_path, evomap_payload = build_evomap_strategy(
                 output_root=output_root,
@@ -959,36 +1149,61 @@ def main() -> int:
             except (ConnectionError, TimeoutError, OSError) as exc:
                 panic_close_all(output_root, reason="binance_ping_transport_error", detail=str(exc))
 
-            symbol = str(signal.get("symbol", "BTCUSDT")).upper()
+            symbol = str(signal.get("symbol", "")).upper()
             side = str(signal.get("side", "BUY")).upper()
             if side not in {"BUY", "SELL"}:
                 side = "BUY"
-
-            try:
-                price = float(client.ticker_price(symbol))
-                exchange_info = client.exchange_info(symbol)
-            except (ConnectionError, TimeoutError, OSError) as exc:
-                panic_close_all(output_root, reason="binance_public_probe_transport_error", detail=str(exc))
-            lot = infer_lot_constraints(exchange_info, symbol)
-            qty = calc_canary_quantity(
-                quote_usdt=float(args.canary_quote_usdt),
-                price=price,
-                step_size=float(lot["step_size"]),
-                min_qty=float(lot["min_qty"]),
-                min_notional=float(lot["min_notional"]),
-            )
-            effective_quote_usdt = float(qty * max(0.0, price))
-
-            summary["steps"]["canary_plan"] = {
-                "symbol": symbol,
-                "side": side,
-                "market": market,
-                "mark_price": price,
-                "quantity": qty,
-                "quote_usdt": float(args.canary_quote_usdt),
-                "effective_quote_usdt": effective_quote_usdt,
-                "constraints": lot,
-            }
+            signal_missing = bool(signal.get("signal_missing", False))
+            plan_available = bool(symbol)
+            lot = {"step_size": 0.0, "min_qty": 0.0, "min_notional": 0.0}
+            qty = 0.0
+            price = 0.0
+            qty_source = "unavailable"
+            explicit_qty = max(0.0, float(getattr(args, "order_quantity", 0.0)))
+            effective_quote_usdt = 0.0
+            if plan_available:
+                try:
+                    price = float(client.ticker_price(symbol))
+                    exchange_info = client.exchange_info(symbol)
+                except (ConnectionError, TimeoutError, OSError) as exc:
+                    panic_close_all(output_root, reason="binance_public_probe_transport_error", detail=str(exc))
+                lot = infer_lot_constraints(exchange_info, symbol)
+                qty = calc_canary_quantity(
+                    quote_usdt=float(args.canary_quote_usdt),
+                    price=price,
+                    step_size=float(lot["step_size"]),
+                    min_qty=float(lot["min_qty"]),
+                    min_notional=float(lot["min_notional"]),
+                )
+                qty_source = "calculated"
+                if explicit_qty > 0.0:
+                    qty = max(0.0, quantize_floor(explicit_qty, float(lot["step_size"])))
+                    qty_source = "explicit_override"
+                effective_quote_usdt = float(qty * max(0.0, price))
+                summary["steps"]["canary_plan"] = {
+                    "symbol": symbol,
+                    "side": side,
+                    "market": market,
+                    "mark_price": price,
+                    "quantity": qty,
+                    "quantity_source": qty_source,
+                    "quantity_override_input": explicit_qty if explicit_qty > 0.0 else 0.0,
+                    "quote_usdt": float(args.canary_quote_usdt),
+                    "effective_quote_usdt": effective_quote_usdt,
+                    "constraints": lot,
+                }
+            else:
+                summary["steps"]["canary_plan"] = {
+                    "symbol": "",
+                    "side": side if side in {"BUY", "SELL"} else "",
+                    "market": market,
+                    "quote_usdt": float(args.canary_quote_usdt),
+                    "effective_quote_usdt": 0.0,
+                    "skipped": True,
+                    "reason": str(signal.get("reason", "signal_missing")),
+                    "signal_source": str(signal.get("source", "")),
+                    "signal_missing": bool(signal_missing),
+                }
 
             start_ms = int((datetime.now(timezone.utc) - timedelta(hours=max(1, int(args.trade_window_hours)))).timestamp() * 1000)
             end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -1216,125 +1431,168 @@ def main() -> int:
                 }
 
                 if bool(args.allow_live_order):
-                    if qty <= 0.0:
-                        panic_close_all(output_root, reason="canary_qty_invalid", detail=f"symbol={symbol}; qty={qty}")
-                    budget_quote = max(0.0, float(args.canary_quote_usdt))
-                    can_place_order = True
-                    if market == "spot":
-                        if side == "BUY":
-                            available_quote = to_float(spot_balance_map.get("USDT", 0.0), 0.0)
-                            required_quote = max(budget_quote, float(lot.get("min_notional", 0.0)))
-                            if available_quote + 1e-12 < required_quote:
-                                can_place_order = False
-                                summary["steps"]["canary_order"] = {
-                                    "executed": False,
-                                    "reason": "precheck_insufficient_quote_balance",
-                                    "asset": "USDT",
-                                    "available": float(available_quote),
-                                    "required": float(required_quote),
-                                }
-                                write_json(order_log_path, summary["steps"]["canary_order"])
-                                summary["steps"]["canary_order"]["path"] = str(order_log_path)
-                                summary["ok"] = False
-                        else:
-                            base_asset = symbol[:-4] if symbol.endswith("USDT") else symbol
-                            available_base = to_float(spot_balance_map.get(base_asset, 0.0), 0.0)
-                            if available_base + 1e-12 < float(qty):
-                                can_place_order = False
-                                summary["steps"]["canary_order"] = {
-                                    "executed": False,
-                                    "reason": "precheck_insufficient_base_balance",
-                                    "asset": base_asset,
-                                    "available": float(available_base),
-                                    "required": float(qty),
-                                }
-                                write_json(order_log_path, summary["steps"]["canary_order"])
-                                summary["steps"]["canary_order"]["path"] = str(order_log_path)
-                                summary["ok"] = False
-                    if can_place_order and market == "futures_usdm" and budget_quote > 0 and effective_quote_usdt > (budget_quote * 2.0):
+                    if not plan_available:
                         summary["steps"]["canary_order"] = {
                             "executed": False,
-                            "reason": "notional_floor_above_budget",
-                            "effective_quote_usdt": effective_quote_usdt,
-                            "budget_quote_usdt": budget_quote,
-                            "market": market,
+                            "reason": "signal_missing",
+                            "signal_source": str(signal.get("source", "")),
+                            "selection_reason": str(signal.get("reason", "")),
                         }
-                        write_json(order_log_path, summary["steps"]["canary_order"])
-                        summary["mode"] = "live_ready_budget_guarded"
+                        summary["mode"] = "live_ready_signal_blocked"
                         summary["ok"] = False
-                        summary["steps"]["canary_order"]["path"] = str(order_log_path)
-                    elif can_place_order:
-                        order_ledger_path = output_root / "state" / "binance_order_idempotency.json"
-                        order_keys = load_list_ledger(order_ledger_path, "order_keys")
-                        order_set = set(order_keys)
-                        dedup_seed = f"{as_of.isoformat()}:{symbol}:{side}:{float(args.canary_quote_usdt):.4f}:evomap_binance_canary_v1"
-                        order_key = hashlib.sha256(dedup_seed.encode("utf-8")).hexdigest()[:28]
-                        if order_key in order_set:
+                    elif not bool(summary["steps"]["risk_guard"].get("allowed", True)):
+                        summary["steps"]["canary_order"] = {
+                            "executed": False,
+                            "reason": "risk_guard_blocked",
+                            "risk_guard": dict(summary["steps"]["risk_guard"]),
+                        }
+                        summary["mode"] = "live_ready_risk_blocked"
+                        summary["ok"] = False
+                    else:
+                        if qty <= 0.0:
+                            panic_close_all(output_root, reason="canary_qty_invalid", detail=f"symbol={symbol}; qty={qty}")
+                        budget_quote = max(0.0, float(args.canary_quote_usdt))
+                        can_place_order = True
+                        min_qty_req = float(lot.get("min_qty", 0.0))
+                        if qty + 1e-12 < min_qty_req:
+                            can_place_order = False
                             summary["steps"]["canary_order"] = {
                                 "executed": False,
-                                "reason": "idempotent_skip",
-                                "order_key": order_key,
+                                "reason": "precheck_quantity_below_min_qty",
+                                "quantity": float(qty),
+                                "min_qty": float(min_qty_req),
                             }
-                        else:
-                            client_order_id = f"pi{as_of.strftime('%m%d')}{order_key[:20]}"
-                            try:
-                                order_rsp = client.place_market_order(
-                                    symbol=symbol,
-                                    side=side,
-                                    quantity=qty,
-                                    client_order_id=client_order_id,
-                                    quote_order_qty=(budget_quote if (market == "spot" and side == "BUY") else None),
+                            write_json(order_log_path, summary["steps"]["canary_order"])
+                            summary["steps"]["canary_order"]["path"] = str(order_log_path)
+                            summary["ok"] = False
+                        if market == "spot":
+                            if can_place_order and side == "BUY":
+                                available_quote = to_float(spot_balance_map.get("USDT", 0.0), 0.0)
+                                # Use effective quote (qty * mark) to avoid quantity-vs-quote mismatch and
+                                # deterministic precheck passes that later fail on exchange reject.
+                                required_quote = max(
+                                    budget_quote,
+                                    float(lot.get("min_notional", 0.0)),
+                                    float(effective_quote_usdt),
                                 )
-                            except RuntimeError as exc:
-                                order_reject = {
-                                    "as_of": as_of.isoformat(),
-                                    "symbol": symbol,
-                                    "side": side,
-                                    "quantity": qty,
-                                    "quote_usdt": float(args.canary_quote_usdt),
-                                    "order_key": order_key,
-                                    "client_order_id": client_order_id,
-                                    "executed": False,
-                                    "reason": "exchange_reject",
-                                    "error": str(exc),
-                                    "recv_ts_ms": now_epoch_ms(),
-                                    "created_at_utc": now_utc_iso(),
-                                }
-                                write_json(order_log_path, order_reject)
+                                if available_quote + 1e-12 < required_quote:
+                                    can_place_order = False
+                                    summary["steps"]["canary_order"] = {
+                                        "executed": False,
+                                        "reason": "precheck_insufficient_quote_balance",
+                                        "asset": "USDT",
+                                        "available": float(available_quote),
+                                        "required": float(required_quote),
+                                    }
+                                    write_json(order_log_path, summary["steps"]["canary_order"])
+                                    summary["steps"]["canary_order"]["path"] = str(order_log_path)
+                                    summary["ok"] = False
+                            elif can_place_order:
+                                base_asset = symbol[:-4] if symbol.endswith("USDT") else symbol
+                                available_base = to_float(spot_balance_map.get(base_asset, 0.0), 0.0)
+                                if available_base + 1e-12 < float(qty):
+                                    can_place_order = False
+                                    summary["steps"]["canary_order"] = {
+                                        "executed": False,
+                                        "reason": "precheck_insufficient_base_balance",
+                                        "asset": base_asset,
+                                        "available": float(available_base),
+                                        "required": float(qty),
+                                    }
+                                    write_json(order_log_path, summary["steps"]["canary_order"])
+                                    summary["steps"]["canary_order"]["path"] = str(order_log_path)
+                                    summary["ok"] = False
+                        if can_place_order and market == "futures_usdm" and budget_quote > 0 and effective_quote_usdt > (budget_quote * 2.0):
+                            summary["steps"]["canary_order"] = {
+                                "executed": False,
+                                "reason": "notional_floor_above_budget",
+                                "effective_quote_usdt": effective_quote_usdt,
+                                "budget_quote_usdt": budget_quote,
+                                "market": market,
+                            }
+                            write_json(order_log_path, summary["steps"]["canary_order"])
+                            summary["mode"] = "live_ready_budget_guarded"
+                            summary["ok"] = False
+                            summary["steps"]["canary_order"]["path"] = str(order_log_path)
+                        elif can_place_order:
+                            order_ledger_path = output_root / "state" / "binance_order_idempotency.json"
+                            order_keys = load_list_ledger(order_ledger_path, "order_keys")
+                            order_set = set(order_keys)
+                            dedup_seed = f"{as_of.isoformat()}:{symbol}:{side}:{float(args.canary_quote_usdt):.4f}:evomap_binance_canary_v1"
+                            order_key = hashlib.sha256(dedup_seed.encode("utf-8")).hexdigest()[:28]
+                            if order_key in order_set:
                                 summary["steps"]["canary_order"] = {
                                     "executed": False,
-                                    "path": str(order_log_path),
+                                    "reason": "idempotent_skip",
                                     "order_key": order_key,
-                                    "reason": "exchange_reject",
-                                    "error": str(exc),
                                 }
-                                summary["ok"] = False
-                            except (ConnectionError, TimeoutError, OSError) as exc:
-                                panic_close_all(output_root, reason="canary_order_transport_error", detail=str(exc))
                             else:
-                                order_record = {
-                                    "as_of": as_of.isoformat(),
-                                    "symbol": symbol,
-                                    "side": side,
-                                    "quantity": qty,
-                                    "quote_usdt": float(args.canary_quote_usdt),
-                                    "order_key": order_key,
-                                    "client_order_id": client_order_id,
-                                    "response": order_rsp,
-                                    "recv_ts_ms": now_epoch_ms(),
-                                    "created_at_utc": now_utc_iso(),
-                                }
-                                write_json(order_log_path, order_record)
-                                order_keys.append(order_key)
-                                save_list_ledger(order_ledger_path, key="order_keys", values=order_keys, max_items=10000)
-                                summary["steps"]["canary_order"] = {
-                                    "executed": True,
-                                    "path": str(order_log_path),
-                                    "order_key": order_key,
-                                    "symbol": symbol,
-                                    "side": side,
-                                    "quantity": qty,
-                                }
+                                client_order_id = f"pi{as_of.strftime('%m%d')}{order_key[:20]}"
+                                try:
+                                    order_rsp = client.place_market_order(
+                                        symbol=symbol,
+                                        side=side,
+                                        quantity=qty,
+                                        client_order_id=client_order_id,
+                                        # Spot BUY uses explicit quantity for deterministic round-trip sizing.
+                                        quote_order_qty=None,
+                                    )
+                                except RuntimeError as exc:
+                                    if is_transport_fatal_exception(exc):
+                                        panic_close_all(
+                                            output_root,
+                                            reason="canary_order_transport_conflict_error",
+                                            detail=str(exc),
+                                        )
+                                    order_reject = {
+                                        "as_of": as_of.isoformat(),
+                                        "symbol": symbol,
+                                        "side": side,
+                                        "quantity": qty,
+                                        "quote_usdt": float(args.canary_quote_usdt),
+                                        "order_key": order_key,
+                                        "client_order_id": client_order_id,
+                                        "executed": False,
+                                        "reason": "exchange_reject",
+                                        "error": str(exc),
+                                        "recv_ts_ms": now_epoch_ms(),
+                                        "created_at_utc": now_utc_iso(),
+                                    }
+                                    write_json(order_log_path, order_reject)
+                                    summary["steps"]["canary_order"] = {
+                                        "executed": False,
+                                        "path": str(order_log_path),
+                                        "order_key": order_key,
+                                        "reason": "exchange_reject",
+                                        "error": str(exc),
+                                    }
+                                    summary["ok"] = False
+                                except (ConnectionError, TimeoutError, OSError) as exc:
+                                    panic_close_all(output_root, reason="canary_order_transport_error", detail=str(exc))
+                                else:
+                                    order_record = {
+                                        "as_of": as_of.isoformat(),
+                                        "symbol": symbol,
+                                        "side": side,
+                                        "quantity": qty,
+                                        "quote_usdt": float(args.canary_quote_usdt),
+                                        "order_key": order_key,
+                                        "client_order_id": client_order_id,
+                                        "response": order_rsp,
+                                        "recv_ts_ms": now_epoch_ms(),
+                                        "created_at_utc": now_utc_iso(),
+                                    }
+                                    write_json(order_log_path, order_record)
+                                    order_keys.append(order_key)
+                                    save_list_ledger(order_ledger_path, key="order_keys", values=order_keys, max_items=10000)
+                                    summary["steps"]["canary_order"] = {
+                                        "executed": True,
+                                        "path": str(order_log_path),
+                                        "order_key": order_key,
+                                        "symbol": symbol,
+                                        "side": side,
+                                        "quantity": qty,
+                                    }
                 else:
                     summary["steps"]["canary_order"] = {
                         "executed": False,
@@ -1363,8 +1621,19 @@ def main() -> int:
         summary["ok"] = False
         summary["panic"] = str(exc)
     except Exception as exc:
-        summary["ok"] = False
-        summary["error"] = str(exc)
+        if is_transport_fatal_exception(exc):
+            try:
+                panic_close_all(
+                    output_root,
+                    reason="binance_live_takeover_unhandled_transport_error",
+                    detail=str(exc),
+                )
+            except PanicTriggered as panic_exc:
+                summary["ok"] = False
+                summary["panic"] = str(panic_exc)
+        else:
+            summary["ok"] = False
+            summary["error"] = str(exc)
 
     summary["finished_at_utc"] = now_utc_iso()
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

@@ -178,7 +178,10 @@ def detect_symbol_regime(symbol_df: pd.DataFrame, cfg: SignalEngineConfig) -> Re
         atr_df = frame[["open", "high", "low", "close"]].tail(120).copy()
         atr_z = compute_atr_zscore(atr_df)
         ts = pd.to_datetime(frame["ts"], errors="coerce")
-        last_ts = ts.max().date() if not ts.dropna().empty else date.today()
+        valid_ts = ts.dropna()
+        if valid_ts.empty:
+            return RegimeLabel.UNCERTAIN
+        last_ts = valid_ts.max().date()
 
         state = derive_regime_consensus(
             as_of=last_ts,
@@ -203,6 +206,7 @@ def _default_market_factor_state(regime: RegimeLabel) -> dict[str, float]:
             "small_cap_pressure": 0.25,
             "dividend_preference": 0.35,
             "data_quality_pressure": 0.0,
+            "flow_quality_pressure": 0.24,
         }
     if regime == RegimeLabel.WEAK_TREND:
         return {
@@ -212,6 +216,7 @@ def _default_market_factor_state(regime: RegimeLabel) -> dict[str, float]:
             "small_cap_pressure": 0.35,
             "dividend_preference": 0.50,
             "data_quality_pressure": 0.0,
+            "flow_quality_pressure": 0.32,
         }
     if regime == RegimeLabel.RANGE:
         return {
@@ -221,6 +226,7 @@ def _default_market_factor_state(regime: RegimeLabel) -> dict[str, float]:
             "small_cap_pressure": 0.55,
             "dividend_preference": 0.65,
             "data_quality_pressure": 0.0,
+            "flow_quality_pressure": 0.42,
         }
     return {
         "valuation_pressure": 0.65,
@@ -229,6 +235,7 @@ def _default_market_factor_state(regime: RegimeLabel) -> dict[str, float]:
         "small_cap_pressure": 0.65,
         "dividend_preference": 0.70,
         "data_quality_pressure": 0.0,
+        "flow_quality_pressure": 0.50,
     }
 
 
@@ -243,6 +250,7 @@ def _merge_market_factor_state(regime: RegimeLabel, market_factor_state: dict[st
         "crowding_aversion",
         "small_cap_pressure",
         "dividend_preference",
+        "flow_quality_pressure",
     ):
         if key in market_factor_state:
             merged[key] = _bounded(_safe_float(market_factor_state.get(key), merged[key]), 0.0, 1.5)
@@ -251,7 +259,11 @@ def _merge_market_factor_state(regime: RegimeLabel, market_factor_state: dict[st
 
     quality_score_7d = _bounded(_safe_float(market_factor_state.get("cross_source_quality_score_7d"), 1.0), 0.0, 1.0)
     fail_ratio_7d = _bounded(_safe_float(market_factor_state.get("cross_source_fail_ratio_7d"), 0.0), 0.0, 1.0)
+    insuff_ratio_7d = _bounded(_safe_float(market_factor_state.get("cross_source_insufficient_ratio_7d"), 0.0), 0.0, 1.0)
     cross_stress = _bounded(_safe_float(market_factor_state.get("cross_source_stress"), 0.0), 0.0, 1.5)
+    crypto_stress = _bounded(_safe_float(market_factor_state.get("crypto_stress"), 0.0), 0.0, 1.5)
+    btc_spread_bps = max(0.0, _safe_float(market_factor_state.get("btc_book_spread_bps"), 0.0))
+    btc_funding_abs = max(0.0, _safe_float(market_factor_state.get("btc_funding_abs_8h"), 0.0))
     derived_quality_pressure = _bounded(
         (1.0 - quality_score_7d) * 0.55 + fail_ratio_7d * 0.75 + (cross_stress / 1.5) * 0.35,
         0.0,
@@ -262,11 +274,27 @@ def _merge_market_factor_state(regime: RegimeLabel, market_factor_state: dict[st
         0.0,
         1.5,
     )
+    derived_flow_pressure = _bounded(
+        (cross_stress / 1.5) * 0.30
+        + fail_ratio_7d * 0.22
+        + insuff_ratio_7d * 0.16
+        + (crypto_stress / 1.5) * 0.18
+        + _bounded((btc_spread_bps - 2.0) / 20.0, 0.0, 1.0) * 0.08
+        + _bounded((btc_funding_abs - 0.0002) * 2000.0, 0.0, 1.0) * 0.06,
+        0.0,
+        1.5,
+    )
+    merged["flow_quality_pressure"] = _bounded(
+        max(float(merged.get("flow_quality_pressure", 0.0)), derived_flow_pressure),
+        0.0,
+        1.5,
+    )
     return merged
 
 
 def _estimate_factor_exposure(df: pd.DataFrame) -> dict[str, float]:
     cur = df.iloc[-1]
+    prev = df.iloc[-2] if len(df) >= 2 else cur
     close = max(1e-9, _safe_float(cur.get("close"), 0.0))
     ma60 = max(1e-9, _safe_float(cur.get("ma60"), close))
     atr14 = _safe_float(cur.get("atr14"), 0.0)
@@ -283,6 +311,37 @@ def _estimate_factor_exposure(df: pd.DataFrame) -> dict[str, float]:
         past = float(close_series.iloc[-21])
         if abs(past) > 1e-9:
             ret60 = close / past - 1.0
+
+    open_px = _safe_float(cur.get("open"), close)
+    prev_close = _safe_float(prev.get("close"), close)
+    high_px = max(open_px, close, _safe_float(cur.get("high"), close))
+    low_px = min(open_px, close, _safe_float(cur.get("low"), close))
+    bar_range = max(1e-9, high_px - low_px)
+    body = abs(close - open_px)
+    upper_wick = max(0.0, high_px - max(close, open_px))
+    lower_wick = max(0.0, min(close, open_px) - low_px)
+    vol_ratio = max(0.0, volume / max(1e-9, vol_ma20))
+    effort_strength = _bounded((vol_ratio - 0.85) / 1.80, 0.0, 2.5)
+    result_strength = _bounded((body / max(atr14, 1e-9) - 0.15) / 0.85, 0.0, 2.5)
+    flow_effort_gap = _bounded(effort_strength - result_strength, 0.0, 2.5)
+    flow_climax = _bounded(
+        _bounded((vol_ratio - 1.25) / 1.50, 0.0, 2.5)
+        * _bounded((bar_range / max(atr14, 1e-9) - 1.0) / 1.8, 0.0, 2.5),
+        0.0,
+        2.5,
+    )
+    flow_absorption_skew = _bounded(
+        ((upper_wick - lower_wick) / bar_range) * (0.5 + 0.5 * _bounded((vol_ratio - 0.9) / 1.6, 0.0, 1.0)),
+        -2.5,
+        2.5,
+    )
+    # Weak directional result with heavy effort often signals poor signal quality.
+    ret1 = (close - prev_close) / max(abs(prev_close), 1e-9)
+    flow_effort_gap = _bounded(
+        max(flow_effort_gap, max(0.0, effort_strength - _bounded(abs(ret1) / max(atr14 / close, 1e-9), 0.0, 2.5))),
+        0.0,
+        2.5,
+    )
 
     momentum = _bounded(ret60 / 0.18, -2.5, 2.5)
     crowded = _bounded((volume / vol_ma20 - 1.0) / 1.5, -2.0, 2.5)
@@ -320,6 +379,9 @@ def _estimate_factor_exposure(df: pd.DataFrame) -> dict[str, float]:
         "size": float(size),
         "volatility": float(volatility),
         "dividend": float(dividend),
+        "flow_effort_gap": float(flow_effort_gap),
+        "flow_climax": float(flow_climax),
+        "flow_absorption_skew": float(flow_absorption_skew),
     }
 
 
@@ -335,13 +397,20 @@ def _factor_risk_score(
     volatility = max(0.0, exposure.get("volatility", 0.0))
     dividend = max(0.0, exposure.get("dividend", 0.0))
     data_quality_pressure = max(0.0, _safe_float(market_factor_state.get("data_quality_pressure"), 0.0))
+    flow_quality_pressure = max(0.0, _safe_float(market_factor_state.get("flow_quality_pressure"), 0.0))
+    flow_effort_gap = max(0.0, exposure.get("flow_effort_gap", 0.0))
+    flow_climax = max(0.0, exposure.get("flow_climax", 0.0))
+    flow_absorption_skew = _safe_float(exposure.get("flow_absorption_skew"), 0.0)
 
     if side == Side.SHORT:
         valuation *= 0.35
         momentum_mismatch = max(0.0, momentum)
+        flow_reversal = max(0.0, -flow_absorption_skew)
     else:
         momentum_mismatch = max(0.0, -momentum)
+        flow_reversal = max(0.0, flow_absorption_skew)
     dividend_mismatch = dividend * max(0.0, market_factor_state.get("dividend_preference", 0.0))
+    flow_risk = 0.55 * flow_effort_gap + 0.45 * flow_climax + 0.50 * flow_reversal
 
     raw = (
         valuation * market_factor_state["valuation_pressure"]
@@ -351,6 +420,7 @@ def _factor_risk_score(
         + volatility * 0.45
         + dividend_mismatch * 0.55
         + data_quality_pressure * 0.65
+        + flow_risk * flow_quality_pressure * 0.55
     )
     score = _bounded(raw / 3.0, 0.0, 1.5)
 
@@ -373,6 +443,14 @@ def _factor_risk_score(
         flags.append("value_tailwind")
     if data_quality_pressure > 0.35:
         flags.append("data_quality_headwind")
+    if flow_effort_gap * flow_quality_pressure > 0.20:
+        flags.append("flow_effort_result_divergence")
+    if flow_climax * flow_quality_pressure > 0.18:
+        flags.append("flow_climax_risk")
+    if flow_reversal * flow_quality_pressure > 0.16:
+        flags.append("flow_absorption_reversal")
+    if flow_quality_pressure > 0.45:
+        flags.append("flow_quality_headwind")
     return score, flags
 
 
@@ -381,6 +459,7 @@ def _microstructure_adjustment(
     side: Side,
     cfg: SignalEngineConfig,
     micro_factor_state: dict[str, float] | None,
+    market_factor_state: dict[str, float] | None = None,
 ) -> tuple[float, float, list[str], float]:
     if not bool(cfg.microstructure_enabled):
         return 0.0, 0.0, [], 0.0
@@ -403,6 +482,9 @@ def _microstructure_adjustment(
     schema_ok = bool(micro_factor_state.get("schema_ok", True))
     time_sync_ok = bool(micro_factor_state.get("time_sync_ok", True))
     trade_count = int(max(0, _safe_float(micro_factor_state.get("trade_count"), 0.0)))
+    cvd_context_mode = str(micro_factor_state.get("cvd_context_mode") or "unclear").strip().lower()
+    cvd_trust_tier = str(micro_factor_state.get("cvd_trust_tier_hint") or "unavailable").strip().lower()
+    cvd_veto_reason = ""
 
     if not schema_ok:
         penalty += 0.50 * float(cfg.micro_penalty_max)
@@ -422,6 +504,76 @@ def _microstructure_adjustment(
     if trade_count < int(max(1, cfg.micro_min_trade_count)):
         penalty += 0.15 * float(cfg.micro_penalty_max)
         flags.append("micro_low_samples")
+
+    if isinstance(market_factor_state, dict):
+        cross_quality = _bounded(_safe_float(market_factor_state.get("cross_source_quality_score_7d"), 1.0), 0.0, 1.0)
+        cross_fail = _bounded(_safe_float(market_factor_state.get("cross_source_fail_ratio_7d"), 0.0), 0.0, 1.0)
+        cross_stress = _bounded(_safe_float(market_factor_state.get("cross_source_stress"), 0.0), 0.0, 1.5)
+        if cvd_trust_tier != "unavailable":
+            if cross_quality >= 0.75 and cross_fail <= 0.25 and cross_stress <= 0.35:
+                cvd_trust_tier = "cross_exchange_confirmed"
+            elif cross_fail >= 0.50 or cross_stress >= 0.75:
+                cvd_trust_tier = "cross_exchange_conflicted"
+
+    if (
+        cvd_context_mode == "unclear"
+        and signed_signal >= 0.20
+        and schema_ok
+        and sync_ok
+        and gap_ok
+        and time_sync_ok
+        and trade_count >= int(max(1, cfg.micro_min_trade_count))
+    ):
+        cvd_context_mode = "continuation"
+
+    if cvd_trust_tier != "unavailable":
+        flags.append(f"cvd_trust_{cvd_trust_tier}")
+    if cvd_context_mode and cvd_context_mode != "unclear":
+        flags.append(f"cvd_context_{cvd_context_mode}")
+
+    if cvd_trust_tier == "cross_exchange_conflicted":
+        penalty += 0.18 * float(cfg.micro_penalty_max)
+        flags.append("cvd_cross_exchange_conflict")
+        cvd_veto_reason = "cross_exchange_conflict"
+    elif cvd_trust_tier == "single_exchange_low":
+        penalty += 0.10 * float(cfg.micro_penalty_max)
+        flags.append("cvd_low_quality")
+        if not cvd_veto_reason:
+            cvd_veto_reason = "low_sample_or_gap_risk"
+
+    if cvd_context_mode == "continuation" and signed_signal > 0.0 and cvd_trust_tier in {
+        "single_exchange_ok",
+        "cross_exchange_confirmed",
+    }:
+        boost += 0.12 * float(cfg.micro_confidence_boost_max)
+        flags.append("cvd_continuation_confirmed")
+    elif cvd_context_mode == "continuation" and signed_signal <= 0.0:
+        penalty += 0.12 * float(cfg.micro_penalty_max)
+        flags.append("cvd_displacement_without_flow")
+        cvd_veto_reason = cvd_veto_reason or "displacement_without_flow"
+
+    if cvd_context_mode == "reversal" and signed_signal > 0.0 and cvd_trust_tier in {
+        "single_exchange_ok",
+        "cross_exchange_confirmed",
+    }:
+        boost += 0.10 * float(cfg.micro_confidence_boost_max)
+        flags.append("cvd_reversal_confirmed")
+    elif cvd_context_mode == "reversal" and signed_signal <= 0.0:
+        penalty += 0.10 * float(cfg.micro_penalty_max)
+        flags.append("cvd_sweep_without_confirmation")
+        cvd_veto_reason = cvd_veto_reason or "sweep_without_delta_confirmation"
+
+    if cvd_context_mode == "absorption":
+        penalty += 0.18 * float(cfg.micro_penalty_max)
+        flags.append("cvd_absorption_risk")
+        cvd_veto_reason = cvd_veto_reason or "effort_result_divergence"
+    if cvd_context_mode == "failed_auction":
+        penalty += 0.22 * float(cfg.micro_penalty_max)
+        flags.append("cvd_failed_auction_risk")
+        cvd_veto_reason = cvd_veto_reason or "effort_result_divergence"
+
+    if cvd_veto_reason:
+        flags.append(f"cvd_veto_{cvd_veto_reason}")
 
     penalty = min(float(cfg.micro_penalty_max) * 1.5, penalty)
     return boost, penalty, flags, signed_signal
@@ -533,6 +685,7 @@ def generate_signal_for_symbol(
         side=side,
         cfg=cfg,
         micro_factor_state=micro_factor_state,
+        market_factor_state=state,
     )
     confidence = _bounded(raw_confidence - factor_penalty + theory_boost + micro_boost - theory_penalty - micro_penalty, 0.0, 100.0)
     close = float(cur["close"])
@@ -561,6 +714,13 @@ def generate_signal_for_symbol(
         note = f"Regime: {regime.value}; target_mult={reward_mult:.2f}"
     if factor_flags:
         note += " | factor=" + ",".join(factor_flags)
+    note += (
+        " | flow="
+        + f"pressure={_safe_float(state.get('flow_quality_pressure'), 0.0):.3f},"
+        + f"gap={_safe_float(exposure.get('flow_effort_gap'), 0.0):.3f},"
+        + f"climax={_safe_float(exposure.get('flow_climax'), 0.0):.3f},"
+        + f"absorb={_safe_float(exposure.get('flow_absorption_skew'), 0.0):.3f}"
+    )
     if theory_flags:
         note += " | theory_flags=" + ",".join(theory_flags)
     if theory_state is not None:
@@ -582,8 +742,13 @@ def generate_signal_for_symbol(
             + f"align={_safe_float(micro_factor_state.get('micro_alignment'), 0.0):.3f},"
             + f"signed={micro_signed:.3f},"
             + f"obi={_safe_float(micro_factor_state.get('queue_imbalance'), 0.0):.3f},"
-            + f"ofi={_safe_float(micro_factor_state.get('ofi_norm'), 0.0):.3f}"
+            + f"ofi={_safe_float(micro_factor_state.get('ofi_norm'), 0.0):.3f},"
+            + f"cvd={_safe_float(micro_factor_state.get('cvd_delta_ratio'), 0.0):.3f},"
+            + f"ctx={str(micro_factor_state.get('cvd_context_mode', 'unclear'))},"
+            + f"trust={str(micro_factor_state.get('cvd_trust_tier_hint', 'unavailable'))}"
         )
+        if str(micro_factor_state.get("cvd_context_note", "")).strip():
+            note += " | cvd_note=" + str(micro_factor_state.get("cvd_context_note"))
     if isinstance(micro_factor_state, dict) and not bool(micro_factor_state.get("schema_ok", True)):
         issues = micro_factor_state.get("schema_issues", [])
         if isinstance(issues, list) and issues:

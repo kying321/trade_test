@@ -9,8 +9,8 @@ Usage:
 Options:
   --base-url URL          API base URL (default: https://x666.me)
   --api-key-env NAME      API key env name (default: NEWAPI_API_KEY; fallback: X666_API_KEY)
-  --models CSV            Requested model list (default: gpt-5.3-codex,gemini-3.1-pro-preview-bs)
-  --required-models CSV   Required models for gate (default: gpt-5.3-codex)
+  --models CSV            Requested model list (default: gpt-5.4,gemini-3.1-pro-preview-bs)
+  --required-models CSV   Required models for gate (default: gpt-5.4)
   --optional-models CSV   Optional models for gate (default: gemini-3.1-pro-preview-bs)
   --samples N             Samples per model (default: 3)
   --retry-transient N     Retries for transient failures (default: 1)
@@ -26,14 +26,15 @@ Options:
 
 Notes:
   - Applies model alias mapping: gemini-pro-3.1 -> gemini-3.1-pro-preview-bs
+  - Supports multi-key fallback via `NEWAPI_API_KEYS` (comma-separated, sk-*).
   - Uses token bucket limiter (10 req/min) and hard 5s timeout.
 USAGE
 }
 
 base_url="https://x666.me"
 api_key_env="NEWAPI_API_KEY"
-models_csv="gpt-5.3-codex,gemini-3.1-pro-preview-bs"
-required_models_csv="gpt-5.3-codex"
+models_csv="gpt-5.4,gemini-3.1-pro-preview-bs"
+required_models_csv="gpt-5.4"
 optional_models_csv="gemini-3.1-pro-preview-bs"
 samples=3
 retry_transient=1
@@ -136,7 +137,24 @@ if [[ -z "$repo_root" ]]; then
   exit 2
 fi
 
+resolve_isolation_config_path() {
+  local raw="$1"
+  if [[ "$raw" == /* ]]; then
+    printf '%s' "$raw"
+  else
+    printf '%s' "${repo_root}/${raw}"
+  fi
+}
+
+default_isolation_config="${repo_root}/system/config.yaml"
+isolation_config_resolved="$(resolve_isolation_config_path "$isolation_config_path")"
+
 mutex_lock_path="${repo_root}/system/output/state/run-halfhour-pulse.lock"
+if [[ "$isolation_config_resolved" != "$default_isolation_config" ]]; then
+  # Keep run-halfhour-pulse semantics, but avoid cross-process contention when
+  # isolating a custom config path (tests / canary clones / temp environments).
+  mutex_lock_path="$(dirname "$isolation_config_resolved")/run-halfhour-pulse.lock"
+fi
 mutex_timeout_seconds=5
 mutex_lock_acquired=0
 
@@ -215,6 +233,38 @@ read_key_from_openclaw_json() {
   ' "$json_file" 2>/dev/null || true
 }
 
+read_key_from_auth_profiles_json() {
+  local json_file="$1"
+  [[ -f "$json_file" ]] || return 1
+  jq -r '
+    [
+      (
+        (.profiles // {}) | to_entries[]?
+        | . as $profile
+        | ($profile.value.providers // {}) | to_entries[]?
+        | {source:("AUTH_PROFILES:" + $profile.key + ":" + .key + ".apiKey"), value:(.value.apiKey // empty)}
+      ),
+      (
+        (.profiles // {}) | to_entries[]?
+        | . as $profile
+        | ($profile.value.providers // {}) | to_entries[]?
+        | {source:("AUTH_PROFILES:" + $profile.key + ":" + .key + ".token"), value:(.value.token // empty)}
+      ),
+      (
+        (.profiles // {}) | to_entries[]?
+        | {source:("AUTH_PROFILES:" + .key + ".apiKey"), value:(.value.apiKey // empty)}
+      ),
+      (
+        (.profiles // {}) | to_entries[]?
+        | {source:("AUTH_PROFILES:" + .key + ".token"), value:(.value.token // empty)}
+      )
+    ]
+    | .[]
+    | select(.value | type == "string" and length > 0)
+    | [.source, .value] | @tsv
+  ' "$json_file" 2>/dev/null || true
+}
+
 declare -a api_keys=()
 declare -a api_key_sources=()
 
@@ -222,7 +272,11 @@ append_api_key_candidate() {
   local key="$1"
   local source="$2"
   local i
+  key="$(printf '%s' "$key" | tr -d '\r' | xargs)"
   [[ -n "$key" ]] || return 0
+  # NewAPI/X666 bearer keys are expected to be sk-* tokens.
+  # Skip unrelated provider keys (for example Google AI keys) to avoid accidental leakage.
+  [[ "$key" == sk-* ]] || return 0
   for i in "${!api_keys[@]}"; do
     if [[ "${api_keys[$i]}" == "$key" ]]; then
       return 0
@@ -232,10 +286,28 @@ append_api_key_candidate() {
   api_key_sources+=("$source")
 }
 
+append_api_key_candidates_csv() {
+  local csv="$1"
+  local source_prefix="$2"
+  local raw trimmed idx
+  local -a items
+  [[ -n "$csv" ]] || return 0
+  IFS=',' read -r -a items <<< "$csv"
+  idx=0
+  for raw in "${items[@]}"; do
+    idx=$(( idx + 1 ))
+    trimmed="$(printf '%s' "$raw" | xargs)"
+    [[ -n "$trimmed" ]] || continue
+    append_api_key_candidate "$trimmed" "${source_prefix}[${idx}]"
+  done
+}
+
 # Priority 1: process env vars.
 append_api_key_candidate "${!api_key_env:-}" "$api_key_env"
 if [[ "$api_key_env" == "NEWAPI_API_KEY" ]]; then
   append_api_key_candidate "${X666_API_KEY:-}" "X666_API_KEY"
+  append_api_key_candidate "${OPENAI_API_KEY:-}" "OPENAI_API_KEY"
+  append_api_key_candidates_csv "${NEWAPI_API_KEYS:-}" "NEWAPI_API_KEYS"
 fi
 
 # Priority 2: ~/.openclaw/.env fallback.
@@ -243,18 +315,28 @@ openclaw_env="${HOME}/.openclaw/.env"
 append_api_key_candidate "$(read_key_from_env_file "$openclaw_env" "$api_key_env" || true)" "OPENCLAW_ENV:${api_key_env}"
 if [[ "$api_key_env" == "NEWAPI_API_KEY" ]]; then
   append_api_key_candidate "$(read_key_from_env_file "$openclaw_env" "X666_API_KEY" || true)" "OPENCLAW_ENV:X666_API_KEY"
+  append_api_key_candidate "$(read_key_from_env_file "$openclaw_env" "OPENAI_API_KEY" || true)" "OPENCLAW_ENV:OPENAI_API_KEY"
+  append_api_key_candidates_csv "$(read_key_from_env_file "$openclaw_env" "NEWAPI_API_KEYS" || true)" "OPENCLAW_ENV:NEWAPI_API_KEYS"
 fi
 
-# Priority 3: ~/.openclaw/openclaw.json skill entries.
-if (( ${#api_keys[@]} == 0 )); then
-  openclaw_json="${HOME}/.openclaw/openclaw.json"
+# Priority 3: ~/.openclaw/openclaw.json skill entries (always append as fallback pool).
+openclaw_json="${HOME}/.openclaw/openclaw.json"
+while IFS=$'\t' read -r key_source key_value; do
+  append_api_key_candidate "$key_value" "$key_source"
+done < <(read_key_from_openclaw_json "$openclaw_json")
+
+# Priority 4: ~/.openclaw/agents/*/agent/auth-profiles.json providers.
+for profile_json in \
+  "${HOME}/.openclaw/agents/main/agent/auth-profiles.json" \
+  "${HOME}/.openclaw/agents/trader/agent/auth-profiles.json" \
+  "${HOME}/.openclaw/agents/pi/agent/auth-profiles.json"; do
   while IFS=$'\t' read -r key_source key_value; do
     append_api_key_candidate "$key_value" "$key_source"
-  done < <(read_key_from_openclaw_json "$openclaw_json")
-fi
+  done < <(read_key_from_auth_profiles_json "$profile_json")
+done
 
 if (( ${#api_keys[@]} == 0 )); then
-  echo "ERROR: missing API key; set ${api_key_env} (or X666_API_KEY), or configure ~/.openclaw/.env / ~/.openclaw/openclaw.json." >&2
+  echo "ERROR: missing API key; set ${api_key_env} (or X666_API_KEY/OPENAI_API_KEY/NEWAPI_API_KEYS), or configure ~/.openclaw/.env / ~/.openclaw/openclaw.json / ~/.openclaw/agents/*/agent/auth-profiles.json." >&2
   exit 2
 fi
 api_key="${api_keys[0]}"
@@ -352,19 +434,29 @@ run_probe() {
   local effective_model="$2"
   local sample_index="$3"
   local request_ts payload response curl_rc http_status body head_snippet prompt_tokens
-  local ok err_kind err_message transient_failure retried
+  local error_text error_text_lc
+  local ok err_kind err_message transient_failure retried auth_retry
   local attempt max_attempts attempt_count sleep_seconds
-  local api_key_idx api_key_for_attempt api_key_source_for_attempt
+  local api_key_idx api_key_for_attempt api_key_source_for_attempt key_count
+  local attempt_trace_csv first_http_status final_http_status
+  local -a attempt_trace
 
   payload="$(jq -nc \
     --arg model "$effective_model" \
     --argjson max_tokens "$max_tokens" \
     '{model:$model,messages:[{role:"user",content:"ping"}],max_tokens:$max_tokens}')"
 
+  key_count="${#api_keys[@]}"
   max_attempts=$(( retry_transient + 1 ))
+  if (( key_count > max_attempts )); then
+    max_attempts="$key_count"
+  fi
   attempt=1
   attempt_count=0
   retried=false
+  attempt_trace=()
+  first_http_status=""
+  final_http_status=""
   while (( attempt <= max_attempts )); do
     attempt_count=$attempt
     api_key_idx=$(( (attempt - 1) % ${#api_keys[@]} ))
@@ -397,6 +489,8 @@ run_probe() {
 
     head_snippet="$(printf '%s' "$body" | head -c 180 | tr '\n' ' ')"
     prompt_tokens="$(printf '%s' "$body" | jq -r '.usage.prompt_tokens // empty' 2>/dev/null || true)"
+    error_text="$(printf '%s' "$body" | jq -r '.error.message // .message // empty' 2>/dev/null || true)"
+    error_text_lc="$(printf '%s' "$error_text" | tr '[:upper:]' '[:lower:]')"
 
     ok=false
     err_kind=""
@@ -411,24 +505,53 @@ run_probe() {
     else
       err_kind="http_error"
       err_message="status_${http_status:-unknown}"
+      if [[ "${http_status:-}" == "401" || "${http_status:-}" == "403" ]]; then
+        err_kind="auth_denied"
+        err_message="status_${http_status}:permission_denied"
+        if [[ "$error_text" == *"无权访问 level2"* || "$error_text_lc" == *"level2"* ]]; then
+          err_kind="auth_denied_level_group"
+          err_message="status_${http_status}:level_group_denied"
+        fi
+      fi
       if is_transient_http_status "${http_status:-}"; then
         transient_failure=true
       fi
     fi
+    if [[ -z "$first_http_status" ]]; then
+      first_http_status="${http_status:-}"
+    fi
+    final_http_status="${http_status:-}"
+    attempt_trace+=("${api_key_source_for_attempt}:${http_status:-curl_${curl_rc}}:${err_message:-ok}")
 
     if [[ "$ok" == "true" ]]; then
       break
     fi
-    if [[ "$transient_failure" != "true" ]] || (( attempt >= max_attempts )); then
+    auth_retry=false
+    if [[ "${http_status:-}" == "401" || "${http_status:-}" == "403" ]]; then
+      # Auth/key permission errors are often key-specific; rotate to the next key candidate.
+      if (( attempt < key_count )); then
+        auth_retry=true
+      fi
+    fi
+
+    if [[ "$auth_retry" != "true" && "$transient_failure" != "true" ]] || (( attempt >= max_attempts )); then
       break
     fi
     retried=true
+    if [[ "$auth_retry" == "true" ]]; then
+      attempt=$(( attempt + 1 ))
+      continue
+    fi
     if (( retry_backoff_ms > 0 )); then
       sleep_seconds="$(awk -v ms="$retry_backoff_ms" 'BEGIN { printf "%.3f", (ms / 1000.0) }')"
       sleep "$sleep_seconds"
     fi
     attempt=$(( attempt + 1 ))
   done
+  attempt_trace_csv="$(
+    IFS='|'
+    echo "${attempt_trace[*]}"
+  )"
 
   jq -nc \
     --arg timestamp_utc "$request_ts" \
@@ -448,6 +571,9 @@ run_probe() {
     --arg error_message "$err_message" \
     --arg response_head "$head_snippet" \
     --arg prompt_tokens "${prompt_tokens:-}" \
+    --arg attempt_trace "$attempt_trace_csv" \
+    --arg first_http_status "${first_http_status:-}" \
+    --arg final_http_status "${final_http_status:-}" \
     '{
       timestamp_utc:$timestamp_utc,
       sample_index:$sample_index,
@@ -464,6 +590,9 @@ run_probe() {
       transient_failure:$transient_failure,
       error_kind:(if $error_kind=="" then null else $error_kind end),
       error_message:(if $error_message=="" then null else $error_message end),
+      first_http_status:(if $first_http_status=="" then null else ($first_http_status|tonumber? // null) end),
+      final_http_status:(if $final_http_status=="" then null else ($final_http_status|tonumber? // null) end),
+      attempt_trace:(if $attempt_trace=="" then [] else ($attempt_trace | split("|")) end),
       prompt_tokens:(if $prompt_tokens=="" then null else ($prompt_tokens|tonumber? // null) end),
       response_head:$response_head
     }' >> "$results_jsonl"
@@ -608,6 +737,46 @@ jq -s \
               else
                 ((.required_missing_models | length) == 0) and (.required_passing == .required_total)
               end
+            ),
+            auth_denied_all:(
+              ($records | length) > 0
+              and (($records | map(select(.ok == true)) | length) == 0)
+              and (
+                $records
+                | all(
+                    (((.first_http_status // .http_status // -1) == 401) or ((.first_http_status // .http_status // -1) == 403))
+                    and (((.final_http_status // .http_status // -1) == 401) or ((.final_http_status // .http_status // -1) == 403))
+                  )
+              )
+            ),
+            auth_denied_models:(
+              $records
+              | map(
+                  select(
+                    (.ok != true)
+                    and (
+                      ((.first_http_status // .http_status // -1) == 401)
+                      or ((.first_http_status // .http_status // -1) == 403)
+                      or ((.final_http_status // .http_status // -1) == 401)
+                      or ((.final_http_status // .http_status // -1) == 403)
+                    )
+                  )
+                  | .requested_model
+                )
+              | unique
+            ),
+            auth_denied_level_group_all:(
+              ($records | length) > 0
+              and (($records | map(select(.ok == true)) | length) == 0)
+              and (
+                $records
+                | all(.error_kind == "auth_denied_level_group")
+              )
+            ),
+            auth_denied_level_group_models:(
+              $records
+              | map(select(.error_kind == "auth_denied_level_group") | .requested_model)
+              | unique
             )
           }
       )
@@ -635,7 +804,7 @@ jq -s \
   jq -r '.summary[] | "- [\(.tier)] \(.requested_model) => \(.effective_model): success=\(.success)/\(.samples), retried=\(.retried_samples), transient_failures=\(.transient_failures), success_rate=\(.success_rate_pct|tostring)%"' "$artifact_json"
   echo
   echo "## Gate"
-  jq -r '"- status: \(.gate.status), gate_ok: \(.gate.gate_ok), required=\(.gate.required_passing)/\(.gate.required_total), required_missing=\((.gate.required_missing_models|join(","))), optional_failures=\((.gate.optional_failing_models|join(",")))"' "$artifact_json"
+  jq -r '"- status: \(.gate.status), gate_ok: \(.gate.gate_ok), required=\(.gate.required_passing)/\(.gate.required_total), required_missing=\((.gate.required_missing_models|join(","))), optional_failures=\((.gate.optional_failing_models|join(","))), auth_denied_all=\(.gate.auth_denied_all), auth_denied_models=\((.gate.auth_denied_models|join(",")))"' "$artifact_json"
   echo
   echo "## Artifact"
   echo "- JSON: ${artifact_json}"
@@ -645,11 +814,7 @@ echo "$artifact_json"
 
 probe_status="$(jq -r '.gate.status // "fail"' "$artifact_json")"
 if [[ "$probe_status" == "fail" || "$probe_status" == "empty" ]]; then
-  if [[ "$isolation_config_path" == /* ]]; then
-    isolation_config="$isolation_config_path"
-  else
-    isolation_config="${repo_root}/${isolation_config_path}"
-  fi
+  isolation_config="$isolation_config_resolved"
   echo "CRITICAL: Live Models failed connectivity check. Triggering ISOLATION." >&2
   if [[ "$isolation_write_enabled" != "true" ]]; then
       echo "Isolation config write disabled by flag; skip mutation." >&2

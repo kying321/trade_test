@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "files": [
+    "binance_spot_exec.py",
+    "cortex_control_kernel.py",
+    "cortex_evaluator.py",
+    "cortex_gate.py",
+    "cron_health_snapshot.py",
+    "cron_policy_apply_batch.py",
+    "cron_policy_patch_draft.py",
+    "digital_life_core.py",
+    "envelope_lint.py",
+    "gate_notify_trend.py",
+    "gateway_singleton_guard.py",
+    "hippocampus.py",
+    "lie_root_resolver.py",
+    "lie_spine_watchdog.py",
+    "lie_spot_halfhour_core.py",
+    "memory_fallback_search.py",
+    "net_resilience.py",
+    "neuro_guard_cycle.py",
+    "pi_cycle_halfhour_launchd_runner.sh",
+    "pi_cycle_orchestrator.py",
+    "reset_paper_state.py",
+    "signal_registry.py"
+  ]
+}
