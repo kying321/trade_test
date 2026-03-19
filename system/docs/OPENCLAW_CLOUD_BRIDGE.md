@@ -63,7 +63,7 @@ scripts/openclaw_cloud_bridge.sh ensure-whitelist-gate
   - 永远跳过 `output/`、缓存目录和 `node_modules/`
   - 覆盖前把旧文件备份到 `output/backups/workspace_sync_*`
   - 自动清理过旧/过多的 `workspace_sync_*` 备份
-  - 非 dry-run 同步会先持有本地 `run_halfhour_pulse.lock`，避免与 launchd/full-cycle 写路径并发冲突
+  - 非 dry-run 同步会先持有本地 `run-halfhour-pulse.lock`，避免与 launchd/full-cycle 写路径并发冲突
 - 直接执行：
 ```bash
 cd /Users/jokenrobot/Downloads/Folders/fenlie/system
@@ -78,7 +78,7 @@ scripts/openclaw_cloud_bridge.sh publish-local-pi-runtime-scripts
   - [runtime_manifest.json](/Users/jokenrobot/Downloads/Folders/fenlie/system/runtime/pi/runtime_manifest.json)
   - [runtime/pi/scripts](/Users/jokenrobot/Downloads/Folders/fenlie/system/runtime/pi/scripts)
 - `publish-local-pi-runtime-scripts` 只会发布 manifest 中列出的文件，不会自动把目录里的临时脚本带进 runtime
-- runtime 脚本发布同样持有本地 `run_halfhour_pulse.lock`，并把覆盖前版本备份到 `output/backups/runtime_script_publish_*`
+- runtime 脚本发布同样持有本地 `run-halfhour-pulse.lock`，并把覆盖前版本备份到 `output/backups/runtime_script_publish_*`
 - 一次性准备本地 PI runtime（同步 workspace + 发布 runtime 脚本 + 修 runtime model + gate-only smoke）：
 ```bash
 cd /Users/jokenrobot/Downloads/Folders/fenlie/system

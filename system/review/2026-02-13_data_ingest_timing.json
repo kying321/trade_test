@@ -1,0 +1,128 @@
+{
+  "date": "2026-02-13",
+  "status": "completed",
+  "elapsed_sec": 0.019,
+  "current_stage": "",
+  "last_completed_stage": "evaluate_quality",
+  "stages": [
+    {
+      "name": "collect_bars",
+      "elapsed_sec": 0.006,
+      "summary": {
+        "provider_count": 2,
+        "requested_symbol_count": 1,
+        "raw_row_count": 2,
+        "providers": [
+          {
+            "provider": "src_a",
+            "requested_symbols": 1,
+            "symbols_with_rows": 1,
+            "rows": 1,
+            "elapsed_sec": 0.003,
+            "symbols": [
+              {
+                "symbol": "TEST1",
+                "rows": 1,
+                "elapsed_sec": 0.003,
+                "outcome": "rows"
+              }
+            ],
+            "slowest_symbols": [
+              {
+                "symbol": "TEST1",
+                "rows": 1,
+                "elapsed_sec": 0.003,
+                "outcome": "rows"
+              }
+            ]
+          },
+          {
+            "provider": "src_b",
+            "requested_symbols": 1,
+            "symbols_with_rows": 1,
+            "rows": 1,
+            "elapsed_sec": 0.0,
+            "symbols": [
+              {
+                "symbol": "TEST1",
+                "rows": 1,
+                "elapsed_sec": 0.0,
+                "outcome": "rows"
+              }
+            ],
+            "slowest_symbols": [
+              {
+                "symbol": "TEST1",
+                "rows": 1,
+                "elapsed_sec": 0.0,
+                "outcome": "rows"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "resolve_prices",
+      "elapsed_sec": 0.004,
+      "summary": {
+        "normalized_rows": 1,
+        "conflict_rows": 0
+      }
+    },
+    {
+      "name": "collect_enrichments",
+      "elapsed_sec": 0.0,
+      "summary": {
+        "provider_count": 2,
+        "macro_frame_count": 0,
+        "raw_news_events": 0,
+        "sentiment_source_count": 2,
+        "providers": [
+          {
+            "provider": "src_a",
+            "macro_rows": 0,
+            "news_events": 0,
+            "sentiment_factors": 2,
+            "elapsed_sec": 0.0
+          },
+          {
+            "provider": "src_b",
+            "macro_rows": 0,
+            "news_events": 0,
+            "sentiment_factors": 2,
+            "elapsed_sec": 0.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "normalize_enrichments",
+      "elapsed_sec": 0.0,
+      "summary": {
+        "sentiment_keys": 11,
+        "deduped_news_events": 0,
+        "macro_rows": 0
+      }
+    },
+    {
+      "name": "evaluate_source_confidence",
+      "elapsed_sec": 0.004,
+      "summary": {
+        "overall_score": 0.734,
+        "source_count": 2,
+        "low_confidence_source_count": 2
+      }
+    },
+    {
+      "name": "evaluate_quality",
+      "elapsed_sec": 0.003,
+      "summary": {
+        "quality_passed": false,
+        "completeness_ratio": 1.0,
+        "unresolved_conflict_ratio": 0.0,
+        "source_confidence_score": 0.734
+      }
+    }
+  ]
+}
