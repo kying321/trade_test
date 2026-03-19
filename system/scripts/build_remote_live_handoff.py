@@ -66,6 +66,38 @@ def load_payload_file(path: Path | None) -> dict[str, Any] | None:
     return None
 
 
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def unwrap_review_input_payload(payload: dict[str, Any] | None) -> tuple[dict[str, Any] | None, int | None]:
+    source = payload if isinstance(payload, dict) else None
+    if not source:
+        return None, None
+    nested = source.get("payload")
+    capture_kind = str(source.get("capture_kind") or source.get("input_kind") or "").strip()
+    if capture_kind and isinstance(nested, dict):
+        return dict(nested), _as_int(source.get("returncode"))
+    return source, None
+
+
+def resolve_review_input_artifact(
+    *,
+    review_dir: Path,
+    explicit_path: Path | None,
+    pattern: str | None = None,
+) -> tuple[Path | None, dict[str, Any] | None, int | None]:
+    path = explicit_path
+    if path is None and pattern:
+        path = find_latest_review_artifact(review_dir, pattern)
+    payload = load_payload_file(path)
+    unwrapped_payload, returncode = unwrap_review_input_payload(payload)
+    return path, unwrapped_payload, returncode
+
+
 def prune_handoffs(
     review_dir: Path,
     *,
@@ -114,6 +146,369 @@ def find_latest_review_artifact(review_dir: Path, pattern: str) -> Path | None:
         reverse=True,
     )
     return files[0] if files else None
+
+
+def _list_text(values: list[str], limit: int = 6) -> str:
+    items = [str(v).strip() for v in values if str(v).strip()]
+    if not items:
+        return "-"
+    if len(items) <= limit:
+        return ", ".join(items)
+    return ", ".join(items[:limit]) + f" (+{len(items) - limit})"
+
+
+def _mapping_text(values: dict[str, Any], limit: int = 8) -> str:
+    items = [
+        f"{str(key).strip()}:{str(value).strip()}"
+        for key, value in sorted((values or {}).items())
+        if str(key).strip() and str(value).strip()
+    ]
+    if not items:
+        return "-"
+    if len(items) <= limit:
+        return ", ".join(items)
+    return ", ".join(items[:limit]) + f" (+{len(items) - limit})"
+
+
+def _remote_live_history_window_map(payload: dict[str, Any] | None) -> dict[int, dict[str, Any]]:
+    source = payload if isinstance(payload, dict) else {}
+    rows = source.get("window_summaries")
+    if not isinstance(rows, list):
+        rows = []
+    window_map: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            hours = int(row.get("window_hours") or 0)
+        except Exception:
+            continue
+        if hours <= 0:
+            continue
+        window_map[hours] = dict(row)
+    return window_map
+
+
+def _remote_live_history_window_brief(row: dict[str, Any]) -> str:
+    if not row:
+        return "-"
+    label = str(row.get("history_window_label") or "").strip()
+    if not label:
+        try:
+            hours = int(row.get("window_hours") or 0)
+        except Exception:
+            hours = 0
+        label = "24h" if hours == 24 else "7d" if hours == 168 else f"{int(hours // 24)}d" if hours else "-"
+    return (
+        f"{label}:{row.get('closed_pnl')}pnl/"
+        f"{int(row.get('trade_count') or 0)}tr/"
+        f"{int(row.get('open_positions') or 0)}open"
+    )
+
+
+def summarize_remote_live_history_audit(
+    payload: dict[str, Any] | None,
+    *,
+    artifact_path: Path | None,
+) -> dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    if not source and artifact_path is None:
+        return {}
+    window_map = _remote_live_history_window_map(source)
+    snapshot = (
+        dict(window_map.get(24) or {})
+        or dict(window_map.get(168) or {})
+        or dict(window_map.get(720) or {})
+    )
+    longest = dict(window_map.get(max(window_map)) or {}) if window_map else {}
+    blocked_candidate = (
+        snapshot.get("blocked_candidate")
+        if isinstance(snapshot.get("blocked_candidate"), dict)
+        else {}
+    )
+    window_brief = " | ".join(
+        [
+            part
+            for part in (
+                _remote_live_history_window_brief(window_map.get(24, {})),
+                _remote_live_history_window_brief(window_map.get(168, {})),
+                _remote_live_history_window_brief(window_map.get(720, {})),
+            )
+            if part != "-"
+        ]
+    )
+    return {
+        "artifact": str(artifact_path) if artifact_path else "",
+        "status": str(source.get("status") or ""),
+        "market": str(source.get("market") or ""),
+        "generated_at": str(source.get("generated_at_utc") or ""),
+        "window_brief": window_brief,
+        "quote_available": snapshot.get("quote_available"),
+        "open_positions": snapshot.get("open_positions"),
+        "risk_guard_status": str(snapshot.get("risk_guard_status") or ""),
+        "risk_guard_reasons": list(snapshot.get("risk_guard_reasons") or []),
+        "blocked_candidate_symbol": str(blocked_candidate.get("symbol") or ""),
+        "pnl_24h": (window_map.get(24) or {}).get("closed_pnl"),
+        "pnl_7d": (window_map.get(168) or {}).get("closed_pnl"),
+        "pnl_30d": (window_map.get(720) or {}).get("closed_pnl"),
+        "trade_count_24h": (window_map.get(24) or {}).get("trade_count"),
+        "trade_count_7d": (window_map.get(168) or {}).get("trade_count"),
+        "trade_count_30d": (window_map.get(720) or {}).get("trade_count"),
+        "symbol_pnl_brief": _mapping_text(dict(longest.get("income_pnl_by_symbol") or {}), limit=8),
+        "day_pnl_brief": _mapping_text(dict(longest.get("income_pnl_by_day") or {}), limit=8),
+    }
+
+
+def _positive_profitability_window(remote_live_history_summary: dict[str, Any]) -> tuple[str, float, int] | None:
+    candidates = (
+        ("30d", remote_live_history_summary.get("pnl_30d"), remote_live_history_summary.get("trade_count_30d")),
+        ("7d", remote_live_history_summary.get("pnl_7d"), remote_live_history_summary.get("trade_count_7d")),
+        ("24h", remote_live_history_summary.get("pnl_24h"), remote_live_history_summary.get("trade_count_24h")),
+    )
+    for label, pnl_raw, trades_raw in candidates:
+        try:
+            pnl = float(pnl_raw)
+        except Exception:
+            continue
+        try:
+            trades = int(trades_raw or 0)
+        except Exception:
+            trades = 0
+        if pnl > 0.0 and trades > 0:
+            return (label, pnl, trades)
+    return None
+
+
+def derive_remote_live_diagnosis(
+    *,
+    remote_live_history_summary: dict[str, Any],
+    account_scope_alignment: dict[str, Any],
+    ready: bool,
+    live_gate_ok: bool | None,
+    risk_guard_attention_reasons: list[str],
+) -> dict[str, Any]:
+    remote_summary = remote_live_history_summary if isinstance(remote_live_history_summary, dict) else {}
+    account_scope = account_scope_alignment if isinstance(account_scope_alignment, dict) else {}
+    market = str(remote_summary.get("market") or "").strip() or "unknown"
+    profitability_window = _positive_profitability_window(remote_summary)
+    profitability_confirmed = profitability_window is not None
+    blocking_layers: list[str] = []
+    if live_gate_ok is False:
+        blocking_layers.append("ops_live_gate")
+    if risk_guard_attention_reasons:
+        blocking_layers.append("risk_guard")
+    if bool(account_scope.get("blocking", False)):
+        blocking_layers.append("account_scope_alignment")
+
+    if ready and not blocking_layers:
+        status = "formal_live_possible"
+        brief = f"formal_live_possible:{market}"
+        blocker_detail = (
+            "Remote account scope, live gate, and risk guard are aligned; formal live is structurally possible."
+        )
+        done_when = "maintain current account scope alignment and keep ops_live_gate and risk_guard clear"
+    elif profitability_confirmed and blocking_layers:
+        label, pnl, trades = profitability_window or ("-", 0.0, 0)
+        status = "profitability_confirmed_but_auto_live_blocked"
+        brief = f"{status}:{market}:{'+'.join(blocking_layers)}"
+        blocker_detail = (
+            f"{market} remote history confirms realized profitability "
+            f"({label} pnl={pnl:.8f} across {trades} trades), but automated live remains blocked by "
+            f"{', '.join(blocking_layers)}."
+        )
+        done_when = (
+            "clear ops_live_gate and risk_guard blockers while keeping the intended ready-check scope aligned "
+            "with the profitable execution account"
+        )
+    elif profitability_confirmed:
+        label, pnl, trades = profitability_window or ("-", 0.0, 0)
+        status = "profitability_confirmed_review_live_scope"
+        brief = f"{status}:{market}"
+        blocker_detail = (
+            f"{market} remote history confirms realized profitability "
+            f"({label} pnl={pnl:.8f} across {trades} trades); review live scope before enabling automation."
+        )
+        done_when = "confirm the intended live scope and explicitly re-run live readiness before automation"
+    elif blocking_layers:
+        status = "auto_live_blocked_without_profitability_confirmation"
+        brief = f"{status}:{market}:{'+'.join(blocking_layers)}"
+        blocker_detail = (
+            "Automated live remains blocked before the system has a positive realized-profit confirmation "
+            f"for the active {market} scope."
+        )
+        done_when = "capture a valid remote history audit and clear the active live blockers"
+    else:
+        status = "review_required"
+        brief = f"review_required:{market}"
+        blocker_detail = "Remote live state needs manual review before automation."
+        done_when = "refresh remote live history and ready-check artifacts"
+
+    return {
+        "status": status,
+        "brief": brief,
+        "market": market,
+        "profitability_confirmed": profitability_confirmed,
+        "profitability_window": profitability_window[0] if profitability_window else "",
+        "profitability_pnl": profitability_window[1] if profitability_window else None,
+        "profitability_trade_count": profitability_window[2] if profitability_window else None,
+        "blocking_layers": blocking_layers,
+        "blocker_detail": blocker_detail,
+        "done_when": done_when,
+    }
+
+
+def summarize_ready_check_scope(payload: dict[str, Any] | None, *, fallback_market: str) -> dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    market = str(source.get("market") or fallback_market).strip().lower() or fallback_market
+    return {
+        "market": market,
+        "ready": bool(source.get("ready", False)),
+        "reason": str(source.get("reason") or ""),
+        "reasons": [str(x) for x in source.get("reasons", [])] if isinstance(source.get("reasons"), list) else [],
+        "quote_available": source.get("quote_available"),
+        "required_quote": source.get("required_quote"),
+        "artifact": str(source.get("artifact") or ""),
+        "takeover_artifact": str(source.get("takeover_artifact") or ""),
+    }
+
+
+def derive_account_scope_alignment(
+    *,
+    spot_ready_summary: dict[str, Any],
+    portfolio_ready_summary: dict[str, Any],
+    remote_live_history_summary: dict[str, Any],
+) -> dict[str, Any]:
+    remote_market = str(remote_live_history_summary.get("market") or "").strip().lower()
+    spot_market = str(spot_ready_summary.get("market") or "spot").strip().lower()
+    portfolio_market = str(portfolio_ready_summary.get("market") or "portfolio_margin_um").strip().lower()
+    if not remote_market:
+        return {
+            "status": "history_market_missing",
+            "brief": "history_market_missing",
+            "blocking": False,
+            "blocker_detail": "remote live history audit is missing market scope, so account-layer alignment cannot be verified.",
+            "done_when": "refresh remote_live_history_audit and confirm the account market scope.",
+        }
+    if remote_market == portfolio_market and spot_market != remote_market:
+        return {
+            "status": "split_scope_spot_vs_portfolio_margin_um",
+            "brief": "split_scope_spot_vs_portfolio_margin_um",
+            "blocking": False,
+            "blocker_detail": (
+                "spot ready-check and portfolio_margin_um account history refer to different execution scopes; "
+                "treat spot gate status and unified-account profitability as separate signals."
+            ),
+            "done_when": (
+                "promote market-specific live routing policy or evaluate live readiness on the same market scope as the target account."
+            ),
+        }
+    return {
+        "status": "scope_aligned",
+        "brief": f"scope_aligned:{remote_market}",
+        "blocking": False,
+        "blocker_detail": f"ready-check and account history both point to `{remote_market}`.",
+        "done_when": "keep live readiness and account history on the same market scope.",
+    }
+
+
+def derive_execution_contract(
+    *,
+    ready_check_scope_market: str,
+    ready_check_scope_source: str,
+    openclaw_orderflow_executor_mode: str,
+    openclaw_orderflow_executor_mode_source: str,
+    account_scope_alignment: dict[str, Any] | None,
+    remote_live_history_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    account_scope = account_scope_alignment if isinstance(account_scope_alignment, dict) else {}
+    remote_summary = (
+        remote_live_history_summary if isinstance(remote_live_history_summary, dict) else {}
+    )
+    target_market = str(ready_check_scope_market or "").strip().lower()
+    target_source = str(ready_check_scope_source or "").strip().lower()
+    executor_mode = str(openclaw_orderflow_executor_mode or "").strip().lower() or "shadow_guarded"
+    executor_mode_source = (
+        str(openclaw_orderflow_executor_mode_source or "").strip() or "default"
+    )
+    executable_lane_market = str(
+        target_market or remote_summary.get("market") or "unknown"
+    ).strip().lower()
+    alignment_status = str(account_scope.get("status") or "").strip()
+    reason_codes: list[str] = []
+    guarded_probe_allowed = False
+    if alignment_status == "split_scope_spot_vs_portfolio_margin_um" and target_market != "spot":
+        reason_codes.append("spot_remote_lane_missing")
+    if executable_lane_market == "portfolio_margin_um":
+        reason_codes.append("portfolio_margin_um_read_only_mode")
+    if executor_mode == "shadow_guarded":
+        # Keep the default source-owned mode explicit instead of assuming every remote lane is
+        # shadow-only forever.
+        reason_codes.append("shadow_executor_only_mode")
+        contract_mode = "shadow_only"
+    elif executor_mode in {"spot_live_guarded", "live_guarded", "live_send_guarded"}:
+        if target_market == "spot" and executable_lane_market == "spot":
+            reason_codes.append("guarded_probe_only_mode")
+            contract_mode = "guarded_probe_only"
+            guarded_probe_allowed = True
+        else:
+            reason_codes.append("requested_executor_mode_not_implemented")
+            contract_mode = "promotion_requested"
+    else:
+        reason_codes.append("unsupported_executor_mode_source")
+        contract_mode = "unsupported_source_mode"
+    deduped_reason_codes: list[str] = []
+    seen: set[str] = set()
+    for code in reason_codes:
+        item = str(code or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        deduped_reason_codes.append(item)
+
+    blocker_parts = [
+        (
+            "remote execution contract is probe-capable but still blocks live send"
+            if guarded_probe_allowed
+            else "remote execution contract remains non-executable"
+        ),
+        f"target={target_market or 'unknown'}",
+        f"lane={executable_lane_market or 'unknown'}",
+        f"scope={alignment_status or 'unknown'}",
+        f"executor_mode={executor_mode}",
+    ]
+    if target_source:
+        blocker_parts.append(f"source={target_source}")
+    if guarded_probe_allowed and deduped_reason_codes == ["guarded_probe_only_mode"]:
+        status = "probe_only_contract"
+    else:
+        status = "non_executable_contract" if deduped_reason_codes else "live_executable_contract"
+    brief = ":".join(
+        [
+            status,
+            target_market or "unknown",
+            executable_lane_market or "unknown",
+            ",".join(deduped_reason_codes) or "-",
+        ]
+    )
+    return {
+        "status": status,
+        "brief": brief,
+        "mode": contract_mode,
+        "guarded_probe_allowed": guarded_probe_allowed,
+        "live_orders_allowed": False if deduped_reason_codes else True,
+        "target_market": target_market,
+        "target_source": target_source,
+        "executor_mode": executor_mode,
+        "executor_mode_source": executor_mode_source,
+        "executable_lane_market": executable_lane_market,
+        "account_scope_alignment_status": alignment_status,
+        "reason_codes": deduped_reason_codes,
+        "blocker_detail": "; ".join(blocker_parts),
+        "done_when": (
+            "use guarded probe evidence for source-owned promotion checks, then implement a source-owned non-shadow "
+            "remote send/ack/fill runtime on the target market before routing capital"
+        ),
+    }
 
 
 def summarize_security_top_risks(findings: list[str]) -> list[str]:
@@ -693,6 +1088,10 @@ def build_operator_handoff_md(
     clock_device_note: str | None,
     operator_status_quad: str,
     notification_delivery_readiness_label: str | None,
+    remote_live_history_summary: dict[str, Any] | None,
+    remote_live_diagnosis: dict[str, Any] | None,
+    ready_check_scope_brief: str | None,
+    account_scope_alignment: dict[str, Any] | None,
     operator_playbook_md: str,
 ) -> str:
     security_score = (
@@ -718,6 +1117,29 @@ def build_operator_handoff_md(
         "",
         operator_playbook_md,
     ]
+    remote_summary = remote_live_history_summary if isinstance(remote_live_history_summary, dict) else {}
+    remote_diagnosis = remote_live_diagnosis if isinstance(remote_live_diagnosis, dict) else {}
+    account_scope = account_scope_alignment if isinstance(account_scope_alignment, dict) else {}
+    if remote_summary:
+        lines.insert(
+            10,
+            "- remote-live-history: "
+            + f"`{remote_summary.get('window_brief') or '-'} | "
+            + f"risk_guard={remote_summary.get('risk_guard_status') or '-'} | "
+            + f"reasons={_list_text(remote_summary.get('risk_guard_reasons') or [])}`",
+        )
+    if remote_diagnosis:
+        lines.insert(
+            10,
+            "- remote-live-diagnosis: "
+            + f"`{remote_diagnosis.get('brief') or '-'} | "
+            + f"blocker={remote_diagnosis.get('blocker_detail') or '-'} | "
+            + f"done_when={remote_diagnosis.get('done_when') or '-'}`",
+        )
+    if ready_check_scope_brief:
+        lines.insert(10, f"- ready-check scope: `{ready_check_scope_brief}`")
+    if account_scope:
+        lines.insert(11, f"- account-scope: `{account_scope.get('brief') or '-'}`")
     if secondary_focus_area:
         lines.insert(7, f"- secondary focus: `{secondary_focus_area}`")
         if secondary_focus_reason:
@@ -748,6 +1170,10 @@ def build_operator_handoff_brief(
     next_focus_command: str,
     secondary_focus_area: str | None,
     secondary_focus_reason: str | None,
+    remote_live_history_summary: dict[str, Any] | None,
+    remote_live_diagnosis: dict[str, Any] | None,
+    ready_check_scope_brief: str | None,
+    account_scope_alignment: dict[str, Any] | None,
 ) -> str:
     lines = [
         f"state: {handoff_state}",
@@ -760,6 +1186,22 @@ def build_operator_handoff_brief(
         lines.append(f"clockdev: {clock_device_floor}")
     if notification_delivery_readiness_label:
         lines.append(f"notify: {notification_delivery_readiness_label}")
+    remote_summary = remote_live_history_summary if isinstance(remote_live_history_summary, dict) else {}
+    remote_diagnosis = remote_live_diagnosis if isinstance(remote_live_diagnosis, dict) else {}
+    account_scope = account_scope_alignment if isinstance(account_scope_alignment, dict) else {}
+    if remote_summary:
+        lines.append(f"history: {remote_summary.get('window_brief') or '-'}")
+        lines.append(
+            "history-risk: "
+            + f"{remote_summary.get('risk_guard_status') or '-'}:"
+            + _list_text(remote_summary.get("risk_guard_reasons") or [], limit=8)
+        )
+    if remote_diagnosis:
+        lines.append(f"history-diagnosis: {remote_diagnosis.get('brief') or '-'}")
+    if ready_check_scope_brief:
+        lines.append(f"scope: {ready_check_scope_brief}")
+    if account_scope:
+        lines.append(f"scope-align: {account_scope.get('brief') or '-'}")
     lines.extend(
         [
             f"focus: {next_focus_area}",
@@ -933,15 +1375,30 @@ def build_operator_handoff(
     remote_user: str,
     remote_project_dir: str,
     ready_payload: dict[str, Any] | None,
+    ready_payload_spot: dict[str, Any] | None,
+    ready_payload_portfolio_margin_um: dict[str, Any] | None,
     daemon_payload: dict[str, Any] | None,
     ops_payload: dict[str, Any] | None,
     journal_payload: dict[str, Any] | None,
     security_payload: dict[str, Any] | None,
     noaf_probe_payload: dict[str, Any] | None,
     notification_send_payload: dict[str, Any] | None,
+    remote_live_history_payload: dict[str, Any] | None,
+    remote_live_history_artifact: Path | None,
     security_accept_max_exposure: float,
+    target_live_takeover_market: str,
+    openclaw_orderflow_executor_mode: str,
+    openclaw_orderflow_executor_mode_source: str,
 ) -> dict[str, Any]:
     ready_payload = ready_payload if isinstance(ready_payload, dict) else {}
+    ready_payload_spot = (
+        ready_payload_spot if isinstance(ready_payload_spot, dict) else {}
+    )
+    ready_payload_portfolio_margin_um = (
+        ready_payload_portfolio_margin_um
+        if isinstance(ready_payload_portfolio_margin_um, dict)
+        else {}
+    )
     daemon_payload = daemon_payload if isinstance(daemon_payload, dict) else {}
     ops_payload = ops_payload if isinstance(ops_payload, dict) else {}
     journal_payload = journal_payload if isinstance(journal_payload, dict) else {}
@@ -949,6 +1406,78 @@ def build_operator_handoff(
     noaf_probe_payload = noaf_probe_payload if isinstance(noaf_probe_payload, dict) else {}
     notification_send_payload = (
         notification_send_payload if isinstance(notification_send_payload, dict) else {}
+    )
+    remote_live_history_summary = summarize_remote_live_history_audit(
+        remote_live_history_payload,
+        artifact_path=remote_live_history_artifact,
+    )
+    ready_check_spot_summary = (
+        summarize_ready_check_scope(ready_payload_spot, fallback_market="spot")
+        if ready_payload_spot
+        else {}
+    )
+    ready_check_portfolio_summary = (
+        summarize_ready_check_scope(
+            ready_payload_portfolio_margin_um,
+            fallback_market="portfolio_margin_um",
+        )
+        if ready_payload_portfolio_margin_um
+        else {}
+    )
+    account_scope_alignment = derive_account_scope_alignment(
+        spot_ready_summary=ready_check_spot_summary,
+        portfolio_ready_summary=ready_check_portfolio_summary,
+        remote_live_history_summary=remote_live_history_summary,
+    )
+    target_market = str(target_live_takeover_market or "").strip().lower()
+    use_explicit_ready_scope = bool(ready_payload_spot or ready_payload_portfolio_margin_um)
+    effective_ready_scope_market = ""
+    effective_ready_scope_source = "legacy"
+    remote_history_market = str(remote_live_history_summary.get("market") or "").strip().lower()
+    if target_market == "spot" and ready_payload_spot:
+        ready_payload = ready_payload_spot
+        effective_ready_scope_market = "spot"
+        effective_ready_scope_source = "spot"
+    elif target_market == "portfolio_margin_um" and ready_payload_portfolio_margin_um:
+        ready_payload = ready_payload_portfolio_margin_um
+        effective_ready_scope_market = "portfolio_margin_um"
+        effective_ready_scope_source = "portfolio_margin_um"
+    elif remote_history_market == "portfolio_margin_um" and ready_payload_portfolio_margin_um:
+        ready_payload = ready_payload_portfolio_margin_um
+        effective_ready_scope_market = "portfolio_margin_um"
+        effective_ready_scope_source = "portfolio_margin_um"
+    elif remote_history_market == "spot" and ready_payload_spot:
+        ready_payload = ready_payload_spot
+        effective_ready_scope_market = "spot"
+        effective_ready_scope_source = "spot"
+    elif ready_payload:
+        effective_ready_scope_market = (
+            str(ready_payload.get("market") or "").strip().lower() or "spot"
+        )
+    elif ready_payload_spot:
+        ready_payload = ready_payload_spot
+        effective_ready_scope_market = "spot"
+        effective_ready_scope_source = "spot"
+    elif ready_payload_portfolio_margin_um:
+        ready_payload = ready_payload_portfolio_margin_um
+        effective_ready_scope_market = "portfolio_margin_um"
+        effective_ready_scope_source = "portfolio_margin_um"
+    else:
+        effective_ready_scope_market = "missing"
+        effective_ready_scope_source = "missing"
+    ready_check_scope_brief = (
+        f"{effective_ready_scope_source}:{effective_ready_scope_market}"
+        if use_explicit_ready_scope and effective_ready_scope_market and effective_ready_scope_source
+        else ""
+    )
+    account_scope_alignment_output = account_scope_alignment if use_explicit_ready_scope else {}
+    execution_contract = derive_execution_contract(
+        ready_check_scope_market=effective_ready_scope_market,
+        ready_check_scope_source=effective_ready_scope_source,
+        openclaw_orderflow_executor_mode=openclaw_orderflow_executor_mode,
+        openclaw_orderflow_executor_mode_source=openclaw_orderflow_executor_mode_source,
+        account_scope_alignment=account_scope_alignment_output,
+        remote_live_history_summary=remote_live_history_summary,
     )
 
     reasons = ready_payload.get("reasons")
@@ -1125,6 +1654,13 @@ def build_operator_handoff(
         ready=ready,
         ready_reasons=ready_reasons,
         risk_guard_payload=risk_guard_payload,
+    )
+    remote_live_diagnosis = derive_remote_live_diagnosis(
+        remote_live_history_summary=remote_live_history_summary,
+        account_scope_alignment=account_scope_alignment_output,
+        ready=ready,
+        live_gate_ok=live_gate_ok,
+        risk_guard_attention_reasons=risk_guard_attention_reasons,
     )
     operator_status_triplet = (
         f"{runtime_status_label} / {gate_status_label} / {risk_guard_status_label}"
@@ -1309,6 +1845,10 @@ def build_operator_handoff(
         ),
         operator_status_quad=operator_status_quad,
         notification_delivery_readiness_label=notification_delivery_readiness_label,
+        remote_live_history_summary=remote_live_history_summary,
+        remote_live_diagnosis=remote_live_diagnosis,
+        ready_check_scope_brief=ready_check_scope_brief,
+        account_scope_alignment=account_scope_alignment_output,
         operator_playbook_md=operator_playbook_md,
     )
     operator_handoff_brief = build_operator_handoff_brief(
@@ -1329,6 +1869,10 @@ def build_operator_handoff(
         next_focus_command=next_focus_command,
         secondary_focus_area=secondary_focus_area,
         secondary_focus_reason=secondary_focus_reason,
+        remote_live_history_summary=remote_live_history_summary,
+        remote_live_diagnosis=remote_live_diagnosis,
+        ready_check_scope_brief=ready_check_scope_brief,
+        account_scope_alignment=account_scope_alignment_output,
     )
     operator_notification = build_operator_notification(
         handoff_state=handoff_state,
@@ -1358,8 +1902,18 @@ def build_operator_handoff(
         "remote_host": remote_host,
         "remote_user": remote_user,
         "remote_project_dir": remote_project_dir,
+        "target_live_takeover_market": target_market,
+        "openclaw_orderflow_executor_mode": openclaw_orderflow_executor_mode,
+        "openclaw_orderflow_executor_mode_source": openclaw_orderflow_executor_mode_source,
         "ready": ready,
         "ready_reasons": ready_reasons,
+        "ready_check_scope_market": effective_ready_scope_market,
+        "ready_check_scope_source": effective_ready_scope_source,
+        "ready_check_scope_brief": ready_check_scope_brief,
+        "ready_check_spot": ready_check_spot_summary or None,
+        "ready_check_portfolio_margin_um": ready_check_portfolio_summary or None,
+        "account_scope_alignment": account_scope_alignment_output,
+        "execution_contract": execution_contract,
         "daemon_running": daemon_running,
         "daemon_mode": daemon_mode,
         "daemon_status": daemon_status,
@@ -1405,6 +1959,8 @@ def build_operator_handoff(
         "operator_handoff_brief": operator_handoff_brief,
         "operator_notification": operator_notification,
         "operator_notification_templates": operator_notification_templates,
+        "remote_live_history": remote_live_history_summary,
+        "remote_live_diagnosis": remote_live_diagnosis,
         "notification_delivery_status": notification_delivery_status,
         "notification_delivery_readiness_label": notification_delivery_readiness_label,
         "notification_delivery_capabilities": notification_delivery_capabilities,
@@ -1431,6 +1987,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--review-dir", default=str(DEFAULT_REVIEW_DIR))
     parser.add_argument("--ready-check-file", default="")
     parser.add_argument("--ready-check-returncode", type=int, default=0)
+    parser.add_argument("--ready-check-spot-file", default="")
+    parser.add_argument("--ready-check-spot-returncode", type=int, default=0)
+    parser.add_argument("--ready-check-portfolio-margin-file", default="")
+    parser.add_argument("--ready-check-portfolio-margin-returncode", type=int, default=0)
     parser.add_argument("--risk-daemon-status-file", default="")
     parser.add_argument("--risk-daemon-status-returncode", type=int, default=0)
     parser.add_argument("--ops-status-file", default="")
@@ -1441,7 +2001,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--security-status-returncode", type=int, default=0)
     parser.add_argument("--noaf-probe-file", default="")
     parser.add_argument("--notification-send-file", default="")
-    parser.add_argument("--security-accept-max-exposure", type=float, default=4.0)
+    parser.add_argument("--security-accept-max-exposure", default="")
+    parser.add_argument("--live-takeover-market", default="")
+    parser.add_argument("--openclaw-orderflow-executor-mode", default="")
     parser.add_argument("--remote-host", default="")
     parser.add_argument("--remote-user", default="")
     parser.add_argument("--remote-project-dir", default="")
@@ -1456,20 +2018,32 @@ def main() -> int:
     review_dir = Path(args.review_dir).expanduser().resolve()
     now_ts = dt.datetime.fromisoformat(args.now) if str(args.now).strip() else now_utc()
 
-    ready_file = Path(args.ready_check_file).expanduser().resolve() if args.ready_check_file else None
-    daemon_file = (
+    ready_path_arg = (
+        Path(args.ready_check_file).expanduser().resolve() if args.ready_check_file else None
+    )
+    ready_spot_path_arg = (
+        Path(args.ready_check_spot_file).expanduser().resolve()
+        if args.ready_check_spot_file
+        else None
+    )
+    ready_portfolio_margin_path_arg = (
+        Path(args.ready_check_portfolio_margin_file).expanduser().resolve()
+        if args.ready_check_portfolio_margin_file
+        else None
+    )
+    daemon_path_arg = (
         Path(args.risk_daemon_status_file).expanduser().resolve()
         if args.risk_daemon_status_file
         else None
     )
-    ops_file = Path(args.ops_status_file).expanduser().resolve() if args.ops_status_file else None
-    journal_file = Path(args.journal_file).expanduser().resolve() if args.journal_file else None
-    security_file = (
+    ops_path_arg = Path(args.ops_status_file).expanduser().resolve() if args.ops_status_file else None
+    journal_path_arg = Path(args.journal_file).expanduser().resolve() if args.journal_file else None
+    security_path_arg = (
         Path(args.security_status_file).expanduser().resolve()
         if args.security_status_file
         else None
     )
-    noaf_probe_file = (
+    noaf_probe_path_arg = (
         Path(args.noaf_probe_file).expanduser().resolve()
         if args.noaf_probe_file
         else None
@@ -1479,35 +2053,165 @@ def main() -> int:
         if args.notification_send_file
         else find_latest_review_artifact(review_dir, "*_remote_live_notification_send.json")
     )
+    bridge_context_file, bridge_context_payload, _ = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=None,
+        pattern="*_remote_live_bridge_context.json",
+    )
+    remote_live_history_file = find_latest_review_artifact(
+        review_dir, "*_remote_live_history_audit.json"
+    )
+    bridge_context_payload = bridge_context_payload if isinstance(bridge_context_payload, dict) else {}
+    remote_host = str(args.remote_host or bridge_context_payload.get("remote_host") or "").strip()
+    remote_user = str(args.remote_user or bridge_context_payload.get("remote_user") or "").strip()
+    remote_project_dir = str(
+        args.remote_project_dir or bridge_context_payload.get("remote_project_dir") or ""
+    ).strip()
+    live_takeover_market = str(
+        args.live_takeover_market or bridge_context_payload.get("live_takeover_market") or ""
+    ).strip().lower()
+    openclaw_orderflow_executor_mode_raw = str(
+        args.openclaw_orderflow_executor_mode
+        or bridge_context_payload.get("openclaw_orderflow_executor_mode")
+        or ""
+    ).strip()
+    if args.openclaw_orderflow_executor_mode:
+        openclaw_orderflow_executor_mode_source = "arg"
+    elif bridge_context_payload.get("openclaw_orderflow_executor_mode"):
+        openclaw_orderflow_executor_mode_source = "bridge_context"
+    else:
+        openclaw_orderflow_executor_mode_source = "default"
+    openclaw_orderflow_executor_mode = (
+        openclaw_orderflow_executor_mode_raw.lower()
+        if openclaw_orderflow_executor_mode_raw
+        else "shadow_guarded"
+    )
+    security_accept_max_exposure_raw = str(args.security_accept_max_exposure or "").strip()
+    if not security_accept_max_exposure_raw:
+        security_accept_max_exposure_raw = str(
+            bridge_context_payload.get("security_accept_max_exposure") or ""
+        ).strip()
+    try:
+        security_accept_max_exposure = (
+            float(security_accept_max_exposure_raw) if security_accept_max_exposure_raw else 4.0
+        )
+    except (TypeError, ValueError):
+        security_accept_max_exposure = 4.0
 
-    ready_payload = load_payload_file(ready_file)
-    daemon_payload = load_payload_file(daemon_file)
-    ops_payload = load_payload_file(ops_file)
-    journal_payload = load_payload_file(journal_file)
-    security_payload = load_payload_file(security_file)
-    noaf_probe_payload = load_payload_file(noaf_probe_file)
+    ready_file, ready_payload, ready_returncode_auto = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=ready_path_arg,
+        pattern="*_remote_live_ready_check.json",
+    )
+    ready_spot_file, ready_payload_spot, ready_spot_returncode_auto = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=ready_spot_path_arg,
+        pattern="*_remote_live_ready_check_spot.json",
+    )
+    (
+        ready_portfolio_margin_file,
+        ready_payload_portfolio_margin_um,
+        ready_portfolio_returncode_auto,
+    ) = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=ready_portfolio_margin_path_arg,
+        pattern="*_remote_live_ready_check_portfolio_margin_um.json",
+    )
+    daemon_file, daemon_payload, daemon_returncode_auto = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=daemon_path_arg,
+        pattern="*_remote_live_risk_daemon_status.json",
+    )
+    ops_file, ops_payload, ops_returncode_auto = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=ops_path_arg,
+        pattern="*_remote_live_ops_reconcile_status.json",
+    )
+    journal_file, journal_payload, journal_returncode_auto = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=journal_path_arg,
+        pattern="*_remote_live_risk_daemon_journal.json",
+    )
+    security_file, security_payload, security_returncode_auto = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=security_path_arg,
+        pattern="*_remote_live_risk_daemon_security_status.json",
+    )
+    noaf_probe_file, noaf_probe_payload, _ = resolve_review_input_artifact(
+        review_dir=review_dir,
+        explicit_path=noaf_probe_path_arg,
+        pattern="*_remote_live_noaf_probe.json",
+    )
     notification_send_payload = load_payload_file(notification_send_file)
+    remote_live_history_payload = load_payload_file(remote_live_history_file)
 
     out: dict[str, Any] = {
         "action": "build_remote_live_handoff",
         "ok": True,
         "status": "ok",
         "generated_at": fmt_utc(now_ts),
-        "remote_host": str(args.remote_host or ""),
-        "remote_user": str(args.remote_user or ""),
-        "remote_project_dir": str(args.remote_project_dir or ""),
-        "ready_check_returncode": int(args.ready_check_returncode),
-        "risk_daemon_status_returncode": int(args.risk_daemon_status_returncode),
-        "ops_status_returncode": int(args.ops_status_returncode),
-        "journal_returncode": int(args.journal_returncode),
-        "security_status_returncode": int(args.security_status_returncode),
+        "remote_host": remote_host,
+        "remote_user": remote_user,
+        "remote_project_dir": remote_project_dir,
+        "security_accept_max_exposure": float(security_accept_max_exposure),
+        "ready_check_returncode": int(
+            args.ready_check_returncode if ready_path_arg is not None else (ready_returncode_auto or 0)
+        ),
+        "ready_check_spot_returncode": int(
+            args.ready_check_spot_returncode
+            if ready_spot_path_arg is not None
+            else (ready_spot_returncode_auto or 0)
+        ),
+        "ready_check_portfolio_margin_um_returncode": int(
+            args.ready_check_portfolio_margin_returncode
+            if ready_portfolio_margin_path_arg is not None
+            else (ready_portfolio_returncode_auto or 0)
+        ),
+        "risk_daemon_status_returncode": int(
+            args.risk_daemon_status_returncode
+            if daemon_path_arg is not None
+            else (daemon_returncode_auto or 0)
+        ),
+        "ops_status_returncode": int(
+            args.ops_status_returncode if ops_path_arg is not None else (ops_returncode_auto or 0)
+        ),
+        "journal_returncode": int(
+            args.journal_returncode
+            if journal_path_arg is not None
+            else (journal_returncode_auto or 0)
+        ),
+        "security_status_returncode": int(
+            args.security_status_returncode
+            if security_path_arg is not None
+            else (security_returncode_auto or 0)
+        ),
         "ready_check": ready_payload,
+        "ready_check_spot": ready_payload_spot,
+        "ready_check_portfolio_margin_um": ready_payload_portfolio_margin_um,
         "risk_daemon_status": daemon_payload,
         "ops_reconcile_status": ops_payload,
         "risk_daemon_journal": journal_payload,
         "risk_daemon_security_status": security_payload,
         "risk_daemon_noaf_probe": noaf_probe_payload,
         "notification_send": notification_send_payload,
+        "remote_live_history_audit": remote_live_history_payload,
+        "source_artifacts": {
+            "ready_check": str(ready_file) if ready_file else "",
+            "ready_check_spot": str(ready_spot_file) if ready_spot_file else "",
+            "ready_check_portfolio_margin_um": str(ready_portfolio_margin_file)
+            if ready_portfolio_margin_file
+            else "",
+            "risk_daemon_status": str(daemon_file) if daemon_file else "",
+            "ops_status": str(ops_file) if ops_file else "",
+            "journal": str(journal_file) if journal_file else "",
+            "security_status": str(security_file) if security_file else "",
+            "notification_send": str(notification_send_file) if notification_send_file else "",
+            "remote_live_history_audit": str(remote_live_history_file)
+            if remote_live_history_file
+            else "",
+            "noaf_probe": str(noaf_probe_file) if noaf_probe_file else "",
+            "bridge_context": str(bridge_context_file) if bridge_context_file else "",
+        },
         "operator_handoff": None,
         "artifact_status_label": "handoff-ok",
         "artifact_label": None,
@@ -1519,19 +2223,46 @@ def main() -> int:
     }
 
     operator_handoff = build_operator_handoff(
-        remote_host=str(args.remote_host or ""),
-        remote_user=str(args.remote_user or ""),
-        remote_project_dir=str(args.remote_project_dir or ""),
+        remote_host=remote_host,
+        remote_user=remote_user,
+        remote_project_dir=remote_project_dir,
         ready_payload=ready_payload,
+        ready_payload_spot=ready_payload_spot,
+        ready_payload_portfolio_margin_um=ready_payload_portfolio_margin_um,
         daemon_payload=daemon_payload,
         ops_payload=ops_payload,
         journal_payload=journal_payload,
         security_payload=security_payload,
         noaf_probe_payload=noaf_probe_payload,
         notification_send_payload=notification_send_payload,
-        security_accept_max_exposure=float(args.security_accept_max_exposure),
+        remote_live_history_payload=remote_live_history_payload,
+        remote_live_history_artifact=remote_live_history_file,
+        security_accept_max_exposure=float(security_accept_max_exposure),
+        target_live_takeover_market=live_takeover_market,
+        openclaw_orderflow_executor_mode=openclaw_orderflow_executor_mode,
+        openclaw_orderflow_executor_mode_source=openclaw_orderflow_executor_mode_source,
     )
     out["operator_handoff"] = operator_handoff
+    effective_ready_scope_market = str(
+        operator_handoff.get("ready_check_scope_market") or ""
+    ).strip()
+    if effective_ready_scope_market == "spot" and ready_payload_spot:
+        out["ready_check"] = ready_payload_spot
+        out["ready_check_returncode"] = int(
+            args.ready_check_spot_returncode
+            if ready_spot_path_arg is not None
+            else (ready_spot_returncode_auto or 0)
+        )
+    elif (
+        effective_ready_scope_market == "portfolio_margin_um"
+        and ready_payload_portfolio_margin_um
+    ):
+        out["ready_check"] = ready_payload_portfolio_margin_um
+        out["ready_check_returncode"] = int(
+            args.ready_check_portfolio_margin_returncode
+            if ready_portfolio_margin_path_arg is not None
+            else (ready_portfolio_returncode_auto or 0)
+        )
     out["artifact_label"] = f"remote-live-handoff:{operator_handoff['handoff_state']}"
     out["artifact_tags"] = [
         "remote-live",
