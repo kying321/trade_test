@@ -148,6 +148,16 @@ def test_script_main_inherits_core_thresholds_from_config(tmp_path: Path, monkey
                     "execution_timeframe": "15m",
                     "structure_engine": "fixed_range_volume_profile_proxy",
                     "flow_confirmation_engine": "cvd_lite",
+                    "default_market_state": "Bias_Only",
+                    "setup_ready_state": "Setup_Ready",
+                    "no_trade_rule": "no_sweep_no_mss_no_cvd_no_trade",
+                    "micro_structure_engine": "ict_sweep_mss",
+                    "micro_structure_timeframes": ["1m", "5m"],
+                    "liquidity_sweep_required": True,
+                    "mss_required": True,
+                    "entry_retest_priority": ["FVG", "OB", "Breaker"],
+                    "session_liquidity_map": ["asia_high_low", "london_high_low"],
+                    "holding_window_minutes": {"min": 15, "max": 180},
                     "location_priority": ["HVN", "POC"],
                     "supported_symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"],
                 },
@@ -185,6 +195,15 @@ def test_script_main_inherits_core_thresholds_from_config(tmp_path: Path, monkey
     assert str(shortline.get("structure_timeframe", "")) == "4h"
     assert str(shortline.get("execution_timeframe", "")) == "15m"
     assert str(shortline.get("flow_confirmation_engine", "")) == "cvd_lite"
+    assert str(shortline.get("default_market_state", "")) == "Bias_Only"
+    assert str(shortline.get("setup_ready_state", "")) == "Setup_Ready"
+    assert str(shortline.get("micro_structure_engine", "")) == "ict_sweep_mss"
+    assert shortline.get("micro_structure_timeframes") == ["1m", "5m"]
+    assert bool(shortline.get("liquidity_sweep_required", False)) is True
+    assert bool(shortline.get("mss_required", False)) is True
+    assert shortline.get("entry_retest_priority") == ["FVG", "OB", "Breaker"]
+    assert shortline.get("session_liquidity_map") == ["asia_high_low", "london_high_low"]
+    assert shortline.get("holding_window_minutes") == {"min": 15, "max": 180}
     assert shortline.get("location_priority") == ["HVN", "POC"]
     assert "BNBUSDT" in list(shortline.get("supported_symbols", []))
     selected = parsed.get("selected", {})

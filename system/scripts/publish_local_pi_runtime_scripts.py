@@ -215,7 +215,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pulse-lock-path",
         default="",
-        help="Override run-halfhour-pulse mutex path. Defaults to <output-root>/state/run_halfhour_pulse.lock.",
+        help="Override run-halfhour-pulse mutex path. Defaults to <output-root>/state/run-halfhour-pulse.lock.",
     )
     parser.add_argument(
         "--lock-timeout-sec",
@@ -248,7 +248,7 @@ def main() -> int:
     pulse_lock_path = (
         Path(pulse_lock_path_raw).expanduser().resolve()
         if pulse_lock_path_raw
-        else (output_root / "state" / "run_halfhour_pulse.lock").resolve()
+        else (output_root / "state" / "run-halfhour-pulse.lock").resolve()
     )
 
     out: dict[str, object] = {

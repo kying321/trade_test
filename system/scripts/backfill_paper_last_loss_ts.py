@@ -23,7 +23,7 @@ def resolve_system_root() -> Path:
 SYSTEM_ROOT = resolve_system_root()
 DEFAULT_STATE_PATH = SYSTEM_ROOT / "output" / "state" / "spot_paper_state.json"
 DEFAULT_LEDGER_PATH = SYSTEM_ROOT / "output" / "logs" / "paper_execution_ledger.jsonl"
-DEFAULT_PULSE_LOCK_PATH = SYSTEM_ROOT / "output" / "state" / "run_halfhour_pulse.lock"
+DEFAULT_PULSE_LOCK_PATH = SYSTEM_ROOT / "output" / "state" / "run-halfhour-pulse.lock"
 
 
 def parse_ts(value: Any) -> dt.datetime | None:

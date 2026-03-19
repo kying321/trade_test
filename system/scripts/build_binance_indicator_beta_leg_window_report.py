@@ -24,6 +24,16 @@ def now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def parse_now(raw: str | None) -> dt.datetime:
+    text = str(raw or "").strip()
+    if not text:
+        return now_utc()
+    parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
 def fmt_utc(value: dt.datetime | None) -> str | None:
     if value is None:
         return None
@@ -227,6 +237,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a short-vs-long beta leg window report for BNB/SOL flow stability.")
     parser.add_argument("--review-dir", required=True)
+    parser.add_argument("--now", default="")
     parser.add_argument("--artifact-ttl-hours", type=float, default=168.0)
     parser.add_argument("--artifact-keep", type=int, default=12)
     return parser
@@ -236,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     review_dir = Path(args.review_dir).expanduser().resolve()
     review_dir.mkdir(parents=True, exist_ok=True)
-    runtime_now = now_utc()
+    runtime_now = parse_now(args.now)
 
     source_path, source_payload = latest_beta_leg_report(review_dir)
     source_legs = dict(source_payload.get("legs") or {})

@@ -79,6 +79,7 @@ def test_classify_playbook_splits_adopt_context_and_retest() -> None:
                     {
                         "combo_id": "rsi_breakout",
                         "avg_total_return": 0.03,
+                        "avg_profit_factor": 1.25,
                         "avg_timely_hit_rate": 1.0,
                         "trade_count": 23,
                     }
@@ -96,11 +97,19 @@ def test_classify_playbook_splits_adopt_context_and_retest() -> None:
             "commodity_family": {
                 "ranked_combos": [
                     {
-                        "combo_id": "ad_rsi_breakout",
+                        "combo_id": "rsi_breakout",
                         "avg_total_return": -0.02,
+                        "avg_profit_factor": 0.92,
                         "avg_timely_hit_rate": 0.84,
                         "trade_count": 62,
-                    }
+                    },
+                    {
+                        "combo_id": "ad_rsi_vol_breakout",
+                        "avg_total_return": 0.01,
+                        "avg_profit_factor": 1.05,
+                        "avg_timely_hit_rate": 0.74,
+                        "trade_count": 41,
+                    },
                 ],
                 "discarded_combos": [],
             },
@@ -114,8 +123,9 @@ def test_classify_playbook_splits_adopt_context_and_retest() -> None:
     )
     assert payload["adopt_now"][0]["combo_id"] == "rsi_breakout"
     assert payload["adopt_now"][0]["combo_id_canonical"] == "rsi_breakout"
-    assert payload["research_only"][0]["combo_id"] == "ad_rsi_breakout"
-    assert payload["research_only"][0]["combo_id_canonical"] == "cvd_rsi_breakout"
+    commodity_rows = [row for row in payload["research_only"] if row["family"] == "commodity"]
+    assert commodity_rows[0]["combo_id"] == "ad_rsi_vol_breakout"
+    assert commodity_rows[0]["combo_id_canonical"] == "cvd_rsi_vol_breakout"
     assert payload["context_only"][0]["combo_id"] == "taker_oi_breakout"
     assert payload["context_only"][0]["combo_id_canonical"] == "taker_oi_breakout"
     assert payload["retest_native_crypto"][0]["combo_id"] == "taker_oi_breakout"
@@ -131,6 +141,38 @@ def test_classify_playbook_splits_adopt_context_and_retest() -> None:
     assert payload["symbol_routes"]["SOLUSDT"]["flow_window_verdict"] == "degrades_on_long_window"
     assert payload["beta_leg_window_takeaway"] == beta_window["overall_takeaway"]
     assert "CVD-lite" in payload["overall_takeaway"]
+
+
+def test_classify_playbook_demotes_negative_crypto_combo_from_adopt_now() -> None:
+    module = _load_module()
+    payload = module.classify_playbook(
+        {
+            "crypto_family": {
+                "ranked_combos": [
+                    {
+                        "combo_id": "rsi_breakout",
+                        "avg_total_return": -0.09,
+                        "avg_profit_factor": 0.53,
+                        "avg_timely_hit_rate": 1.0,
+                        "trade_count": 21,
+                    }
+                ],
+                "discarded_combos": [],
+            },
+            "commodity_family": {"ranked_combos": [], "discarded_combos": []},
+            "crypto_takeaway": "crypto measured",
+            "crypto_practitioner_note": "crypto practitioner",
+            "commodity_takeaway": "commodity measured",
+            "commodity_practitioner_note": "commodity practitioner",
+        }
+    )
+    assert payload["adopt_now"] == []
+    assert payload["research_only"][0]["family"] == "crypto"
+    assert payload["research_only"][0]["combo_id"] == "rsi_breakout"
+    assert payload["research_only"][0]["promotion_gate_status"] == "blocked"
+    assert "non_positive_return" in payload["research_only"][0]["promotion_gate_reason"]
+    assert "profit_factor_not_above_one" in payload["research_only"][0]["promotion_gate_reason"]
+    assert "No ETF-proxy crypto combo clears the measured promotion gate" in payload["overall_takeaway"]
 
 
 def test_latest_native_lane_playbook_prefers_latest_timestamp_not_mtime(tmp_path: Path) -> None:
@@ -155,6 +197,21 @@ def test_latest_artifact_by_suffix_ignores_future_stamped_artifact(tmp_path: Pat
     future.write_text(json.dumps({"marker": "future"}), encoding="utf-8")
     path = module.latest_artifact_by_suffix(tmp_path, "binance_indicator_native_beta_leg_window_report")
     assert path == current
+
+
+def test_latest_artifact_by_suffix_respects_reference_now(tmp_path: Path) -> None:
+    module = _load_module()
+    current = tmp_path / "20260310T154122Z_binance_indicator_native_beta_leg_window_report.json"
+    future = tmp_path / "20260310T234122Z_binance_indicator_native_beta_leg_window_report.json"
+    current.write_text(json.dumps({"marker": "current"}), encoding="utf-8")
+    future.write_text(json.dumps({"marker": "future"}), encoding="utf-8")
+    ref_now = module.parse_now("2026-03-10T23:45:00Z")
+    path = module.latest_artifact_by_suffix(
+        tmp_path,
+        "binance_indicator_native_beta_leg_window_report",
+        ref_now,
+    )
+    assert path == future
 
 
 def test_classify_playbook_uses_fragile_beta_language_when_lane_is_research_hold() -> None:

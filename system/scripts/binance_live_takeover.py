@@ -103,6 +103,10 @@ class PanicTriggered(RuntimeError):
     pass
 
 
+class ControlledTakeoverFailure(RuntimeError):
+    pass
+
+
 def is_transport_fatal_exception(exc: BaseException) -> bool:
     msg = str(exc).strip().lower()
     if isinstance(exc, (ConnectionError, TimeoutError)):
@@ -130,6 +134,35 @@ def panic_close_all(output_root: Path, *, reason: str, detail: str = "") -> None
     }
     write_json(output_root / "state" / "panic_close_all.json", marker)
     raise PanicTriggered(f"panic_close_all:{reason}")
+
+
+def block_takeover_without_panic(
+    summary: dict[str, Any],
+    *,
+    mode: str,
+    step_name: str,
+    step_payload: dict[str, Any],
+    canary_reason: str = "preflight_transport_blocked",
+    extra_steps: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    summary["ok"] = False
+    summary["mode"] = str(mode)
+    summary["steps"][step_name] = step_payload
+    if isinstance(extra_steps, dict):
+        for extra_name, extra_payload in extra_steps.items():
+            if isinstance(extra_payload, dict):
+                summary["steps"][extra_name] = extra_payload
+    canary_payload = summary["steps"].get("canary_order", {})
+    if not isinstance(canary_payload, dict):
+        canary_payload = {}
+    canary_payload.setdefault("executed", False)
+    canary_payload["reason"] = str(canary_reason)
+    canary_payload["failed_step"] = str(step_name)
+    canary_payload["severity"] = "blocked_no_panic"
+    if str(step_payload.get("error", "")).strip():
+        canary_payload["error"] = str(step_payload.get("error", "")).strip()
+    summary["steps"]["canary_order"] = canary_payload
+    raise ControlledTakeoverFailure(f"{step_name}:{step_payload.get('reason', canary_reason)}")
 
 
 class RunHalfhourMutex:
@@ -305,6 +338,147 @@ class BinanceUsdMClient:
             signed=True,
         )
         return out if isinstance(out, dict) else {}
+
+
+class BinancePortfolioMarginUmClient:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        api_secret: str,
+        rate_limit_per_minute: int = DEFAULT_RATE_LIMIT_PER_MINUTE,
+        timeout_ms: int = DEFAULT_TIMEOUT_MS,
+        base_url: str = "https://papi.binance.com",
+        public_base_url: str = "https://fapi.binance.com",
+    ) -> None:
+        self.api_key = str(api_key or "").strip()
+        self.api_secret = str(api_secret or "").strip()
+        self.base_url = str(base_url).rstrip("/")
+        self.public_base_url = str(public_base_url).rstrip("/")
+        self.bucket = TokenBucket(rate_per_minute=max(1, int(rate_limit_per_minute)))
+        self.timeout_seconds = min(5.0, max(0.1, float(max(100, int(timeout_ms))) / 1000.0))
+
+    def _request(
+        self,
+        *,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+        signed: bool = False,
+        public: bool = False,
+    ) -> Any:
+        payload = dict(params or {})
+        headers: dict[str, str] = {}
+        if signed:
+            if not self.api_key or not self.api_secret:
+                raise RuntimeError("missing_signed_credentials")
+            payload["timestamp"] = int(time.time() * 1000)
+            payload.setdefault("recvWindow", 5000)
+
+        query = parse.urlencode(payload, doseq=True)
+        if signed:
+            sig = hmac.new(self.api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
+            query = f"{query}&signature={sig}"
+            headers["X-MBX-APIKEY"] = self.api_key
+        elif self.api_key:
+            headers["X-MBX-APIKEY"] = self.api_key
+
+        if not self.bucket.acquire(self.timeout_seconds):
+            raise RuntimeError("token_bucket_acquire_timeout")
+
+        base_url = self.public_base_url if public else self.base_url
+        url = f"{base_url}{path}"
+        if query:
+            url = f"{url}?{query}"
+
+        req = request.Request(url=url, method=method.upper(), headers=headers)
+        try:
+            with request.urlopen(req, timeout=self.timeout_seconds) as resp:
+                body = resp.read()
+                if not body:
+                    return {}
+                return json.loads(body.decode("utf-8"))
+        except urlerror.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="ignore")
+            except Exception:
+                detail = ""
+            raise RuntimeError(f"http_{exc.code}:{detail[:240]}") from exc
+        except (urlerror.URLError, TimeoutError, OSError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    def ping(self) -> dict[str, Any]:
+        out = self._request(method="GET", path="/fapi/v1/ping", params={}, signed=False, public=True)
+        return out if isinstance(out, dict) else {}
+
+    def ticker_price(self, symbol: str) -> float:
+        out = self._request(
+            method="GET",
+            path="/fapi/v1/ticker/price",
+            params={"symbol": symbol},
+            signed=False,
+            public=True,
+        )
+        if not isinstance(out, dict):
+            return 0.0
+        return to_float(out.get("price", 0.0), 0.0)
+
+    def exchange_info(self, symbol: str) -> dict[str, Any]:
+        out = self._request(
+            method="GET",
+            path="/fapi/v1/exchangeInfo",
+            params={"symbol": symbol},
+            signed=False,
+            public=True,
+        )
+        return out if isinstance(out, dict) else {}
+
+    def account(self) -> dict[str, Any]:
+        out = self._request(method="GET", path="/papi/v1/um/account", params={}, signed=True, public=False)
+        return out if isinstance(out, dict) else {}
+
+    def user_trades(self, *, symbol: str, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
+        out = self._request(
+            method="GET",
+            path="/papi/v1/um/userTrades",
+            params={
+                "symbol": symbol,
+                "startTime": int(start_ms),
+                "endTime": int(end_ms),
+                "limit": max(1, min(1000, int(limit))),
+            },
+            signed=True,
+            public=False,
+        )
+        return out if isinstance(out, list) else []
+
+    def realized_pnl_income(self, *, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
+        out = self._request(
+            method="GET",
+            path="/papi/v1/um/income",
+            params={
+                "incomeType": "REALIZED_PNL",
+                "startTime": int(start_ms),
+                "endTime": int(end_ms),
+                "limit": max(1, min(1000, int(limit))),
+            },
+            signed=True,
+            public=False,
+        )
+        return out if isinstance(out, list) else []
+
+    def place_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        client_order_id: str,
+        quote_order_qty: float | None = None,
+    ) -> dict[str, Any]:
+        _ = (symbol, side, quantity, client_order_id, quote_order_qty)
+        raise RuntimeError("portfolio_margin_um_live_order_unsupported")
 
 
 class BinanceSpotClient:
@@ -493,6 +667,13 @@ def _missing_canary_selection(*, source: str, reason: str, **extra: Any) -> dict
     return payload
 
 
+def _primary_blocked_ticket_reason(reasons: list[str]) -> str:
+    for code in ("signal_market_scope_mismatch", "target_market_read_only"):
+        if code in reasons:
+            return code
+    return "no_actionable_ticket"
+
+
 def choose_canary_signal(output_root: Path, target_date: date, whitelist: list[str]) -> dict[str, Any]:
     path = latest_signals_path(output_root, target_date)
     if path is None:
@@ -537,10 +718,13 @@ def latest_tickets_path(output_root: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def choose_canary_ticket(output_root: Path, whitelist: list[str]) -> dict[str, Any]:
+def choose_canary_ticket(output_root: Path, whitelist: list[str], *, market: str = "spot") -> dict[str, Any]:
     path = latest_tickets_path(output_root)
     if path is None:
         return _missing_canary_selection(source="no_ticket_artifact", reason="no_latest_ticket_artifact")
+    target_market = str(market or "").strip().lower()
+    if target_market not in {"spot", "futures_usdm", "portfolio_margin_um"}:
+        target_market = "spot"
     payload = read_json(path, {})
     rows = payload.get("tickets", []) if isinstance(payload, dict) else []
     best: dict[str, Any] | None = None
@@ -564,8 +748,10 @@ def choose_canary_ticket(output_root: Path, whitelist: list[str]) -> dict[str, A
         reasons = [str(x) for x in raw.get("reasons", []) if str(x)]
         stale = "stale_signal" in reasons
         not_found = "signal_not_found" in reasons
+        if target_market == "portfolio_margin_um" and "target_market_read_only" not in reasons:
+            reasons.append("target_market_read_only")
         only_size_blocked = bool(reasons) and all(x == "size_below_min_notional" for x in reasons)
-        allowed = bool(raw.get("allowed", False))
+        allowed = bool(raw.get("allowed", False)) and "target_market_read_only" not in reasons
         execution_mode = str(execution.get("mode", "")).strip().upper()
         if execution_mode == "HEDGE_ONLY":
             continue
@@ -584,6 +770,7 @@ def choose_canary_ticket(output_root: Path, whitelist: list[str]) -> dict[str, A
             "ticket_allowed": bool(allowed),
             "ticket_reasons": reasons,
             "ticket_execution_mode": execution_mode,
+            "target_market": target_market,
             "signal_side": side_raw,
             "signal_date": str(raw.get("date", "")),
             "age_days": int(to_int(raw.get("age_days", -1), -1)),
@@ -600,9 +787,13 @@ def choose_canary_ticket(output_root: Path, whitelist: list[str]) -> dict[str, A
         best_score = score
         best = blocked_candidate | {"reason": "", "signal_missing": False}
     if best is None:
+        missing_reason = "no_actionable_ticket"
+        if isinstance(best_blocked, dict):
+            blocked_reasons = [str(x) for x in best_blocked.get("ticket_reasons", []) if str(x)]
+            missing_reason = _primary_blocked_ticket_reason(blocked_reasons)
         return _missing_canary_selection(
             source=str(path),
-            reason="no_actionable_ticket",
+            reason=missing_reason,
             blocked_candidate=best_blocked,
         )
     return best
@@ -995,6 +1186,175 @@ def save_list_ledger(path: Path, *, key: str, values: list[str], max_items: int)
     write_json(path, payload)
 
 
+def trade_query_slice_hours_for_market(market: str) -> int:
+    mk = str(market).strip().lower()
+    if mk == "spot":
+        return 24
+    if mk in {"futures_usdm", "portfolio_margin_um"}:
+        return 24 * 7
+    return 24
+
+
+def normalize_latest_takeover_market_name(raw: Any) -> str:
+    market = str(raw or "").strip().lower()
+    if market in {"spot", "futures_usdm", "portfolio_margin_um"}:
+        return market
+    return "spot"
+
+
+def build_time_slices(*, start_ms: int, end_ms: int, slice_hours: int) -> list[tuple[int, int]]:
+    start_i = int(start_ms)
+    end_i = int(end_ms)
+    if end_i <= start_i:
+        return [(start_i, max(start_i, end_i))]
+    slice_ms = max(1, int(slice_hours)) * 60 * 60 * 1000
+    out: list[tuple[int, int]] = []
+    cur = start_i
+    while cur < end_i:
+        nxt = min(end_i, cur + slice_ms)
+        out.append((cur, nxt))
+        if nxt <= cur:
+            break
+        cur = nxt
+    return out or [(start_i, end_i)]
+
+
+def dedupe_trade_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = "|".join(
+            [
+                str(row.get("symbol", "")).upper(),
+                str(row.get("id", row.get("tradeId", row.get("orderId", "")))),
+                str(row.get("time", row.get("transactTime", ""))),
+                str(row.get("qty", row.get("executedQty", ""))),
+            ]
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def dedupe_income_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = "|".join(
+            [
+                str(row.get("symbol", "")).upper(),
+                str(row.get("tranId", row.get("tradeId", row.get("info", "")))),
+                str(row.get("time", "")),
+                str(row.get("income", "")),
+            ]
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def summarize_trades_by_symbol(rows: list[dict[str, Any]]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        out[symbol] = int(out.get(symbol, 0)) + 1
+    return out
+
+
+def summarize_income_pnl_by_symbol(rows: list[dict[str, Any]]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        out[symbol] = float(out.get(symbol, 0.0) + to_float(row.get("income", 0.0), 0.0))
+    return out
+
+
+def summarize_income_count_by_symbol(rows: list[dict[str, Any]]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        out[symbol] = int(out.get(symbol, 0)) + 1
+    return out
+
+
+def summarize_income_pnl_by_day(rows: list[dict[str, Any]], *, fallback_date: date) -> dict[str, float]:
+    out: dict[str, float] = {}
+    fallback = fallback_date.isoformat()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ts_ms = to_int(row.get("time", 0), 0)
+        day = fallback
+        if ts_ms > 0:
+            day = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).date().isoformat()
+        out[day] = float(out.get(day, 0.0) + to_float(row.get("income", 0.0), 0.0))
+    return out
+
+
+def fetch_trade_rows_windowed(
+    *,
+    client: Any,
+    symbol: str,
+    start_ms: int,
+    end_ms: int,
+    slice_hours: int,
+    limit: int = 1000,
+) -> tuple[list[dict[str, Any]], list[tuple[int, int]]]:
+    slices = build_time_slices(start_ms=start_ms, end_ms=end_ms, slice_hours=slice_hours)
+    out: list[dict[str, Any]] = []
+    for slice_start_ms, slice_end_ms in slices:
+        rows = client.user_trades(
+            symbol=symbol,
+            start_ms=slice_start_ms,
+            end_ms=slice_end_ms,
+            limit=limit,
+        )
+        if isinstance(rows, list):
+            out.extend(x for x in rows if isinstance(x, dict))
+    return dedupe_trade_rows(out), slices
+
+
+def fetch_income_rows_windowed(
+    *,
+    client: Any,
+    start_ms: int,
+    end_ms: int,
+    slice_hours: int,
+    limit: int = 1000,
+) -> tuple[list[dict[str, Any]], list[tuple[int, int]]]:
+    slices = build_time_slices(start_ms=start_ms, end_ms=end_ms, slice_hours=slice_hours)
+    out: list[dict[str, Any]] = []
+    for slice_start_ms, slice_end_ms in slices:
+        rows = client.realized_pnl_income(
+            start_ms=slice_start_ms,
+            end_ms=slice_end_ms,
+            limit=limit,
+        )
+        if isinstance(rows, list):
+            out.extend(x for x in rows if isinstance(x, dict))
+    return dedupe_income_rows(out), slices
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Activate Binance live takeover canary for Pi cloud node.")
     parser.add_argument("--date", default="", help="Trading date (YYYY-MM-DD). Default: local today.")
@@ -1006,7 +1366,7 @@ def main() -> int:
     parser.add_argument("--max-drawdown", type=float, default=0.05)
     parser.add_argument("--trade-window-hours", type=int, default=24)
     parser.add_argument("--max-trade-symbols", type=int, default=3)
-    parser.add_argument("--market", choices=["futures_usdm", "spot"], default="futures_usdm")
+    parser.add_argument("--market", choices=["futures_usdm", "spot", "portfolio_margin_um"], default="futures_usdm")
     parser.add_argument("--activate-config", action="store_true")
     parser.add_argument("--allow-live-order", action="store_true")
     parser.add_argument("--allow-daemon-env-fallback", action="store_true")
@@ -1059,9 +1419,10 @@ def main() -> int:
                     "detail": changed,
                 }
             cfg = load_config(cfg_path)
+            market = str(args.market).strip().lower()
 
             whitelist = load_whitelist_symbols(cfg)
-            signal = choose_canary_ticket(output_root=output_root, whitelist=whitelist)
+            signal = choose_canary_ticket(output_root=output_root, whitelist=whitelist, market=market)
             explicit_symbol_override = bool(str(args.order_symbol).strip())
             if explicit_symbol_override:
                 signal["symbol"] = str(args.order_symbol).strip().upper()
@@ -1122,9 +1483,15 @@ def main() -> int:
                 "has_api_secret": has_secret,
             }
 
-            market = str(args.market).strip().lower()
             if market == "spot":
                 client = BinanceSpotClient(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    rate_limit_per_minute=max(1, int(args.rate_limit_per_minute)),
+                    timeout_ms=min(5000, max(100, int(args.timeout_ms))),
+                )
+            elif market == "portfolio_margin_um":
+                client = BinancePortfolioMarginUmClient(
                     api_key=api_key,
                     api_secret=api_secret,
                     rate_limit_per_minute=max(1, int(args.rate_limit_per_minute)),
@@ -1146,8 +1513,33 @@ def main() -> int:
                     "recv_ts_ms": now_epoch_ms(),
                     "payload": ping,
                 }
+            except RuntimeError as exc:
+                block_takeover_without_panic(
+                    summary,
+                    mode="probe_preflight_blocked" if not bool(args.allow_live_order) else "live_ready_preflight_blocked",
+                    step_name="binance_ping",
+                    step_payload={
+                        "ok": False,
+                        "recv_ts_ms": now_epoch_ms(),
+                        "reason": "binance_ping_runtime_error",
+                        "error": str(exc),
+                        "severity": "blocked_no_panic",
+                    },
+                    canary_reason="preflight_runtime_blocked",
+                )
             except (ConnectionError, TimeoutError, OSError) as exc:
-                panic_close_all(output_root, reason="binance_ping_transport_error", detail=str(exc))
+                block_takeover_without_panic(
+                    summary,
+                    mode="probe_preflight_blocked" if not bool(args.allow_live_order) else "live_ready_preflight_blocked",
+                    step_name="binance_ping",
+                    step_payload={
+                        "ok": False,
+                        "recv_ts_ms": now_epoch_ms(),
+                        "reason": "binance_ping_transport_error",
+                        "error": str(exc),
+                        "severity": "blocked_no_panic",
+                    },
+                )
 
             symbol = str(signal.get("symbol", "")).upper()
             side = str(signal.get("side", "BUY")).upper()
@@ -1165,8 +1557,41 @@ def main() -> int:
                 try:
                     price = float(client.ticker_price(symbol))
                     exchange_info = client.exchange_info(symbol)
+                except RuntimeError as exc:
+                    block_takeover_without_panic(
+                        summary,
+                        mode="probe_preflight_blocked" if not bool(args.allow_live_order) else "live_ready_preflight_blocked",
+                        step_name="canary_plan",
+                        step_payload={
+                            "symbol": symbol,
+                            "side": side,
+                            "market": market,
+                            "quote_usdt": float(args.canary_quote_usdt),
+                            "effective_quote_usdt": 0.0,
+                            "skipped": True,
+                            "reason": "binance_public_probe_runtime_error",
+                            "error": str(exc),
+                            "severity": "blocked_no_panic",
+                        },
+                        canary_reason="preflight_runtime_blocked",
+                    )
                 except (ConnectionError, TimeoutError, OSError) as exc:
-                    panic_close_all(output_root, reason="binance_public_probe_transport_error", detail=str(exc))
+                    block_takeover_without_panic(
+                        summary,
+                        mode="probe_preflight_blocked" if not bool(args.allow_live_order) else "live_ready_preflight_blocked",
+                        step_name="canary_plan",
+                        step_payload={
+                            "symbol": symbol,
+                            "side": side,
+                            "market": market,
+                            "quote_usdt": float(args.canary_quote_usdt),
+                            "effective_quote_usdt": 0.0,
+                            "skipped": True,
+                            "reason": "binance_public_probe_transport_error",
+                            "error": str(exc),
+                            "severity": "blocked_no_panic",
+                        },
+                    )
                 lot = infer_lot_constraints(exchange_info, symbol)
                 qty = calc_canary_quantity(
                     quote_usdt=float(args.canary_quote_usdt),
@@ -1208,7 +1633,9 @@ def main() -> int:
             start_ms = int((datetime.now(timezone.utc) - timedelta(hours=max(1, int(args.trade_window_hours)))).timestamp() * 1000)
             end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
+            market_name = normalize_latest_takeover_market_name(market)
             live_snapshot_path = output_root / "artifacts" / "broker_live_inbox" / f"{as_of.isoformat()}.json"
+            live_snapshot_market_path = output_root / "artifacts" / "broker_live_inbox" / f"{as_of.isoformat()}_{market_name}.json"
             trades_path = output_root / "artifacts" / "binance_live_trades" / f"{as_of.isoformat()}.json"
             income_path = output_root / "artifacts" / "binance_live_income" / f"{as_of.isoformat()}.json"
             order_log_path = output_root / "artifacts" / "binance_live_orders" / f"{as_of.isoformat()}.json"
@@ -1218,11 +1645,73 @@ def main() -> int:
                 summary["mode"] = "live_ready"
                 try:
                     account = client.account()
+                except RuntimeError as exc:
+                    block_takeover_without_panic(
+                        summary,
+                        mode="live_ready_preflight_blocked",
+                        step_name="account_overview",
+                        step_payload={
+                            "market": market,
+                            "ok": False,
+                            "reason": "binance_account_runtime_error",
+                            "error": str(exc),
+                            "severity": "blocked_no_panic",
+                        },
+                        extra_steps={
+                            "live_snapshot": {
+                                "path": "",
+                                "reason": "binance_account_runtime_error",
+                                "severity": "blocked_no_panic",
+                            },
+                            "trade_telemetry": {
+                                "status": "blocked",
+                                "reason": "binance_account_runtime_error",
+                                "severity": "blocked_no_panic",
+                            },
+                            "backtest_feedback": {
+                                "sqlite": str(sqlite_path),
+                                "inserted_rows": 0,
+                                "reason": "binance_account_runtime_error",
+                                "severity": "blocked_no_panic",
+                            },
+                        },
+                        canary_reason="preflight_runtime_blocked",
+                    )
                 except (ConnectionError, TimeoutError, OSError) as exc:
-                    panic_close_all(output_root, reason="binance_account_transport_error", detail=str(exc))
+                    block_takeover_without_panic(
+                        summary,
+                        mode="live_ready_preflight_blocked",
+                        step_name="account_overview",
+                        step_payload={
+                            "market": market,
+                            "ok": False,
+                            "reason": "binance_account_transport_error",
+                            "error": str(exc),
+                            "severity": "blocked_no_panic",
+                        },
+                        extra_steps={
+                            "live_snapshot": {
+                                "path": "",
+                                "reason": "binance_account_transport_error",
+                                "severity": "blocked_no_panic",
+                            },
+                            "trade_telemetry": {
+                                "status": "blocked",
+                                "reason": "binance_account_transport_error",
+                                "severity": "blocked_no_panic",
+                            },
+                            "backtest_feedback": {
+                                "sqlite": str(sqlite_path),
+                                "inserted_rows": 0,
+                                "reason": "binance_account_transport_error",
+                                "severity": "blocked_no_panic",
+                            },
+                        },
+                    )
 
                 positions_out: list[dict[str, Any]] = []
                 spot_balance_map: dict[str, float] = {}
+                telemetry_warnings: list[dict[str, Any]] = []
                 symbol_pool: list[str] = []
                 for s in [symbol] + whitelist:
                     ss = str(s).upper()
@@ -1249,7 +1738,30 @@ def main() -> int:
                         qty_asset = to_float(spot_balance_map.get(base_asset, 0.0), 0.0)
                         if qty_asset <= 1e-12:
                             continue
-                        px = to_float(client.ticker_price(sym), 0.0)
+                        try:
+                            px = to_float(client.ticker_price(sym), 0.0)
+                        except RuntimeError as exc:
+                            px = 0.0
+                            telemetry_warnings.append(
+                                {
+                                    "step": "spot_position_mark_price",
+                                    "symbol": sym,
+                                    "reason": "binance_public_probe_runtime_error",
+                                    "error": str(exc),
+                                    "severity": "degraded_only",
+                                }
+                            )
+                        except (ConnectionError, TimeoutError, OSError) as exc:
+                            px = 0.0
+                            telemetry_warnings.append(
+                                {
+                                    "step": "spot_position_mark_price",
+                                    "symbol": sym,
+                                    "reason": "binance_public_probe_transport_error",
+                                    "error": str(exc),
+                                    "severity": "degraded_only",
+                                }
+                            )
                         notional = qty_asset * px if px > 0 else 0.0
                         positions_out.append(
                             {
@@ -1278,7 +1790,9 @@ def main() -> int:
                         "nonzero_asset_count": int(len(spot_balance_map)),
                         "top_assets": [{"asset": str(a), "qty": float(q)} for a, q in top_assets],
                     }
-                else:
+                    if telemetry_warnings:
+                        summary["steps"]["account_overview"]["warnings"] = telemetry_warnings
+                elif market == "futures_usdm":
                     positions_in = account.get("positions", []) if isinstance(account.get("positions", []), list) else []
                     for row in positions_in:
                         if not isinstance(row, dict):
@@ -1314,29 +1828,180 @@ def main() -> int:
                         "total_wallet_balance": float(to_float(account.get("totalWalletBalance", 0.0), 0.0)),
                         "available_balance": float(to_float(account.get("availableBalance", 0.0), 0.0)),
                     }
-
-                all_trades: list[dict[str, Any]] = []
-                for sym in symbol_pool:
-                    try:
-                        rows = client.user_trades(symbol=sym, start_ms=start_ms, end_ms=end_ms, limit=1000)
-                    except (ConnectionError, TimeoutError, OSError) as exc:
-                        panic_close_all(output_root, reason="binance_user_trades_transport_error", detail=str(exc))
-                    for row in rows:
+                else:
+                    positions_in = account.get("positions", []) if isinstance(account.get("positions", []), list) else []
+                    for row in positions_in:
                         if not isinstance(row, dict):
                             continue
+                        pos_amt = to_float(row.get("positionAmt", 0.0), 0.0)
+                        if abs(pos_amt) <= 1e-12:
+                            continue
+                        symbol_i = str(row.get("symbol", "")).upper()
+                        mark_price = to_float(row.get("markPrice", 0.0), 0.0)
+                        if mark_price <= 0.0 and symbol_i:
+                            try:
+                                mark_price = to_float(client.ticker_price(symbol_i), 0.0)
+                            except RuntimeError as exc:
+                                mark_price = 0.0
+                                telemetry_warnings.append(
+                                    {
+                                        "step": "portfolio_margin_mark_price",
+                                        "symbol": symbol_i,
+                                        "reason": "binance_public_probe_runtime_error",
+                                        "error": str(exc),
+                                        "severity": "degraded_only",
+                                    }
+                                )
+                            except (ConnectionError, TimeoutError, OSError) as exc:
+                                mark_price = 0.0
+                                telemetry_warnings.append(
+                                    {
+                                        "step": "portfolio_margin_mark_price",
+                                        "symbol": symbol_i,
+                                        "reason": "binance_public_probe_transport_error",
+                                        "error": str(exc),
+                                        "severity": "degraded_only",
+                                    }
+                                )
+                        notional = to_float(row.get("notional", 0.0), 0.0)
+                        if abs(notional) <= 1e-12 and mark_price > 0.0:
+                            notional = float(pos_amt * mark_price)
+                        positions_out.append(
+                            {
+                                "symbol": symbol_i,
+                                "positionAmt": float(pos_amt),
+                                "positionSide": str(row.get("positionSide", "BOTH")).upper(),
+                                "entryPrice": to_float(row.get("entryPrice", 0.0), 0.0),
+                                "markPrice": float(mark_price),
+                                "notional": float(notional),
+                                "leverage": to_float(row.get("leverage", 0.0), 0.0),
+                                "recv_ts_ms": now_epoch_ms(),
+                            }
+                        )
+                    assets_in = account.get("assets", []) if isinstance(account.get("assets", []), list) else []
+                    quote_bal = 0.0
+                    quote_margin = 0.0
+                    for row in assets_in:
+                        if not isinstance(row, dict):
+                            continue
+                        if str(row.get("asset", "")).strip().upper() != "USDT":
+                            continue
+                        quote_bal = to_float(
+                            row.get(
+                                "availableBalance",
+                                row.get(
+                                    "crossWalletBalance",
+                                    row.get("walletBalance", row.get("marginBalance", 0.0)),
+                                ),
+                            ),
+                            0.0,
+                        )
+                        quote_margin = to_float(
+                            row.get(
+                                "marginBalance",
+                                row.get("crossWalletBalance", row.get("walletBalance", 0.0)),
+                            ),
+                            0.0,
+                        )
+                        break
+                    summary["steps"]["account_overview"] = {
+                        "market": "portfolio_margin_um",
+                        "quote_asset": "USDT",
+                        "quote_available": float(quote_bal),
+                        "position_count": int(len(positions_out)),
+                        "total_wallet_balance": float(
+                            to_float(
+                                account.get(
+                                    "accountEquity",
+                                    account.get("actualEquity", account.get("totalWalletBalance", 0.0)),
+                                ),
+                                0.0,
+                            )
+                        ),
+                        "available_balance": float(quote_bal),
+                        "margin_balance": float(quote_margin),
+                        "account_status": str(account.get("accountStatus", "")).strip(),
+                    }
+                    if telemetry_warnings:
+                        summary["steps"]["account_overview"]["warnings"] = telemetry_warnings
+
+                trade_slice_hours = trade_query_slice_hours_for_market(market)
+                all_trades: list[dict[str, Any]] = []
+                trade_slice_count_total = 0
+                trade_telemetry_warnings: list[dict[str, Any]] = []
+                for sym in symbol_pool:
+                    try:
+                        rows, trade_slices = fetch_trade_rows_windowed(
+                            client=client,
+                            symbol=sym,
+                            start_ms=start_ms,
+                            end_ms=end_ms,
+                            slice_hours=trade_slice_hours,
+                            limit=1000,
+                        )
+                    except RuntimeError as exc:
+                        rows = []
+                        trade_slices = []
+                        trade_telemetry_warnings.append(
+                            {
+                                "step": "user_trades",
+                                "symbol": sym,
+                                "reason": "binance_user_trades_runtime_error",
+                                "error": str(exc),
+                                "severity": "degraded_only",
+                            }
+                        )
+                    except (ConnectionError, TimeoutError, OSError) as exc:
+                        rows = []
+                        trade_slices = []
+                        trade_telemetry_warnings.append(
+                            {
+                                "step": "user_trades",
+                                "symbol": sym,
+                                "reason": "binance_user_trades_transport_error",
+                                "error": str(exc),
+                                "severity": "degraded_only",
+                            }
+                        )
+                    trade_slice_count_total += int(len(trade_slices))
+                    for row in rows:
                         out_row = dict(row)
                         out_row["recv_ts_ms"] = now_epoch_ms()
                         all_trades.append(out_row)
 
                 try:
-                    incomes = client.realized_pnl_income(start_ms=start_ms, end_ms=end_ms, limit=1000)
+                    incomes, income_slices = fetch_income_rows_windowed(
+                        client=client,
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                        slice_hours=trade_slice_hours,
+                        limit=1000,
+                    )
+                except RuntimeError as exc:
+                    incomes = []
+                    income_slices = []
+                    trade_telemetry_warnings.append(
+                        {
+                            "step": "income",
+                            "reason": "binance_income_runtime_error",
+                            "error": str(exc),
+                            "severity": "degraded_only",
+                        }
+                    )
                 except (ConnectionError, TimeoutError, OSError) as exc:
-                    panic_close_all(output_root, reason="binance_income_transport_error", detail=str(exc))
+                    incomes = []
+                    income_slices = []
+                    trade_telemetry_warnings.append(
+                        {
+                            "step": "income",
+                            "reason": "binance_income_transport_error",
+                            "error": str(exc),
+                            "severity": "degraded_only",
+                        }
+                    )
 
                 incomes_out: list[dict[str, Any]] = []
                 for row in incomes:
-                    if not isinstance(row, dict):
-                        continue
                     rr = dict(row)
                     rr["recv_ts_ms"] = now_epoch_ms()
                     incomes_out.append(rr)
@@ -1345,7 +2010,13 @@ def main() -> int:
                 live_snapshot = {
                     "date": as_of.isoformat(),
                     "generated_at": now_utc_iso(),
-                    "source": "binance_spot" if market == "spot" else "binance_futures",
+                    "source": (
+                        "binance_spot"
+                        if market == "spot"
+                        else "binance_futures"
+                        if market == "futures_usdm"
+                        else "binance_portfolio_margin_um"
+                    ),
                     "open_positions": int(len(positions_out)),
                     "closed_count": int(len(incomes_out)),
                     "closed_pnl": float(closed_pnl),
@@ -1358,11 +2029,12 @@ def main() -> int:
                     },
                 }
                 write_json(live_snapshot_path, live_snapshot)
+                write_json(live_snapshot_market_path, live_snapshot)
                 write_json(trades_path, {"as_of": as_of.isoformat(), "rows": all_trades, "recv_ts_ms": now_epoch_ms()})
                 write_json(income_path, {"as_of": as_of.isoformat(), "rows": incomes_out, "recv_ts_ms": now_epoch_ms()})
 
                 summary["steps"]["live_snapshot"] = {
-                    "path": str(live_snapshot_path),
+                    "path": str(live_snapshot_market_path),
                     "open_positions": int(len(positions_out)),
                     "closed_count": int(len(incomes_out)),
                     "closed_pnl": float(closed_pnl),
@@ -1373,7 +2045,17 @@ def main() -> int:
                     "symbols": symbol_pool,
                     "trades": int(len(all_trades)),
                     "income_rows": int(len(incomes_out)),
+                    "query_slice_hours": int(trade_slice_hours),
+                    "trade_slice_count": int(trade_slice_count_total),
+                    "income_slice_count": int(len(income_slices)),
+                    "trade_count_by_symbol": summarize_trades_by_symbol(all_trades),
+                    "income_count_by_symbol": summarize_income_count_by_symbol(incomes_out),
+                    "income_pnl_by_symbol": summarize_income_pnl_by_symbol(incomes_out),
+                    "income_pnl_by_day": summarize_income_pnl_by_day(incomes_out, fallback_date=as_of),
+                    "status": "degraded" if trade_telemetry_warnings else "ok",
                 }
+                if trade_telemetry_warnings:
+                    summary["steps"]["trade_telemetry"]["warnings"] = trade_telemetry_warnings
 
                 mode_payload = read_json(output_root / "daily" / f"{as_of.isoformat()}_mode_feedback.json", {})
                 runtime_mode = "live_binance"
@@ -1428,7 +2110,10 @@ def main() -> int:
                     "sqlite": str(sqlite_path),
                     "inserted_rows": int(inserted),
                     "runtime_mode": runtime_mode,
+                    "status": "degraded" if trade_telemetry_warnings else "ok",
                 }
+                if trade_telemetry_warnings:
+                    summary["steps"]["backtest_feedback"]["warnings"] = trade_telemetry_warnings
 
                 if bool(args.allow_live_order):
                     if not plan_available:
@@ -1449,10 +2134,19 @@ def main() -> int:
                         summary["mode"] = "live_ready_risk_blocked"
                         summary["ok"] = False
                     else:
-                        if qty <= 0.0:
-                            panic_close_all(output_root, reason="canary_qty_invalid", detail=f"symbol={symbol}; qty={qty}")
-                        budget_quote = max(0.0, float(args.canary_quote_usdt))
                         can_place_order = True
+                        if qty <= 0.0:
+                            summary["steps"]["canary_order"] = {
+                                "executed": False,
+                                "reason": "quantity_invalid_preflight",
+                                "symbol": symbol,
+                                "quantity": float(qty),
+                                "severity": "blocked_no_panic",
+                            }
+                            summary["mode"] = "live_ready_preflight_blocked"
+                            summary["ok"] = False
+                            can_place_order = False
+                        budget_quote = max(0.0, float(args.canary_quote_usdt))
                         min_qty_req = float(lot.get("min_qty", 0.0))
                         if qty + 1e-12 < min_qty_req:
                             can_place_order = False
@@ -1502,7 +2196,17 @@ def main() -> int:
                                     write_json(order_log_path, summary["steps"]["canary_order"])
                                     summary["steps"]["canary_order"]["path"] = str(order_log_path)
                                     summary["ok"] = False
-                        if can_place_order and market == "futures_usdm" and budget_quote > 0 and effective_quote_usdt > (budget_quote * 2.0):
+                        if can_place_order and market == "portfolio_margin_um":
+                            summary["steps"]["canary_order"] = {
+                                "executed": False,
+                                "reason": "portfolio_margin_um_read_only_mode",
+                                "market": market,
+                            }
+                            write_json(order_log_path, summary["steps"]["canary_order"])
+                            summary["mode"] = "live_ready_read_only_market"
+                            summary["ok"] = False
+                            summary["steps"]["canary_order"]["path"] = str(order_log_path)
+                        elif can_place_order and market == "futures_usdm" and budget_quote > 0 and effective_quote_usdt > (budget_quote * 2.0):
                             summary["steps"]["canary_order"] = {
                                 "executed": False,
                                 "reason": "notional_floor_above_budget",
@@ -1617,23 +2321,18 @@ def main() -> int:
                     "reason": "missing_binance_api_secret",
                 }
 
+    except ControlledTakeoverFailure as exc:
+        summary["ok"] = False
+        summary["controlled_failure"] = str(exc)
     except PanicTriggered as exc:
         summary["ok"] = False
         summary["panic"] = str(exc)
     except Exception as exc:
+        summary["ok"] = False
+        summary["error"] = str(exc)
+        summary["error_type"] = type(exc).__name__
         if is_transport_fatal_exception(exc):
-            try:
-                panic_close_all(
-                    output_root,
-                    reason="binance_live_takeover_unhandled_transport_error",
-                    detail=str(exc),
-                )
-            except PanicTriggered as panic_exc:
-                summary["ok"] = False
-                summary["panic"] = str(panic_exc)
-        else:
-            summary["ok"] = False
-            summary["error"] = str(exc)
+            summary["error_class"] = "transport_unhandled"
 
     summary["finished_at_utc"] = now_utc_iso()
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1641,6 +2340,8 @@ def main() -> int:
     summary["artifact"] = str(out_path)
     write_json(out_path, summary)
     write_json(output_root / "review" / "latest_binance_live_takeover.json", summary)
+    market_name = normalize_latest_takeover_market_name(summary.get("market"))
+    write_json(output_root / "review" / f"latest_binance_live_takeover_{market_name}.json", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if bool(summary.get("ok", False)) else 2
 

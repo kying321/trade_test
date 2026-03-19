@@ -40,6 +40,14 @@ class RegimeTests(unittest.TestCase):
         self.assertIn("bear", probs)
         self.assertAlmostEqual(sum(probs.values()), 1.0, places=5)
 
+    def test_hmm_outputs_probabilities_with_fast_params(self) -> None:
+        bars = make_bars("300750", n=260)
+        probs = infer_hmm_state(bars, n_iter=8, max_points=48)
+        self.assertIn("bull", probs)
+        self.assertIn("range", probs)
+        self.assertIn("bear", probs)
+        self.assertAlmostEqual(sum(probs.values()), 1.0, places=5)
+
     def test_atr_zscore_finite(self) -> None:
         bars = make_bars("300750", n=200)
         z = compute_atr_zscore(bars)

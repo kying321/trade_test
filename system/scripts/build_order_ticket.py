@@ -21,6 +21,8 @@ DEFAULT_MAX_ALLOC_PER_TRADE_PCT = 0.30
 DEFAULT_MIN_NOTIONAL_USDT = 5.0
 DEFAULT_ARTIFACT_TTL_HOURS = 168
 MAX_SIGNAL_SOURCE_CANDIDATES = 32
+DEFAULT_TAKEOVER_MARKET = "spot"
+SUPPORTED_TAKEOVER_MARKETS = {"spot", "futures_usdm", "portfolio_margin_um"}
 
 
 def now_utc() -> datetime:
@@ -33,6 +35,19 @@ def now_utc_iso() -> str:
 
 def now_utc_compact() -> str:
     return now_utc().strftime("%Y%m%dT%H%M%SZ")
+
+
+def parse_now(raw: str) -> datetime | None:
+    text_value = str(raw).strip()
+    if not text_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def resolve_path(raw: str, *, anchor: Path) -> Path:
@@ -82,6 +97,16 @@ def normalize_symbols(raw: str) -> tuple[str, ...]:
     return tuple(out) if out else DEFAULT_SYMBOLS
 
 
+def parse_takeover_market(raw: Any) -> str:
+    market = str(raw or "").strip().lower()
+    return market if market in SUPPORTED_TAKEOVER_MARKETS else ""
+
+
+def should_auto_narrow_symbols(raw: str) -> bool:
+    normalized = normalize_symbols(raw)
+    return normalized == DEFAULT_SYMBOLS
+
+
 def load_policy_thresholds(config_path: Path) -> dict[str, Any]:
     payload: Any = {}
     source = "builtin_default"
@@ -97,12 +122,194 @@ def load_policy_thresholds(config_path: Path) -> dict[str, Any]:
         "signal_confidence_min": float(to_float(thresholds.get("signal_confidence_min", DEFAULT_MIN_CONFIDENCE), DEFAULT_MIN_CONFIDENCE)),
         "convexity_min": float(to_float(thresholds.get("convexity_min", DEFAULT_MIN_CONVEXITY), DEFAULT_MIN_CONVEXITY)),
         "source": source,
+        "source_kind": "config_thresholds",
+        "runtime_mode": "",
     }
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def derive_policy_thresholds(output_root: Path, *, config_path: Path, as_of: date) -> dict[str, Any]:
+    config_thresholds = load_policy_thresholds(config_path)
+    runtime_params_live_candidates = [
+        output_root / "artifacts" / "runtime_params_live.json",
+        output_root / "state" / "output" / "artifacts" / "runtime_params_live.json",
+    ]
+    for path in runtime_params_live_candidates:
+        if not path.exists():
+            continue
+        payload = read_json(path, {})
+        if not isinstance(payload, dict):
+            continue
+        has_override = False
+        signal_conf = config_thresholds["signal_confidence_min"]
+        convexity = config_thresholds["convexity_min"]
+        if "signal_confidence_min" in payload:
+            signal_conf = float(to_float(payload.get("signal_confidence_min"), signal_conf))
+            has_override = True
+        if "convexity_min" in payload:
+            convexity = float(to_float(payload.get("convexity_min"), convexity))
+            has_override = True
+        if has_override:
+            return {
+                "signal_confidence_min": signal_conf,
+                "convexity_min": convexity,
+                "source": str(path),
+                "source_kind": "runtime_params_live",
+                "runtime_mode": str(payload.get("runtime_mode", "")).strip(),
+            }
+
+    params_live_path = output_root / "artifacts" / "params_live.yaml"
+    if params_live_path.exists():
+        params_live = _load_yaml_mapping(params_live_path)
+        has_override = False
+        signal_conf = config_thresholds["signal_confidence_min"]
+        convexity = config_thresholds["convexity_min"]
+        if "signal_confidence_min" in params_live:
+            signal_conf = float(to_float(params_live.get("signal_confidence_min"), signal_conf))
+            has_override = True
+        if "convexity_min" in params_live:
+            convexity = float(to_float(params_live.get("convexity_min"), convexity))
+            has_override = True
+        if has_override:
+            return {
+                "signal_confidence_min": signal_conf,
+                "convexity_min": convexity,
+                "source": str(params_live_path),
+                "source_kind": "params_live",
+                "runtime_mode": "",
+            }
+
+    candidates = [
+        output_root / "daily" / f"{as_of.isoformat()}_mode_feedback.json",
+        output_root / "state" / "output" / "daily" / f"{as_of.isoformat()}_mode_feedback.json",
+    ]
+    fallback_dir = output_root / "state" / "output" / "daily"
+    if fallback_dir.exists():
+        candidates.extend(sorted(fallback_dir.glob("*_mode_feedback.json"), reverse=True))
+    for path in candidates:
+        if not path.exists():
+            continue
+        payload = read_json(path, {})
+        runtime_params = payload.get("runtime_params", {}) if isinstance(payload, dict) else {}
+        if not isinstance(runtime_params, dict):
+            continue
+        has_override = False
+        signal_conf = config_thresholds["signal_confidence_min"]
+        convexity = config_thresholds["convexity_min"]
+        if "signal_confidence_min" in runtime_params:
+            signal_conf = float(to_float(runtime_params.get("signal_confidence_min"), signal_conf))
+            has_override = True
+        if "convexity_min" in runtime_params:
+            convexity = float(to_float(runtime_params.get("convexity_min"), convexity))
+            has_override = True
+        if has_override:
+            return {
+                "signal_confidence_min": signal_conf,
+                "convexity_min": convexity,
+                "source": str(path),
+                "source_kind": "mode_feedback_runtime_params",
+                "runtime_mode": str(payload.get("runtime_mode", "")).strip(),
+            }
+
+    return config_thresholds
+
+
+def normalize_takeover_market(raw: Any, *, default: str = DEFAULT_TAKEOVER_MARKET) -> str:
+    market = str(raw or "").strip().lower()
+    if market in SUPPORTED_TAKEOVER_MARKETS:
+        return market
+    return str(default).strip().lower() or DEFAULT_TAKEOVER_MARKET
+
+
+def load_takeover_market(config_path: Path) -> str:
+    payload: Any = {}
+    if config_path.exists():
+        try:
+            payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+    validation = payload.get("validation", {}) if isinstance(payload, dict) else {}
+    return normalize_takeover_market(validation.get("binance_live_takeover_market", DEFAULT_TAKEOVER_MARKET))
+
+
+def find_latest_review_artifact(review_dir: Path, pattern: str) -> Path | None:
+    candidates = sorted(review_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def load_signal_remote_market_context(*, review_dir: Path, now_dt: datetime, ttl_hours: float) -> dict[str, Any]:
+    cutoff = now_dt.timestamp() - (max(1.0, float(ttl_hours)) * 3600.0)
+    candidates = (
+        ("*_remote_ticket_actionability_state.json", "remote_market", "remote_ticket_actionability_state"),
+        ("*_remote_scope_router_state.json", "remote_market", "remote_scope_router_state"),
+        ("*_remote_execution_identity_state.json", "ready_check_scope_market", "remote_execution_identity_state"),
+        ("*_remote_execution_identity_state.json", "remote_market", "remote_execution_identity_state"),
+    )
+    for pattern, field, kind in candidates:
+        path = find_latest_review_artifact(review_dir, pattern)
+        if path is None or not path.exists():
+            continue
+        try:
+            if path.stat().st_mtime < cutoff:
+                continue
+        except OSError:
+            continue
+        payload = read_json(path, {})
+        if not isinstance(payload, dict):
+            continue
+        market = parse_takeover_market(payload.get(field))
+        if market:
+            return {
+                "remote_market": market,
+                "artifact": str(path),
+                "source_kind": kind,
+            }
+    return {
+        "remote_market": "",
+        "artifact": "",
+        "source_kind": "missing",
+    }
+
+
+def load_latest_takeover_payload(*, output_root: Path, market: str) -> tuple[dict[str, Any], str]:
+    review_dir = output_root / "review"
+    market_name = normalize_takeover_market(market)
+    candidates = [
+        review_dir / f"latest_binance_live_takeover_{market_name}.json",
+        review_dir / "latest_binance_live_takeover.json",
+    ]
+    for path in candidates:
+        payload = read_json(path, {})
+        if not isinstance(payload, dict) or not payload:
+            continue
+        steps = payload.get("steps", {}) if isinstance(payload.get("steps", {}), dict) else {}
+        acct = steps.get("account_overview", {}) if isinstance(steps.get("account_overview", {}), dict) else {}
+        payload_market_raw = payload.get("market") or acct.get("market")
+        payload_market = normalize_takeover_market(payload_market_raw) if str(payload_market_raw).strip() else ""
+        if path.name == "latest_binance_live_takeover.json" and payload_market and payload_market != market_name:
+            continue
+        return payload, str(path)
+    return {}, ""
 
 
 def iter_signal_source_candidates(output_root: Path, review_dir: Path) -> list[tuple[Path, str]]:
     candidates: list[tuple[Path, str]] = []
     seen: set[str] = set()
+    for path in sorted(review_dir.glob("*_crypto_shortline_signal_source.json"), reverse=True):
+        key = str(path)
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        candidates.append((path, "crypto_shortline_signal_source"))
+        if len(candidates) >= MAX_SIGNAL_SOURCE_CANDIDATES:
+            return candidates
     for path in sorted(review_dir.glob("*_strategy_recent5_signals.json"), reverse=True):
         key = str(path)
         if key in seen or not path.is_file():
@@ -270,16 +477,16 @@ def resolve_signal_source(
     return {}, first_meta
 
 
-def derive_equity_usdt(*, output_root: Path, override_equity_usdt: float | None) -> tuple[float, str]:
+def derive_equity_usdt(*, output_root: Path, override_equity_usdt: float | None, market: str) -> tuple[float, str]:
     if override_equity_usdt is not None and override_equity_usdt > 0.0:
         return float(override_equity_usdt), "cli_override"
-    latest_takeover = output_root / "review" / "latest_binance_live_takeover.json"
-    payload = read_json(latest_takeover, {})
+    payload, latest_takeover_source = load_latest_takeover_payload(output_root=output_root, market=market)
     steps = payload.get("steps", {}) if isinstance(payload, dict) else {}
     acct = steps.get("account_overview", {}) if isinstance(steps, dict) else {}
     quote = to_float(acct.get("quote_available", 0.0), 0.0)
     if quote > 0.0:
-        return quote, "latest_binance_live_takeover.account_overview.quote_available"
+        latest_name = Path(latest_takeover_source).name if latest_takeover_source else "latest_binance_live_takeover.json"
+        return quote, f"{latest_name}.account_overview.quote_available"
     return 0.0, "default_zero"
 
 
@@ -329,7 +536,17 @@ def build_ticket_row(
     base_risk_pct: float,
     max_alloc_per_trade_pct: float,
     min_notional_usdt: float,
+    takeover_market: str,
+    signal_remote_market: str,
 ) -> dict[str, Any]:
+    market_scope_mismatch = bool(signal_remote_market and signal_remote_market != takeover_market)
+    target_market_read_only = takeover_market == "portfolio_margin_um"
+    market_scope = {
+        "takeover_market": takeover_market,
+        "signal_remote_market": signal_remote_market,
+        "mismatch": bool(market_scope_mismatch),
+        "read_only": bool(target_market_read_only),
+    }
     if signal_row is None:
         return {
             "symbol": symbol,
@@ -370,6 +587,7 @@ def build_ticket_row(
                 "order_type_hint": "LIMIT",
                 "max_slippage_bps": 0.0,
             },
+            "market_scope": market_scope,
         }
 
     signal_date = _parse_signal_date(str(signal_row.get("date", "")), as_of)
@@ -382,6 +600,15 @@ def build_ticket_row(
     price_reference_kind = str(signal_row.get("price_reference_kind", "")).strip()
     price_reference_source = str(signal_row.get("price_reference_source", "")).strip()
     execution_price_ready = bool(signal_row.get("execution_price_ready", True))
+    execution_state = str(signal_row.get("execution_state", "")).strip()
+    route_action = str(signal_row.get("route_action", "")).strip()
+    route_state = str(signal_row.get("route_state", "")).strip()
+    missing_gates = [
+        str(item).strip()
+        for item in signal_row.get("missing_gates", [])
+        if str(item).strip()
+    ] if isinstance(signal_row.get("missing_gates", []), list) else []
+    pattern_hint_brief = str(signal_row.get("pattern_hint_brief", "")).strip()
     risk_per_unit_pct = calc_risk_per_unit_pct(entry_price=entry_price, stop_price=stop_price)
     age_days = max(0, int((as_of - signal_date).days))
     reasons: list[str] = []
@@ -395,6 +622,12 @@ def build_ticket_row(
         reasons.append("convexity_below_threshold")
     if not execution_price_ready:
         reasons.append("proxy_price_reference_only")
+    if execution_state and execution_state != "Setup_Ready":
+        reasons.append("route_not_setup_ready")
+    if market_scope_mismatch:
+        reasons.append("signal_market_scope_mismatch")
+    if target_market_read_only:
+        reasons.append("target_market_read_only")
 
     execution_mode = "SPOT_LONG_OR_SELL"
     order_side = "LONG"
@@ -439,6 +672,11 @@ def build_ticket_row(
             "price_reference_kind": price_reference_kind,
             "price_reference_source": price_reference_source,
             "execution_price_ready": bool(execution_price_ready),
+            "execution_state": execution_state,
+            "route_action": route_action,
+            "route_state": route_state,
+            "missing_gates": list(missing_gates),
+            "pattern_hint_brief": pattern_hint_brief,
         },
         "levels": {
             "entry_price": float(entry_price),
@@ -462,6 +700,7 @@ def build_ticket_row(
             "order_type_hint": "LIMIT",
             "max_slippage_bps": float(max_slippage_bps),
         },
+        "market_scope": market_scope,
     }
 
 
@@ -505,6 +744,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- as_of: `{payload.get('as_of', '')}`",
         f"- signal_source_path: `{payload.get('signal_source', {}).get('path', '')}`",
         f"- signal_source_kind: `{payload.get('signal_source', {}).get('kind', '')}`",
+        f"- takeover_market: `{payload.get('signal_source', {}).get('takeover_market', '')}`",
+        f"- signal_remote_market: `{payload.get('signal_source', {}).get('remote_market', '')}`",
         "",
         "## Summary",
         f"- ticket_count: `{payload.get('summary', {}).get('ticket_count', 0)}`",
@@ -512,6 +753,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- stale_count: `{payload.get('summary', {}).get('stale_count', 0)}`",
         f"- missing_count: `{payload.get('summary', {}).get('missing_count', 0)}`",
         f"- proxy_price_only_count: `{payload.get('summary', {}).get('proxy_price_only_count', 0)}`",
+        f"- market_scope_mismatch_count: `{payload.get('summary', {}).get('market_scope_mismatch_count', 0)}`",
+        f"- target_market_read_only_count: `{payload.get('summary', {}).get('target_market_read_only_count', 0)}`",
         "",
         "## Tickets",
         "| symbol | date | side | conf | convexity | allowed | quote | reason |",
@@ -556,20 +799,25 @@ def main() -> int:
     parser.add_argument("--max-alloc-per-trade-pct", type=float, default=DEFAULT_MAX_ALLOC_PER_TRADE_PCT)
     parser.add_argument("--min-notional-usdt", type=float, default=DEFAULT_MIN_NOTIONAL_USDT)
     parser.add_argument("--artifact-ttl-hours", type=int, default=DEFAULT_ARTIFACT_TTL_HOURS)
+    parser.add_argument("--now", default="", help="Optional UTC timestamp override for artifact generation")
     args = parser.parse_args()
 
-    as_of = date.fromisoformat(str(args.date)) if str(args.date).strip() else now_utc().date()
+    reference_now = parse_now(args.now) or now_utc()
+    as_of = date.fromisoformat(str(args.date)) if str(args.date).strip() else reference_now.date()
     config_path = resolve_path(args.config, anchor=system_root)
     output_root = resolve_path(args.output_root, anchor=system_root)
     review_dir = resolve_path(args.review_dir, anchor=system_root)
     out_dir = resolve_path(args.output_dir, anchor=system_root)
-    policy_thresholds = load_policy_thresholds(config_path)
+    policy_thresholds = derive_policy_thresholds(output_root, config_path=config_path, as_of=as_of)
+    takeover_market = load_takeover_market(config_path)
     min_confidence = float(args.min_confidence) if args.min_confidence is not None else float(policy_thresholds["signal_confidence_min"])
     min_convexity = float(args.min_convexity) if args.min_convexity is not None else float(policy_thresholds["convexity_min"])
     symbols = normalize_symbols(args.symbols)
+    auto_narrow_symbols = should_auto_narrow_symbols(args.symbols)
     equity_usdt, equity_source = derive_equity_usdt(
         output_root=output_root,
         override_equity_usdt=(float(args.equity_usdt) if float(args.equity_usdt) > 0.0 else None),
+        market=takeover_market,
     )
     risk_multiplier, risk_multiplier_source = derive_risk_multiplier(output_root, as_of=as_of)
 
@@ -581,6 +829,7 @@ def main() -> int:
         signal_source_meta["selected_candidate_index"] = 0
         signal_source_meta["fallback_used"] = False
         signal_source_meta["selection_reason"] = "explicit"
+        signal_source_meta["symbol_scope_mode"] = "explicit_signals_json"
     else:
         signal_rows, signal_source_meta = resolve_signal_source(
             output_root=output_root,
@@ -588,6 +837,39 @@ def main() -> int:
             as_of=as_of,
             symbols=symbols,
         )
+        if (
+            auto_narrow_symbols
+            and str(signal_source_meta.get("kind", "")) == "crypto_shortline_signal_source"
+            and signal_rows
+        ):
+            narrowed_symbols = tuple(sym for sym in symbols if sym in signal_rows)
+            if narrowed_symbols:
+                symbols = narrowed_symbols
+                signal_source_meta["symbol_scope_mode"] = "source_narrowed_default_symbols"
+        elif auto_narrow_symbols:
+            signal_source_meta["symbol_scope_mode"] = "default_symbols"
+        else:
+            signal_source_meta["symbol_scope_mode"] = "explicit_symbols"
+
+    signal_market_context = {
+        "remote_market": "",
+        "artifact": "",
+        "source_kind": "missing",
+    }
+    if str(signal_source_meta.get("kind", "")) == "crypto_shortline_signal_source":
+        signal_market_context = load_signal_remote_market_context(
+            review_dir=review_dir,
+            now_dt=reference_now,
+            ttl_hours=max(1, int(args.artifact_ttl_hours)),
+        )
+    signal_source_meta["takeover_market"] = takeover_market
+    signal_source_meta["remote_market"] = str(signal_market_context.get("remote_market", ""))
+    signal_source_meta["remote_market_artifact"] = str(signal_market_context.get("artifact", ""))
+    signal_source_meta["remote_market_source_kind"] = str(signal_market_context.get("source_kind", "missing"))
+    signal_source_meta["target_market_read_only"] = takeover_market == "portfolio_margin_um"
+    signal_source_meta["market_scope_mismatch"] = bool(
+        signal_source_meta["remote_market"] and signal_source_meta["remote_market"] != takeover_market
+    )
 
     tickets = [
         build_ticket_row(
@@ -604,12 +886,14 @@ def main() -> int:
             base_risk_pct=float(args.base_risk_pct),
             max_alloc_per_trade_pct=float(args.max_alloc_per_trade_pct),
             min_notional_usdt=float(args.min_notional_usdt),
+            takeover_market=takeover_market,
+            signal_remote_market=str(signal_market_context.get("remote_market", "")),
         )
         for sym in symbols
     ]
 
     payload = {
-        "generated_at_utc": now_utc_iso(),
+        "generated_at_utc": reference_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "as_of": as_of.isoformat(),
         "workspace": str(system_root.parent),
         "signal_db": str(output_root / "artifacts" / "lie_engine.db"),
@@ -623,6 +907,8 @@ def main() -> int:
             "max_alloc_per_trade_pct": float(args.max_alloc_per_trade_pct),
             "min_notional_usdt": float(args.min_notional_usdt),
             "threshold_source": str(policy_thresholds.get("source", "builtin_default")),
+            "threshold_source_kind": str(policy_thresholds.get("source_kind", "config_thresholds")),
+            "runtime_mode": str(policy_thresholds.get("runtime_mode", "")),
         },
         "sizing_context": {
             "equity_usdt": float(equity_usdt),
@@ -637,10 +923,16 @@ def main() -> int:
             "stale_count": int(sum(1 for row in tickets if "stale_signal" in list(row.get("reasons", [])))),
             "missing_count": int(sum(1 for row in tickets if "signal_not_found" in list(row.get("reasons", [])))),
             "proxy_price_only_count": int(sum(1 for row in tickets if "proxy_price_reference_only" in list(row.get("reasons", [])))),
+            "market_scope_mismatch_count": int(
+                sum(1 for row in tickets if "signal_market_scope_mismatch" in list(row.get("reasons", [])))
+            ),
+            "target_market_read_only_count": int(
+                sum(1 for row in tickets if "target_market_read_only" in list(row.get("reasons", [])))
+            ),
         },
     }
 
-    stamp = now_utc_compact()
+    stamp = reference_now.strftime("%Y%m%dT%H%M%SZ")
     out_json = out_dir / f"{stamp}_signal_to_order_tickets.json"
     out_md = out_dir / f"{stamp}_signal_to_order_tickets.md"
     out_checksum = out_dir / f"{stamp}_signal_to_order_tickets_checksum.json"
@@ -648,7 +940,7 @@ def main() -> int:
     write_text(out_md, render_markdown(payload))
     evicted = evict_old_ticket_artifacts(
         directory=out_dir,
-        now_dt=now_utc(),
+        now_dt=reference_now,
         ttl_hours=max(1, int(args.artifact_ttl_hours)),
         keep_names={out_json.name, out_md.name, out_checksum.name},
     )
@@ -662,7 +954,7 @@ def main() -> int:
     write_json(
         out_checksum,
         {
-            "generated_at_utc": now_utc_iso(),
+            "generated_at_utc": reference_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "files": [
                 {"path": str(out_json), "sha256": json_sha, "size_bytes": int(json_size)},
                 {"path": str(out_md), "sha256": md_sha, "size_bytes": int(md_size)},

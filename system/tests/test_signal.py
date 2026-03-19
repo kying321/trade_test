@@ -37,6 +37,36 @@ class SignalTests(unittest.TestCase):
         signals = scan_signals(bars, regime=RegimeLabel.RANGE, cfg=cfg)
         self.assertIsInstance(signals, list)
 
+    def test_scan_signals_emits_symbol_timing(self) -> None:
+        bars = pd.concat(
+            [
+                make_bars("BTCUSDT", n=180, trend=0.10, seed=12, asset_class="crypto"),
+                make_bars("ETHUSDT", n=180, trend=0.08, seed=13, asset_class="crypto"),
+            ],
+            ignore_index=True,
+        )
+        cfg = SignalEngineConfig(confidence_min=10, convexity_min=1.0)
+        seen: list[dict[str, object]] = []
+
+        signals = scan_signals(
+            bars,
+            regime=RegimeLabel.WEAK_TREND,
+            cfg=cfg,
+            timing_callback=lambda payload: seen.append(payload),
+        )
+
+        self.assertIsInstance(signals, list)
+        self.assertGreaterEqual(len(seen), 1)
+        final = seen[-1]
+        self.assertEqual(final.get("status"), "completed")
+        self.assertEqual(final.get("symbol_count"), 2)
+        symbols = final.get("symbols")
+        self.assertIsInstance(symbols, list)
+        assert isinstance(symbols, list)
+        self.assertEqual(len(symbols), 2)
+        self.assertTrue(all("detect_regime_elapsed_sec" in row for row in symbols))
+        self.assertTrue(all("generate_signal_elapsed_sec" in row for row in symbols))
+
     def test_scan_uses_symbol_level_regime(self) -> None:
         bars = pd.concat(
             [
@@ -78,6 +108,56 @@ class SignalTests(unittest.TestCase):
 
         regimes = {s.regime for s in signals}
         self.assertEqual(regimes, {RegimeLabel.STRONG_TREND, RegimeLabel.RANGE})
+
+    def test_generate_signal_short_circuits_before_factor_stack_when_raw_confidence_hopeless(self) -> None:
+        bars = make_bars("SOLUSDT", n=180, trend=0.01, seed=201, asset_class="crypto")
+        cfg = SignalEngineConfig(confidence_min=60.0, convexity_min=1.0, theory_enabled=False)
+
+        with (
+            patch(
+                "lie_engine.signal.engine.score_trend",
+                return_value={"position": 1.0, "structure": 1.0, "momentum": 1.0, "side": Side.LONG},
+            ),
+            patch("lie_engine.signal.engine._estimate_factor_exposure", side_effect=AssertionError("should short-circuit")),
+        ):
+            signal = generate_signal_for_symbol(bars, regime=RegimeLabel.STRONG_TREND, cfg=cfg)
+
+        self.assertIsNone(signal)
+
+    def test_generate_signal_short_circuits_before_theory_micro_when_penalized_confidence_hopeless(self) -> None:
+        bars = make_bars("SOLUSDT", n=180, trend=0.03, seed=202, asset_class="crypto")
+        cfg = SignalEngineConfig(
+            confidence_min=60.0,
+            convexity_min=1.0,
+            theory_enabled=True,
+            microstructure_enabled=True,
+            theory_confidence_boost_max=5.0,
+            micro_confidence_boost_max=8.0,
+            factor_penalty_max=30.0,
+            factor_drop_threshold=2.0,
+        )
+        micro_state = {"has_data": True, "micro_alignment": 1.0, "evidence_score": 1.0}
+
+        with (
+            patch(
+                "lie_engine.signal.engine.score_trend",
+                return_value={"position": 5.0, "structure": 2.0, "momentum": 1.0, "side": Side.LONG},
+            ),
+            patch("lie_engine.signal.engine._estimate_factor_exposure", return_value={"valuation": 0.0}),
+            patch("lie_engine.signal.engine._merge_market_factor_state", return_value={"valuation_pressure": 1.0}),
+            patch("lie_engine.signal.engine._factor_risk_score", return_value=(0.8, ["valuation_headwind"])),
+            patch("lie_engine.signal.engine._theory_adjustment", side_effect=AssertionError("should short-circuit")),
+            patch("lie_engine.signal.engine._microstructure_adjustment", side_effect=AssertionError("should short-circuit")),
+        ):
+            signal = generate_signal_for_symbol(
+                bars,
+                regime=RegimeLabel.STRONG_TREND,
+                cfg=cfg,
+                market_factor_state={},
+                micro_factor_state=micro_state,
+            )
+
+        self.assertIsNone(signal)
 
     def test_weak_trend_target_tighter_than_strong(self) -> None:
         bars = make_bars("300750", n=280, trend=0.12, seed=21)

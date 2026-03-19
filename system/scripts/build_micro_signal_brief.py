@@ -96,17 +96,43 @@ def load_shortline_policy(config_path: Path) -> dict[str, Any]:
         "execution_timeframe": str(shortline.get("execution_timeframe", "15m")),
         "structure_engine": str(shortline.get("structure_engine", "fixed_range_volume_profile_proxy")),
         "structure_reference": str(shortline.get("structure_reference", "vpvr_concepts_deterministic_proxy")),
+        "market_state_engine": str(shortline.get("market_state_engine", "bias_only_vs_setup_ready")),
+        "default_market_state": str(shortline.get("default_market_state", "Bias_Only")),
+        "setup_ready_state": str(shortline.get("setup_ready_state", "Setup_Ready")),
         "profile_lookback_bars": int(to_int(shortline.get("profile_lookback_bars", 120), 120)),
         "profile_value_area_pct": float(to_float(shortline.get("profile_value_area_pct", 0.70), 0.70)),
         "location_priority": normalize_symbol_list(shortline.get("location_priority", ("HVN", "POC")), default=("HVN", "POC")),
         "avoid_location": str(shortline.get("avoid_location", "LVN")),
+        "no_trade_zone": str(shortline.get("no_trade_zone", "range_mid")),
+        "no_trade_rule": str(shortline.get("no_trade_rule", "no_sweep_no_mss_no_cvd_no_trade")),
         "flow_confirmation_engine": str(shortline.get("flow_confirmation_engine", "cvd_lite")),
         "flow_confirmation_role": str(shortline.get("flow_confirmation_role", "confirm_and_veto_only")),
         "flow_confirmation_half_life_seconds": int(
             to_int(shortline.get("flow_confirmation_half_life_seconds", 180), 180)
         ),
+        "micro_structure_engine": str(shortline.get("micro_structure_engine", "ict_sweep_mss")),
+        "micro_structure_timeframes": [str(x).strip() for x in shortline.get("micro_structure_timeframes", []) if str(x).strip()]
+        or ["1m", "5m"],
+        "liquidity_sweep_required": bool(shortline.get("liquidity_sweep_required", True)),
+        "mss_required": bool(shortline.get("mss_required", True)),
+        "entry_retest_priority": [str(x).strip() for x in shortline.get("entry_retest_priority", []) if str(x).strip()]
+        or ["FVG", "OB", "Breaker"],
+        "session_liquidity_map": [str(x).strip() for x in shortline.get("session_liquidity_map", []) if str(x).strip()]
+        or ["asia_high_low", "london_high_low", "prior_day_high_low", "equal_highs_lows"],
+        "execution_style": str(shortline.get("execution_style", "right_side_only")),
+        "holding_window_minutes": {
+            "min": int(to_int((shortline.get("holding_window_minutes", {}) or {}).get("min", 15), 15)),
+            "max": int(to_int((shortline.get("holding_window_minutes", {}) or {}).get("max", 180), 180)),
+        },
         "trigger_stack": [str(x).strip() for x in shortline.get("trigger_stack", []) if str(x).strip()]
-        or ["4h_profile_location", "15m_cvd_divergence_or_confirmation", "15m_reversal_or_breakout_candle"],
+        or [
+            "4h_profile_location",
+            "liquidity_sweep",
+            "1m_5m_mss_or_choch",
+            "15m_cvd_divergence_or_confirmation",
+            "fvg_ob_breaker_retest",
+            "15m_reversal_or_breakout_candle",
+        ],
         "supported_symbols": normalize_symbol_list(
             shortline.get("supported_symbols", DEFAULT_SHORTLINE_SUPPORTED),
             default=DEFAULT_SHORTLINE_SUPPORTED,
@@ -262,6 +288,30 @@ def render_markdown(payload: dict[str, Any]) -> str:
         )
         lines.append(
             f"- shortline_location_priority: `{', '.join(str(x) for x in shortline.get('location_priority', [])) or '-'}`"
+        )
+        lines.append(
+            "- shortline_market_state: `{bias}` -> `{setup}` | no_trade=`{rule}`".format(
+                bias=str(shortline.get("default_market_state", "")),
+                setup=str(shortline.get("setup_ready_state", "")),
+                rule=str(shortline.get("no_trade_rule", "")),
+            )
+        )
+        lines.append(
+            "- shortline_micro_trigger: `{engine}` | tfs=`{tfs}` | sweep=`{sweep}` | mss=`{mss}` | retest=`{retest}`".format(
+                engine=str(shortline.get("micro_structure_engine", "")),
+                tfs=", ".join(str(x) for x in shortline.get("micro_structure_timeframes", [])) or "-",
+                sweep=str(bool(shortline.get("liquidity_sweep_required", False))).lower(),
+                mss=str(bool(shortline.get("mss_required", False))).lower(),
+                retest=", ".join(str(x) for x in shortline.get("entry_retest_priority", [])) or "-",
+            )
+        )
+        lines.append(
+            "- shortline_session_map: `{sessions}` | hold=`{hold_min}-{hold_max}m` | style=`{style}`".format(
+                sessions=", ".join(str(x) for x in shortline.get("session_liquidity_map", [])) or "-",
+                hold_min=str(((shortline.get("holding_window_minutes", {}) or {}).get("min", "-"))),
+                hold_max=str(((shortline.get("holding_window_minutes", {}) or {}).get("max", "-"))),
+                style=str(shortline.get("execution_style", "")),
+            )
         )
         lines.append(
             f"- shortline_supported_symbols: `{', '.join(str(x) for x in shortline.get('supported_symbols', [])) or '-'}`"

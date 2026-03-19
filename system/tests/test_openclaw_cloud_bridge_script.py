@@ -39,6 +39,60 @@ def _run_bridge_shell(tmp_path: Path, body: str) -> subprocess.CompletedProcess[
     )
 
 
+def test_bridge_prefers_script_system_root_over_repo_root_for_copied_workspace_script(
+    tmp_path: Path,
+) -> None:
+    system_root = Path(__file__).resolve().parents[1]
+    script_text = (system_root / "scripts" / "openclaw_cloud_bridge.sh").read_text(
+        encoding="utf-8"
+    )
+    repo_root = tmp_path / "repo"
+    (repo_root / "system").mkdir(parents=True)
+    deploy_root = tmp_path / "workspace" / "fenlie-system"
+    (deploy_root / "scripts").mkdir(parents=True)
+    (deploy_root / "src").mkdir(parents=True)
+    script_copy = deploy_root / "scripts" / "openclaw_cloud_bridge.sh"
+    script_copy.write_text(script_text, encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            if [[ "$1" == "rev-parse" && "$2" == "--show-toplevel" ]]; then
+              printf '%s\\n' "{repo_root}"
+              exit 0
+            fi
+            exit 1
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+
+    env = os.environ.copy()
+    env.pop("FENLIE_SYSTEM_ROOT", None)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    proc = subprocess.run(
+        ["bash", str(script_copy), "remote-live-handoff"],
+        cwd=str(repo_root),
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert proc.returncode == 4, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "script_missing"
+    assert payload["script_path"] == str(
+        deploy_root / "scripts" / "build_remote_live_handoff.py"
+    )
+
+
 def _stub_guarded_exec_payload() -> str:
     return json.dumps(
         {
@@ -167,6 +221,106 @@ def _stub_ops_live_gate_blocked_payload() -> str:
     )
 
 
+def test_live_takeover_probe_remote_capture_unwraps_guarded_payload(tmp_path: Path) -> None:
+    proc = _run_bridge_shell(
+        tmp_path,
+        """
+        run_guarded_exec_remote() {
+          echo "unexpected direct guarded exec" >&2
+          return 1
+        }
+        run_guarded_exec_remote_capture() {
+          cat <<'JSON'
+{
+  "action": "guarded-exec-capture",
+  "capture_mode": "remote_stdout_capture",
+  "guard_returncode": 0,
+  "stdout_path": "/tmp/probe_stdout.json",
+  "stderr_path": "/tmp/probe_stderr.log",
+  "stdout_size_bytes": 128,
+  "stderr_size_bytes": 0,
+  "stderr_tail": [],
+  "payload": {
+    "executed": false,
+    "status": "probe_completed",
+    "artifact": "/tmp/guard.json",
+    "takeover": {
+      "payload": {
+        "artifact": "/tmp/takeover.json"
+      }
+    }
+  }
+}
+JSON
+        }
+        live_takeover_probe_capture_mode=remote_capture
+        out="$(action_live_takeover_probe)"
+        printf '%s\\n' "${out}"
+        """,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["action"] == "live-takeover-probe"
+    assert payload["status"] == "probe_completed"
+    assert payload["executed"] is False
+    assert payload["guarded_exec"]["artifact"] == "/tmp/guard.json"
+    assert payload["probe_transport"]["capture_mode"] == "remote_stdout_capture"
+    assert payload["probe_transport"]["stdout_path"] == "/tmp/probe_stdout.json"
+    assert payload["probe_transport"]["guard_returncode"] == 0
+
+
+def test_live_takeover_probe_remote_async_unwraps_guarded_payload(tmp_path: Path) -> None:
+    proc = _run_bridge_shell(
+        tmp_path,
+        """
+        run_guarded_exec_remote() {
+          echo "unexpected direct guarded exec" >&2
+          return 1
+        }
+        run_guarded_exec_remote_capture_async() {
+          cat <<'JSON'
+{
+  "action": "guarded-exec-capture-async",
+  "capture_mode": "remote_async_capture",
+  "guard_returncode": 0,
+  "state_path": "/tmp/probe_state.json",
+  "stdout_path": "/tmp/probe_stdout.json",
+  "stderr_path": "/tmp/probe_stderr.log",
+  "rc_path": "/tmp/probe_rc.txt",
+  "stdout_size_bytes": 256,
+  "stderr_size_bytes": 0,
+  "stderr_tail": [],
+  "payload": {
+    "executed": false,
+    "status": "probe_completed",
+    "artifact": "/tmp/guard.json",
+    "takeover": {
+      "payload": {
+        "artifact": "/tmp/takeover.json"
+      }
+    }
+  }
+}
+JSON
+        }
+        live_takeover_probe_capture_mode=remote_async
+        out="$(action_live_takeover_probe)"
+        printf '%s\\n' "${out}"
+        """,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["action"] == "live-takeover-probe"
+    assert payload["status"] == "probe_completed"
+    assert payload["executed"] is False
+    assert payload["guarded_exec"]["artifact"] == "/tmp/guard.json"
+    assert payload["probe_transport"]["capture_mode"] == "remote_async_capture"
+    assert payload["probe_transport"]["state_path"] == "/tmp/probe_state.json"
+    assert payload["probe_transport"]["rc_path"] == "/tmp/probe_rc.txt"
+
+
 def _stub_ops_live_gate_allowed_payload() -> str:
     return json.dumps(
         {
@@ -262,6 +416,28 @@ def test_ready_check_returns_payload_and_nonzero_rc_without_exiting_shell(tmp_pa
     assert payload["ready"] is False
     assert payload["reasons"] == ["risk_guard_blocked", "ops_reconcile_drift_blocked"]
     assert payload["backup_intel"]["status"] == "active"
+
+
+def test_live_takeover_probe_parses_json_after_connection_closed_prefix(tmp_path: Path) -> None:
+    proc = _run_bridge_shell(
+        tmp_path,
+        f"""
+        run_guarded_exec_remote() {{
+          printf 'Connection closed by 43.153.148.242 port 22\\n'
+          cat <<'JSON'
+        {_stub_guarded_exec_payload_risk_ok()}
+        JSON
+        }}
+        action_live_takeover_probe
+        """,
+    )
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "unknown"
+    guarded = payload.get("guarded_exec", {})
+    assert isinstance(guarded, dict)
+    assert "raw" not in guarded
+    assert str((guarded.get("takeover", {}) or {}).get("payload", {}).get("market", "")) == "spot"
 
 
 def test_ready_check_blocks_on_ops_gate_failure_even_when_reconcile_passes(tmp_path: Path) -> None:
@@ -407,7 +583,7 @@ def test_ensure_local_openclaw_runtime_model_action_repairs_temp_home_config(tmp
     cfg.write_text(
         json.dumps(
             {
-                "models": {"providers": {"google": {"baseUrl": "http://127.0.0.1:9999/v1beta", "models": []}}},
+                "models": {"providers": {"google": {"baseUrl": "https://generativelanguage.googleapis.com/v1beta", "models": []}}},
                 "agents": {"defaults": {"models": {}}},
             },
             ensure_ascii=False,
@@ -457,7 +633,7 @@ def test_sync_local_pi_workspace_action_forwards_expected_args(tmp_path: Path) -
     assert f"--target-root {target_root}" in line
     assert "--backup-keep 7" in line
     assert "--backup-max-age-hours 24" in line
-    assert f"--pulse-lock-path {target_root}/output/state/run_halfhour_pulse.lock" in line
+    assert f"--pulse-lock-path {target_root}/output/state/run-halfhour-pulse.lock" in line
     assert "--dry-run" in line
     assert "--no-backup" in line
 
@@ -490,7 +666,7 @@ def test_publish_local_pi_runtime_scripts_action_forwards_expected_args(tmp_path
     assert f"--source-root {runtime_root}" in line
     assert f"--target-root {target_root}" in line
     assert f"--output-root {workspace_root}/output" in line
-    assert f"--pulse-lock-path {workspace_root}/output/state/run_halfhour_pulse.lock" in line
+    assert f"--pulse-lock-path {workspace_root}/output/state/run-halfhour-pulse.lock" in line
     assert "--backup-keep 6" in line
     assert "--backup-max-age-hours 48" in line
     assert "--dry-run" in line
@@ -898,6 +1074,8 @@ def test_remote_live_handoff_runs_local_script(tmp_path: Path) -> None:
         {"action":"build_remote_live_noaf_probe","ok":false,"status":"incompatible"}
         JSON
         remote_live_handoff_keep="9"
+        live_risk_daemon_security_accept_max_exposure="2.5"
+        openclaw_orderflow_executor_mode="spot_live_guarded"
         action_live_takeover_ready_check() {
           cat <<'JSON'
         {"action":"live-takeover-ready-check","ready":false,"reasons":["risk_guard_blocked"]}
@@ -938,14 +1116,56 @@ def test_remote_live_handoff_runs_local_script(tmp_path: Path) -> None:
     line = proc.stdout.strip()
     assert line.startswith("PYTHON3:")
     assert "scripts/build_remote_live_handoff.py" in line
-    assert "--ready-check-returncode 3" in line
+    assert "--ready-check-spot-returncode 3" in line
+    assert "--ready-check-portfolio-margin-returncode 3" in line
     assert "--risk-daemon-status-returncode 0" in line
     assert "--ops-status-returncode 0" in line
     assert "--journal-returncode 0" in line
     assert "--security-status-returncode 0" in line
+    assert "--ready-check-spot-file" in line
+    assert "--ready-check-portfolio-margin-file" in line
+    assert str(tmp_path) in line
+    assert "_remote_live_ready_check_spot.json" in line
+    assert "_remote_live_ready_check_portfolio_margin_um.json" in line
+    assert "_remote_live_risk_daemon_status.json" in line
+    assert "_remote_live_ops_reconcile_status.json" in line
+    assert "_remote_live_risk_daemon_journal.json" in line
+    assert "_remote_live_risk_daemon_security_status.json" in line
+    assert "_remote_live_bridge_context.json" not in line
     assert f"--noaf-probe-file {tmp_path}/20260309T042253Z_remote_live_noaf_probe.json" in line
-    assert "--security-accept-max-exposure 4.0" in line
+    assert "--security-accept-max-exposure 2.5" in line
+    assert "--openclaw-orderflow-executor-mode spot_live_guarded" in line
     assert "--artifact-keep 9" in line
+
+    spot_inputs = sorted(tmp_path.glob("*_remote_live_ready_check_spot.json"))
+    portfolio_inputs = sorted(tmp_path.glob("*_remote_live_ready_check_portfolio_margin_um.json"))
+    daemon_inputs = sorted(tmp_path.glob("*_remote_live_risk_daemon_status.json"))
+    ops_inputs = sorted(tmp_path.glob("*_remote_live_ops_reconcile_status.json"))
+    journal_inputs = sorted(tmp_path.glob("*_remote_live_risk_daemon_journal.json"))
+    security_inputs = sorted(tmp_path.glob("*_remote_live_risk_daemon_security_status.json"))
+    context_inputs = sorted(tmp_path.glob("*_remote_live_bridge_context.json"))
+    assert len(spot_inputs) == 1
+    assert len(portfolio_inputs) == 1
+    assert len(daemon_inputs) == 1
+    assert len(ops_inputs) == 1
+    assert len(journal_inputs) == 1
+    assert len(security_inputs) == 1
+    assert len(context_inputs) == 1
+
+    spot_payload = json.loads(spot_inputs[0].read_text(encoding="utf-8"))
+    assert spot_payload["capture_kind"] == "remote_live_ready_check_spot"
+    assert spot_payload["returncode"] == 3
+    assert spot_payload["payload"]["action"] == "live-takeover-ready-check"
+    daemon_payload = json.loads(daemon_inputs[0].read_text(encoding="utf-8"))
+    assert daemon_payload["capture_kind"] == "remote_live_risk_daemon_status"
+    assert daemon_payload["returncode"] == 0
+    assert daemon_payload["payload"]["action"] == "live-risk-daemon-status"
+    context_payload = json.loads(context_inputs[0].read_text(encoding="utf-8"))
+    assert context_payload["capture_kind"] == "remote_live_bridge_context"
+    assert context_payload["remote_host"] == "43.153.148.242"
+    assert context_payload["security_accept_max_exposure"] == 2.5
+    assert context_payload["live_takeover_market"] == "spot"
+    assert context_payload["openclaw_orderflow_executor_mode"] == "spot_live_guarded"
 
 
 def test_live_risk_daemon_security_status_action_uses_remote_helper(tmp_path: Path) -> None:

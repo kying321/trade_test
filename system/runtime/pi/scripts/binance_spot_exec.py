@@ -54,6 +54,31 @@ PRIVATE_BASES = [
 SYMBOL_DEFAULT = "ETHUSDT"
 MAX_ORDER_NOTIONAL = float(os.getenv("CORTEX_MAX_ORDER_NOTIONAL", "5"))
 MAX_ORDER_QTY = float(os.getenv("CORTEX_MAX_ORDER_QTY", "0.02"))
+MAX_HTTP_TIMEOUT_SECONDS = 5.0
+
+
+def _clamp_timeout_component(value: Any, *, default: float) -> float:
+    try:
+        timeout = float(value)
+    except Exception:
+        timeout = float(default)
+    return min(MAX_HTTP_TIMEOUT_SECONDS, max(0.1, timeout))
+
+
+def _bounded_timeout_value(value: Any, *, default: float) -> float | tuple[float, float]:
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return (
+            _clamp_timeout_component(value[0], default=default),
+            _clamp_timeout_component(value[1], default=default),
+        )
+    return _clamp_timeout_component(value, default=default)
+
+
+def _load_http_timeout_seconds() -> float:
+    return _clamp_timeout_component(os.getenv("BINANCE_HTTP_TIMEOUT_SECONDS", MAX_HTTP_TIMEOUT_SECONDS), default=MAX_HTTP_TIMEOUT_SECONDS)
+
+
+HTTP_TIMEOUT_SECONDS = _load_http_timeout_seconds()
 
 
 def _env(name: str) -> str:
@@ -116,15 +141,19 @@ def choose_base(bases: list[str]) -> str:
 
 
 def _request_no_proxy(method: str, url: str, **kwargs: Any) -> requests.Response:
-    return _net_request_no_proxy(method, url, **kwargs)
+    request_kwargs = dict(kwargs)
+    request_kwargs["timeout"] = _bounded_timeout_value(request_kwargs.get("timeout", HTTP_TIMEOUT_SECONDS), default=HTTP_TIMEOUT_SECONDS)
+    return _net_request_no_proxy(method, url, **request_kwargs)
 
 
 def _request_with_proxy_bypass(method: str, url: str, **kwargs: Any) -> requests.Response:
+    request_kwargs = dict(kwargs)
+    request_kwargs["timeout"] = _bounded_timeout_value(request_kwargs.get("timeout", HTTP_TIMEOUT_SECONDS), default=HTTP_TIMEOUT_SECONDS)
     return _net_request_with_proxy_bypass(
         method,
         url,
         no_proxy_request_func=_request_no_proxy,
-        **kwargs,
+        **request_kwargs,
     )
 
 
@@ -135,7 +164,7 @@ def _emit_event(event: Dict[str, Any]) -> None:
 
 
 def get_server_time_ms(base: str) -> int:
-    r = _request_with_proxy_bypass("GET", base + "/api/v3/time", timeout=10)
+    r = _request_with_proxy_bypass("GET", base + "/api/v3/time", timeout=HTTP_TIMEOUT_SECONDS)
     r.raise_for_status()
     return int(r.json()["serverTime"])
 
@@ -148,7 +177,7 @@ def signed_request(method: str, base: str, path: str, api_key: str, api_secret: 
     method_u = method.upper()
     if method_u not in {"GET", "POST", "DELETE"}:
         raise ValueError(method)
-    return _request_with_proxy_bypass(method_u, url, headers=headers, timeout=15)
+    return _request_with_proxy_bypass(method_u, url, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
 
 
 def get_price(base: str, symbol: str) -> float:
@@ -156,7 +185,7 @@ def get_price(base: str, symbol: str) -> float:
         "GET",
         base + "/api/v3/ticker/price",
         params={"symbol": symbol},
-        timeout=10,
+        timeout=HTTP_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
     return float(r.json()["price"])
@@ -167,7 +196,7 @@ def get_exchange_info(base: str, symbol: str) -> Dict[str, Any]:
         "GET",
         base + "/api/v3/exchangeInfo",
         params={"symbol": symbol},
-        timeout=15,
+        timeout=HTTP_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
     data = r.json()

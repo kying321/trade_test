@@ -50,7 +50,7 @@ def test_backfill_dry_run_requires_trailing_streak_match(tmp_path: Path) -> None
 def test_backfill_write_sets_last_loss_ts_on_exact_streak_match(tmp_path: Path) -> None:
     state_path = tmp_path / "spot_paper_state.json"
     ledger_path = tmp_path / "paper_execution_ledger.jsonl"
-    pulse_lock_path = tmp_path / "run_halfhour_pulse.lock"
+    pulse_lock_path = tmp_path / "run-halfhour-pulse.lock"
     state_path.write_text(
         json.dumps({"date": "2026-03-08", "consecutive_losses": 2, "last_loss_ts": None}, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -131,7 +131,7 @@ def test_backfill_fallback_can_select_latest_negative_without_match(tmp_path: Pa
 def test_backfill_write_blocks_when_expected_fingerprint_mismatches(tmp_path: Path) -> None:
     state_path = tmp_path / "spot_paper_state.json"
     ledger_path = tmp_path / "paper_execution_ledger.jsonl"
-    pulse_lock_path = tmp_path / "run_halfhour_pulse.lock"
+    pulse_lock_path = tmp_path / "run-halfhour-pulse.lock"
     state_path.write_text(
         json.dumps({"date": "2026-03-08", "consecutive_losses": 2, "last_loss_ts": None}, ensure_ascii=False) + "\n",
         encoding="utf-8",

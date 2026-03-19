@@ -81,7 +81,7 @@ def main() -> int:
     pulse_lock_path = (
         Path(str(args.pulse_lock_path)).expanduser().resolve()
         if str(args.pulse_lock_path).strip()
-        else (workspace_system_root / "output" / "state" / "run_halfhour_pulse.lock").resolve()
+        else (workspace_system_root / "output" / "state" / "run-halfhour-pulse.lock").resolve()
     )
     expected_current_state_fingerprint = (
         str(args.expected_current_state_fingerprint or "").strip() or None

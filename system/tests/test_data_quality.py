@@ -48,6 +48,78 @@ class DataQualityTests(unittest.TestCase):
         self.assertFalse(report.passed)
         self.assertTrue(any("TRADING_DAY_MISMATCH_WEEKEND" in f for f in report.flags))
 
+    def test_quality_allows_crypto_weekend_rows(self) -> None:
+        df = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2026-01-03", "2026-01-04"]),  # weekend
+                "symbol": ["BTCUSDT", "BTCUSDT"],
+                "open": [1, 1],
+                "high": [2, 2],
+                "low": [0.5, 0.5],
+                "close": [130, 130],
+                "volume": [100, 100],
+                "asset_class": ["crypto", "crypto"],
+            }
+        )
+        conflicts = pd.DataFrame(columns=["ts", "symbol", "field", "values", "max_diff_pct"])
+        report = evaluate_quality(df, conflicts, 0.99, 0.005)
+        self.assertTrue(report.passed)
+        self.assertFalse(any("TRADING_DAY_MISMATCH_WEEKEND" in f for f in report.flags))
+
+    def test_quality_ignores_volume_only_conflicts(self) -> None:
+        df = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2026-01-05", "2026-01-06"]),
+                "symbol": ["BTCUSDT", "BTCUSDT"],
+                "open": [1, 1],
+                "high": [2, 2],
+                "low": [0.5, 0.5],
+                "close": [130, 131],
+                "volume": [100, 120],
+                "asset_class": ["crypto", "crypto"],
+            }
+        )
+        conflicts = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2026-01-05", "2026-01-06"]),
+                "symbol": ["BTCUSDT", "BTCUSDT"],
+                "field": ["volume", "volume"],
+                "values": ["100,200", "120,240"],
+                "max_diff_pct": [0.5, 0.5],
+            }
+        )
+        report = evaluate_quality(df, conflicts, 0.99, 0.005)
+        self.assertTrue(report.passed)
+        self.assertAlmostEqual(report.unresolved_conflict_ratio, 0.0)
+        self.assertFalse(any("UNRESOLVED_CONFLICT_HIGH" in f for f in report.flags))
+
+    def test_quality_keeps_price_conflicts_as_blockers(self) -> None:
+        df = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2026-01-05", "2026-01-06"]),
+                "symbol": ["BTCUSDT", "BTCUSDT"],
+                "open": [1, 1],
+                "high": [2, 2],
+                "low": [0.5, 0.5],
+                "close": [130, 131],
+                "volume": [100, 120],
+                "asset_class": ["crypto", "crypto"],
+            }
+        )
+        conflicts = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2026-01-05", "2026-01-06"]),
+                "symbol": ["BTCUSDT", "BTCUSDT"],
+                "field": ["close", "close"],
+                "values": ["130,133", "131,134"],
+                "max_diff_pct": [0.02, 0.02],
+            }
+        )
+        report = evaluate_quality(df, conflicts, 0.99, 0.005)
+        self.assertFalse(report.passed)
+        self.assertAlmostEqual(report.unresolved_conflict_ratio, 1.0)
+        self.assertTrue(any("UNRESOLVED_CONFLICT_HIGH" in f for f in report.flags))
+
     def test_quality_flags_low_source_confidence(self) -> None:
         df = pd.DataFrame(
             {

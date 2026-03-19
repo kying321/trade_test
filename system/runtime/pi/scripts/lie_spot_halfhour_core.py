@@ -58,7 +58,7 @@ LOCK_PATH = Path(
 PULSE_LOCK_PATH = Path(
     os.getenv(
         "LIE_HALFHOUR_PULSE_LOCK_PATH",
-        str(LIE_ROOT / "output" / "state" / "run_halfhour_pulse.lock"),
+        str(LIE_ROOT / "output" / "state" / "run-halfhour-pulse.lock"),
     )
 )
 READINESS_REFRESH_LOCK_PATH = Path(
@@ -143,6 +143,39 @@ CONSECUTIVE_LOSS_STOP = int(os.getenv("LIE_CONSECUTIVE_LOSS_STOP", "3"))
 PAPER_INIT_USDT = float(os.getenv("LIE_PAPER_INIT_USDT", "100"))
 CORTEX_MAX_PAPER_NOTIONAL = float(os.getenv("CORTEX_MAX_PAPER_NOTIONAL", "5"))
 CORTEX_MAX_PAPER_QTY = float(os.getenv("CORTEX_MAX_PAPER_QTY", "0.02"))
+MAX_HTTP_TIMEOUT_SECONDS = 5.0
+
+
+def _clamp_timeout_component(value: Any, *, default: float) -> float:
+    try:
+        timeout = float(value)
+    except Exception:
+        timeout = float(default)
+    return min(MAX_HTTP_TIMEOUT_SECONDS, max(0.1, timeout))
+
+
+def _bounded_http_timeout(value: Any, *, default: float) -> float | Tuple[float, float]:
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return (
+            _clamp_timeout_component(value[0], default=default),
+            _clamp_timeout_component(value[1], default=default),
+        )
+    return _clamp_timeout_component(value, default=default)
+
+
+HTTP_TIMEOUT_SECONDS = _clamp_timeout_component(
+    os.getenv("LIE_HTTP_TIMEOUT_SECONDS", MAX_HTTP_TIMEOUT_SECONDS),
+    default=MAX_HTTP_TIMEOUT_SECONDS,
+)
+LIE_EMBEDDING_BASE_URL = str(os.getenv("LIE_EMBEDDING_BASE_URL", "")).strip()
+LIE_EMBEDDING_MODEL = str(os.getenv("LIE_EMBEDDING_MODEL", "text-embedding-3-small")).strip()
+LIE_SEMANTIC_API_BASE_URL = str(
+    os.getenv("LIE_SEMANTIC_API_BASE_URL", "http://127.0.0.1:8317/v1")
+).strip()
+LIE_SEMANTIC_API_KEY = str(
+    os.getenv("LIE_SEMANTIC_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+).strip()
+LIE_SEMANTIC_MODEL = str(os.getenv("LIE_SEMANTIC_MODEL", "gpt-5.4")).strip()
 
 LOCK_GATE_LEVEL_ORDER: Dict[str, int] = {
     "ok": 0,
@@ -328,8 +361,10 @@ def _infer_http_source(url: str) -> str:
         if path.startswith("/stats"):
             return "blockchain_stats_n_tx"
         return "blockchain_info"
-    if host in {"127.0.0.1:9999", "localhost:9999"}:
-        return "embedding_local"
+    if path.endswith("/v1/embeddings") and host.startswith(("127.0.0.1:", "localhost:")):
+        return "embedding_configured"
+    if path.endswith("/v1/responses") and host.startswith(("127.0.0.1:", "localhost:")):
+        return "semantic_llm_configured"
     return "unknown"
 
 
@@ -638,12 +673,17 @@ def _http(method: str, url: str, **kwargs: Any) -> requests.Response:
     endpoint = str(urlsplit(str(url or "")).path or "/")
     source = _infer_http_source(url)
     symbol_hint = _extract_symbol_hint(url, kwargs)
+    request_kwargs = dict(kwargs)
+    request_kwargs["timeout"] = _bounded_http_timeout(
+        request_kwargs.get("timeout", HTTP_TIMEOUT_SECONDS),
+        default=HTTP_TIMEOUT_SECONDS,
+    )
     try:
         resp = _net_request_with_proxy_bypass(
             method,
             url,
             no_proxy_request_func=_http_no_proxy,
-            **kwargs,
+            **request_kwargs,
         )
         latency_ms = (pytime.perf_counter() - started) * 1000.0
         _append_source_request_log(
@@ -714,7 +754,7 @@ def coingecko_price(symbol: str) -> float:
         "GET",
         "https://api.coingecko.com/api/v3/simple/price",
         params={"ids": cg_id, "vs_currencies": "usd"},
-        timeout=10,
+        timeout=HTTP_TIMEOUT_SECONDS,
         headers={"accept": "application/json"},
     )
     r.raise_for_status()
@@ -758,7 +798,7 @@ def coinbase_price(symbol: str) -> float:
             r = _http(
                 "GET",
                 f"https://api.exchange.coinbase.com/products/{product}/ticker",
-                timeout=10,
+                timeout=HTTP_TIMEOUT_SECONDS,
                 headers={"accept": "application/json"},
             )
             r.raise_for_status()
@@ -805,7 +845,7 @@ def kraken_price(symbol: str) -> float:
                 "GET",
                 "https://api.kraken.com/0/public/Ticker",
                 params={"pair": pair},
-                timeout=10,
+                timeout=HTTP_TIMEOUT_SECONDS,
                 headers={"accept": "application/json"},
             )
             r.raise_for_status()
@@ -853,7 +893,7 @@ def okx_price(symbol: str) -> float:
         "GET",
         "https://www.okx.com/api/v5/market/ticker",
         params={"instId": inst},
-        timeout=10,
+        timeout=HTTP_TIMEOUT_SECONDS,
         headers={"accept": "application/json"},
     )
     r.raise_for_status()
@@ -879,7 +919,7 @@ def cryptocompare_price(symbol: str) -> float:
         "GET",
         "https://min-api.cryptocompare.com/data/price",
         params={"fsym": base, "tsyms": "USD"},
-        timeout=10,
+        timeout=HTTP_TIMEOUT_SECONDS,
         headers={"accept": "application/json"},
     )
     r.raise_for_status()
@@ -905,7 +945,7 @@ def spot_price(symbol: str) -> Tuple[float, str, Optional[str]]:
     errs: List[str] = []
     for base in endpoints:
         try:
-            r = _http("GET", f"{base}/api/v3/ticker/price", params={"symbol": symbol}, timeout=10)
+            r = _http("GET", f"{base}/api/v3/ticker/price", params={"symbol": symbol}, timeout=HTTP_TIMEOUT_SECONDS)
             r.raise_for_status()
             return float(r.json()["price"]), "binance", None
         except Exception as e:
@@ -991,7 +1031,7 @@ def coinbase_book_imbalance(symbol: str) -> float:
                 "GET",
                 f"https://api.exchange.coinbase.com/products/{product}/book",
                 params={"level": 2},
-                timeout=10,
+                timeout=HTTP_TIMEOUT_SECONDS,
                 headers={"accept": "application/json"},
             )
             r.raise_for_status()
@@ -1014,7 +1054,7 @@ def kraken_book_imbalance(symbol: str) -> float:
                 "GET",
                 "https://api.kraken.com/0/public/Depth",
                 params={"pair": pair, "count": 100},
-                timeout=10,
+                timeout=HTTP_TIMEOUT_SECONDS,
                 headers={"accept": "application/json"},
             )
             r.raise_for_status()
@@ -1102,10 +1142,17 @@ def alternative_fng_sentiment() -> float:
 
 
 def _embedding_sentiment(summary: str) -> float:
+    if not LIE_EMBEDDING_BASE_URL:
+        raise RuntimeError("embedding_base_url_not_configured")
+    endpoint = (
+        LIE_EMBEDDING_BASE_URL
+        if LIE_EMBEDDING_BASE_URL.endswith("/embeddings")
+        else f"{LIE_EMBEDDING_BASE_URL.rstrip('/')}/embeddings"
+    )
     r = _http(
         "POST",
-        "http://127.0.0.1:9999/v1/embeddings",
-        json={"model": "BAAI/bge-m3", "input": summary},
+        endpoint,
+        json={"model": LIE_EMBEDDING_MODEL, "input": summary},
         timeout=5,
     )
     if int(r.status_code) != 200:
@@ -1122,12 +1169,74 @@ def _embedding_sentiment(summary: str) -> float:
     return float(_clamp(val, -3.0, 3.0))
 
 
+def _extract_response_text(payload: Any) -> Optional[str]:
+    if isinstance(payload, dict):
+        output_text = payload.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
+        output = payload.get("output")
+        if isinstance(output, list):
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    text = block.get("text")
+                    if isinstance(text, str) and text.strip():
+                        return text.strip()
+    return None
+
+
+def _llm_sentiment(summary: str) -> float:
+    if not LIE_SEMANTIC_API_BASE_URL:
+        raise RuntimeError("semantic_api_base_url_not_configured")
+    if not LIE_SEMANTIC_API_KEY:
+        raise RuntimeError("semantic_api_key_not_configured")
+    endpoint = (
+        LIE_SEMANTIC_API_BASE_URL
+        if LIE_SEMANTIC_API_BASE_URL.endswith("/responses")
+        else f"{LIE_SEMANTIC_API_BASE_URL.rstrip('/')}/responses"
+    )
+    prompt = (
+        "You are a market sentiment scorer. "
+        "Return only one decimal number between -1.0 and 1.0, "
+        "where -1.0 is strongly bearish, 0.0 is neutral, and 1.0 is strongly bullish.\n"
+        f"Text: {summary}"
+    )
+    r = _http(
+        "POST",
+        endpoint,
+        headers={
+            "authorization": f"Bearer {LIE_SEMANTIC_API_KEY}",
+            "content-type": "application/json",
+        },
+        json={
+            "model": LIE_SEMANTIC_MODEL,
+            "input": prompt,
+            "max_output_tokens": 8,
+        },
+        timeout=5,
+    )
+    if int(r.status_code) != 200:
+        raise RuntimeError(f"semantic_llm_http_{int(r.status_code)}")
+    score_txt = _extract_response_text(r.json())
+    score_val = _to_float(score_txt)
+    if score_val is None:
+        raise RuntimeError("semantic_llm_missing_score")
+    return float(_clamp(float(score_val) * 3.0, -3.0, 3.0))
+
+
 def get_semantic_sentiment() -> float:
     """Semantic sentiment proxy in [-3, 3].
 
     Source priority:
     1) Alternative.me Fear & Greed Index (public, no key)
-    2) local embedding adapter fallback (127.0.0.1:9999)
+    2) configured embedding fallback (LIE_EMBEDDING_BASE_URL)
+    3) configured local responses fallback (LIE_SEMANTIC_API_BASE_URL)
     """
     return get_semantic_sentiment_with_source()[0]
 
@@ -1141,7 +1250,13 @@ def get_semantic_sentiment_with_source() -> Tuple[float, str]:
 
     try:
         summary = "Crypto market regime summary fallback for embedding sentiment."
-        return _embedding_sentiment(summary), "embedding_local"
+        return _embedding_sentiment(summary), "embedding_configured"
+    except Exception:
+        pass
+
+    try:
+        summary = "Crypto market regime summary fallback for semantic sentiment."
+        return _llm_sentiment(summary), "semantic_llm_configured"
     except Exception:
         return 0.0, "fallback_zero"
 

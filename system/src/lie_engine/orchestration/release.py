@@ -7,6 +7,7 @@ from contextlib import closing
 import csv
 import math
 import sqlite3
+import time as time_module
 from typing import Any, Callable, ClassVar
 
 import yaml
@@ -518,47 +519,187 @@ class ReleaseOrchestrator:
         stable_replay_mode: str = "execute",
     ) -> dict[str, Any]:
         d = as_of.isoformat()
+        review_dir = self.output_dir / "review"
+        timing_path = review_dir / f"{d}_gate_report_timing.json"
+        timing_started_mono = time_module.monotonic()
+        stable_replay_mode_norm = str(stable_replay_mode or "execute").strip().lower()
+        if stable_replay_mode_norm not in {"execute", "cached"}:
+            stable_replay_mode_norm = "execute"
+        gate_timing: dict[str, Any] = {
+            "date": d,
+            "stable_replay_mode": stable_replay_mode_norm,
+            "status": "pending",
+            "elapsed_sec": 0.0,
+            "current_stage": "",
+            "last_completed_stage": "",
+            "stages": [],
+        }
+
+        def _persist_gate_timing() -> None:
+            gate_timing["elapsed_sec"] = round(time_module.monotonic() - timing_started_mono, 3)
+            write_json(timing_path, gate_timing)
+
+        def _stage_summary(payload: Any) -> dict[str, Any]:
+            if not isinstance(payload, dict):
+                return {}
+            summary: dict[str, Any] = {}
+            for key in ("status", "passed", "active", "mode", "source_date"):
+                if key in payload:
+                    summary[key] = payload.get(key)
+            for key in ("samples", "window_days", "replay_days"):
+                if key in payload:
+                    summary[key] = int(self._safe_float(payload.get(key, 0), 0))
+            checks = payload.get("checks", {}) if isinstance(payload.get("checks", {}), dict) else {}
+            failed_checks = [str(key) for key, value in checks.items() if not bool(value)]
+            if failed_checks:
+                summary["failed_checks"] = failed_checks[:8]
+            alerts = payload.get("alerts", []) if isinstance(payload.get("alerts", []), list) else []
+            if alerts:
+                summary["alerts"] = [str(x) for x in alerts[:8]]
+            metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics", {}), dict) else {}
+            for key in (
+                "completeness",
+                "unresolved_conflict_ratio",
+                "positive_window_ratio",
+                "max_drawdown",
+                "violations",
+                "age_days",
+            ):
+                if key in metrics:
+                    summary[key] = metrics.get(key)
+            if "missing" in payload and isinstance(payload.get("missing", []), list):
+                summary["missing"] = [str(x) for x in payload.get("missing", [])[:8]]
+            return summary
+
+        def _run_timed_stage(
+            name: str,
+            fn: Callable[[], Any],
+            *,
+            summarize: Callable[[Any], dict[str, Any]] | None = None,
+        ) -> Any:
+            stage_started_mono = time_module.monotonic()
+            gate_timing["status"] = "running"
+            gate_timing["current_stage"] = name
+            gate_timing["current_stage_started_elapsed_sec"] = round(
+                stage_started_mono - timing_started_mono,
+                3,
+            )
+            _persist_gate_timing()
+            try:
+                value = fn()
+            except Exception as exc:
+                gate_timing["status"] = "failed"
+                gate_timing["failed_stage"] = name
+                gate_timing["error"] = f"{type(exc).__name__}:{exc}"
+                gate_timing["current_stage_elapsed_sec"] = round(
+                    time_module.monotonic() - stage_started_mono,
+                    3,
+                )
+                _persist_gate_timing()
+                raise
+            stage_row: dict[str, Any] = {
+                "name": name,
+                "elapsed_sec": round(time_module.monotonic() - stage_started_mono, 3),
+            }
+            if summarize is not None:
+                try:
+                    summary = summarize(value)
+                except Exception:
+                    summary = {}
+                if summary:
+                    stage_row["summary"] = summary
+            gate_timing.setdefault("stages", []).append(stage_row)
+            gate_timing["last_completed_stage"] = name
+            gate_timing["current_stage"] = ""
+            gate_timing.pop("current_stage_started_elapsed_sec", None)
+            gate_timing.pop("current_stage_elapsed_sec", None)
+            gate_timing.pop("failed_stage", None)
+            gate_timing.pop("error", None)
+            _persist_gate_timing()
+            return value
+
         review_delta_path = self.output_dir / "review" / f"{d}_param_delta.yaml"
         if run_review_if_missing and not review_delta_path.exists():
-            self.run_review(as_of)
+            _run_timed_stage(
+                "run_review_if_missing",
+                lambda: self.run_review(as_of),
+                summarize=lambda review: {
+                    "pass_gate": bool(getattr(review, "pass_gate", False)),
+                    "defect_count": int(len(getattr(review, "defects", []) or [])),
+                },
+            )
 
-        quality = self.quality_snapshot(as_of)
-        backtest = self.backtest_snapshot(as_of)
-        health = self.health_check(as_of, True)
-        stable_replay_mode_norm = str(stable_replay_mode or "execute").strip().lower()
+        quality = _run_timed_stage("quality_snapshot", lambda: self.quality_snapshot(as_of), summarize=_stage_summary)
+        backtest = _run_timed_stage("backtest_snapshot", lambda: self.backtest_snapshot(as_of), summarize=_stage_summary)
+        health = _run_timed_stage("health_check", lambda: self.health_check(as_of, True), summarize=_stage_summary)
         if stable_replay_mode_norm == "cached":
-            replay = self._stable_replay_health_snapshot(as_of=as_of, days=None)
+            replay = _run_timed_stage(
+                "stable_replay",
+                lambda: self._stable_replay_health_snapshot(as_of=as_of, days=None),
+                summarize=_stage_summary,
+            )
         else:
-            stable_replay_mode_norm = "execute"
-            replay = self.stable_replay_check(as_of, None)
+            replay = _run_timed_stage(
+                "stable_replay",
+                lambda: self.stable_replay_check(as_of, None),
+                summarize=_stage_summary,
+            )
             if isinstance(replay, dict):
                 replay = dict(replay)
                 replay.setdefault("mode", "execute_run_eod")
-        state_stability = self._state_stability_metrics(as_of=as_of)
+        state_stability = _run_timed_stage(
+            "state_stability_metrics",
+            lambda: self._state_stability_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         state_active = bool(state_stability.get("active", False))
         state_checks = state_stability.get("checks", {}) if isinstance(state_stability.get("checks", {}), dict) else {}
         state_stability_ok = all(bool(v) for v in state_checks.values()) if state_active else True
-        strategy_stability = self._strategy_stability_metrics(as_of=as_of)
+        strategy_stability = _run_timed_stage(
+            "strategy_stability_metrics",
+            lambda: self._strategy_stability_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         strategy_active = bool(strategy_stability.get("active", False))
         strategy_checks = (
             strategy_stability.get("checks", {}) if isinstance(strategy_stability.get("checks", {}), dict) else {}
         )
         strategy_stability_ok = all(bool(v) for v in strategy_checks.values()) if strategy_active else True
-        temporal_audit = self._temporal_audit_metrics(as_of=as_of)
+        temporal_audit = _run_timed_stage(
+            "temporal_audit_metrics",
+            lambda: self._temporal_audit_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         temporal_active = bool(temporal_audit.get("active", False))
         temporal_checks = temporal_audit.get("checks", {}) if isinstance(temporal_audit.get("checks", {}), dict) else {}
         temporal_audit_ok = all(bool(v) for v in temporal_checks.values()) if temporal_active else True
-        slot_anomaly = self._slot_anomaly_metrics(as_of=as_of)
+        slot_anomaly = _run_timed_stage(
+            "slot_anomaly_metrics",
+            lambda: self._slot_anomaly_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         slot_active = bool(slot_anomaly.get("active", False))
         slot_checks = slot_anomaly.get("checks", {}) if isinstance(slot_anomaly.get("checks", {}), dict) else {}
         slot_anomaly_ok = all(bool(v) for v in slot_checks.values()) if slot_active else True
-        mode_drift = self._mode_drift_metrics(as_of=as_of)
+        mode_drift = _run_timed_stage(
+            "mode_drift_metrics",
+            lambda: self._mode_drift_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         drift_active = bool(mode_drift.get("active", False))
         drift_checks = mode_drift.get("checks", {}) if isinstance(mode_drift.get("checks", {}), dict) else {}
         mode_drift_ok = all(bool(v) for v in drift_checks.values()) if drift_active else True
-        style_drift = self._style_drift_metrics(as_of=as_of)
+        style_drift = _run_timed_stage(
+            "style_drift_metrics",
+            lambda: self._style_drift_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         style_drift_ok = bool(style_drift.get("gate_ok", True))
-        stress_matrix_trend = self._stress_matrix_trend_metrics(as_of=as_of)
+        stress_matrix_trend = _run_timed_stage(
+            "stress_matrix_trend_metrics",
+            lambda: self._stress_matrix_trend_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         stress_active = bool(stress_matrix_trend.get("active", False))
         stress_checks = (
             stress_matrix_trend.get("checks", {})
@@ -566,7 +707,11 @@ class ReleaseOrchestrator:
             else {}
         )
         stress_matrix_trend_ok = all(bool(v) for v in stress_checks.values()) if stress_active else True
-        stress_autorun_history = self._stress_autorun_history_metrics(as_of=as_of)
+        stress_autorun_history = _run_timed_stage(
+            "stress_autorun_history_metrics",
+            lambda: self._stress_autorun_history_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         stress_autorun_history_active = bool(stress_autorun_history.get("active", False))
         stress_autorun_history_checks = (
             stress_autorun_history.get("checks", {})
@@ -576,7 +721,11 @@ class ReleaseOrchestrator:
         stress_autorun_history_ok = (
             all(bool(v) for v in stress_autorun_history_checks.values()) if stress_autorun_history_active else True
         )
-        stress_autorun_adaptive = self._stress_autorun_adaptive_saturation_metrics(as_of=as_of)
+        stress_autorun_adaptive = _run_timed_stage(
+            "stress_autorun_adaptive_saturation_metrics",
+            lambda: self._stress_autorun_adaptive_saturation_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         stress_autorun_adaptive_active = bool(stress_autorun_adaptive.get("active", False))
         stress_autorun_adaptive_checks = (
             stress_autorun_adaptive.get("checks", {})
@@ -586,7 +735,11 @@ class ReleaseOrchestrator:
         stress_autorun_adaptive_ok = (
             all(bool(v) for v in stress_autorun_adaptive_checks.values()) if stress_autorun_adaptive_active else True
         )
-        stress_autorun_reason_drift = self._stress_autorun_adaptive_reason_drift_metrics(as_of=as_of)
+        stress_autorun_reason_drift = _run_timed_stage(
+            "stress_autorun_adaptive_reason_drift_metrics",
+            lambda: self._stress_autorun_adaptive_reason_drift_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         stress_autorun_reason_drift_active = bool(stress_autorun_reason_drift.get("active", False))
         stress_autorun_reason_drift_checks = (
             stress_autorun_reason_drift.get("checks", {})
@@ -598,16 +751,24 @@ class ReleaseOrchestrator:
             if stress_autorun_reason_drift_active
             else True
         )
-        reconcile_drift = self._reconcile_drift_metrics(as_of=as_of)
+        reconcile_drift = _run_timed_stage(
+            "reconcile_drift_metrics",
+            lambda: self._reconcile_drift_metrics(as_of=as_of),
+            summarize=_stage_summary,
+        )
         reconcile_active = bool(reconcile_drift.get("active", False))
         reconcile_checks = reconcile_drift.get("checks", {}) if isinstance(reconcile_drift.get("checks", {}), dict) else {}
         reconcile_drift_ok = all(bool(v) for v in reconcile_checks.values()) if reconcile_active else True
-        artifact_governance = self._artifact_governance_metrics(
-            as_of=as_of,
-            temporal_audit=temporal_audit,
-            stress_autorun_history=stress_autorun_history,
-            stress_autorun_reason_drift=stress_autorun_reason_drift,
-            reconcile_drift=reconcile_drift,
+        artifact_governance = _run_timed_stage(
+            "artifact_governance_metrics",
+            lambda: self._artifact_governance_metrics(
+                as_of=as_of,
+                temporal_audit=temporal_audit,
+                stress_autorun_history=stress_autorun_history,
+                stress_autorun_reason_drift=stress_autorun_reason_drift,
+                reconcile_drift=reconcile_drift,
+            ),
+            summarize=_stage_summary,
         )
         artifact_governance_active = bool(artifact_governance.get("active", False))
         artifact_governance_checks = (
@@ -622,16 +783,27 @@ class ReleaseOrchestrator:
         tests_ok = True
         tests_payload: dict[str, Any] = {}
         if run_tests:
-            tests_payload = self.test_all()
+            tests_payload = _run_timed_stage("test_all", lambda: self.test_all(), summarize=_stage_summary)
             tests_ok = bool(tests_payload.get("returncode", 1) == 0)
 
         review_pass = False
         mode_health_ok = True
         if review_delta_path.exists():
-            try:
-                review_delta = yaml.safe_load(review_delta_path.read_text(encoding="utf-8")) or {}
-            except Exception:
-                review_delta = {}
+            def _load_review_delta() -> dict[str, Any]:
+                try:
+                    raw = yaml.safe_load(review_delta_path.read_text(encoding="utf-8")) or {}
+                except Exception:
+                    raw = {}
+                return raw if isinstance(raw, dict) else {}
+
+            review_delta = _run_timed_stage(
+                "load_review_delta",
+                _load_review_delta,
+                summarize=lambda payload: {
+                    "pass_gate": bool((payload or {}).get("pass_gate", False)),
+                    "mode_health_present": bool(isinstance((payload or {}).get("mode_health", {}), dict)),
+                },
+            )
             review_pass = bool(review_delta.get("pass_gate", False))
             mode_health = review_delta.get("mode_health", {}) if isinstance(review_delta.get("mode_health", {}), dict) else {}
             mode_health_ok = bool(mode_health.get("passed", True))
@@ -762,8 +934,23 @@ class ReleaseOrchestrator:
                 except OSError:
                     pass
 
-        report_path = self.output_dir / "review" / f"{d}_gate_report.json"
-        write_json(report_path, out)
+        report_path = review_dir / f"{d}_gate_report.json"
+        _run_timed_stage(
+            "write_gate_report",
+            lambda: write_json(report_path, out),
+            summarize=lambda _: {
+                "passed": bool(overall),
+                "failed_checks": [str(key) for key, value in checks.items() if not bool(value)][:10],
+                "path": str(report_path),
+            },
+        )
+        gate_timing["status"] = "completed"
+        gate_timing["current_stage"] = ""
+        gate_timing.pop("current_stage_started_elapsed_sec", None)
+        gate_timing.pop("current_stage_elapsed_sec", None)
+        gate_timing.pop("failed_stage", None)
+        gate_timing.pop("error", None)
+        _persist_gate_timing()
         return out
 
     def _stable_replay_health_snapshot(
@@ -1920,11 +2107,16 @@ class ReleaseOrchestrator:
         raw_series = self._load_review_loop_history_series(as_of=as_of, window_days=window_days)
         series: list[dict[str, Any]] = []
         reason_counts: dict[str, int] = {}
+        ignored_reason_counts: dict[str, int] = {}
+        ignored_reasons = {"insufficient_rounds", "adaptive_disabled", "base_max_runs_zero"}
         for row in raw_series:
             if not isinstance(row, dict):
                 continue
             reason = str(row.get("adaptive_reason", "")).strip()
             if not reason:
+                continue
+            if reason in ignored_reasons:
+                ignored_reason_counts[reason] = int(ignored_reason_counts.get(reason, 0) + 1)
                 continue
             if reason == "high_density_throttle":
                 bucket = "high"
@@ -2002,7 +2194,9 @@ class ReleaseOrchestrator:
                 alerts.append("stress_autorun_reason_change_point")
 
         metrics = {
+            "raw_rounds_total": int(len(raw_series)),
             "rounds_total": int(rounds_total),
+            "ignored_rounds": int(sum(int(v) for v in ignored_reason_counts.values())),
             "baseline_rounds": int(len(baseline_series)),
             "recent_rounds": int(len(recent_series)),
             "baseline_high_ratio": float(baseline_ratio.get("high", 0.0)),
@@ -2014,6 +2208,9 @@ class ReleaseOrchestrator:
             "reason_mix_gap": float(mix_gap),
             "change_point_gap": float(change_point_gap),
             "reason_counts": dict(sorted(reason_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))),
+            "ignored_reason_counts": dict(
+                sorted(ignored_reason_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
+            ),
             "transition_counts": dict(
                 sorted(transition_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
             ),
@@ -2226,6 +2423,172 @@ class ReleaseOrchestrator:
                 else {}
             )
             mode_health = payload.get("mode_health", {}) if isinstance(payload.get("mode_health", {}), dict) else {}
+            soft_failed_rules = (
+                mode_health.get("soft_failed_rules", [])
+                if isinstance(mode_health.get("soft_failed_rules", []), list)
+                else []
+            )
+            hard_failed_rules = (
+                mode_health.get("hard_failed_rules", [])
+                if isinstance(mode_health.get("hard_failed_rules", []), list)
+                else []
+            )
+            mode_health_passed = bool(mode_health.get("passed", True))
+            mode_health_degraded = bool(mode_health.get("degraded", False))
+            if hard_failed_rules:
+                mode_health_passed = False
+                mode_health_degraded = True
+            elif soft_failed_rules:
+                mode_health_passed = True
+                mode_health_degraded = True
+            elif (not mode_health_passed) and isinstance(mode_health.get("stats", {}), dict) and isinstance(
+                mode_health.get("thresholds", {}), dict
+            ):
+                stats = mode_health.get("stats", {})
+                thresholds = mode_health.get("thresholds", {})
+                current_soft_min_profit_factor = self._safe_float(
+                    self.settings.validation.get("mode_health_min_profit_factor", 1.0),
+                    1.0,
+                )
+                current_soft_min_win_rate = self._safe_float(
+                    self.settings.validation.get("mode_health_min_win_rate", 0.40),
+                    0.40,
+                )
+                current_soft_max_drawdown = self._safe_float(
+                    self.settings.validation.get(
+                        "mode_health_max_drawdown_max",
+                        self.settings.validation.get("max_drawdown_max", 0.18),
+                    ),
+                    self._safe_float(self.settings.validation.get("max_drawdown_max", 0.18), 0.18),
+                )
+                current_soft_max_violations = max(
+                    0,
+                    int(self._safe_float(self.settings.validation.get("mode_health_max_violations", 0), 0)),
+                )
+                soft_min_profit_factor = self._safe_float(
+                    thresholds.get("min_profit_factor", self.settings.validation.get("mode_health_min_profit_factor", 1.0)),
+                    current_soft_min_profit_factor,
+                )
+                soft_min_win_rate = self._safe_float(
+                    thresholds.get("min_win_rate", self.settings.validation.get("mode_health_min_win_rate", 0.40)),
+                    current_soft_min_win_rate,
+                )
+                soft_max_drawdown = self._safe_float(
+                    thresholds.get(
+                        "max_drawdown_max",
+                        self.settings.validation.get(
+                            "mode_health_max_drawdown_max",
+                            self.settings.validation.get("max_drawdown_max", 0.18),
+                        ),
+                    ),
+                    current_soft_max_drawdown,
+                )
+                soft_max_violations = max(
+                    0,
+                    int(
+                        self._safe_float(
+                            thresholds.get(
+                                "max_violations",
+                                self.settings.validation.get("mode_health_max_violations", 0),
+                            ),
+                            float(current_soft_max_violations),
+                        )
+                    ),
+                )
+                hard_min_profit_factor = max(
+                    0.0,
+                    self._safe_float(
+                        mode_health.get("hard_thresholds", {}).get(
+                            "min_profit_factor",
+                            self.settings.validation.get(
+                                "mode_health_hard_min_profit_factor",
+                                max(0.0, current_soft_min_profit_factor - 0.10),
+                            ),
+                        )
+                        if isinstance(mode_health.get("hard_thresholds", {}), dict)
+                        else self.settings.validation.get(
+                            "mode_health_hard_min_profit_factor",
+                            max(0.0, current_soft_min_profit_factor - 0.10),
+                        ),
+                        max(0.0, current_soft_min_profit_factor - 0.10),
+                    ),
+                )
+                hard_min_win_rate = min(
+                    1.0,
+                    max(
+                        0.0,
+                        self._safe_float(
+                            mode_health.get("hard_thresholds", {}).get(
+                                "min_win_rate",
+                                self.settings.validation.get(
+                                    "mode_health_hard_min_win_rate",
+                                    max(0.0, current_soft_min_win_rate - 0.10),
+                                ),
+                            )
+                            if isinstance(mode_health.get("hard_thresholds", {}), dict)
+                            else self.settings.validation.get(
+                                "mode_health_hard_min_win_rate",
+                                max(0.0, current_soft_min_win_rate - 0.10),
+                            ),
+                            max(0.0, current_soft_min_win_rate - 0.10),
+                        ),
+                    ),
+                )
+                hard_max_drawdown = min(
+                    1.0,
+                    max(
+                        0.0,
+                        self._safe_float(
+                            mode_health.get("hard_thresholds", {}).get(
+                                "max_drawdown_max",
+                                self.settings.validation.get("mode_health_hard_max_drawdown_max", current_soft_max_drawdown),
+                            )
+                            if isinstance(mode_health.get("hard_thresholds", {}), dict)
+                            else self.settings.validation.get("mode_health_hard_max_drawdown_max", current_soft_max_drawdown),
+                            current_soft_max_drawdown,
+                        ),
+                    ),
+                )
+                hard_max_violations = max(
+                    0,
+                    int(
+                        self._safe_float(
+                            mode_health.get("hard_thresholds", {}).get(
+                                "max_violations",
+                                self.settings.validation.get("mode_health_hard_max_violations", current_soft_max_violations),
+                            )
+                            if isinstance(mode_health.get("hard_thresholds", {}), dict)
+                            else self.settings.validation.get("mode_health_hard_max_violations", current_soft_max_violations),
+                            float(current_soft_max_violations),
+                        )
+                    ),
+                )
+                pf = self._safe_float(stats.get("avg_profit_factor", 0.0), 0.0)
+                wr = self._safe_float(stats.get("avg_win_rate", 0.0), 0.0)
+                dd = self._safe_float(stats.get("worst_drawdown", 1.0), 1.0)
+                viol = int(self._safe_float(stats.get("total_violations", 0), 0))
+                inferred_soft = [
+                    rule
+                    for rule, ok in (
+                        ("profit_factor", pf >= soft_min_profit_factor),
+                        ("win_rate", wr >= soft_min_win_rate),
+                        ("max_drawdown", dd <= soft_max_drawdown),
+                        ("violations", viol <= soft_max_violations),
+                    )
+                    if not ok
+                ]
+                inferred_hard = [
+                    rule
+                    for rule, ok in (
+                        ("profit_factor", pf >= hard_min_profit_factor),
+                        ("win_rate", wr >= hard_min_win_rate),
+                        ("max_drawdown", dd <= hard_max_drawdown),
+                        ("violations", viol <= hard_max_violations),
+                    )
+                    if not ok
+                ]
+                mode_health_passed = len(inferred_hard) == 0
+                mode_health_degraded = len(inferred_soft) > 0
             micro = payload.get("microstructure", {}) if isinstance(payload.get("microstructure", {}), dict) else {}
             cross_audit = (
                 micro.get("cross_source_audit", {}) if isinstance(micro.get("cross_source_audit", {}), dict) else {}
@@ -2238,7 +2601,8 @@ class ReleaseOrchestrator:
                     "runtime_mode": str(payload.get("runtime_mode", "")).strip(),
                     "risk_multiplier": self._safe_float(risk_control.get("risk_multiplier", 1.0), 1.0),
                     "source_confidence_score": self._safe_float(risk_control.get("source_confidence_score", 1.0), 1.0),
-                    "mode_health_passed": bool(mode_health.get("passed", True)),
+                    "mode_health_passed": bool(mode_health_passed),
+                    "mode_health_degraded": bool(mode_health_degraded),
                     "micro_schema_fail_symbols": int(micro.get("symbols_schema_fail", 0)),
                     "micro_gate_triggered": bool(gate_reasons),
                     "cross_source_active": bool(cross_audit.get("active", False)),
@@ -5073,6 +5437,8 @@ class ReleaseOrchestrator:
                 "gaps": {
                     "win_rate_abs": abs(live_wr - base_wr),
                     "profit_factor_abs": abs(live_pf - base_pf),
+                    "win_rate_downside": max(0.0, base_wr - live_wr),
+                    "profit_factor_downside": max(0.0, base_pf - live_pf),
                 },
                 "checks": {
                     "baseline_ok": baseline_samples > 0,
@@ -5096,8 +5462,9 @@ class ReleaseOrchestrator:
                 active_modes += 1
                 row["active"] = True
                 compared_modes += 1
-                wr_gap = self._safe_float(row["gaps"]["win_rate_abs"], 0.0)
-                pf_gap = self._safe_float(row["gaps"]["profit_factor_abs"], 0.0)
+                # Only downside drift should block the live gate; improvements are not degradations.
+                wr_gap = self._safe_float(row["gaps"]["win_rate_downside"], 0.0)
+                pf_gap = self._safe_float(row["gaps"]["profit_factor_downside"], 0.0)
                 row["checks"]["win_rate_gap_ok"] = bool(wr_gap <= max_wr_gap)
                 row["checks"]["profit_factor_gap_ok"] = bool(pf_gap <= max_pf_gap)
                 if not bool(row["checks"]["win_rate_gap_ok"]):
@@ -5866,6 +6233,18 @@ class ReleaseOrchestrator:
         micro_capture_cross_source_fail_ratio_values = [
             self._safe_float(x.get("micro_capture_cross_source_fail_ratio", 0.0), 0.0) for x in rows
         ]
+        micro_capture_time_sync_observed_days = sum(
+            1
+            for x in rows
+            if bool(x.get("system_time_sync_active", False))
+            and int(self._safe_float(x.get("system_time_sync_available_sources", 0), 0)) > 0
+        )
+        micro_capture_time_sync_unavailable_days = sum(
+            1
+            for x in rows
+            if bool(x.get("system_time_sync_active", False))
+            and int(self._safe_float(x.get("system_time_sync_available_sources", 0), 0)) <= 0
+        )
         mode_health_fail_days = sum(1 for x in rows if not bool(x.get("mode_health_passed", True)))
         micro_schema_fail_days = sum(1 for x in rows if int(x.get("micro_schema_fail_symbols", 0)) > 0)
         cross_source_fail_days = sum(
@@ -5890,7 +6269,35 @@ class ReleaseOrchestrator:
             system_time_sync_inactive_days = sum(
                 1 for x in rows if not bool(x.get("system_time_sync_active", False))
             )
-        micro_capture_degraded_days = sum(1 for x in rows if str(x.get("micro_capture_reason", "")) == "degraded")
+        def _micro_capture_time_sync_quality_failed(row: dict[str, Any]) -> bool:
+            if not micro_capture_time_sync_enforced:
+                return False
+            if not bool(row.get("system_time_sync_active", False)):
+                return False
+            available_sources = int(self._safe_float(row.get("system_time_sync_available_sources", 0), 0))
+            if available_sources <= 0:
+                return False
+            return (
+                self._safe_float(row.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0)
+                < micro_capture_time_sync_ok_ratio_min
+            )
+
+        def _micro_capture_quality_failed(row: dict[str, Any]) -> bool:
+            if int(self._safe_float(row.get("micro_capture_run_count", 0), 0)) <= 0:
+                return False
+            return bool(
+                self._safe_float(row.get("micro_capture_pass_ratio", 0.0), 0.0) < micro_capture_pass_ratio_min
+                or self._safe_float(row.get("micro_capture_schema_ok_ratio", 0.0), 0.0) < micro_capture_schema_ok_ratio_min
+                or _micro_capture_time_sync_quality_failed(row)
+                or self._safe_float(row.get("micro_capture_cross_source_fail_ratio", 0.0), 0.0)
+                > micro_capture_cross_source_fail_ratio_max
+            )
+
+        micro_capture_degraded_days = sum(
+            1
+            for x in rows
+            if str(x.get("micro_capture_reason", "")) == "degraded" and _micro_capture_quality_failed(x)
+        )
         micro_capture_insufficient_days = sum(
             1
             for x in rows
@@ -5899,17 +6306,7 @@ class ReleaseOrchestrator:
         micro_capture_quality_fail_days = sum(
             1
             for x in rows
-            if int(self._safe_float(x.get("micro_capture_run_count", 0), 0)) > 0
-            and (
-                self._safe_float(x.get("micro_capture_pass_ratio", 0.0), 0.0) < micro_capture_pass_ratio_min
-                or self._safe_float(x.get("micro_capture_schema_ok_ratio", 0.0), 0.0) < micro_capture_schema_ok_ratio_min
-                or (
-                    micro_capture_time_sync_enforced
-                    and self._safe_float(x.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0) < micro_capture_time_sync_ok_ratio_min
-                )
-                or self._safe_float(x.get("micro_capture_cross_source_fail_ratio", 0.0), 0.0)
-                > micro_capture_cross_source_fail_ratio_max
-            )
+            if _micro_capture_quality_failed(x)
         )
 
         switch_count = 0
@@ -5934,6 +6331,15 @@ class ReleaseOrchestrator:
         micro_capture_time_sync_ok_ratio_avg = (
             sum(micro_capture_time_sync_ok_ratio_values) / len(micro_capture_time_sync_ok_ratio_values)
         ) if micro_capture_time_sync_ok_ratio_values else 0.0
+        micro_capture_time_sync_ok_ratio_observed_avg = (
+            sum(
+                self._safe_float(x.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0)
+                for x in rows
+                if bool(x.get("system_time_sync_active", False))
+                and int(self._safe_float(x.get("system_time_sync_available_sources", 0), 0)) > 0
+            )
+            / max(1, micro_capture_time_sync_observed_days)
+        ) if micro_capture_time_sync_observed_days > 0 else 0.0
         micro_capture_cross_source_fail_ratio_avg = (
             sum(micro_capture_cross_source_fail_ratio_values) / len(micro_capture_cross_source_fail_ratio_values)
         ) if micro_capture_cross_source_fail_ratio_values else 0.0
@@ -6044,6 +6450,9 @@ class ReleaseOrchestrator:
                 "micro_capture_pass_ratio_avg": micro_capture_pass_ratio_avg,
                 "micro_capture_schema_ok_ratio_avg": micro_capture_schema_ok_ratio_avg,
                 "micro_capture_time_sync_ok_ratio_avg": micro_capture_time_sync_ok_ratio_avg,
+                "micro_capture_time_sync_ok_ratio_observed_avg": micro_capture_time_sync_ok_ratio_observed_avg,
+                "micro_capture_time_sync_observed_days": micro_capture_time_sync_observed_days,
+                "micro_capture_time_sync_unavailable_days": micro_capture_time_sync_unavailable_days,
                 "micro_capture_cross_source_fail_ratio_avg": micro_capture_cross_source_fail_ratio_avg,
                 "system_time_sync_fail_days": system_time_sync_fail_days,
                 "system_time_sync_inactive_days": system_time_sync_inactive_days,
@@ -8288,7 +8697,12 @@ class ReleaseOrchestrator:
         write_markdown(md_path, "\n".join(lines) + "\n")
         return {"json": str(json_path), "md": str(md_path)}
 
-    def review_until_pass(self, as_of: date, max_rounds: int = 3) -> dict[str, Any]:
+    def review_until_pass(
+        self,
+        as_of: date,
+        max_rounds: int = 3,
+        fast_tests_only: bool = False,
+    ) -> dict[str, Any]:
         alert_path = self.output_dir / "logs" / f"review_loop_alert_{as_of.isoformat()}.json"
         if int(max_rounds) <= 0:
             return {
@@ -8306,6 +8720,7 @@ class ReleaseOrchestrator:
         fast_shard_total = int(val.get("review_loop_fast_shard_total", 1))
         fast_seed = str(val.get("review_loop_fast_seed", "lie-fast-v1"))
         fast_then_full = bool(val.get("review_loop_fast_then_full", True))
+        fast_then_full_enabled = bool(fast_then_full and (not fast_tests_only))
         timeout_fallback_enabled = bool(val.get("review_loop_timeout_fallback_enabled", True))
         timeout_fallback_ratio = max(0.01, min(1.0, float(val.get("review_loop_timeout_fallback_ratio", fast_ratio))))
         timeout_fallback_shard_total = max(1, int(val.get("review_loop_timeout_fallback_shard_total", fast_shard_total)))
@@ -8382,7 +8797,7 @@ class ReleaseOrchestrator:
         for i in range(int(max_rounds)):
             round_no = i + 1
             review = self.run_review(as_of)
-            run_fast = bool(i == 0 and fast_enabled)
+            run_fast = bool(fast_tests_only or (i == 0 and fast_enabled))
             tests = self._run_tests(
                 fast=run_fast,
                 fast_ratio=fast_ratio,
@@ -8392,7 +8807,7 @@ class ReleaseOrchestrator:
             )
             fast_tests = tests if run_fast else {}
             full_tests = tests if (not run_fast) else {}
-            if run_fast and tests.get("returncode", 1) == 0 and fast_then_full:
+            if run_fast and tests.get("returncode", 1) == 0 and fast_then_full_enabled:
                 full_tests = self._run_tests(
                     fast=False,
                     fast_ratio=fast_ratio,
@@ -8592,12 +9007,17 @@ class ReleaseOrchestrator:
                 else {}
             )
             ok = bool(gate["passed"] and tests["returncode"] == 0 and review.pass_gate)
-            tests_mode = "fast+full" if (run_fast and fast_then_full and full_tests) else ("fast" if run_fast else "full")
+            tests_mode = (
+                "fast-only"
+                if (run_fast and fast_tests_only)
+                else ("fast+full" if (run_fast and fast_then_full_enabled and full_tests) else ("fast" if run_fast else "full"))
+            )
             if timeout_fallback:
                 tests_mode = tests_mode + "+timeout-fast"
             rounds.append(
                 {
                     "round": round_no,
+                    "fast_tests_only": bool(fast_tests_only),
                     "tests_mode": tests_mode,
                     "pass_gate": review.pass_gate,
                     "tests_ok": tests["returncode"] == 0,
@@ -8691,10 +9111,20 @@ class ReleaseOrchestrator:
         write_json(alert_path, fail_payload)
         return fail_payload
 
-    def run_review_cycle(self, as_of: date, max_rounds: int = 2, ops_window_days: int | None = None) -> dict[str, Any]:
+    def run_review_cycle(
+        self,
+        as_of: date,
+        max_rounds: int = 2,
+        ops_window_days: int | None = None,
+        fast_tests_only: bool = False,
+    ) -> dict[str, Any]:
         replay_days = int(self.settings.validation.get("required_stable_replay_days", 3))
         ops_days = int(ops_window_days or replay_days)
-        review_loop = self.review_until_pass(as_of=as_of, max_rounds=max_rounds)
+        review_loop = self.review_until_pass(
+            as_of=as_of,
+            max_rounds=max_rounds,
+            fast_tests_only=fast_tests_only,
+        )
         gate = self.gate_report(as_of=as_of, run_tests=False, run_review_if_missing=False)
         ops = self.ops_report(as_of=as_of, window_days=ops_days)
         health = self.health_check(as_of, True)

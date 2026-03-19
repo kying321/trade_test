@@ -264,6 +264,16 @@ def test_latest_combo_playbook_ignores_future_stamped_artifact(tmp_path: Path) -
     assert module.latest_combo_playbook(tmp_path) == current
 
 
+def test_latest_combo_playbook_respects_reference_now(tmp_path: Path) -> None:
+    module = _load_module()
+    current = tmp_path / "20260310T154509Z_binance_indicator_combo_playbook.json"
+    future = tmp_path / "20260310T234509Z_binance_indicator_combo_playbook.json"
+    current.write_text(json.dumps({"marker": "current"}), encoding="utf-8")
+    future.write_text(json.dumps({"marker": "future"}), encoding="utf-8")
+    ref_now = module.parse_now("2026-03-10T23:50:00Z")
+    assert module.latest_combo_playbook(tmp_path, ref_now) == future
+
+
 def test_latest_bnb_flow_focus_prefers_richer_direct_native_artifact(tmp_path: Path) -> None:
     module = _load_module()
     older_rich = tmp_path / "20260310T094600Z_binance_indicator_bnb_flow_focus.json"
@@ -314,3 +324,46 @@ def test_classify_route_maps_long_window_watch_actions_to_watch_labels() -> None
     )
     assert bnb["status_label"] == "watch_priority"
     assert sol["status_label"] == "watch_only"
+
+
+def test_crypto_route_refresh_audit_lane_reports_reused_native_inputs(tmp_path: Path) -> None:
+    module = _load_module()
+    refresh = tmp_path / "20260312T114514Z_crypto_route_refresh.json"
+    refresh.write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "as_of": "2026-03-12T11:45:14+00:00",
+                "native_refresh_mode": "skip_native_refresh",
+                "steps": [
+                    {"name": "native_custom", "status": "reused_previous_artifact"},
+                    {"name": "native_majors", "status": "reused_previous_artifact"},
+                    {"name": "build_source_control_report", "status": "ok"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit = module._crypto_route_refresh_audit_lane(tmp_path)
+    assert audit["status"] == "reused_native_inputs"
+    assert audit["brief"] == "reused_native_inputs:skip_native_refresh:2/2"
+    assert audit["artifact"] == str(refresh)
+    assert audit["reused_native_count"] == 2
+    assert audit["missing_reused_count"] == 0
+
+
+def test_crypto_route_refresh_reuse_gate_marks_reused_inputs_non_blocking() -> None:
+    module = _load_module()
+    gate = module._crypto_route_refresh_reuse_gate(
+        {
+            "status": "reused_native_inputs",
+            "brief": "reused_native_inputs:skip_native_refresh:2/2",
+            "native_mode": "skip_native_refresh",
+            "reused_native_count": 2,
+            "native_step_count": 2,
+        }
+    )
+    assert gate["level"] == "informational"
+    assert gate["status"] == "reuse_non_blocking"
+    assert gate["brief"] == "reuse_non_blocking:skip_native_refresh:2/2"
+    assert gate["blocking"] is False

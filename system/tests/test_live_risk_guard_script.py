@@ -213,6 +213,209 @@ def test_live_risk_guard_blocks_on_recent_panic_marker(tmp_path: Path, monkeypat
     assert bool(fuse.get("allowed", True)) is False
 
 
+def test_live_risk_guard_surfaces_ticket_market_scope_mismatch(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    output_root = tmp_path / "output"
+    review_dir = output_root / "review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "20260306T000000Z_signal_to_order_tickets.json").write_text(
+        json.dumps(
+            {
+                "as_of": "2026-03-06",
+                "tickets": [
+                    {
+                        "symbol": "SOLUSDT",
+                        "date": "2026-03-06",
+                        "age_days": 0,
+                        "allowed": False,
+                        "reasons": ["signal_market_scope_mismatch", "size_below_min_notional"],
+                        "signal": {"side": "LONG", "confidence": 72.0, "convexity_ratio": 3.6},
+                        "execution": {"mode": "SPOT_LONG_OR_SELL"},
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_takeover_snapshot(output_root, quote_available=20.0, open_notional=0.0, closed_pnl=0.0)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "validation": {
+                    "micro_capture_daemon_symbols": ["SOLUSDT"],
+                    "binance_live_takeover_market": "spot",
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "live_risk_guard.py",
+            "--config",
+            str(config_path),
+            "--output-root",
+            str(output_root),
+            "--review-dir",
+            str(review_dir),
+            "--ticket-freshness-seconds",
+            "900",
+        ],
+    )
+    rc = mod.main()
+    assert rc == 3
+
+    generated = sorted(review_dir.glob("*_live_risk_guard.json"))
+    assert generated
+    parsed = json.loads(generated[-1].read_text(encoding="utf-8"))
+    assert bool(parsed.get("allowed", True)) is False
+    assert "ticket_missing:signal_market_scope_mismatch" in list(parsed.get("reasons", []))
+    selected = parsed.get("ticket_selection", {}).get("selected", {})
+    assert str(selected.get("reason", "")) == "signal_market_scope_mismatch"
+
+
+def test_load_exposure_snapshot_prefers_market_specific_takeover_snapshot(tmp_path: Path) -> None:
+    mod = _load_module()
+    output_root = tmp_path / "output"
+    review_dir = output_root / "review"
+    artifacts_dir = output_root / "artifacts" / "broker_live_inbox"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    spot_snapshot = artifacts_dir / "spot.json"
+    pm_snapshot = artifacts_dir / "pm.json"
+    spot_snapshot.write_text(
+        json.dumps(
+            {
+                "positions": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "qty": 0.00002,
+                        "market_price": 100000.0,
+                    }
+                ],
+                "closed_pnl": 0.0,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    pm_snapshot.write_text(
+        json.dumps(
+            {
+                "positions": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "positionAmt": 0.001,
+                        "markPrice": 73000.0,
+                    }
+                ],
+                "closed_pnl": 12.0,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "latest_binance_live_takeover.json").write_text(
+        json.dumps(
+            {
+                "market": "portfolio_margin_um",
+                "steps": {
+                    "account_overview": {"market": "portfolio_margin_um", "quote_available": 67.0},
+                    "live_snapshot": {"path": str(pm_snapshot), "closed_pnl": 12.0},
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (review_dir / "latest_binance_live_takeover_spot.json").write_text(
+        json.dumps(
+            {
+                "market": "spot",
+                "steps": {
+                    "account_overview": {"market": "spot", "quote_available": 20.0},
+                    "live_snapshot": {"path": str(spot_snapshot), "closed_pnl": 0.0},
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exposure = mod.load_exposure_snapshot(output_root, market="spot")
+    assert str(exposure.get("latest_takeover_path", "")).endswith("latest_binance_live_takeover_spot.json")
+    assert str(exposure.get("market", "")) == "spot"
+    assert abs(float(exposure.get("quote_available", 0.0)) - 20.0) < 1e-12
+    assert abs(float(exposure.get("open_exposure_notional", 0.0)) - 2.0) < 1e-12
+
+
+def test_live_risk_guard_blocks_read_only_portfolio_margin_market(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    output_root = tmp_path / "output"
+    review_dir = output_root / "review"
+    _write_ticket(review_dir, allowed=True)
+    _write_takeover_snapshot(output_root, quote_available=20.0, open_notional=1.0, closed_pnl=0.0)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "validation": {
+                    "micro_capture_daemon_symbols": ["BTCUSDT"],
+                    "binance_live_takeover_market": "portfolio_margin_um",
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "live_risk_guard.py",
+            "--config",
+            str(config_path),
+            "--output-root",
+            str(output_root),
+            "--review-dir",
+            str(review_dir),
+            "--ticket-freshness-seconds",
+            "900",
+            "--max-daily-loss-ratio",
+            "0.05",
+            "--max-open-exposure-ratio",
+            "0.50",
+        ],
+    )
+    rc = mod.main()
+    assert rc == 3
+
+    generated = sorted(review_dir.glob("*_live_risk_guard.json"))
+    assert generated
+    parsed = json.loads(generated[-1].read_text(encoding="utf-8"))
+    assert bool(parsed.get("allowed", True)) is False
+    assert list(parsed.get("reasons", [])) == ["ticket_missing:target_market_read_only"]
+    selected = ((parsed.get("ticket_selection", {}) or {}).get("selected", {}) or {})
+    blocked = selected.get("blocked_candidate", {})
+    assert isinstance(blocked, dict)
+    assert list(blocked.get("ticket_reasons", [])) == ["target_market_read_only"]
+    assert str(blocked.get("target_market", "")) == "portfolio_margin_um"
+
+
 def test_live_risk_guard_refreshes_tickets_before_eval(tmp_path: Path, monkeypatch) -> None:
     mod = _load_module()
     output_root = tmp_path / "output"

@@ -60,6 +60,43 @@ def find_latest(review_dir: Path, pattern: str) -> Path | None:
     return files[0] if files else None
 
 
+def resolve_queue_profile_source(
+    review_dir: Path,
+    explicit_path: str,
+) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None]:
+    if str(explicit_path).strip():
+        queue_path = Path(explicit_path).expanduser().resolve()
+        queue_payload = load_json_mapping(queue_path)
+        queue_profile = (
+            queue_payload.get("crypto_cvd_queue_profile", {})
+            if isinstance(queue_payload, dict)
+            else None
+        )
+        return queue_path, queue_payload, queue_profile if isinstance(queue_profile, dict) else None
+
+    queue_path = find_latest(review_dir, "*_crypto_cvd_queue_profile.json")
+    queue_payload = load_json_mapping(queue_path)
+    queue_profile = (
+        queue_payload.get("crypto_cvd_queue_profile", {})
+        if isinstance(queue_payload, dict)
+        else None
+    )
+    if isinstance(queue_profile, dict) and queue_profile:
+        return queue_path, queue_payload, queue_profile
+
+    hot_path = find_latest(review_dir, "*_hot_universe_research.json")
+    hot_payload = load_json_mapping(hot_path)
+    hot_profile = (
+        hot_payload.get("crypto_cvd_queue_profile", {})
+        if isinstance(hot_payload, dict)
+        else None
+    )
+    if isinstance(hot_profile, dict) and hot_profile:
+        return hot_path, hot_payload, hot_profile
+
+    return queue_path, queue_payload, queue_profile if isinstance(queue_profile, dict) else None
+
+
 def prune_artifacts(
     review_dir: Path,
     *,
@@ -110,12 +147,21 @@ def summarize_batch_runtime(batch_row: dict[str, Any], symbol_state: dict[str, d
     eligible_symbols = [str(x).strip().upper() for x in batch_row.get("cvd_eligible_symbols", []) if str(x).strip()]
     matching: list[dict[str, Any]] = []
     class_counts: dict[str, int] = {}
+    locality_counts: dict[str, int] = {}
+    attack_side_counts: dict[str, int] = {}
+    drift_risk_symbols: list[str] = []
     for symbol in eligible_symbols:
         row = symbol_state.get(symbol)
         if not row:
             continue
         klass = str(row.get("classification", "unclear")).strip() or "unclear"
+        locality = str(row.get("cvd_locality_status", "unknown")).strip() or "unknown"
+        attack_side = str(row.get("cvd_attack_side", "unknown")).strip() or "unknown"
         class_counts[klass] = int(class_counts.get(klass, 0)) + 1
+        locality_counts[locality] = int(locality_counts.get(locality, 0)) + 1
+        attack_side_counts[attack_side] = int(attack_side_counts.get(attack_side, 0)) + 1
+        if bool(row.get("cvd_drift_risk", False)):
+            drift_risk_symbols.append(symbol)
         matching.append(
             {
                 "symbol": symbol,
@@ -123,6 +169,9 @@ def summarize_batch_runtime(batch_row: dict[str, Any], symbol_state: dict[str, d
                 "cvd_context_mode": str(row.get("cvd_context_mode", "unclear")),
                 "cvd_trust_tier_hint": str(row.get("cvd_trust_tier_hint", "unavailable")),
                 "cvd_veto_hint": str(row.get("cvd_veto_hint", "")),
+                "cvd_locality_status": locality,
+                "cvd_drift_risk": bool(row.get("cvd_drift_risk", False)),
+                "cvd_attack_side": attack_side,
                 "active_reasons": list(row.get("active_reasons", [])) if isinstance(row.get("active_reasons"), list) else [],
             }
         )
@@ -131,7 +180,10 @@ def summarize_batch_runtime(batch_row: dict[str, Any], symbol_state: dict[str, d
     runtime_status = "no_live_symbols"
     runtime_note = "No overlapping symbols were present in the latest micro snapshot."
     if matching:
-        if class_counts.get("watch_only", 0) == len(matching):
+        if len(drift_risk_symbols) == len(matching):
+            runtime_status = "local_window_drift_risk"
+            runtime_note = "All overlapping symbols fail the local CVD window or drift guard."
+        elif class_counts.get("watch_only", 0) == len(matching):
             runtime_status = "watch_only"
             runtime_note = "All overlapping symbols are downgraded to watch-only in the latest micro snapshot."
         elif queue_mode == "trend_confirmation" and class_counts.get("trend_confirmation_watch", 0) > 0:
@@ -156,6 +208,9 @@ def summarize_batch_runtime(batch_row: dict[str, Any], symbol_state: dict[str, d
         "eligible_symbols": eligible_symbols,
         "matching_symbols": matching,
         "classification_counts": class_counts,
+        "locality_counts": locality_counts,
+        "attack_side_counts": attack_side_counts,
+        "drift_risk_symbols": drift_risk_symbols,
         "runtime_status": runtime_status,
         "runtime_note": runtime_note,
     }
@@ -173,6 +228,7 @@ def runtime_priority_score(row: dict[str, Any]) -> float:
         "aligned": 4.0,
         "mixed": 2.0,
         "watch_only": 1.0,
+        "local_window_drift_risk": 0.75,
         "no_live_symbols": 0.5,
     }.get(runtime_status, 0.0)
     score += {
@@ -197,6 +253,8 @@ def classify_queue_action(row: dict[str, Any]) -> tuple[str, str]:
         if queue_mode == "trend_confirmation":
             return "inspect_first", "Latest micro snapshot aligns with a trend-confirmation queue."
         return "inspect_first", "Latest micro snapshot aligns with a reversal/absorption queue."
+    if runtime_status == "local_window_drift_risk":
+        return "defer_until_local_cvd_recovers", "Overlapping symbols only show stale or drift-risk CVD context near the queue."
     if runtime_status == "mixed":
         return "review_after_refresh", "Queue remains valid, but the latest micro snapshot is mixed."
     if runtime_status == "watch_only":
@@ -252,6 +310,9 @@ def render_markdown(payload: dict[str, Any]) -> str:
                 f"  - runtime_note: `{row.get('runtime_note')}`",
                 f"  - leaders: `{', '.join(row.get('leader_symbols', [])) or '-'}`",
                 f"  - matching: `{', '.join(m.get('symbol', '') for m in row.get('matching_symbols', [])) or '-'}`",
+                f"  - localities: `{json.dumps(row.get('locality_counts', {}), ensure_ascii=False, sort_keys=True)}`",
+                f"  - attacks: `{json.dumps(row.get('attack_side_counts', {}), ensure_ascii=False, sort_keys=True)}`",
+                f"  - drift_risk_symbols: `{', '.join(row.get('drift_risk_symbols', [])) or '-'}`",
             ]
         )
     return "\n".join(lines).strip() + "\n"
@@ -273,28 +334,21 @@ def main() -> int:
     review_dir = Path(args.review_dir).expanduser().resolve()
     now_ts = dt.datetime.fromisoformat(args.now) if str(args.now).strip() else now_utc()
 
-    queue_path = (
-        Path(args.queue_profile_file).expanduser().resolve()
-        if str(args.queue_profile_file).strip()
-        else find_latest(review_dir, "*_crypto_cvd_queue_profile.json")
-    )
+    queue_path, queue_payload, queue_profile = resolve_queue_profile_source(review_dir, args.queue_profile_file)
     semantic_path = (
         Path(args.semantic_snapshot_file).expanduser().resolve()
         if str(args.semantic_snapshot_file).strip()
         else find_latest(review_dir, "*_crypto_cvd_semantic_snapshot.json")
     )
 
-    queue_payload = load_json_mapping(queue_path)
     semantic_payload = load_json_mapping(semantic_path)
 
     ok = True
     status = "ok"
-    queue_profile = {}
     if not isinstance(queue_payload, dict):
         ok = False
         status = "queue_profile_missing"
     else:
-        queue_profile = queue_payload.get("crypto_cvd_queue_profile", {})
         if not isinstance(queue_profile, dict) or not queue_profile:
             ok = False
             status = "queue_profile_invalid"
@@ -321,6 +375,11 @@ def main() -> int:
 
     ready_now_batches = [str(row.get("batch", "")) for row in batch_runtime_profiles if str(row.get("runtime_status", "")) == "aligned"]
     watch_only_batches = [str(row.get("batch", "")) for row in batch_runtime_profiles if str(row.get("runtime_status", "")) == "watch_only"]
+    drift_risk_batches = [
+        str(row.get("batch", ""))
+        for row in batch_runtime_profiles
+        if str(row.get("runtime_status", "")) == "local_window_drift_risk"
+    ]
     mixed_batches = [str(row.get("batch", "")) for row in batch_runtime_profiles if str(row.get("runtime_status", "")) == "mixed"]
     runtime_queue: list[dict[str, Any]] = []
     for row in batch_runtime_profiles:
@@ -355,6 +414,9 @@ def main() -> int:
     elif ready_now_batches:
         takeaway = "Use the listed ready-now batches as the first crypto queue to inspect; the latest micro snapshot aligns with their preferred contexts."
         operator_status = "queue-ready"
+    elif drift_risk_batches:
+        takeaway = "Queue priorities remain valid, but the latest micro snapshot is stale near the key level; wait for a fresh local CVD window before using it."
+        operator_status = "queue-local-cvd-drift-risk"
     elif watch_only_batches:
         takeaway = "Queue priorities remain valid, but the latest micro snapshot downgrades all overlapping crypto symbols to watch-only."
         operator_status = "queue-watch-only"
@@ -377,6 +439,7 @@ def main() -> int:
         "operator_status": operator_status,
         "priority_batches": priority_batches,
         "ready_now_batches": ready_now_batches,
+        "drift_risk_batches": drift_risk_batches,
         "watch_only_batches": watch_only_batches,
         "mixed_batches": mixed_batches,
         "deferred_batches": deferred_batches,

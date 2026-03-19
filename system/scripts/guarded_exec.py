@@ -340,18 +340,29 @@ def classify_controlled_failure(payload: dict[str, Any]) -> bool:
     canary = steps.get("canary_order", {}) if isinstance(steps.get("canary_order", {}), dict) else {}
     reason = str(canary.get("reason", ""))
     if reason in {
+        "preflight_transport_blocked",
+        "preflight_runtime_blocked",
+        "quantity_invalid_preflight",
         "signal_missing",
         "risk_guard_blocked",
         "precheck_quantity_below_min_qty",
         "precheck_insufficient_quote_balance",
         "precheck_insufficient_base_balance",
         "notional_floor_above_budget",
+        "portfolio_margin_um_read_only_mode",
         "exchange_reject",
         "allow_live_order_false",
     }:
         return True
     mode = str(payload.get("mode", ""))
-    return mode in {"live_ready_signal_blocked", "live_ready_risk_blocked", "degraded_read_only"}
+    return mode in {
+        "live_ready_signal_blocked",
+        "live_ready_risk_blocked",
+        "live_ready_preflight_blocked",
+        "probe_preflight_blocked",
+        "live_ready_read_only_market",
+        "degraded_read_only",
+    }
 
 
 def build_guard_artifact(
@@ -402,6 +413,8 @@ def build_guard_artifact(
         payload["status"] = "idempotent_skip"
     elif effective_mode == "probe" and requested_mode == "canary" and downgrade_reason:
         payload["status"] = f"downgraded_probe_{downgrade_reason}"
+    elif effective_mode == "probe" and int(takeover.get("returncode", 0)) != 0 and classify_controlled_failure(takeover_payload):
+        payload["status"] = "probe_controlled_block"
     elif effective_mode == "probe":
         payload["status"] = "probe_completed"
     elif bool(payload.get("executed", False)):
@@ -447,7 +460,7 @@ def main() -> int:
     parser.add_argument("--workspace", default="")
     parser.add_argument("--date", default="")
     parser.add_argument("--mode", choices=["probe", "canary"], default="probe")
-    parser.add_argument("--market", choices=["spot", "futures_usdm"], default="spot")
+    parser.add_argument("--market", choices=["spot", "futures_usdm", "portfolio_margin_um"], default="spot")
     parser.add_argument("--canary-quote-usdt", type=float, default=5.0)
     parser.add_argument("--rate-limit-per-minute", type=int, default=10)
     parser.add_argument("--timeout-ms", type=int, default=5000)

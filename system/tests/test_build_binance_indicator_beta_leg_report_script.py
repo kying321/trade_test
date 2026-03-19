@@ -129,6 +129,25 @@ def test_latest_beta_stability_artifact_prefers_latest_timestamp_not_mtime(tmp_p
     assert payload["stability"]["beta"]["status"] == "fragile_flow_secondary"
 
 
+def test_latest_group_artifact_falls_back_to_partial_failure_when_no_ok_exists(tmp_path: Path) -> None:
+    module = _load_module()
+    partial = tmp_path / "20260310T130000Z_binance_indicator_combo_native_crypto.json"
+    partial.write_text(
+        json.dumps(
+            {
+                "status": "partial_failure",
+                "symbol_group": "sol",
+                "native_crypto_family": {"ranked_combos": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    path, payload = module.latest_group_artifact(tmp_path, "sol")
+    assert path == partial
+    assert payload["status"] == "partial_failure"
+
+
 def test_main_marks_beta_as_fragile_leg_only_when_no_leg_is_stable_and_beta_is_fragile(tmp_path: Path) -> None:
     module = _load_module()
     artifacts = {

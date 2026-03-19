@@ -39,6 +39,16 @@ def now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def parse_now(raw: str | None) -> dt.datetime:
+    text = str(raw or "").strip()
+    if not text:
+        return now_utc()
+    parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
 def fmt_utc(value: dt.datetime | None) -> str | None:
     if value is None:
         return None
@@ -114,6 +124,7 @@ def latest_group_artifact(review_dir: Path, group_name: str) -> tuple[Path, dict
         reverse=True,
     )
     fallback: tuple[Path, dict[str, Any]] | None = None
+    partial_fallback: tuple[Path, dict[str, Any]] | None = None
     for path in candidates:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if str(payload.get("symbol_group") or "") == group_name:
@@ -122,8 +133,12 @@ def latest_group_artifact(review_dir: Path, group_name: str) -> tuple[Path, dict
                 return path, payload
             if fallback is None and rank >= 1:
                 fallback = (path, payload)
+            if partial_fallback is None:
+                partial_fallback = (path, payload)
     if fallback is not None:
         return fallback
+    if partial_fallback is not None:
+        return partial_fallback
     raise FileNotFoundError(f"missing_native_group_artifact:{group_name}")
 
 
@@ -395,6 +410,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Derive majors vs beta native crypto deployment lanes.")
     parser.add_argument("--review-dir", required=True)
+    parser.add_argument("--now", default="")
     parser.add_argument("--artifact-ttl-hours", type=float, default=168.0)
     parser.add_argument("--artifact-keep", type=int, default=12)
     return parser
@@ -404,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     review_dir = Path(args.review_dir).expanduser().resolve()
     review_dir.mkdir(parents=True, exist_ok=True)
-    runtime_now = now_utc()
+    runtime_now = parse_now(args.now)
 
     group_report_path, group_report = latest_group_report(review_dir)
     stability_report_path, stability_report = latest_stability_report(review_dir)

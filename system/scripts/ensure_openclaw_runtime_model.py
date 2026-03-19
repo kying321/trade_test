@@ -12,7 +12,7 @@ from typing import Any
 DEFAULT_PROVIDER = "openai"
 DEFAULT_MODEL_ID = "gpt-5.4"
 DEFAULT_API = "openai-responses"
-DEFAULT_BASE_URL = "http://127.0.0.1:9999/v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:8317/v1"
 DEFAULT_CONTEXT_WINDOW = 391000
 DEFAULT_MAX_TOKENS = 128000
 
@@ -142,7 +142,7 @@ def ensure_default_aliases(payload: dict[str, Any], *, provider: str, model_id: 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Ensure OpenClaw runtime config can resolve a target model through the local OpenAI-compatible proxy.")
+    parser = argparse.ArgumentParser(description="Ensure OpenClaw runtime config can resolve a target model through the local CLIProxyAPI/OpenAI-compatible proxy.")
     parser.add_argument("--config", default=str(Path.home() / ".openclaw" / "openclaw.json"))
     parser.add_argument("--provider", default=DEFAULT_PROVIDER)
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)

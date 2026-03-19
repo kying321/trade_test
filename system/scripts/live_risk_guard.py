@@ -22,6 +22,8 @@ DEFAULT_BACKUP_INTEL_REL_PATH = "state/backup_web_intel.json"
 DEFAULT_BACKUP_INTEL_MAX_AGE_SECONDS = 7200
 DEFAULT_BACKUP_INTEL_REQUIRED_AUTHORITY = "risk_only"
 DEFAULT_BACKUP_INTEL_BLOCK_SEVERITIES = ("high",)
+DEFAULT_TAKEOVER_MARKET = "spot"
+SUPPORTED_TAKEOVER_MARKETS = {"spot", "futures_usdm", "portfolio_margin_um"}
 
 
 def _load_takeover_module():
@@ -66,6 +68,39 @@ def resolve_path(raw: str, *, anchor: Path) -> Path:
     if cwd_candidate.exists():
         return cwd_candidate
     return anchor / path
+
+
+def normalize_takeover_market(raw: Any, *, default: str = DEFAULT_TAKEOVER_MARKET) -> str:
+    market = str(raw or "").strip().lower()
+    if market in SUPPORTED_TAKEOVER_MARKETS:
+        return market
+    return str(default).strip().lower() or DEFAULT_TAKEOVER_MARKET
+
+
+def load_takeover_market(cfg: dict[str, Any]) -> str:
+    validation = cfg.get("validation", {}) if isinstance(cfg.get("validation", {}), dict) else {}
+    return normalize_takeover_market(validation.get("binance_live_takeover_market", DEFAULT_TAKEOVER_MARKET))
+
+
+def load_latest_takeover_payload(*, output_root: Path, market: str) -> tuple[dict[str, Any], str]:
+    review_dir = output_root / "review"
+    market_name = normalize_takeover_market(market)
+    candidates = [
+        review_dir / f"latest_binance_live_takeover_{market_name}.json",
+        review_dir / "latest_binance_live_takeover.json",
+    ]
+    for path in candidates:
+        payload = read_json(path, {})
+        if not isinstance(payload, dict) or not payload:
+            continue
+        steps = payload.get("steps", {}) if isinstance(payload.get("steps", {}), dict) else {}
+        acct = steps.get("account_overview", {}) if isinstance(steps.get("account_overview", {}), dict) else {}
+        payload_market_raw = payload.get("market") or acct.get("market")
+        payload_market = normalize_takeover_market(payload_market_raw) if str(payload_market_raw).strip() else ""
+        if path.name == "latest_binance_live_takeover.json" and payload_market and payload_market != market_name:
+            continue
+        return payload, str(path)
+    return {}, ""
 
 
 def parse_utc_text(raw: str) -> datetime | None:
@@ -242,9 +277,8 @@ def estimate_position_notional(row: dict[str, Any]) -> float:
     return float(qty * price)
 
 
-def load_exposure_snapshot(output_root: Path) -> dict[str, Any]:
-    latest_takeover = output_root / "review" / "latest_binance_live_takeover.json"
-    takeover = read_json(latest_takeover, {})
+def load_exposure_snapshot(output_root: Path, *, market: str) -> dict[str, Any]:
+    takeover, latest_takeover = load_latest_takeover_payload(output_root=output_root, market=market)
     steps = takeover.get("steps", {}) if isinstance(takeover, dict) else {}
     acct = steps.get("account_overview", {}) if isinstance(steps.get("account_overview", {}), dict) else {}
     snapshot_meta = steps.get("live_snapshot", {}) if isinstance(steps.get("live_snapshot", {}), dict) else {}
@@ -261,6 +295,7 @@ def load_exposure_snapshot(output_root: Path) -> dict[str, Any]:
     daily_loss_ratio = (abs(min(0.0, closed_pnl)) / equity_proxy) if equity_proxy > 1e-12 else (1.0 if closed_pnl < 0.0 else 0.0)
     return {
         "latest_takeover_path": str(latest_takeover),
+        "market": normalize_takeover_market(acct.get("market") or takeover.get("market") or market),
         "live_snapshot_path": str(snapshot_path) if snapshot_path is not None else "",
         "quote_available": float(quote_available),
         "open_exposure_notional": float(open_exposure_notional),
@@ -458,14 +493,15 @@ def build_payload(
 ) -> dict[str, Any]:
     now_dt = now_utc()
     cfg = load_config(config_path)
+    takeover_market = load_takeover_market(cfg)
     whitelist = load_whitelist_symbols(cfg)
-    ticket = choose_canary_ticket(output_root=output_root, whitelist=whitelist)
+    ticket = choose_canary_ticket(output_root=output_root, whitelist=whitelist, market=takeover_market)
     ticket_path = latest_tickets_path(output_root)
     ticket_age_seconds: float | None = None
     if ticket_path is not None and ticket_path.exists():
         ticket_age_seconds = max(0.0, (now_dt - datetime.fromtimestamp(ticket_path.stat().st_mtime, tz=timezone.utc)).total_seconds())
     panic_state = load_recent_panic_state(output_root=output_root, now_dt=now_dt, cooldown_seconds=panic_cooldown_seconds)
-    exposure = load_exposure_snapshot(output_root)
+    exposure = load_exposure_snapshot(output_root, market=takeover_market)
     backup_intel_policy = load_backup_intel_policy(cfg, output_root=output_root)
     backup_intel = evaluate_backup_intel(policy=backup_intel_policy, ticket=ticket, now_dt=now_dt)
 

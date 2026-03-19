@@ -173,7 +173,7 @@ def main() -> int:
     pulse_lock_path = (
         Path(str(args.pulse_lock_path)).expanduser().resolve()
         if str(args.pulse_lock_path).strip()
-        else (workspace_system_root / "output" / "state" / "run_halfhour_pulse.lock").resolve()
+        else (workspace_system_root / "output" / "state" / "run-halfhour-pulse.lock").resolve()
     )
     note = str(args.note or "").strip() or None
     stamp = now_utc_compact()

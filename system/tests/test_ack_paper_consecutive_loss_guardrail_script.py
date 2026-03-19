@@ -55,7 +55,7 @@ def test_ack_guardrail_write_emits_artifact_and_checksum(tmp_path: Path) -> None
     state_path = tmp_path / "spot_paper_state.json"
     ack_path = tmp_path / "paper_consecutive_loss_ack.json"
     checksum_path = tmp_path / "paper_consecutive_loss_ack_checksum.json"
-    pulse_lock_path = tmp_path / "run_halfhour_pulse.lock"
+    pulse_lock_path = tmp_path / "run-halfhour-pulse.lock"
     state_path.write_text(
         json.dumps(
             {
@@ -117,7 +117,7 @@ def test_ack_guardrail_write_blocks_when_expected_fingerprint_mismatches(tmp_pat
     state_path = tmp_path / "spot_paper_state.json"
     ack_path = tmp_path / "paper_consecutive_loss_ack.json"
     checksum_path = tmp_path / "paper_consecutive_loss_ack_checksum.json"
-    pulse_lock_path = tmp_path / "run_halfhour_pulse.lock"
+    pulse_lock_path = tmp_path / "run-halfhour-pulse.lock"
     state_path.write_text(
         json.dumps(
             {

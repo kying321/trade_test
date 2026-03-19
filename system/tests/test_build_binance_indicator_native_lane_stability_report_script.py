@@ -75,3 +75,22 @@ def test_main_builds_stability_report(tmp_path: Path) -> None:
     assert payload["lanes"]["majors"]["short"]["top_combo_canonical"] == "rsi_breakout"
     assert payload["lanes"]["beta"]["short"]["flow_combo_canonical"] == "taker_oi_breakout"
     assert "split survives the longer window" in payload["overall_takeaway"]
+
+
+def test_latest_group_artifact_falls_back_to_partial_failure_when_no_ok_exists(tmp_path: Path) -> None:
+    module = _load_module()
+    partial = tmp_path / "20260310T130000Z_binance_indicator_combo_native_crypto.json"
+    partial.write_text(
+        json.dumps(
+            {
+                "status": "partial_failure",
+                "symbol_group": "majors",
+                "native_crypto_family": {"ranked_combos": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    path, payload = module.latest_group_artifact(tmp_path, "majors")
+    assert path == partial
+    assert payload["status"] == "partial_failure"

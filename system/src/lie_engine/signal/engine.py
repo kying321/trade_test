@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import time as time_module
 from typing import Any, Iterable
 
 import numpy as np
@@ -66,6 +67,19 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     if not np.isfinite(out):
         return float(default)
     return out
+
+
+def _max_confidence_boost(
+    cfg: SignalEngineConfig,
+    *,
+    theory_enabled: bool,
+    micro_factor_state: dict[str, float] | None,
+) -> float:
+    theory_boost = float(cfg.theory_confidence_boost_max) * (1.15 if theory_enabled else 0.0)
+    micro_boost = 0.0
+    if bool(cfg.microstructure_enabled) and isinstance(micro_factor_state, dict) and bool(micro_factor_state.get("has_data", False)):
+        micro_boost = float(cfg.micro_confidence_boost_max) * 1.12
+    return float(theory_boost + micro_boost)
 
 
 def _convexity_ratio(side: Side, entry: float, stop: float, target: float) -> float:
@@ -168,7 +182,7 @@ def detect_symbol_regime(symbol_df: pd.DataFrame, cfg: SignalEngineConfig) -> Re
         frame = symbol_df.sort_values("ts").tail(180)
         hmm_input = frame[["close", "volume"]].iloc[::3].tail(80).copy()
         if len(hmm_input) >= 25:
-            hmm_probs = infer_hmm_state(hmm_input)
+            hmm_probs = infer_hmm_state(hmm_input, n_iter=8, max_points=48)
         else:
             hmm_probs = {"bull": 0.33, "range": 0.34, "bear": 0.33}
 
@@ -663,6 +677,14 @@ def generate_signal_for_symbol(
     if side == Side.FLAT:
         return None
 
+    max_confidence_boost = _max_confidence_boost(
+        cfg,
+        theory_enabled=bool(cfg.theory_enabled),
+        micro_factor_state=micro_factor_state,
+    )
+    if raw_confidence + max_confidence_boost < float(cfg.confidence_min):
+        return None
+
     exposure = _estimate_factor_exposure(df)
     state = _merge_market_factor_state(regime, market_factor_state)
     factor_risk_score = 0.0
@@ -674,6 +696,8 @@ def generate_signal_for_symbol(
         return None
 
     factor_penalty = min(float(cfg.factor_penalty_max), factor_risk_score * float(cfg.factor_penalty_max))
+    if raw_confidence - factor_penalty + max_confidence_boost < float(cfg.confidence_min):
+        return None
     theory_boost, theory_penalty, theory_flags, theory_state = _theory_adjustment(
         side=side,
         regime=regime,
@@ -707,6 +731,11 @@ def generate_signal_for_symbol(
         reward_mult=reward_mult,
     )
     convexity = _convexity_ratio(side=side, entry=entry, stop=stop, target=target)
+
+    if confidence < cfg.confidence_min:
+        return None
+    if convexity < cfg.convexity_min:
+        return None
 
     if side == Side.SHORT and not can_short:
         note = "S点触发但标的不支持直接做空，转译为减仓/平仓+指数对冲腿"
@@ -754,11 +783,6 @@ def generate_signal_for_symbol(
         if isinstance(issues, list) and issues:
             note += " | micro_schema=" + ",".join(str(x) for x in issues[:2])
 
-    if confidence < cfg.confidence_min:
-        return None
-    if convexity < cfg.convexity_min:
-        return None
-
     return SignalCandidate(
         symbol=str(cur["symbol"]),
         side=side,
@@ -785,6 +809,7 @@ def scan_signals(
     cfg: SignalEngineConfig,
     market_factor_state: dict[str, float] | None = None,
     micro_factor_map: dict[str, dict[str, Any]] | None = None,
+    timing_callback: object | None = None,
 ) -> list[SignalCandidate]:
     if bars.empty:
         return []
@@ -793,20 +818,64 @@ def scan_signals(
         return []
 
     out: list[SignalCandidate] = []
+    timing: dict[str, object] = {
+        "status": "running",
+        "symbol_count": 0,
+        "accepted_count": 0,
+        "detect_regime_elapsed_sec": 0.0,
+        "generate_signal_elapsed_sec": 0.0,
+        "symbols": [],
+    }
+
+    def _emit_timing(*, force: bool = False) -> None:
+        if not callable(timing_callback):
+            return
+        if force:
+            timing["status"] = "completed"
+        timing_callback(dict(timing))
+
     for _, symbol_df in bars.groupby("symbol"):
         sorted_df = symbol_df.sort_values("ts")
+        symbol = str(sorted_df.iloc[-1].get("symbol", ""))
+        detect_started_mono = time_module.monotonic()
         local_regime = detect_symbol_regime(sorted_df, cfg)
+        detect_elapsed = time_module.monotonic() - detect_started_mono
         if local_regime == RegimeLabel.UNCERTAIN and regime not in {RegimeLabel.UNCERTAIN, RegimeLabel.EXTREME_VOL}:
             local_regime = regime
+        generate_started_mono = time_module.monotonic()
         candidate = generate_signal_for_symbol(
             sorted_df,
             regime=local_regime,
             cfg=cfg,
             market_factor_state=market_factor_state,
-            micro_factor_state=(micro_factor_map or {}).get(str(sorted_df.iloc[-1].get("symbol", ""))),
+            micro_factor_state=(micro_factor_map or {}).get(symbol),
         )
+        generate_elapsed = time_module.monotonic() - generate_started_mono
+        timing["symbol_count"] = int(timing.get("symbol_count", 0)) + 1
+        timing["detect_regime_elapsed_sec"] = round(
+            float(timing.get("detect_regime_elapsed_sec", 0.0)) + detect_elapsed,
+            3,
+        )
+        timing["generate_signal_elapsed_sec"] = round(
+            float(timing.get("generate_signal_elapsed_sec", 0.0)) + generate_elapsed,
+            3,
+        )
+        symbols = timing.setdefault("symbols", [])
+        if isinstance(symbols, list):
+            symbols.append(
+                {
+                    "symbol": symbol,
+                    "regime": local_regime.value,
+                    "detect_regime_elapsed_sec": round(detect_elapsed, 3),
+                    "generate_signal_elapsed_sec": round(generate_elapsed, 3),
+                    "accepted": bool(candidate is not None),
+                }
+            )
         if candidate is not None:
             out.append(candidate)
+            timing["accepted_count"] = int(timing.get("accepted_count", 0)) + 1
+        _emit_timing()
 
     out.sort(key=lambda x: (-x.confidence, x.factor_penalty))
+    _emit_timing(force=True)
     return out

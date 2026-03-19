@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import shlex
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,122 @@ SYSTEM_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = SYSTEM_ROOT / "output"
 DEFAULT_REVIEW_DIR = DEFAULT_OUTPUT_ROOT / "review"
 DEFAULT_CRYPTO_ROUTE_REFRESH_BATCHES = ("crypto_hot", "crypto_majors", "crypto_beta")
+SOURCE_TEXT = "text"
+SOURCE_INT = "int"
+SOURCE_RAW = "raw"
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from operator_brief_debug_snapshots import (
+    brooks_source_debug_lines as _brooks_source_debug_lines,
+    cross_market_runtime_debug_lines as _cross_market_runtime_debug_lines,
+    cross_market_source_debug_lines as _cross_market_source_debug_lines,
+    crypto_route_source_debug_lines as _crypto_route_source_debug_lines,
+    remote_live_source_debug_lines as _remote_live_source_debug_lines,
+)
+from operator_brief_source_chunks import (
+    build_brooks_runtime_chunk as _build_brooks_runtime_chunk,
+    build_brooks_source_chunk as _build_brooks_source_chunk,
+    build_cross_market_source_snapshot_chunk as _build_cross_market_source_snapshot_chunk,
+    build_cross_market_runtime_chunk as _build_cross_market_runtime_chunk,
+    build_crypto_route_source_chunk as _build_crypto_route_source_chunk,
+    build_research_embedding_quality_chunk as _build_research_embedding_quality_chunk,
+    build_remote_live_source_chunk as _build_remote_live_source_chunk,
+)
+
+_CROSS_MARKET_SOURCE_MIRROR_SPECS: tuple[tuple[str, str], ...] = (
+    ("status", SOURCE_TEXT),
+    ("as_of", SOURCE_TEXT),
+    ("review_backlog_status", SOURCE_TEXT),
+    ("review_backlog_count", SOURCE_INT),
+    ("review_backlog_brief", SOURCE_TEXT),
+    ("review_head_area", SOURCE_TEXT),
+    ("review_head_symbol", SOURCE_TEXT),
+    ("review_head_action", SOURCE_TEXT),
+    ("review_head_priority_score", SOURCE_RAW),
+    ("review_head_priority_tier", SOURCE_TEXT),
+    ("operator_backlog_status", SOURCE_TEXT),
+    ("operator_backlog_count", SOURCE_INT),
+    ("operator_backlog_brief", SOURCE_TEXT),
+    ("operator_backlog_state_brief", SOURCE_TEXT),
+    ("operator_backlog_priority_totals_brief", SOURCE_TEXT),
+    ("operator_state_lane_heads_brief", SOURCE_TEXT),
+    ("operator_state_lane_priority_order_brief", SOURCE_TEXT),
+    ("remote_live_operator_alignment_status", SOURCE_TEXT),
+    ("remote_live_operator_alignment_brief", SOURCE_TEXT),
+    ("remote_live_operator_alignment_blocker_detail", SOURCE_TEXT),
+    ("remote_live_operator_alignment_done_when", SOURCE_TEXT),
+    ("remote_live_takeover_gate_status", SOURCE_TEXT),
+    ("remote_live_takeover_gate_brief", SOURCE_TEXT),
+    ("remote_live_takeover_gate_blocker_detail", SOURCE_TEXT),
+    ("remote_live_takeover_gate_done_when", SOURCE_TEXT),
+    ("remote_live_takeover_clearing_status", SOURCE_TEXT),
+    ("remote_live_takeover_clearing_brief", SOURCE_TEXT),
+    ("remote_live_takeover_clearing_blocker_detail", SOURCE_TEXT),
+    ("remote_live_takeover_clearing_done_when", SOURCE_TEXT),
+    ("remote_live_takeover_clearing_source_freshness_brief", SOURCE_TEXT),
+    ("remote_live_takeover_slot_anomaly_breakdown_status", SOURCE_TEXT),
+    ("remote_live_takeover_slot_anomaly_breakdown_brief", SOURCE_TEXT),
+    ("remote_live_takeover_slot_anomaly_breakdown_artifact", SOURCE_TEXT),
+    ("remote_live_takeover_slot_anomaly_breakdown_repair_focus", SOURCE_TEXT),
+    ("operator_head_area", SOURCE_TEXT),
+    ("operator_head_symbol", SOURCE_TEXT),
+    ("operator_head_action", SOURCE_TEXT),
+    ("operator_head_state", SOURCE_TEXT),
+    ("operator_head_priority_score", SOURCE_RAW),
+    ("operator_head_priority_tier", SOURCE_TEXT),
+    ("review_head_lane_status", SOURCE_TEXT),
+    ("review_head_lane_brief", SOURCE_TEXT),
+    ("operator_head_lane_status", SOURCE_TEXT),
+    ("operator_head_lane_brief", SOURCE_TEXT),
+    ("operator_repair_head_lane_status", SOURCE_TEXT),
+    ("operator_repair_head_lane_brief", SOURCE_TEXT),
+    ("operator_repair_queue_brief", SOURCE_TEXT),
+    ("operator_repair_queue_count", SOURCE_INT),
+    ("operator_repair_checklist_brief", SOURCE_TEXT),
+    ("operator_waiting_lane_status", SOURCE_TEXT),
+    ("operator_waiting_lane_count", SOURCE_INT),
+    ("operator_waiting_lane_brief", SOURCE_TEXT),
+    ("operator_waiting_lane_priority_total", SOURCE_INT),
+    ("operator_waiting_lane_head_symbol", SOURCE_TEXT),
+    ("operator_waiting_lane_head_action", SOURCE_TEXT),
+    ("operator_waiting_lane_head_priority_score", SOURCE_INT),
+    ("operator_waiting_lane_head_priority_tier", SOURCE_TEXT),
+    ("operator_review_lane_status", SOURCE_TEXT),
+    ("operator_review_lane_count", SOURCE_INT),
+    ("operator_review_lane_brief", SOURCE_TEXT),
+    ("operator_review_lane_priority_total", SOURCE_INT),
+    ("operator_review_lane_head_symbol", SOURCE_TEXT),
+    ("operator_review_lane_head_action", SOURCE_TEXT),
+    ("operator_review_lane_head_priority_score", SOURCE_INT),
+    ("operator_review_lane_head_priority_tier", SOURCE_TEXT),
+    ("operator_watch_lane_status", SOURCE_TEXT),
+    ("operator_watch_lane_count", SOURCE_INT),
+    ("operator_watch_lane_brief", SOURCE_TEXT),
+    ("operator_watch_lane_priority_total", SOURCE_INT),
+    ("operator_watch_lane_head_symbol", SOURCE_TEXT),
+    ("operator_watch_lane_head_action", SOURCE_TEXT),
+    ("operator_watch_lane_head_priority_score", SOURCE_INT),
+    ("operator_watch_lane_head_priority_tier", SOURCE_TEXT),
+    ("operator_blocked_lane_status", SOURCE_TEXT),
+    ("operator_blocked_lane_count", SOURCE_INT),
+    ("operator_blocked_lane_brief", SOURCE_TEXT),
+    ("operator_blocked_lane_priority_total", SOURCE_INT),
+    ("operator_blocked_lane_head_symbol", SOURCE_TEXT),
+    ("operator_blocked_lane_head_action", SOURCE_TEXT),
+    ("operator_blocked_lane_head_priority_score", SOURCE_INT),
+    ("operator_blocked_lane_head_priority_tier", SOURCE_TEXT),
+    ("operator_repair_lane_status", SOURCE_TEXT),
+    ("operator_repair_lane_count", SOURCE_INT),
+    ("operator_repair_lane_brief", SOURCE_TEXT),
+    ("operator_repair_lane_priority_total", SOURCE_INT),
+    ("operator_repair_lane_head_symbol", SOURCE_TEXT),
+    ("operator_repair_lane_head_action", SOURCE_TEXT),
+    ("operator_repair_lane_head_priority_score", SOURCE_INT),
+    ("operator_repair_lane_head_priority_tier", SOURCE_TEXT),
+)
 
 
 def now_utc() -> dt.datetime:
@@ -57,6 +174,38 @@ def artifact_sort_key(path: Path, reference_now: dt.datetime | None = None) -> t
     future_cutoff = effective_now + dt.timedelta(minutes=FUTURE_STAMP_GRACE_MINUTES)
     is_future = bool(stamp_dt and stamp_dt > future_cutoff)
     return (0 if is_future else 1, artifact_stamp(path), path.stat().st_mtime, path.name)
+
+
+def _mirror_source_prefixed_fields(
+    *,
+    prefix: str,
+    source_payload: dict[str, Any] | None,
+    specs: tuple[tuple[str, str], ...],
+) -> dict[str, Any]:
+    payload = dict(source_payload or {})
+    mirrored: dict[str, Any] = {}
+    for field, kind in specs:
+        value = payload.get(field)
+        output_key = f"{prefix}{field}"
+        if kind == SOURCE_INT:
+            mirrored[output_key] = int(value or 0)
+        elif kind == SOURCE_RAW:
+            mirrored[output_key] = value
+        else:
+            mirrored[output_key] = str(value or "")
+    return mirrored
+
+
+def _compact_snapshot_parts(*parts: str) -> str:
+    return " | ".join([part for part in (str(x).strip() for x in parts) if part and part != "-"])
+
+
+
+
+
+
+
+
 
 
 def _payload_richness(payload: dict[str, Any]) -> int:
@@ -216,6 +365,260 @@ def latest_crypto_route_focus_source(review_dir: Path, reference_now: dt.datetim
         return latest_hot_universe_crypto_source(review_dir, reference_now)
     except FileNotFoundError:
         return None
+
+
+def latest_crypto_route_refresh_source(review_dir: Path, reference_now: dt.datetime | None = None) -> Path | None:
+    candidates = list(review_dir.glob("*_crypto_route_refresh.json"))
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_remote_live_history_audit_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_remote_live_history_audit.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_remote_live_handoff_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_remote_live_handoff.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_live_gate_blocker_report_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_live_gate_blocker_report.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_brooks_price_action_route_report_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_brooks_price_action_route_report.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_brooks_price_action_execution_plan_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_brooks_price_action_execution_plan.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_brooks_structure_review_queue_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_brooks_structure_review_queue.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_brooks_structure_refresh_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_brooks_structure_refresh.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_cross_market_operator_state_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_cross_market_operator_state.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_system_time_sync_repair_plan_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_system_time_sync_repair_plan.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_system_time_sync_repair_verification_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_system_time_sync_repair_verification_report.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_openclaw_orderflow_blueprint_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_openclaw_orderflow_blueprint.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
+        if nonfuture_candidates:
+            candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def _unwrap_remote_live_handoff_operator_payload(
+    source_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    source = source_payload if isinstance(source_payload, dict) else {}
+    nested = source.get("operator_handoff")
+    return nested if isinstance(nested, dict) else {}
 
 
 def latest_commodity_execution_lane_source(review_dir: Path, reference_now: dt.datetime | None = None) -> Path | None:
@@ -420,6 +823,214 @@ def _mapping_text(values: dict[str, Any], limit: int = 4) -> str:
     return ", ".join(items[:limit]) + f" (+{len(items) - limit})"
 
 
+def _remote_live_history_window_map(source_payload: dict[str, Any] | None) -> dict[int, dict[str, Any]]:
+    payload = dict(source_payload or {})
+    rows = payload.get("window_summaries")
+    if not isinstance(rows, list):
+        rows = []
+    window_map: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            window_hours = int(row.get("window_hours") or 0)
+        except Exception:
+            continue
+        if window_hours <= 0:
+            continue
+        window_map[window_hours] = dict(row)
+    return window_map
+
+
+def _remote_live_history_snapshot_row(window_map: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    for window_hours in (24, 168, 720):
+        row = window_map.get(window_hours)
+        if row:
+            return dict(row)
+    if not window_map:
+        return {}
+    latest_window = max(window_map)
+    return dict(window_map.get(latest_window) or {})
+
+
+def _remote_live_history_longest_row(window_map: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    if not window_map:
+        return {}
+    return dict(window_map.get(max(window_map)) or {})
+
+
+def _remote_live_history_window_brief(row: dict[str, Any]) -> str:
+    if not row:
+        return "-"
+    label = str(row.get("history_window_label") or "").strip()
+    if not label:
+        try:
+            hours = int(row.get("window_hours") or 0)
+        except Exception:
+            hours = 0
+        label = "24h" if hours == 24 else "7d" if hours == 168 else f"{int(hours // 24)}d" if hours else "-"
+    return (
+        f"{label}:{_fmt_num(row.get('closed_pnl'))}pnl/"
+        f"{int(row.get('trade_count') or 0)}tr/"
+        f"{int(row.get('open_positions') or 0)}open"
+    )
+
+
+def _crypto_route_refresh_reuse_audit(source_payload: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(source_payload or {})
+    if not payload:
+        return {
+            "reuse_status": "",
+            "reuse_brief": "",
+            "reuse_note": "",
+            "done_when": "",
+            "native_step_count": None,
+            "reused_native_count": None,
+            "missing_reused_count": None,
+            "native_refresh_mode": "",
+        }
+    steps = [dict(row) for row in payload.get("steps", []) if isinstance(row, dict)]
+    native_steps = [row for row in steps if str(row.get("name") or "").startswith("native_")]
+    native_step_count = len(native_steps)
+    reused_native_count = sum(
+        1 for row in native_steps if str(row.get("status") or "").strip() == "reused_previous_artifact"
+    )
+    missing_reused_count = sum(
+        1 for row in native_steps if str(row.get("status") or "").strip() == "missing_reused_source"
+    )
+    native_refresh_mode = str(payload.get("native_refresh_mode") or "").strip()
+    if native_step_count <= 0:
+        reuse_status = "native_audit_unavailable"
+    elif reused_native_count == native_step_count and native_step_count > 0:
+        reuse_status = "reused_native_inputs"
+    elif reused_native_count > 0:
+        reuse_status = "mixed_native_inputs"
+    elif missing_reused_count > 0:
+        reuse_status = "native_reuse_incomplete"
+    else:
+        reuse_status = "fresh_native_inputs"
+    reuse_brief = (
+        f"{reuse_status}:{native_refresh_mode or '-'}:{reused_native_count}/{native_step_count}"
+        if native_step_count > 0
+        else f"{reuse_status}:{native_refresh_mode or '-'}"
+    )
+    if native_step_count <= 0:
+        reuse_note = "crypto_route_refresh did not expose any native_* steps to audit"
+        done_when = "record native refresh steps before relying on reuse audit"
+    elif reuse_status == "reused_native_inputs":
+        reuse_note = (
+            f"crypto_route_refresh is currently reusing {reused_native_count}/{native_step_count} "
+            f"native inputs via {native_refresh_mode or 'unknown_mode'}"
+        )
+        done_when = "run full native refresh only when fresh native recomputation is required"
+    elif reuse_status == "mixed_native_inputs":
+        reuse_note = (
+            f"crypto_route_refresh is mixing reused and refreshed native inputs "
+            f"({reused_native_count}/{native_step_count} reused)"
+        )
+        done_when = "stabilize native refresh mode before treating route refresh inputs as uniform"
+    elif reuse_status == "native_reuse_incomplete":
+        reuse_note = (
+            f"crypto_route_refresh could not reuse all expected native inputs "
+            f"({missing_reused_count} missing of {native_step_count})"
+        )
+        done_when = "fill missing native sources or rerun guarded native refresh"
+    else:
+        reuse_note = f"crypto_route_refresh refreshed native inputs directly ({native_step_count}/{native_step_count})"
+        done_when = "keep using the current crypto_route_refresh artifact while it stays fresh enough"
+    return {
+        "reuse_status": reuse_status,
+        "reuse_brief": reuse_brief,
+        "reuse_note": reuse_note,
+        "done_when": done_when,
+        "native_step_count": native_step_count,
+        "reused_native_count": reused_native_count,
+        "missing_reused_count": missing_reused_count,
+        "native_refresh_mode": native_refresh_mode,
+    }
+
+
+def _crypto_route_refresh_reuse_gate(
+    source_payload: dict[str, Any] | None,
+    fallback_audit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(source_payload or {})
+    audit = dict(fallback_audit or {})
+    gate_level = str(payload.get("crypto_route_refresh_reuse_level") or "").strip()
+    gate_status = str(payload.get("crypto_route_refresh_reuse_gate_status") or "").strip()
+    gate_brief = str(payload.get("crypto_route_refresh_reuse_gate_brief") or "").strip()
+    gate_blocker_detail = str(payload.get("crypto_route_refresh_reuse_gate_blocker_detail") or "").strip()
+    gate_done_when = str(payload.get("crypto_route_refresh_reuse_gate_done_when") or "").strip()
+    gate_blocking_raw = payload.get("crypto_route_refresh_reuse_gate_blocking")
+    if gate_status or gate_brief or gate_level or gate_blocker_detail or gate_done_when:
+        return {
+            "level": gate_level,
+            "status": gate_status,
+            "brief": gate_brief,
+            "blocking": bool(gate_blocking_raw) if gate_blocking_raw is not None else None,
+            "blocker_detail": gate_blocker_detail,
+            "done_when": gate_done_when,
+        }
+
+    reuse_status = str(audit.get("reuse_status") or "").strip()
+    reuse_brief = str(audit.get("reuse_brief") or "").strip()
+    reuse_note = str(audit.get("reuse_note") or "").strip()
+    reuse_done_when = str(audit.get("done_when") or "").strip()
+    if reuse_status == "reused_native_inputs":
+        return {
+            "level": "informational",
+            "status": "reuse_non_blocking",
+            "brief": reuse_brief.replace("reused_native_inputs", "reuse_non_blocking", 1),
+            "blocking": False,
+            "blocker_detail": reuse_note,
+            "done_when": reuse_done_when,
+        }
+    if reuse_status == "fresh_native_inputs":
+        return {
+            "level": "informational",
+            "status": "fresh_non_blocking",
+            "brief": reuse_brief.replace("fresh_native_inputs", "fresh_non_blocking", 1),
+            "blocking": False,
+            "blocker_detail": reuse_note,
+            "done_when": reuse_done_when,
+        }
+    if reuse_status == "mixed_native_inputs":
+        return {
+            "level": "blocking",
+            "status": "mixed_requires_full_native_refresh",
+            "brief": reuse_brief.replace("mixed_native_inputs", "mixed_requires_full_native_refresh", 1),
+            "blocking": True,
+            "blocker_detail": reuse_note,
+            "done_when": reuse_done_when or "rerun crypto_route_refresh with a full native refresh before promotion",
+        }
+    if reuse_status == "native_reuse_incomplete":
+        return {
+            "level": "blocking",
+            "status": "audit_missing_requires_full_native_refresh",
+            "brief": reuse_brief.replace("native_reuse_incomplete", "audit_missing_requires_full_native_refresh", 1),
+            "blocking": True,
+            "blocker_detail": reuse_note,
+            "done_when": reuse_done_when or "fill missing native sources or rerun guarded native refresh",
+        }
+    if reuse_status == "native_audit_unavailable":
+        return {
+            "level": "blocking",
+            "status": "audit_missing_requires_full_native_refresh",
+            "brief": reuse_brief.replace("native_audit_unavailable", "audit_missing_requires_full_native_refresh", 1),
+            "blocking": True,
+            "blocker_detail": reuse_note,
+            "done_when": reuse_done_when or "record native refresh steps before relying on reuse audit",
+        }
+    return {
+        "level": "",
+        "status": "",
+        "brief": "",
+        "blocking": None,
+        "blocker_detail": "",
+        "done_when": "",
+    }
+
+
 def _watch_items_text(items: list[dict[str, Any]], limit: int = 8) -> str:
     parts: list[str] = []
     for row in items[:limit]:
@@ -441,6 +1052,52 @@ def _watch_items_text(items: list[dict[str, Any]], limit: int = 8) -> str:
     if len(items) <= limit:
         return ", ".join(parts)
     return ", ".join(parts) + f" (+{len(items) - limit})"
+
+
+def _review_priority_head_row(
+    queue: list[dict[str, Any]],
+    *,
+    head_symbol: str,
+) -> dict[str, Any]:
+    symbol_text = str(head_symbol or "").strip().upper()
+    if symbol_text:
+        for row in queue:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("symbol") or "").strip().upper() == symbol_text:
+                return dict(row)
+    for row in queue:
+        if isinstance(row, dict) and str(row.get("symbol") or "").strip():
+            return dict(row)
+    return {}
+
+
+def _find_focus_slot_row(
+    items: list[dict[str, Any]],
+    *,
+    area: str = "",
+    symbol: str = "",
+    action: str = "",
+) -> dict[str, Any]:
+    area_text = str(area or "").strip()
+    symbol_text = str(symbol or "").strip().upper()
+    action_text = str(action or "").strip()
+    fallback: dict[str, Any] = {}
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        row_area = str(row.get("area") or "").strip()
+        row_symbol = str(row.get("symbol") or "").strip().upper()
+        row_action = str(row.get("action") or "").strip()
+        if area_text and row_area != area_text:
+            continue
+        if symbol_text and row_symbol != symbol_text:
+            continue
+        if action_text and row_action == action_text:
+            return dict(row)
+        if not fallback:
+            fallback = dict(row)
+    return fallback
 
 
 def _research_embedding_quality(payload: dict[str, Any]) -> dict[str, Any]:
@@ -563,7 +1220,29 @@ def _crypto_route_embedding_alignment(
     }
 
 
-def _crypto_route_alignment_focus(payload: dict[str, Any]) -> dict[str, str]:
+def _crypto_route_alignment_focus(
+    payload: dict[str, Any],
+    *,
+    focus_slots: list[dict[str, Any]] | None = None,
+) -> dict[str, str]:
+    head_symbol = str(payload.get("crypto_route_review_priority_head_symbol") or "").strip().upper()
+    head_action = str(payload.get("crypto_route_review_priority_head_action") or "").strip()
+    if head_symbol:
+        matched_row = _find_focus_slot_row(
+            focus_slots or list(payload.get("operator_focus_slots") or []),
+            area="crypto_route",
+            symbol=head_symbol,
+            action=head_action,
+        )
+        matched_slot = str(matched_row.get("slot") or "").strip()
+        matched_area = str(matched_row.get("area") or "").strip()
+        matched_action = str(matched_row.get("action") or "").strip()
+        return {
+            "slot": matched_slot or "queue_head",
+            "area": matched_area or "crypto_route",
+            "symbol": head_symbol,
+            "action": head_action or matched_action,
+        }
     for prefix in ("next_focus", "followup_focus", "secondary_focus"):
         area = str(payload.get(f"{prefix}_area") or "").strip()
         if area != "crypto_route":
@@ -579,6 +1258,511 @@ def _crypto_route_alignment_focus(payload: dict[str, Any]) -> dict[str, str]:
             "action": action,
         }
     return {"slot": "", "area": "", "symbol": "", "action": ""}
+
+
+def _brooks_structure_review_lane(
+    *,
+    route_report_payload: dict[str, Any] | None,
+    execution_plan_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    route_payload = route_report_payload or {}
+    execution_payload = execution_plan_payload or {}
+    route_candidates = [
+        dict(row)
+        for row in (route_payload.get("current_candidates") or [])
+        if isinstance(row, dict)
+    ]
+    route_head = dict(route_candidates[0]) if route_candidates else {}
+    route_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in route_candidates:
+        route_lookup[
+            (
+                str(row.get("symbol") or "").strip().upper(),
+                str(row.get("strategy_id") or "").strip(),
+            )
+        ] = row
+    execution_items = [
+        dict(row)
+        for row in (execution_payload.get("plan_items") or [])
+        if isinstance(row, dict)
+    ]
+    queue: list[dict[str, Any]] = []
+    status = "inactive"
+    brief = "inactive:-"
+    blocker_detail = "No Brooks structure review item is currently active."
+    done_when = "a fresh Brooks route candidate appears with an execution plan head"
+
+    def _priority_for_row(plan_status: str, route_selection_score: float, signal_score: int, signal_age_bars: int) -> tuple[int, str]:
+        plan_status_text = str(plan_status or "").strip()
+        if plan_status_text == "manual_structure_review_now":
+            base = 60
+        elif plan_status_text == "blocked_shortline_gate":
+            base = 25
+        elif plan_status_text == "route_candidate_only":
+            base = 15
+        else:
+            base = 10
+        route_component = min(25, max(0, int(round(float(route_selection_score or 0.0) / 4.0))))
+        signal_component = min(10, max(0, int(round(int(signal_score or 0) / 10.0))))
+        age_component = max(0, 10 - min(max(0, int(signal_age_bars or 0)), 10))
+        priority_score = min(100, base + route_component + signal_component + age_component)
+        if plan_status_text == "manual_structure_review_now":
+            priority_tier = "review_queue_now"
+        elif plan_status_text == "blocked_shortline_gate":
+            priority_tier = "blocked_review"
+        elif plan_status_text == "route_candidate_only":
+            priority_tier = "route_candidate_only"
+        else:
+            priority_tier = "informational_review"
+        return priority_score, priority_tier
+
+    if execution_items:
+        for rank, plan_item in enumerate(execution_items, start=1):
+            plan_status = str(plan_item.get("plan_status") or "").strip()
+            if plan_status == "manual_structure_review_now":
+                tier = "review_queue_now"
+            elif plan_status == "blocked_shortline_gate":
+                tier = "blocked_queue"
+            else:
+                tier = "informational_queue"
+            route_row = route_lookup.get(
+                (
+                    str(plan_item.get("symbol") or "").strip().upper(),
+                    str(plan_item.get("strategy_id") or "").strip(),
+                ),
+                {},
+            )
+            route_selection_score = float(plan_item.get("route_selection_score") or 0.0)
+            signal_score = int(plan_item.get("signal_score") or 0)
+            signal_age_bars = int(plan_item.get("signal_age_bars") or 0)
+            priority_score, priority_tier = _priority_for_row(
+                plan_status,
+                route_selection_score,
+                signal_score,
+                signal_age_bars,
+            )
+            queue.append(
+                {
+                    "rank": rank,
+                    "symbol": str(plan_item.get("symbol") or "").strip().upper(),
+                    "strategy_id": str(plan_item.get("strategy_id") or "").strip(),
+                    "tier": tier,
+                    "plan_status": plan_status,
+                    "execution_action": str(plan_item.get("execution_action") or "").strip(),
+                    "direction": str(plan_item.get("direction") or route_row.get("direction") or "").strip(),
+                    "route_selection_score": route_selection_score,
+                    "signal_score": signal_score,
+                    "signal_age_bars": signal_age_bars,
+                    "priority_score": priority_score,
+                    "priority_tier": priority_tier,
+                    "blocker_detail": str(plan_item.get("plan_blocker_detail") or "").strip(),
+                    "done_when": str(plan_item.get("plan_done_when") or "").strip()
+                    or "Brooks structure item is either executed manually, promoted into an automated bridge, or invalidated.",
+                }
+            )
+        head = dict(queue[0])
+        if str(head.get("tier") or "").strip() == "review_queue_now":
+            status = "ready"
+        elif str(head.get("tier") or "").strip() == "blocked_queue":
+            status = "blocked"
+        else:
+            status = "informational"
+        brief = (
+            f"{status}:{head.get('symbol') or '-'}:{head.get('strategy_id') or '-'}:{head.get('plan_status') or '-'}"
+        )
+        blocker_detail = str(head.get("blocker_detail") or "").strip() or blocker_detail
+        done_when = str(head.get("done_when") or "").strip() or done_when
+    elif route_head:
+        route_selection_score = float(route_head.get("route_selection_score") or 0.0)
+        signal_score = int(route_head.get("signal_score") or 0)
+        signal_age_bars = int(route_head.get("signal_age_bars") or 0)
+        priority_score, priority_tier = _priority_for_row(
+            "route_candidate_only",
+            route_selection_score,
+            signal_score,
+            signal_age_bars,
+        )
+        queue.append(
+            {
+                "rank": 1,
+                "symbol": str(route_head.get("symbol") or "").strip().upper(),
+                "strategy_id": str(route_head.get("strategy_id") or "").strip(),
+                "tier": "route_candidate_only",
+                "plan_status": "route_candidate_only",
+                "execution_action": "review_route_only",
+                "direction": str(route_head.get("direction") or "").strip(),
+                "route_selection_score": route_selection_score,
+                "signal_score": signal_score,
+                "signal_age_bars": signal_age_bars,
+                "priority_score": priority_score,
+                "priority_tier": priority_tier,
+                "blocker_detail": str(route_head.get("route_bridge_blocker_detail") or "").strip(),
+                "done_when": "Brooks route candidate receives a concrete execution plan head.",
+            }
+        )
+        status = "route_candidate_only"
+        brief = (
+            f"route_candidate_only:{queue[0]['symbol'] or '-'}:{queue[0]['strategy_id'] or '-'}"
+        )
+        blocker_detail = queue[0]["blocker_detail"] or blocker_detail
+        done_when = queue[0]["done_when"]
+
+    queue_brief = " | ".join(
+        [
+            f"{int(row.get('rank') or 0)}:{str(row.get('symbol') or '-')}:{str(row.get('tier') or '-')}:{str(row.get('plan_status') or '-')}"
+            for row in queue
+        ]
+    ) or "-"
+    head = dict(queue[0]) if queue else {}
+    return {
+        "status": status,
+        "brief": brief,
+        "queue_status": "ready" if queue else "inactive",
+        "queue_count": len(queue),
+        "queue": queue,
+        "queue_brief": queue_brief,
+        "head": head,
+        "priority_status": "ready" if queue else "inactive",
+        "priority_brief": (
+            f"ready:{str(head.get('symbol') or '-')}:{int(head.get('priority_score') or 0)}:{str(head.get('priority_tier') or '-')}"
+            if queue
+            else "inactive:-"
+        ),
+        "blocker_detail": blocker_detail,
+        "done_when": done_when,
+    }
+
+
+def _brooks_structure_operator_lane(
+    *,
+    queue_payload: dict[str, Any] | None,
+    fallback_lane: dict[str, Any] | None,
+) -> dict[str, Any]:
+    source_payload = dict(queue_payload or {})
+    queue_rows = [
+        dict(row)
+        for row in list(source_payload.get("queue") or [])
+        if isinstance(row, dict)
+    ]
+    head = dict(source_payload.get("head") or {}) if isinstance(source_payload.get("head"), dict) else {}
+    if not head and queue_rows:
+        head = dict(queue_rows[0])
+    fallback = dict(fallback_lane or {})
+    if not head and isinstance(fallback.get("head"), dict):
+        head = dict(fallback.get("head") or {})
+    review_status = str(source_payload.get("review_status") or fallback.get("status") or "").strip()
+    review_brief = str(source_payload.get("review_brief") or fallback.get("brief") or "").strip()
+    blocker_detail = str(source_payload.get("blocker_detail") or fallback.get("blocker_detail") or "").strip()
+    done_when = str(source_payload.get("done_when") or fallback.get("done_when") or "").strip()
+    if not head:
+        return {
+            "status": "inactive",
+            "brief": "inactive:-",
+            "head": {},
+            "backlog_count": 0,
+            "backlog_brief": "-",
+            "blocker_detail": blocker_detail or "No Brooks structure operator lane is active.",
+            "done_when": done_when or "a fresh Brooks structure review queue item appears",
+        }
+
+    backlog = queue_rows[1:] if queue_rows else []
+    backlog_brief = " | ".join(
+        [
+            f"{int(row.get('rank') or 0)}:{str(row.get('symbol') or '-')}:{str(row.get('priority_tier') or '-')}:{int(row.get('priority_score') or 0)}"
+            for row in backlog[:5]
+        ]
+    ) or "-"
+    head_symbol = str(head.get("symbol") or "").strip().upper() or "-"
+    head_action = str(head.get("execution_action") or "").strip() or "-"
+    head_priority_score = int(head.get("priority_score") or 0)
+    lane_status = review_status or "ready"
+    lane_brief = (
+        f"{lane_status}:{head_symbol}:{head_action}:{head_priority_score}"
+        if head_symbol != "-"
+        else (review_brief or "inactive:-")
+    )
+    return {
+        "status": lane_status,
+        "brief": lane_brief,
+        "head": head,
+        "backlog_count": len(backlog),
+        "backlog_brief": backlog_brief,
+        "blocker_detail": blocker_detail or str(head.get("blocker_detail") or "").strip() or "-",
+        "done_when": done_when or str(head.get("done_when") or "").strip() or "-",
+    }
+
+
+def _cross_market_review_head_lane(
+    *,
+    source_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(source_payload or {})
+    explicit_lane = dict(payload.get("review_head_lane") or {}) if isinstance(payload.get("review_head_lane"), dict) else {}
+    if explicit_lane:
+        head = dict(explicit_lane.get("head") or {}) if isinstance(explicit_lane.get("head"), dict) else {}
+        return {
+            "status": str(explicit_lane.get("status") or "inactive"),
+            "brief": str(explicit_lane.get("brief") or "inactive:-"),
+            "head": head,
+            "head_rank": int(explicit_lane.get("head_rank") or head.get("rank") or 0),
+            "target": str(explicit_lane.get("target") or head.get("target") or head.get("symbol") or "-"),
+            "reason": str(explicit_lane.get("reason") or head.get("reason") or "-"),
+            "backlog_count": int(explicit_lane.get("backlog_count") or 0),
+            "backlog_brief": str(explicit_lane.get("backlog_brief") or "-"),
+            "blocker_detail": str(explicit_lane.get("blocker_detail") or ""),
+            "done_when": str(explicit_lane.get("done_when") or ""),
+        }
+    backlog = [
+        dict(row)
+        for row in list(payload.get("review_backlog") or [])
+        if isinstance(row, dict)
+    ]
+    head = dict(payload.get("review_head") or {}) if isinstance(payload.get("review_head"), dict) else {}
+    if not head and backlog:
+        head = dict(backlog[0])
+    if not head:
+        head_area = str(payload.get("review_head_area") or "").strip()
+        head_symbol = str(payload.get("review_head_symbol") or "").strip().upper()
+        head_action = str(payload.get("review_head_action") or "").strip()
+        head_priority_score = payload.get("review_head_priority_score")
+        head_priority_tier = str(payload.get("review_head_priority_tier") or "").strip()
+        if head_area or head_symbol or head_action:
+            head = {
+                "area": head_area,
+                "symbol": head_symbol,
+                "action": head_action,
+                "priority_score": head_priority_score,
+                "priority_tier": head_priority_tier,
+            }
+    if not head:
+        return {
+            "status": "inactive",
+            "brief": "inactive:-",
+            "head": {},
+            "backlog_count": 0,
+            "backlog_brief": "-",
+            "blocker_detail": "No cross-market review head is currently active.",
+            "done_when": "cross-market operator state produces at least one review backlog item",
+        }
+
+    head_area = str(head.get("area") or "").strip() or "-"
+    head_symbol = str(head.get("symbol") or "").strip().upper() or "-"
+    head_action = str(head.get("action") or "").strip() or "-"
+    head_target = str(head.get("target") or head_symbol).strip() or head_symbol
+    head_reason = str(head.get("reason") or "").strip() or "cross_market_review_head"
+    head_rank = int(head.get("rank") or 1)
+    head_priority_score = int(head.get("priority_score") or 0)
+    head_status = str(head.get("status") or payload.get("review_backlog_status") or "").strip() or "ready"
+    head_blocker_detail = str(head.get("blocker_detail") or "").strip()
+    head_done_when = str(head.get("done_when") or "").strip()
+
+    if not backlog and head_area != "-" and head_symbol != "-":
+        backlog = [dict(head)]
+    backlog_tail = backlog[1:] if backlog else []
+    backlog_brief = " | ".join(
+        [
+            f"{int(row.get('rank') or 0)}:{str(row.get('area') or '-')}"
+            f":{str(row.get('symbol') or '-')}"
+            f":{str(row.get('priority_tier') or '-')}"
+            f":{int(row.get('priority_score') or 0)}"
+            for row in backlog_tail[:8]
+        ]
+    ) or "-"
+    return {
+        "status": head_status,
+        "brief": f"{head_status}:{head_area}:{head_symbol}:{head_action}:{head_priority_score}",
+        "head": head,
+        "head_rank": head_rank,
+        "target": head_target,
+        "reason": head_reason,
+        "backlog_count": len(backlog_tail),
+        "backlog_brief": backlog_brief,
+        "blocker_detail": head_blocker_detail or "Cross-market review head is active and awaiting operator review.",
+        "done_when": head_done_when or "cross-market review head is resolved, promoted, or invalidated",
+    }
+
+
+def _cross_market_operator_head_lane(
+    *,
+    source_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(source_payload or {})
+    explicit_lane = dict(payload.get("operator_head_lane") or {}) if isinstance(payload.get("operator_head_lane"), dict) else {}
+    if explicit_lane:
+        head = dict(explicit_lane.get("head") or {}) if isinstance(explicit_lane.get("head"), dict) else {}
+        return {
+            "status": str(explicit_lane.get("status") or "inactive"),
+            "brief": str(explicit_lane.get("brief") or "inactive:-"),
+            "head": head,
+            "head_rank": int(explicit_lane.get("head_rank") or head.get("rank") or 0),
+            "backlog_count": int(explicit_lane.get("backlog_count") or 0),
+            "backlog_brief": str(explicit_lane.get("backlog_brief") or "-"),
+            "blocker_detail": str(explicit_lane.get("blocker_detail") or ""),
+            "done_when": str(explicit_lane.get("done_when") or ""),
+            "state": str(explicit_lane.get("state") or head.get("state") or "inactive"),
+            "priority_tier": str(explicit_lane.get("priority_tier") or head.get("priority_tier") or ""),
+        }
+    backlog = [
+        dict(row)
+        for row in list(payload.get("operator_backlog") or [])
+        if isinstance(row, dict)
+    ]
+    head = dict(payload.get("operator_head") or {}) if isinstance(payload.get("operator_head"), dict) else {}
+    if not head and backlog:
+        head = dict(backlog[0])
+    if not head:
+        head_area = str(payload.get("operator_head_area") or "").strip()
+        head_symbol = str(payload.get("operator_head_symbol") or "").strip().upper()
+        head_action = str(payload.get("operator_head_action") or "").strip()
+        head_state = str(payload.get("operator_head_state") or "").strip()
+        head_priority_score = payload.get("operator_head_priority_score")
+        head_priority_tier = str(payload.get("operator_head_priority_tier") or "").strip()
+        if head_area or head_symbol or head_action:
+            head = {
+                "area": head_area,
+                "symbol": head_symbol,
+                "action": head_action,
+                "state": head_state,
+                "priority_score": head_priority_score,
+                "priority_tier": head_priority_tier,
+            }
+    if not head:
+        return {
+            "status": "inactive",
+            "brief": "inactive:-",
+            "head": {},
+            "head_rank": 0,
+            "backlog_count": 0,
+            "backlog_brief": "-",
+            "blocker_detail": "No cross-market operator head is currently active.",
+            "done_when": "cross-market operator state produces at least one operator backlog item",
+        }
+
+    head_area = str(head.get("area") or "").strip() or "-"
+    head_symbol = str(head.get("symbol") or "").strip().upper() or "-"
+    head_action = str(head.get("action") or "").strip() or "-"
+    head_state = str(head.get("state") or payload.get("operator_backlog_status") or "").strip() or "review"
+    head_rank = int(head.get("rank") or 1)
+    head_priority_score = int(head.get("priority_score") or 0)
+    head_priority_tier = str(head.get("priority_tier") or "").strip() or "-"
+    head_blocker_detail = str(head.get("blocker_detail") or "").strip()
+    head_done_when = str(head.get("done_when") or "").strip()
+
+    if not backlog and head_area != "-" and head_symbol != "-":
+        backlog = [dict(head)]
+    backlog_tail = backlog[1:] if backlog else []
+    computed_backlog_brief = " | ".join(
+        [
+            f"{int(row.get('rank') or 0)}:{str(row.get('state') or '-')}"
+            f":{str(row.get('area') or '-')}"
+            f":{str(row.get('symbol') or '-')}"
+            f":{str(row.get('action') or '-')}"
+            f":{int(row.get('priority_score') or 0)}"
+            for row in backlog_tail[:8]
+        ]
+    ) or "-"
+    fallback_backlog_count = max(0, int(payload.get("operator_backlog_count") or 0) - 1)
+    backlog_count = len(backlog_tail) if backlog_tail else fallback_backlog_count
+    backlog_brief = computed_backlog_brief
+    if backlog_brief == "-" and backlog_count > 0:
+        fallback_brief = str(payload.get("operator_backlog_brief") or "").strip()
+        if fallback_brief:
+            fallback_parts = [part.strip() for part in fallback_brief.split("|")]
+            backlog_brief = " | ".join(fallback_parts[1:]).strip() or fallback_brief
+    return {
+        "status": head_state,
+        "brief": f"{head_state}:{head_area}:{head_symbol}:{head_action}:{head_priority_score}",
+        "head": head,
+        "head_rank": head_rank,
+        "backlog_count": backlog_count,
+        "backlog_brief": backlog_brief,
+        "blocker_detail": head_blocker_detail or "Cross-market operator head is active and awaiting operator follow-through.",
+        "done_when": head_done_when or "cross-market operator head is resolved, promoted, or invalidated",
+        "state": head_state,
+        "priority_tier": head_priority_tier,
+    }
+
+
+def _cross_market_operator_repair_head_lane(
+    *,
+    source_payload: dict[str, Any] | None,
+    live_gate_blocker_source_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(source_payload or {})
+    explicit_lane = (
+        dict(payload.get("operator_repair_head_lane") or {})
+        if isinstance(payload.get("operator_repair_head_lane"), dict)
+        else {}
+    )
+    if explicit_lane:
+        head = dict(explicit_lane.get("head") or {}) if isinstance(explicit_lane.get("head"), dict) else {}
+        return {
+            "status": str(explicit_lane.get("status") or "inactive"),
+            "brief": str(explicit_lane.get("brief") or "inactive:-"),
+            "head": head,
+            "head_rank": int(explicit_lane.get("head_rank") or head.get("rank") or 0),
+            "backlog_count": int(explicit_lane.get("backlog_count") or 0),
+            "backlog_brief": str(explicit_lane.get("backlog_brief") or "-"),
+            "priority_total": int(explicit_lane.get("priority_total") or 0),
+            "blocker_detail": str(explicit_lane.get("blocker_detail") or ""),
+            "done_when": str(explicit_lane.get("done_when") or ""),
+            "command": str(explicit_lane.get("command") or ""),
+            "clear_when": str(explicit_lane.get("clear_when") or ""),
+        }
+    repair_queue = (
+        dict((live_gate_blocker_source_payload or {}).get("remote_live_takeover_repair_queue") or {})
+        if isinstance((live_gate_blocker_source_payload or {}).get("remote_live_takeover_repair_queue"), dict)
+        else {}
+    )
+    if not repair_queue:
+        return {
+            "status": "inactive",
+            "brief": "inactive:-",
+            "head": {},
+            "head_rank": 0,
+            "backlog_count": 0,
+            "backlog_brief": "-",
+            "blocker_detail": "",
+            "done_when": "",
+            "command": "",
+            "clear_when": "",
+        }
+    head_area = str(repair_queue.get("head_area") or "").strip()
+    head_code = str(repair_queue.get("head_code") or "").strip()
+    head_action = str(repair_queue.get("head_action") or "").strip()
+    head_priority_score = int(repair_queue.get("head_priority_score") or 0)
+    head_priority_tier = str(repair_queue.get("head_priority_tier") or "").strip()
+    head = {
+        "area": head_area,
+        "symbol": head_code.upper(),
+        "target": head_code,
+        "action": head_action,
+        "priority_score": head_priority_score,
+        "priority_tier": head_priority_tier,
+    }
+    queue_brief = str(repair_queue.get("queue_brief") or "").strip()
+    backlog_parts = [part.strip() for part in queue_brief.split("|")] if queue_brief else []
+    queue_items = [
+        dict(row)
+        for row in list(repair_queue.get("items") or [])
+        if isinstance(row, dict)
+    ]
+    priority_total = sum(int(row.get("priority_score") or 0) for row in queue_items)
+    if priority_total <= 0:
+        priority_total = head_priority_score
+    return {
+        "status": str(repair_queue.get("status") or "ready"),
+        "brief": str(repair_queue.get("brief") or f"ready:{head_area or '-'}:{head_code or '-'}:{head_priority_score}"),
+        "head": head,
+        "head_rank": 1,
+        "backlog_count": int(repair_queue.get("count") or 0),
+        "backlog_brief": " | ".join(backlog_parts).strip() if backlog_parts else "-",
+        "priority_total": priority_total,
+        "blocker_detail": str(repair_queue.get("head_clear_when") or "").strip(),
+        "done_when": str(repair_queue.get("done_when") or "").strip(),
+        "command": str(repair_queue.get("head_command") or "").strip(),
+        "clear_when": str(repair_queue.get("head_clear_when") or "").strip(),
+    }
 
 
 def _crypto_route_alignment_recovery_recipe(
@@ -942,8 +2126,14 @@ def _action_queue_brief(items: list[dict[str, Any]], limit: int = 4) -> str:
 def _action_checklist_state(*, area: str, action: str, rank: int) -> str:
     area_text = str(area or "").strip()
     action_text = str(action or "").strip()
+    if area_text in {"ops_live_gate", "risk_guard"} or action_text.startswith("clear_"):
+        return "repair"
     if action_text.startswith("watch_"):
         return "watch"
+    if action_text in {"review_manual_stop_entry", "review_route_only"}:
+        return "review"
+    if action_text == "deprioritize_flow":
+        return "review"
     if action_text.startswith("wait_"):
         return "waiting"
     if rank == 1:
@@ -959,6 +2149,7 @@ def _action_checklist_blocker(
     action: str,
     symbol: str,
     reason: str,
+    row_blocker_detail: str = "",
     stale_signal_dates: dict[str, str],
     stale_signal_age_days: dict[str, int],
     focus_evidence_summary: dict[str, Any],
@@ -966,6 +2157,7 @@ def _action_checklist_blocker(
     focus_symbol: str,
     focus_lifecycle_status: str = "",
     focus_lifecycle_blocker_detail: str = "",
+    crypto_focus_execution_blocker_detail: str = "",
     crypto_route_alignment_status: str = "",
     crypto_route_alignment_recovery_status: str = "",
     crypto_route_alignment_recovery_zero_trade_batches: list[str] | None = None,
@@ -973,9 +2165,12 @@ def _action_checklist_blocker(
     symbol_text = str(symbol or "").strip().upper()
     action_text = str(action or "").strip()
     reason_text = str(reason or "").strip()
+    row_blocker_text = str(row_blocker_detail or "").strip()
     stale_date = stale_signal_dates.get(symbol_text, "")
     stale_age = stale_signal_age_days.get(symbol_text)
 
+    if row_blocker_text:
+        return row_blocker_text
     if action_text == "review_paper_execution_retro":
         evidence_present = (
             area == focus_area
@@ -1007,6 +2202,12 @@ def _action_checklist_blocker(
         return "directional signal ticket is missing or not fresh"
     if action_text == "normalize_commodity_execution_price_reference":
         return "execution price is still proxy-reference only"
+    if action_text == "deprioritize_flow":
+        if str(crypto_focus_execution_blocker_detail or "").strip():
+            return str(crypto_focus_execution_blocker_detail or "").strip()
+        if reason_text and reason_text != "secondary_focus":
+            return reason_text.replace("_", " ")
+        return f"{symbol_text or 'SYMBOL'} flow edge remains below review threshold"
     if action_text == "watch_priority_until_long_window_confirms":
         if (
             str(crypto_route_alignment_status or "").strip() == "route_ahead_of_embedding"
@@ -1028,13 +2229,18 @@ def _action_checklist_done_when(
     *,
     action: str,
     symbol: str,
+    row_done_when: str = "",
     focus_lifecycle_status: str = "",
     focus_lifecycle_done_when: str = "",
+    crypto_focus_execution_done_when: str = "",
     crypto_route_alignment_status: str = "",
     crypto_route_alignment_recovery_status: str = "",
 ) -> str:
     symbol_text = str(symbol or "").strip().upper() or "SYMBOL"
     action_text = str(action or "").strip()
+    row_done_when_text = str(row_done_when or "").strip()
+    if row_done_when_text:
+        return row_done_when_text
     if action_text == "review_paper_execution_retro":
         if str(focus_lifecycle_status or "").strip() == "open_position_wait_close_evidence":
             return str(focus_lifecycle_done_when or "").strip() or (
@@ -1053,6 +2259,10 @@ def _action_checklist_done_when(
         return f"{symbol_text} prints a fresh directional signal ticket"
     if action_text == "normalize_commodity_execution_price_reference":
         return f"{symbol_text} receives executable non-proxy price levels"
+    if action_text == "deprioritize_flow":
+        return str(crypto_focus_execution_done_when or "").strip() or (
+            f"{symbol_text} regains a positive ranked flow edge or leaves review"
+        )
     if action_text == "apply_commodity_execution_bridge":
         return f"{symbol_text} is written into paper evidence artifacts"
     if action_text == "watch_priority_until_long_window_confirms":
@@ -1124,6 +2334,8 @@ def _focus_slot_source(payload: dict[str, Any], *, area: str, action: str) -> tu
         ("commodity_execution_preview", "commodity_execution_preview", payload.get("source_commodity_execution_preview_artifact")),
         ("commodity_ticket_book", "commodity_ticket_book", payload.get("source_commodity_ticket_book_artifact")),
         ("commodity_route", "commodity_route", payload.get("source_commodity_artifact")),
+        ("brooks_structure", "brooks_structure_review_queue", payload.get("source_brooks_structure_review_queue_artifact")),
+        ("cross_market_review", "cross_market_operator_state", payload.get("source_cross_market_operator_state_artifact")),
         ("crypto_route", "crypto_route", payload.get("source_crypto_route_artifact") or payload.get("source_crypto_artifact")),
         ("research_queue", "action_research", payload.get("source_action_artifact")),
     ]
@@ -1169,6 +2381,8 @@ def _focus_slot_source_status(payload: dict[str, Any], *, source_kind: str) -> s
         "commodity_execution_preview": str(payload.get("source_commodity_execution_preview_status") or ""),
         "commodity_ticket_book": str(payload.get("source_commodity_ticket_book_status") or ""),
         "commodity_route": str(payload.get("source_commodity_status") or ""),
+        "brooks_structure_review_queue": str(payload.get("source_brooks_structure_review_queue_status") or ""),
+        "cross_market_operator_state": str(payload.get("source_cross_market_operator_state_status") or ""),
         "crypto_route": str(payload.get("source_crypto_route_status") or payload.get("source_crypto_status") or ""),
         "action_research": str(payload.get("source_action_status") or ""),
     }
@@ -1412,6 +2626,7 @@ def _focus_slot_actionability_backlog(
     items: list[dict[str, Any]],
     *,
     alignment_focus_slot: str,
+    alignment_focus_symbol: str,
     alignment_status: str,
     alignment_brief: str,
     alignment_recovery_status: str,
@@ -1427,20 +2642,25 @@ def _focus_slot_actionability_backlog(
         "followup": "followup",
         "secondary": "secondary",
     }.get(focus_slot_text, focus_slot_text)
+    focus_symbol_text = str(alignment_focus_symbol or "").strip().upper()
     backlog: list[dict[str, Any]] = []
     for row in items:
         if not isinstance(row, dict):
             continue
         area_text = str(row.get("area") or "").strip()
         slot_text = str(row.get("slot") or "").strip()
+        symbol_text = str(row.get("symbol") or "").strip().upper()
         if area_text != "crypto_route":
             continue
-        if focus_slot_alias and slot_text != focus_slot_alias:
+        if focus_symbol_text:
+            if symbol_text != focus_symbol_text:
+                continue
+        elif focus_slot_alias and slot_text != focus_slot_alias:
             continue
         backlog.append(
             {
-                "slot": focus_slot_text or slot_text or "-",
-                "symbol": str(row.get("symbol") or "").strip().upper() or "-",
+                "slot": slot_text or focus_slot_text or "-",
+                "symbol": symbol_text or "-",
                 "action": str(row.get("action") or "").strip() or "-",
                 "state": str(row.get("state") or "").strip() or "-",
                 "blocker_detail": str(row.get("blocker_detail") or "").strip()
@@ -1524,6 +2744,150 @@ def _focus_slot_actionability_gate_done_when(
 def _focus_slot_actionability_gate_brief(*, status: str, actionable_count: int, total_count: int) -> str:
     status_text = str(status or "").strip() or "-"
     return f"{status_text}:{actionable_count}/{total_count}"
+
+
+def _crypto_route_focus_review_lane(
+    *,
+    symbol: str,
+    action: str,
+    focus_execution_state: str,
+    focus_execution_blocker_detail: str,
+    focus_execution_done_when: str,
+    focus_execution_micro_veto: str,
+    alignment_status: str,
+    alignment_recovery_status: str,
+) -> dict[str, str]:
+    symbol_text = str(symbol or "").strip().upper()
+    action_text = str(action or "").strip()
+    lane = {
+        "status": "not_active",
+        "brief": "not_active:-",
+        "primary_blocker": "not_applicable",
+        "micro_blocker": "-",
+        "blocker_detail": "crypto review lane is only active when crypto focus is under deprioritize_flow review.",
+        "done_when": "crypto focus returns to a deprioritize_flow review state before reassessing",
+    }
+    if not symbol_text or action_text != "deprioritize_flow":
+        return lane
+
+    state_text = str(focus_execution_state or "").strip()
+    blocker_detail_text = str(focus_execution_blocker_detail or "").strip()
+    done_when_text = str(focus_execution_done_when or "").strip()
+    micro_veto_text = str(focus_execution_micro_veto or "").strip()
+    alignment_status_text = str(alignment_status or "").strip()
+    alignment_recovery_status_text = str(alignment_recovery_status or "").strip()
+
+    status_parts: list[str] = []
+    primary_blocker = "review_pending"
+    if (
+        alignment_status_text == "route_ahead_of_embedding"
+        and alignment_recovery_status_text == "recovery_completed_no_edge"
+    ):
+        primary_blocker = "no_edge"
+        status_parts.append("no_edge")
+    if state_text == "Bias_Only":
+        if primary_blocker == "review_pending":
+            primary_blocker = "bias_only"
+        status_parts.append("bias_only")
+    if micro_veto_text and micro_veto_text != "-":
+        status_parts.append("micro_veto")
+
+    lane["status"] = f"review_{'_'.join(status_parts) if status_parts else 'pending'}"
+    lane["brief"] = f"{lane['status']}:{symbol_text}"
+    lane["primary_blocker"] = primary_blocker
+    lane["micro_blocker"] = micro_veto_text or "-"
+    lane["blocker_detail"] = blocker_detail_text or f"{symbol_text} remains under flow review."
+    lane["done_when"] = done_when_text or f"{symbol_text} regains a positive ranked flow edge or leaves review"
+    return lane
+
+
+def _crypto_route_focus_review_scores(
+    *,
+    symbol: str,
+    action: str,
+    focus_execution_state: str,
+    focus_execution_micro_classification: str,
+    focus_execution_micro_veto: str,
+    review_primary_blocker: str,
+) -> dict[str, Any]:
+    symbol_text = str(symbol or "").strip().upper()
+    action_text = str(action or "").strip()
+    state_text = str(focus_execution_state or "").strip()
+    micro_class_text = str(focus_execution_micro_classification or "").strip()
+    micro_veto_text = str(focus_execution_micro_veto or "").strip()
+    primary_blocker_text = str(review_primary_blocker or "").strip()
+    scores: dict[str, Any] = {
+        "status": "not_active",
+        "edge_score": 0,
+        "structure_score": 0,
+        "micro_score": 0,
+        "composite_score": 0,
+        "brief": "not_active:edge=0|structure=0|micro=0|composite=0",
+    }
+    if not symbol_text or action_text != "deprioritize_flow":
+        return scores
+
+    edge_score = 35
+    if primary_blocker_text == "no_edge":
+        edge_score = 5
+    elif primary_blocker_text == "bias_only":
+        edge_score = 15
+
+    structure_score = {
+        "Setup_Ready": 100,
+        "Bias_Only": 25,
+    }.get(state_text, 40 if state_text else 0)
+
+    micro_score = {
+        "confirmed": 100,
+        "confirm_and_veto_only": 65,
+        "watch_only": 35,
+    }.get(micro_class_text, 40 if micro_class_text else 0)
+    if micro_veto_text == "low_sample_or_gap_risk":
+        micro_score = min(micro_score, 20)
+    elif micro_veto_text and micro_veto_text != "-":
+        micro_score = min(micro_score, 25)
+
+    composite_score = int(round((edge_score + structure_score + micro_score) / 3.0))
+    scores.update(
+        {
+            "status": "scored",
+            "edge_score": edge_score,
+            "structure_score": structure_score,
+            "micro_score": micro_score,
+            "composite_score": composite_score,
+            "brief": (
+                f"scored:{symbol_text}:"
+                f"edge={edge_score}|structure={structure_score}|micro={micro_score}|composite={composite_score}"
+            ),
+        }
+    )
+    return scores
+
+
+def _crypto_route_focus_review_priority(scores: dict[str, Any]) -> dict[str, Any]:
+    if str(scores.get("status") or "").strip() != "scored":
+        return {
+            "status": "not_active",
+            "score": 0,
+            "tier": "-",
+            "brief": "not_active:0/100",
+        }
+    score = int(scores.get("composite_score") or 0)
+    if score >= 70:
+        tier = "high_priority_review"
+    elif score >= 40:
+        tier = "medium_priority_review"
+    elif score >= 20:
+        tier = "low_priority_review"
+    else:
+        tier = "deprioritized_review"
+    return {
+        "status": "ready",
+        "score": score,
+        "tier": tier,
+        "brief": f"{tier}:{score}/100",
+    }
 
 
 def _focus_slot_readiness_gate_status(
@@ -1850,7 +3214,13 @@ def _recipe_pending_brief(steps: list[dict[str, Any]], limit: int = 4) -> str:
     return " | ".join(parts) + f" | +{len(steps) - limit}"
 
 
-def _source_refresh_recipe(*, source_kind: str, source_artifact: str, reference_now: dt.datetime) -> dict[str, Any]:
+def _source_refresh_recipe(
+    *,
+    source_kind: str,
+    source_artifact: str,
+    symbol: str = "",
+    reference_now: dt.datetime,
+) -> dict[str, Any]:
     kind_text = str(source_kind or "").strip()
     artifact_text = str(source_artifact or "").strip()
     artifact_path = Path(artifact_text).expanduser() if artifact_text else Path()
@@ -2006,7 +3376,7 @@ def _source_refresh_recipe(*, source_kind: str, source_artifact: str, reference_
     recipe["note"] = "guarded entrypoint refreshes native crypto route sources before the remaining pipeline steps"
     recipe["followup_script"] = str(followup_script_path)
     recipe["followup_command_hint"] = shlex.join(followup_command)
-    recipe["verify_hint"] = "rerun commodity refresh and confirm BNBUSDT leaves operator_source_refresh_queue"
+    recipe["verify_hint"] = _source_refresh_checklist_verify_hint(symbol=symbol)
     recipe["steps_brief"] = " | ".join(f"{step['rank']}:{step['name']}" for step in steps)
     recipe["step_checkpoint_brief"] = _recipe_step_checkpoint_brief(steps)
     recipe["steps"] = steps
@@ -2022,6 +3392,7 @@ def _source_refresh_checklist(items: list[dict[str, Any]], *, reference_now: dt.
         recipe = _source_refresh_recipe(
             source_kind=str(item.get("source_kind") or ""),
             source_artifact=str(item.get("source_artifact") or ""),
+            symbol=str(item.get("symbol") or ""),
             reference_now=reference_now,
         )
         item["state"] = _source_refresh_checklist_state(action=str(item.get("action") or ""))
@@ -2073,6 +3444,169 @@ def _source_refresh_checklist_brief(items: list[dict[str, Any]], limit: int = 3)
     if len(items) <= limit:
         return " | ".join(parts)
     return " | ".join(parts) + f" | +{len(items) - limit}"
+
+
+def _crypto_route_head_source_refresh_lane(
+    *,
+    row: dict[str, Any] | None,
+    reference_now: dt.datetime,
+    cooldown_next_eligible_end_date: str = "",
+    source_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    item = dict(row or {})
+    symbol = str(item.get("symbol") or "").strip().upper()
+    if not symbol:
+        return {
+            "status": "not_applicable",
+            "brief": "not_applicable:-",
+            "slot": "-",
+            "symbol": "-",
+            "action": "-",
+            "source_kind": "-",
+            "source_health": "-",
+            "source_artifact": "",
+            "blocker_detail": "crypto route head source refresh lane is only active when a crypto review head is present.",
+            "done_when": "crypto route head returns before reassessing source refresh",
+            "recipe": {},
+        }
+
+    action = str(item.get("source_refresh_action") or "").strip()
+    source_kind = str(item.get("source_kind") or "").strip()
+    source_status = str(item.get("source_status") or "").strip()
+    source_recency = str(item.get("source_recency") or "").strip()
+    source_health = str(item.get("source_health") or "").strip()
+    source_artifact = str(item.get("source_artifact") or "").strip()
+    source_age_minutes = item.get("source_age_minutes")
+
+    source_lane = dict(source_payload or {})
+    source_lane_symbol = str(source_lane.get("crypto_route_head_source_refresh_symbol") or "").strip().upper()
+    source_lane_status = str(source_lane.get("crypto_route_head_source_refresh_status") or "").strip()
+    source_lane_action = str(source_lane.get("crypto_route_head_source_refresh_action") or "").strip()
+    if (
+        symbol
+        and symbol == source_lane_symbol
+        and action in ("", "read_current_artifact")
+        and source_lane_status in {"ready", "deferred_until_next_eligible_end_date"}
+    ):
+        return {
+            "status": source_lane_status,
+            "brief": str(source_lane.get("crypto_route_head_source_refresh_brief") or f"{source_lane_status}:{symbol}:{source_lane_action or '-'}"),
+            "slot": str(item.get("slot") or "").strip() or "-",
+            "symbol": symbol,
+            "action": source_lane_action or action or "-",
+            "source_kind": str(source_lane.get("crypto_route_head_source_refresh_source_kind") or source_kind or "-"),
+            "source_health": str(source_lane.get("crypto_route_head_source_refresh_source_health") or source_health or "-"),
+            "source_artifact": str(source_lane.get("crypto_route_head_source_refresh_source_artifact") or source_artifact),
+            "blocker_detail": str(source_lane.get("crypto_route_head_source_refresh_blocker_detail") or ""),
+            "done_when": str(source_lane.get("crypto_route_head_source_refresh_done_when") or ""),
+            "recipe": {},
+        }
+
+    if action in ("", "read_current_artifact"):
+        status = "ready"
+        blocker_detail = (
+            f"{symbol} currently uses a readable {source_kind or 'source'} artifact "
+            f"({source_status or '-'}, {source_recency or '-'})"
+        )
+        done_when = f"keep {symbol} on the current {source_kind or 'source'} artifact while it remains usable"
+        recipe: dict[str, Any] = {}
+    elif action == "wait_for_next_eligible_end_date":
+        status = "deferred_until_next_eligible_end_date"
+        ready_on = str(cooldown_next_eligible_end_date or "").strip() or "-"
+        blocker_detail = f"{symbol} source refresh is deferred until the next eligible end date ({ready_on})"
+        done_when = (
+            f"{symbol} reaches the next eligible end date ({ready_on}) and still remains the crypto review head"
+        )
+        recipe = _source_refresh_recipe(
+            source_kind=source_kind,
+            source_artifact=source_artifact,
+            symbol=symbol,
+            reference_now=reference_now,
+        )
+    else:
+        status = _source_refresh_checklist_state(action=action)
+        blocker_detail = _source_refresh_checklist_blocker(
+            source_kind=source_kind,
+            source_status=source_status,
+            source_recency=source_recency,
+            source_age_minutes=source_age_minutes,
+        )
+        done_when = _source_refresh_checklist_done_when(
+            symbol=symbol,
+            source_kind=source_kind,
+            source_status=source_status,
+            action=action,
+        )
+        recipe = _source_refresh_recipe(
+            source_kind=source_kind,
+            source_artifact=source_artifact,
+            symbol=symbol,
+            reference_now=reference_now,
+        )
+
+    return {
+        "status": status,
+        "brief": f"{status}:{symbol}:{action or '-'}",
+        "slot": str(item.get("slot") or "").strip() or "-",
+        "symbol": symbol,
+        "action": action or "-",
+        "source_kind": source_kind or "-",
+        "source_health": source_health or "-",
+        "source_artifact": source_artifact,
+        "blocker_detail": blocker_detail,
+        "done_when": done_when,
+        "recipe": recipe,
+    }
+
+
+def _source_refresh_pipeline_relevance(
+    *,
+    crypto_head_source_refresh: dict[str, Any] | None,
+    pending_steps: list[dict[str, Any]],
+    deferred_steps: list[dict[str, Any]],
+) -> dict[str, str]:
+    head = dict(crypto_head_source_refresh or {})
+    head_status = str(head.get("status") or "").strip()
+    head_symbol = str(head.get("symbol") or "").strip().upper() or "-"
+    head_action = str(head.get("action") or "").strip() or "-"
+    pending_count = len(pending_steps)
+    deferred_count = len(deferred_steps)
+
+    if pending_count == 0 and deferred_count == 0:
+        return {
+            "status": "clear",
+            "brief": "clear",
+            "blocker_detail": "no source refresh pipeline work remains.",
+            "done_when": "keep the source refresh pipeline clear",
+        }
+
+    if head_status in {"ready", "deferred_until_next_eligible_end_date"} and head_action in {
+        "read_current_artifact",
+        "wait_for_next_eligible_end_date",
+    }:
+        remaining_count = pending_count + deferred_count
+        return {
+            "status": "non_blocking_for_current_crypto_head",
+            "brief": f"non_blocking_for_current_crypto_head:{head_symbol}:{remaining_count}",
+            "blocker_detail": (
+                f"{head_symbol} current source lane is already {head_status} via {head_action}; "
+                "remaining source refresh pipeline work is broader carry-over and does not block the current crypto head."
+            ),
+            "done_when": (
+                "run the remaining source refresh pipeline only when broader refresh freshness is required "
+                "or the crypto review queue head changes"
+            ),
+        }
+
+    return {
+        "status": "blocking_for_current_crypto_head",
+        "brief": f"blocking_for_current_crypto_head:{head_symbol}:{pending_count + deferred_count}",
+        "blocker_detail": (
+            f"{head_symbol} current source lane is {head_status or '-'} via {head_action}; "
+            "remaining source refresh pipeline work still blocks the current crypto head."
+        ),
+        "done_when": "clear the remaining source refresh pipeline steps before promoting the current crypto head",
+    }
 
 
 def _source_refresh_checklist_verify_hint(*, symbol: str) -> str:
@@ -2233,6 +3767,8 @@ def build_operator_brief(
     commodity_execution_retro_payload: dict[str, Any] | None = None,
     commodity_execution_gap_payload: dict[str, Any] | None = None,
     commodity_execution_bridge_payload: dict[str, Any] | None = None,
+    cross_market_operator_state_payload: dict[str, Any] | None = None,
+    live_gate_blocker_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     partial_bridge_statuses = {
         "bridge_partially_bridged_missing_remainder",
@@ -2263,6 +3799,7 @@ def build_operator_brief(
     embedded_crypto_route_brief = dict(crypto_payload.get("crypto_route_brief") or {})
     embedded_crypto_route_operator_brief = dict(crypto_payload.get("crypto_route_operator_brief") or {})
     dedicated_crypto_route_payload = dict(crypto_route_payload or {})
+    cross_market_operator_state_payload = dict(cross_market_operator_state_payload or {})
     dedicated_crypto_route_operator_brief: dict[str, Any] = {}
     dedicated_crypto_route_brief: dict[str, Any] = {}
     if dedicated_crypto_route_payload:
@@ -2739,6 +4276,248 @@ def build_operator_brief(
     focus_brief = str(crypto_route_operator_brief.get("focus_brief") or crypto_route_brief.get("focus_brief") or "").strip()
     next_retest_action = str(crypto_route_operator_brief.get("next_retest_action") or crypto_route_brief.get("next_retest_action") or "").strip()
     next_retest_reason = str(crypto_route_operator_brief.get("next_retest_reason") or crypto_route_brief.get("next_retest_reason") or "").strip()
+    crypto_route_shortline_market_state_brief = str(
+        crypto_route_operator_brief.get("shortline_market_state_brief")
+        or crypto_route_brief.get("shortline_market_state_brief")
+        or ""
+    ).strip()
+    crypto_route_shortline_execution_gate_brief = str(
+        crypto_route_operator_brief.get("shortline_execution_gate_brief")
+        or crypto_route_brief.get("shortline_execution_gate_brief")
+        or ""
+    ).strip()
+    crypto_route_shortline_no_trade_rule = str(
+        crypto_route_operator_brief.get("shortline_no_trade_rule")
+        or crypto_route_brief.get("shortline_no_trade_rule")
+        or ""
+    ).strip()
+    crypto_route_shortline_session_map_brief = str(
+        crypto_route_operator_brief.get("shortline_session_map_brief")
+        or crypto_route_brief.get("shortline_session_map_brief")
+        or ""
+    ).strip()
+    crypto_route_shortline_cvd_semantic_status = str(
+        crypto_route_operator_brief.get("shortline_cvd_semantic_status")
+        or crypto_route_brief.get("shortline_cvd_semantic_status")
+        or ""
+    ).strip()
+    crypto_route_shortline_cvd_semantic_takeaway = str(
+        crypto_route_operator_brief.get("shortline_cvd_semantic_takeaway")
+        or crypto_route_brief.get("shortline_cvd_semantic_takeaway")
+        or ""
+    ).strip()
+    crypto_route_shortline_cvd_queue_handoff_status = str(
+        crypto_route_operator_brief.get("shortline_cvd_queue_handoff_status")
+        or crypto_route_brief.get("shortline_cvd_queue_handoff_status")
+        or ""
+    ).strip()
+    crypto_route_shortline_cvd_queue_handoff_takeaway = str(
+        crypto_route_operator_brief.get("shortline_cvd_queue_handoff_takeaway")
+        or crypto_route_brief.get("shortline_cvd_queue_handoff_takeaway")
+        or ""
+    ).strip()
+    crypto_route_shortline_cvd_queue_focus_batch = str(
+        crypto_route_operator_brief.get("shortline_cvd_queue_focus_batch")
+        or crypto_route_brief.get("shortline_cvd_queue_focus_batch")
+        or ""
+    ).strip()
+    crypto_route_shortline_cvd_queue_focus_action = str(
+        crypto_route_operator_brief.get("shortline_cvd_queue_focus_action")
+        or crypto_route_brief.get("shortline_cvd_queue_focus_action")
+        or ""
+    ).strip()
+    crypto_route_shortline_cvd_queue_stack_brief = str(
+        crypto_route_operator_brief.get("shortline_cvd_queue_stack_brief")
+        or crypto_route_brief.get("shortline_cvd_queue_stack_brief")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_state = str(
+        crypto_route_operator_brief.get("focus_execution_state")
+        or crypto_route_brief.get("focus_execution_state")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_blocker_detail = str(
+        crypto_route_operator_brief.get("focus_execution_blocker_detail")
+        or crypto_route_brief.get("focus_execution_blocker_detail")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_done_when = str(
+        crypto_route_operator_brief.get("focus_execution_done_when")
+        or crypto_route_brief.get("focus_execution_done_when")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_classification = str(
+        crypto_route_operator_brief.get("focus_execution_micro_classification")
+        or crypto_route_brief.get("focus_execution_micro_classification")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_context = str(
+        crypto_route_operator_brief.get("focus_execution_micro_context")
+        or crypto_route_brief.get("focus_execution_micro_context")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_trust_tier = str(
+        crypto_route_operator_brief.get("focus_execution_micro_trust_tier")
+        or crypto_route_brief.get("focus_execution_micro_trust_tier")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_veto = str(
+        crypto_route_operator_brief.get("focus_execution_micro_veto")
+        or crypto_route_brief.get("focus_execution_micro_veto")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_locality_status = str(
+        crypto_route_operator_brief.get("focus_execution_micro_locality_status")
+        or crypto_route_brief.get("focus_execution_micro_locality_status")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_drift_risk = str(
+        crypto_route_operator_brief.get("focus_execution_micro_drift_risk")
+        or crypto_route_brief.get("focus_execution_micro_drift_risk")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_attack_side = str(
+        crypto_route_operator_brief.get("focus_execution_micro_attack_side")
+        or crypto_route_brief.get("focus_execution_micro_attack_side")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_attack_presence = str(
+        crypto_route_operator_brief.get("focus_execution_micro_attack_presence")
+        or crypto_route_brief.get("focus_execution_micro_attack_presence")
+        or ""
+    ).strip()
+    crypto_route_focus_execution_micro_reasons = [
+        str(x).strip()
+        for x in (
+            crypto_route_operator_brief.get("focus_execution_micro_reasons")
+            or crypto_route_brief.get("focus_execution_micro_reasons")
+            or []
+        )
+        if str(x).strip()
+    ]
+    crypto_route_focus_review_status = str(
+        crypto_route_operator_brief.get("focus_review_status")
+        or crypto_route_brief.get("focus_review_status")
+        or ""
+    ).strip()
+    crypto_route_focus_review_brief = str(
+        crypto_route_operator_brief.get("focus_review_brief")
+        or crypto_route_brief.get("focus_review_brief")
+        or ""
+    ).strip()
+    crypto_route_focus_review_primary_blocker = str(
+        crypto_route_operator_brief.get("focus_review_primary_blocker")
+        or crypto_route_brief.get("focus_review_primary_blocker")
+        or ""
+    ).strip()
+    crypto_route_focus_review_micro_blocker = str(
+        crypto_route_operator_brief.get("focus_review_micro_blocker")
+        or crypto_route_brief.get("focus_review_micro_blocker")
+        or ""
+    ).strip()
+    crypto_route_focus_review_blocker_detail = str(
+        crypto_route_operator_brief.get("focus_review_blocker_detail")
+        or crypto_route_brief.get("focus_review_blocker_detail")
+        or ""
+    ).strip()
+    crypto_route_focus_review_done_when = str(
+        crypto_route_operator_brief.get("focus_review_done_when")
+        or crypto_route_brief.get("focus_review_done_when")
+        or ""
+    ).strip()
+    crypto_route_focus_review_score_status = str(
+        crypto_route_operator_brief.get("focus_review_score_status")
+        or crypto_route_brief.get("focus_review_score_status")
+        or ""
+    ).strip()
+    crypto_route_focus_review_edge_score = int(
+        crypto_route_operator_brief.get("focus_review_edge_score")
+        or crypto_route_brief.get("focus_review_edge_score")
+        or 0
+    )
+    crypto_route_focus_review_structure_score = int(
+        crypto_route_operator_brief.get("focus_review_structure_score")
+        or crypto_route_brief.get("focus_review_structure_score")
+        or 0
+    )
+    crypto_route_focus_review_micro_score = int(
+        crypto_route_operator_brief.get("focus_review_micro_score")
+        or crypto_route_brief.get("focus_review_micro_score")
+        or 0
+    )
+    crypto_route_focus_review_composite_score = int(
+        crypto_route_operator_brief.get("focus_review_composite_score")
+        or crypto_route_brief.get("focus_review_composite_score")
+        or 0
+    )
+    crypto_route_focus_review_score_brief = str(
+        crypto_route_operator_brief.get("focus_review_score_brief")
+        or crypto_route_brief.get("focus_review_score_brief")
+        or ""
+    ).strip()
+    crypto_route_focus_review_priority_status = str(
+        crypto_route_operator_brief.get("focus_review_priority_status")
+        or crypto_route_brief.get("focus_review_priority_status")
+        or ""
+    ).strip()
+    crypto_route_focus_review_priority_score = int(
+        crypto_route_operator_brief.get("focus_review_priority_score")
+        or crypto_route_brief.get("focus_review_priority_score")
+        or 0
+    )
+    crypto_route_focus_review_priority_tier = str(
+        crypto_route_operator_brief.get("focus_review_priority_tier")
+        or crypto_route_brief.get("focus_review_priority_tier")
+        or ""
+    ).strip()
+    crypto_route_focus_review_priority_brief = str(
+        crypto_route_operator_brief.get("focus_review_priority_brief")
+        or crypto_route_brief.get("focus_review_priority_brief")
+        or ""
+    ).strip()
+    crypto_route_review_priority_queue_status = str(
+        crypto_route_operator_brief.get("review_priority_queue_status")
+        or crypto_route_brief.get("review_priority_queue_status")
+        or ""
+    ).strip()
+    crypto_route_review_priority_queue_count = int(
+        crypto_route_operator_brief.get("review_priority_queue_count")
+        or crypto_route_brief.get("review_priority_queue_count")
+        or 0
+    )
+    crypto_route_review_priority_queue_brief = str(
+        crypto_route_operator_brief.get("review_priority_queue_brief")
+        or crypto_route_brief.get("review_priority_queue_brief")
+        or ""
+    ).strip()
+    crypto_route_review_priority_head_symbol = str(
+        crypto_route_operator_brief.get("review_priority_head_symbol")
+        or crypto_route_brief.get("review_priority_head_symbol")
+        or ""
+    ).strip()
+    crypto_route_review_priority_head_tier = str(
+        crypto_route_operator_brief.get("review_priority_head_tier")
+        or crypto_route_brief.get("review_priority_head_tier")
+        or ""
+    ).strip()
+    crypto_route_review_priority_head_score = int(
+        crypto_route_operator_brief.get("review_priority_head_score")
+        or crypto_route_brief.get("review_priority_head_score")
+        or 0
+    )
+    crypto_route_review_priority_queue = [
+        dict(row)
+        for row in (
+            crypto_route_operator_brief.get("review_priority_queue")
+            or crypto_route_brief.get("review_priority_queue")
+            or []
+        )
+        if isinstance(row, dict)
+    ]
+    crypto_route_review_priority_head_row = _review_priority_head_row(
+        crypto_route_review_priority_queue,
+        head_symbol=crypto_route_review_priority_head_symbol,
+    )
 
     operator_status = "focus-commodities-plus-crypto-watch"
     if not focus_primary and not focus_regime:
@@ -2912,8 +4691,6 @@ def build_operator_brief(
             else "close-evidence"
         )
 
-    crypto_route_short_brief = f"{focus_symbol}:{focus_action}" if focus_symbol else (route_stack or "-")
-
     next_focus_area = "-"
     next_focus_target = "-"
     next_focus_symbol = "-"
@@ -2924,6 +4701,9 @@ def build_operator_brief(
     secondary_focus_symbol = "-"
     secondary_focus_action = "-"
     secondary_focus_reason = "-"
+    secondary_focus_priority_tier = "-"
+    secondary_focus_priority_score: int | str = "-"
+    secondary_focus_queue_rank: int | str = "-"
     commodity_remainder_focus_area = "-"
     commodity_remainder_focus_target = "-"
     commodity_remainder_focus_symbol = "-"
@@ -2941,6 +4721,73 @@ def build_operator_brief(
     followup_focus_symbol = "-"
     followup_focus_action = "-"
     followup_focus_reason = "-"
+    crypto_secondary_target = focus_symbol or "-"
+    crypto_secondary_symbol = focus_symbol or "-"
+    crypto_secondary_action = focus_action or "-"
+    crypto_secondary_reason = focus_reason or "secondary_focus"
+    crypto_secondary_blocker_override = ""
+    crypto_secondary_done_when_override = ""
+    crypto_route_review_priority_head_action = ""
+    crypto_route_review_priority_head_reason = ""
+    crypto_route_review_priority_head_blocker_detail = ""
+    crypto_route_review_priority_head_done_when = ""
+    crypto_route_review_priority_head_rank: int | str = "-"
+    if crypto_route_review_priority_head_row:
+        crypto_secondary_symbol = (
+            str(crypto_route_review_priority_head_row.get("symbol") or "").strip().upper()
+            or crypto_secondary_symbol
+        )
+        crypto_secondary_target = crypto_secondary_symbol or "-"
+        crypto_secondary_action = (
+            str(crypto_route_review_priority_head_row.get("route_action") or "").strip()
+            or crypto_secondary_action
+        )
+        crypto_secondary_reason = (
+            str(crypto_route_review_priority_head_row.get("reason") or "").strip()
+            or crypto_secondary_reason
+        )
+        crypto_secondary_blocker_override = str(
+            crypto_route_review_priority_head_row.get("blocker_detail") or ""
+        ).strip()
+        crypto_secondary_done_when_override = str(
+            crypto_route_review_priority_head_row.get("done_when") or ""
+        ).strip()
+        crypto_route_review_priority_head_action = crypto_secondary_action
+        crypto_route_review_priority_head_reason = crypto_secondary_reason
+        crypto_route_review_priority_head_blocker_detail = crypto_secondary_blocker_override
+        crypto_route_review_priority_head_done_when = crypto_secondary_done_when_override
+        secondary_focus_priority_tier = (
+            str(crypto_route_review_priority_head_row.get("priority_tier") or "").strip()
+            or crypto_route_review_priority_head_tier
+            or "-"
+        )
+        secondary_focus_priority_score = int(
+            crypto_route_review_priority_head_row.get("priority_score")
+            or crypto_route_review_priority_head_score
+            or 0
+        )
+        secondary_focus_queue_rank = (
+            crypto_route_review_priority_head_row.get("rank")
+            if crypto_route_review_priority_head_row.get("rank") not in (None, "")
+            else "-"
+        )
+    elif crypto_route_review_priority_head_tier:
+        secondary_focus_priority_tier = crypto_route_review_priority_head_tier
+        secondary_focus_priority_score = crypto_route_review_priority_head_score
+        secondary_focus_queue_rank = 1 if crypto_route_review_priority_head_symbol else "-"
+    if crypto_route_review_priority_head_symbol and secondary_focus_queue_rank not in (None, ""):
+        crypto_route_review_priority_head_rank = secondary_focus_queue_rank
+    crypto_route_short_brief_symbol = (
+        crypto_secondary_symbol if crypto_secondary_symbol and crypto_secondary_symbol != "-" else focus_symbol
+    )
+    crypto_route_short_brief_action = (
+        crypto_secondary_action if crypto_route_short_brief_symbol == crypto_secondary_symbol else (focus_action or "-")
+    )
+    crypto_route_short_brief = (
+        f"{crypto_route_short_brief_symbol}:{crypto_route_short_brief_action}"
+        if crypto_route_short_brief_symbol
+        else (route_stack or "-")
+    )
     if commodity_stale_signal_watch_items:
         commodity_stale_watch_head = dict(commodity_stale_signal_watch_items[0])
         commodity_stale_signal_watch_next_execution_id = str(
@@ -3061,24 +4908,24 @@ def build_operator_brief(
         next_focus_action = "continue_research_queue"
         next_focus_reason = "research_queue_active"
 
-    if next_focus_area.startswith("commodity_") and focus_symbol:
+    if next_focus_area.startswith("commodity_") and crypto_secondary_symbol and crypto_secondary_symbol != "-":
         secondary_focus_area = "crypto_route"
-        secondary_focus_target = focus_symbol
-        secondary_focus_symbol = focus_symbol
-        secondary_focus_action = focus_action or "-"
-        secondary_focus_reason = "secondary_focus"
+        secondary_focus_target = crypto_secondary_target
+        secondary_focus_symbol = crypto_secondary_symbol
+        secondary_focus_action = crypto_secondary_action
+        secondary_focus_reason = crypto_secondary_reason
     elif next_focus_area == "crypto_route" and research_queue:
         secondary_focus_area = "research_queue"
         secondary_focus_target = research_queue[0]
         secondary_focus_symbol = research_queue[0]
         secondary_focus_action = "continue_research_queue"
         secondary_focus_reason = "secondary_focus"
-    elif next_focus_area == "research_queue" and focus_symbol:
+    elif next_focus_area == "research_queue" and crypto_secondary_symbol and crypto_secondary_symbol != "-":
         secondary_focus_area = "crypto_route"
-        secondary_focus_target = focus_symbol
-        secondary_focus_symbol = focus_symbol
-        secondary_focus_action = focus_action or "-"
-        secondary_focus_reason = "secondary_focus"
+        secondary_focus_target = crypto_secondary_target
+        secondary_focus_symbol = crypto_secondary_symbol
+        secondary_focus_action = crypto_secondary_action
+        secondary_focus_reason = crypto_secondary_reason
 
     if commodity_next_fill_evidence_execution_id or commodity_next_fill_evidence_execution_symbol:
         commodity_remainder_focus_area = "commodity_fill_evidence"
@@ -3128,6 +4975,8 @@ def build_operator_brief(
             "secondary_focus_area": secondary_focus_area,
             "secondary_focus_symbol": secondary_focus_symbol,
             "secondary_focus_action": secondary_focus_action,
+            "crypto_route_review_priority_head_symbol": crypto_route_review_priority_head_symbol,
+            "crypto_route_review_priority_head_action": crypto_route_review_priority_head_action,
         }
     )
     checklist_crypto_route_alignment = _crypto_route_embedding_alignment(
@@ -3143,6 +4992,69 @@ def build_operator_brief(
         source_status=str(crypto_payload.get("status") or ""),
         source_payload=crypto_payload if isinstance(crypto_payload, dict) else {},
     )
+    if crypto_route_focus_review_status:
+        crypto_route_focus_review_lane = {
+            "status": crypto_route_focus_review_status,
+            "brief": crypto_route_focus_review_brief or f"{crypto_route_focus_review_status}:{focus_symbol or '-'}",
+            "primary_blocker": crypto_route_focus_review_primary_blocker or "review_pending",
+            "micro_blocker": crypto_route_focus_review_micro_blocker or "-",
+            "blocker_detail": crypto_route_focus_review_blocker_detail
+            or crypto_route_focus_execution_blocker_detail
+            or "crypto review lane is active.",
+            "done_when": crypto_route_focus_review_done_when
+            or crypto_route_focus_execution_done_when
+            or f"{focus_symbol or 'crypto focus'} leaves review",
+        }
+    else:
+        crypto_route_focus_review_lane = _crypto_route_focus_review_lane(
+            symbol=focus_symbol,
+            action=focus_action,
+            focus_execution_state=crypto_route_focus_execution_state,
+            focus_execution_blocker_detail=crypto_route_focus_execution_blocker_detail,
+            focus_execution_done_when=crypto_route_focus_execution_done_when,
+            focus_execution_micro_veto=crypto_route_focus_execution_micro_veto,
+            alignment_status=str(checklist_crypto_route_alignment.get("status") or ""),
+            alignment_recovery_status=str(checklist_crypto_route_alignment_recovery.get("status") or ""),
+        )
+    if crypto_route_focus_review_score_status:
+        crypto_route_focus_review_scores = {
+            "status": crypto_route_focus_review_score_status,
+            "edge_score": crypto_route_focus_review_edge_score,
+            "structure_score": crypto_route_focus_review_structure_score,
+            "micro_score": crypto_route_focus_review_micro_score,
+            "composite_score": crypto_route_focus_review_composite_score,
+            "brief": crypto_route_focus_review_score_brief
+            or (
+                f"scored:{focus_symbol or '-'}:edge={crypto_route_focus_review_edge_score}"
+                f"|structure={crypto_route_focus_review_structure_score}"
+                f"|micro={crypto_route_focus_review_micro_score}"
+                f"|composite={crypto_route_focus_review_composite_score}"
+            ),
+        }
+    else:
+        crypto_route_focus_review_scores = _crypto_route_focus_review_scores(
+            symbol=focus_symbol,
+            action=focus_action,
+            focus_execution_state=crypto_route_focus_execution_state,
+            focus_execution_micro_classification=crypto_route_focus_execution_micro_classification,
+            focus_execution_micro_veto=crypto_route_focus_execution_micro_veto,
+            review_primary_blocker=str(crypto_route_focus_review_lane.get("primary_blocker") or ""),
+        )
+    if crypto_route_focus_review_priority_status:
+        crypto_route_focus_review_priority = {
+            "status": crypto_route_focus_review_priority_status,
+            "score": crypto_route_focus_review_priority_score,
+            "tier": crypto_route_focus_review_priority_tier,
+            "brief": crypto_route_focus_review_priority_brief
+            or (
+                f"{crypto_route_focus_review_priority_tier or '-'}:"
+                f"{crypto_route_focus_review_priority_score}/100"
+            ),
+        }
+    else:
+        crypto_route_focus_review_priority = _crypto_route_focus_review_priority(
+            crypto_route_focus_review_scores
+        )
 
     action_queue: list[dict[str, Any]] = []
     operator_action_queue: list[dict[str, Any]] = []
@@ -3196,95 +5108,362 @@ def build_operator_brief(
             focus_evidence_summary=commodity_focus_evidence_summary,
         )
 
-    action_queue = []
-    _append_action_queue_item(
-        action_queue,
-        area=next_focus_area,
-        target=next_focus_target,
-        symbol=next_focus_symbol,
-        action=next_focus_action,
-        reason=next_focus_reason,
+    cross_market_review_head_lane = _cross_market_review_head_lane(
+        source_payload=cross_market_operator_state_payload,
     )
-    _append_action_queue_item(
-        action_queue,
-        area=commodity_remainder_focus_area,
-        target=commodity_remainder_focus_target,
-        symbol=commodity_remainder_focus_symbol,
-        action=commodity_remainder_focus_action,
-        reason=commodity_remainder_focus_reason,
+    cross_market_operator_head_lane = _cross_market_operator_head_lane(
+        source_payload=cross_market_operator_state_payload,
     )
-    _append_action_queue_item(
-        action_queue,
-        area=secondary_focus_area,
-        target=secondary_focus_target,
-        symbol=secondary_focus_symbol,
-        action=secondary_focus_action,
-        reason=secondary_focus_reason,
+    cross_market_operator_repair_head_lane = _cross_market_operator_repair_head_lane(
+        source_payload=cross_market_operator_state_payload,
+        live_gate_blocker_source_payload=live_gate_blocker_payload,
     )
+    source_operator_repair_queue = [
+        dict(row)
+        for row in (cross_market_operator_state_payload or {}).get("operator_repair_queue", [])
+        if isinstance(row, dict)
+    ]
+    source_operator_action_queue = [
+        dict(row)
+        for row in (cross_market_operator_state_payload or {}).get("operator_action_queue", [])
+        if isinstance(row, dict)
+    ]
+    source_operator_action_queue_brief = str(
+        (cross_market_operator_state_payload or {}).get("operator_action_queue_brief") or ""
+    ).strip()
+    source_operator_action_checklist = [
+        dict(row)
+        for row in (cross_market_operator_state_payload or {}).get("operator_action_checklist", [])
+        if isinstance(row, dict)
+    ]
+    source_operator_action_checklist_brief = str(
+        (cross_market_operator_state_payload or {}).get("operator_action_checklist_brief") or ""
+    ).strip()
+    source_operator_focus_slots = [
+        dict(row)
+        for row in (cross_market_operator_state_payload or {}).get("operator_focus_slots", [])
+        if isinstance(row, dict)
+    ]
+    source_operator_focus_slots_brief = str(
+        (cross_market_operator_state_payload or {}).get("operator_focus_slots_brief") or ""
+    ).strip()
+    source_operator_repair_queue_brief = str(
+        (cross_market_operator_state_payload or {}).get("operator_repair_queue_brief") or ""
+    ).strip()
+    source_operator_repair_checklist = [
+        dict(row)
+        for row in (cross_market_operator_state_payload or {}).get("operator_repair_checklist", [])
+        if isinstance(row, dict)
+    ]
+    source_operator_repair_checklist_brief = str(
+        (cross_market_operator_state_payload or {}).get("operator_repair_checklist_brief") or ""
+    ).strip()
+
     followup_focus_area = "-"
     followup_focus_target = "-"
     followup_focus_symbol = "-"
     followup_focus_action = "-"
     followup_focus_reason = "-"
-    if len(action_queue) >= 2:
-        followup_row = dict(action_queue[1])
-        followup_focus_area = str(followup_row.get("area") or "-")
-        followup_focus_target = str(followup_row.get("target") or "-")
-        followup_focus_symbol = str(followup_row.get("symbol") or "-")
-        followup_focus_action = str(followup_row.get("action") or "-")
-        followup_focus_reason = str(followup_row.get("reason") or "-")
-    operator_action_queue = [
-        {
-            **row,
-            "rank": idx,
-        }
-        for idx, row in enumerate(action_queue, start=1)
-    ]
-    operator_action_queue_brief = _action_queue_brief(operator_action_queue)
+    repair_queue_payload = dict(
+        (live_gate_blocker_payload or {}).get("remote_live_takeover_repair_queue") or {}
+    )
+    repair_head_area = str(repair_queue_payload.get("head_area") or "").strip()
+    repair_head_code = str(repair_queue_payload.get("head_code") or "").strip()
+    repair_head_action = str(repair_queue_payload.get("head_action") or "").strip()
+    repair_head_clear_when = str(repair_queue_payload.get("head_clear_when") or "").strip()
+    repair_done_when = str(repair_queue_payload.get("done_when") or "").strip()
+    repair_gate_blocker_detail = str(
+        (cross_market_operator_state_payload or {}).get("remote_live_takeover_gate_blocker_detail") or ""
+    ).strip()
+    repair_clearing_done_when = str(
+        (cross_market_operator_state_payload or {}).get("remote_live_takeover_clearing_done_when") or ""
+    ).strip()
 
-    operator_action_checklist = [
-        {
-            **row,
-            "rank": idx,
-            "state": _action_checklist_state(
-                area=str(row.get("area") or ""),
-                action=str(row.get("action") or ""),
-                rank=idx,
-            ),
-            "blocker_detail": _action_checklist_blocker(
-                area=str(row.get("area") or ""),
-                action=str(row.get("action") or ""),
-                symbol=str(row.get("symbol") or ""),
-                reason=str(row.get("reason") or ""),
-                stale_signal_dates=commodity_execution_bridge_stale_signal_dates,
-                stale_signal_age_days=commodity_execution_bridge_stale_signal_age_days,
-                focus_evidence_summary=commodity_focus_evidence_summary,
-                focus_area=next_focus_area,
-                focus_symbol=next_focus_symbol,
-                focus_lifecycle_status=str(commodity_focus_lifecycle.get("status") or ""),
-                focus_lifecycle_blocker_detail=str(commodity_focus_lifecycle.get("blocker_detail") or ""),
-                crypto_route_alignment_status=str(checklist_crypto_route_alignment.get("status") or ""),
-                crypto_route_alignment_recovery_status=str(
-                    checklist_crypto_route_alignment_recovery.get("status") or ""
+    if source_operator_action_queue:
+        operator_action_queue = [
+            {
+                **row,
+                "rank": idx,
+            }
+            for idx, row in enumerate(source_operator_action_queue, start=1)
+        ]
+        operator_action_queue_brief = source_operator_action_queue_brief or _action_queue_brief(
+            operator_action_queue
+        )
+        if source_operator_action_checklist:
+            operator_action_checklist = [
+                {
+                    **row,
+                    "rank": idx,
+                }
+                for idx, row in enumerate(source_operator_action_checklist, start=1)
+            ]
+        else:
+            operator_action_checklist = [
+                {
+                    **row,
+                    "rank": idx,
+                    "state": _action_checklist_state(
+                        area=str(row.get("area") or ""),
+                        action=str(row.get("action") or ""),
+                        rank=idx,
+                    ),
+                    "blocker_detail": str(row.get("blocker_detail") or "").strip(),
+                    "done_when": str(row.get("done_when") or "").strip(),
+                }
+                for idx, row in enumerate(operator_action_queue, start=1)
+            ]
+        operator_action_checklist_brief = source_operator_action_checklist_brief or _action_checklist_brief(
+            operator_action_checklist
+        )
+    else:
+        action_queue = []
+        action_queue_detail_overrides: dict[tuple[str, str, str], dict[str, Any]] = {}
+        _append_action_queue_item(
+            action_queue,
+            area=next_focus_area,
+            target=next_focus_target,
+            symbol=next_focus_symbol,
+            action=next_focus_action,
+            reason=next_focus_reason,
+        )
+        _append_action_queue_item(
+            action_queue,
+            area=commodity_remainder_focus_area,
+            target=commodity_remainder_focus_target,
+            symbol=commodity_remainder_focus_symbol,
+            action=commodity_remainder_focus_action,
+            reason=commodity_remainder_focus_reason,
+        )
+        review_head_area = str(cross_market_review_head_lane.get("head", {}).get("area") or "").strip()
+        review_head_symbol = str(cross_market_review_head_lane.get("head", {}).get("symbol") or "").strip().upper()
+        review_head_action = str(cross_market_review_head_lane.get("head", {}).get("action") or "").strip()
+        review_head_target = str(cross_market_review_head_lane.get("target") or review_head_symbol or "").strip()
+        review_head_reason = str(cross_market_review_head_lane.get("reason") or "").strip() or secondary_focus_reason
+        if (
+            review_head_area
+            and review_head_symbol
+            and review_head_action
+            and review_head_area == str(secondary_focus_area or "").strip()
+            and review_head_symbol == str(secondary_focus_symbol or "").strip().upper()
+            and review_head_action == str(secondary_focus_action or "").strip()
+            and str(secondary_focus_reason or "").strip()
+            and str(secondary_focus_reason or "").strip() != "-"
+        ):
+            review_head_reason = str(secondary_focus_reason or "").strip()
+        action_queue_review_area = review_head_area or secondary_focus_area
+        action_queue_review_target = review_head_target or secondary_focus_target
+        action_queue_review_symbol = review_head_symbol or secondary_focus_symbol
+        action_queue_review_action = review_head_action or secondary_focus_action
+        action_queue_review_reason = review_head_reason or secondary_focus_reason
+        _append_action_queue_item(
+            action_queue,
+            area=action_queue_review_area,
+            target=action_queue_review_target,
+            symbol=action_queue_review_symbol,
+            action=action_queue_review_action,
+            reason=action_queue_review_reason,
+        )
+        if (
+            action_queue_review_area != "-"
+            and action_queue_review_target != "-"
+            and action_queue_review_action != "-"
+            and str(cross_market_review_head_lane.get("status") or "").strip() not in {"", "inactive"}
+        ):
+            action_queue_detail_overrides[
+                (action_queue_review_area, action_queue_review_target, action_queue_review_action)
+            ] = {
+                "blocker_detail": str(cross_market_review_head_lane.get("blocker_detail") or "").strip(),
+                "done_when": str(cross_market_review_head_lane.get("done_when") or "").strip(),
+            }
+        if secondary_focus_area == "crypto_route" and secondary_focus_target != "-" and secondary_focus_action != "-":
+            action_queue_detail_overrides[
+                (secondary_focus_area, secondary_focus_target, secondary_focus_action)
+            ] = {
+                "blocker_detail": crypto_secondary_blocker_override,
+                "done_when": crypto_secondary_done_when_override,
+            }
+        if repair_head_area and repair_head_code and repair_head_action:
+            _append_action_queue_item(
+                action_queue,
+                area=repair_head_area,
+                target=repair_head_code,
+                symbol=repair_head_code,
+                action=repair_head_action,
+                reason=repair_head_clear_when or str(repair_queue_payload.get("brief") or "").strip(),
+            )
+            action_queue_detail_overrides[
+                (repair_head_area, repair_head_code, repair_head_action)
+            ] = {
+                "blocker_detail": repair_gate_blocker_detail or repair_head_clear_when,
+                "done_when": repair_done_when or repair_clearing_done_when,
+            }
+        operator_action_queue = [
+            {
+                **row,
+                "rank": idx,
+            }
+            for idx, row in enumerate(action_queue, start=1)
+        ]
+        operator_action_queue_brief = _action_queue_brief(operator_action_queue)
+
+        operator_action_checklist = [
+            {
+                **row,
+                "rank": idx,
+                "state": _action_checklist_state(
+                    area=str(row.get("area") or ""),
+                    action=str(row.get("action") or ""),
+                    rank=idx,
                 ),
-                crypto_route_alignment_recovery_zero_trade_batches=list(
-                    checklist_crypto_route_alignment_recovery.get("zero_trade_batches") or []
+                "blocker_detail": _action_checklist_blocker(
+                    area=str(row.get("area") or ""),
+                    action=str(row.get("action") or ""),
+                    symbol=str(row.get("symbol") or ""),
+                    reason=str(row.get("reason") or ""),
+                    row_blocker_detail=str(
+                        action_queue_detail_overrides.get(
+                            (
+                                str(row.get("area") or ""),
+                                str(row.get("target") or ""),
+                                str(row.get("action") or ""),
+                            ),
+                            {},
+                        ).get("blocker_detail")
+                        or ""
+                    ),
+                    stale_signal_dates=commodity_execution_bridge_stale_signal_dates,
+                    stale_signal_age_days=commodity_execution_bridge_stale_signal_age_days,
+                    focus_evidence_summary=commodity_focus_evidence_summary,
+                    focus_area=next_focus_area,
+                    focus_symbol=next_focus_symbol,
+                    focus_lifecycle_status=str(commodity_focus_lifecycle.get("status") or ""),
+                    focus_lifecycle_blocker_detail=str(commodity_focus_lifecycle.get("blocker_detail") or ""),
+                    crypto_focus_execution_blocker_detail=crypto_route_focus_execution_blocker_detail,
+                    crypto_route_alignment_status=str(checklist_crypto_route_alignment.get("status") or ""),
+                    crypto_route_alignment_recovery_status=str(
+                        checklist_crypto_route_alignment_recovery.get("status") or ""
+                    ),
+                    crypto_route_alignment_recovery_zero_trade_batches=list(
+                        checklist_crypto_route_alignment_recovery.get("zero_trade_batches") or []
+                    ),
                 ),
-            ),
-            "done_when": _action_checklist_done_when(
-                action=str(row.get("action") or ""),
-                symbol=str(row.get("symbol") or ""),
-                focus_lifecycle_status=str(commodity_focus_lifecycle.get("status") or ""),
-                focus_lifecycle_done_when=str(commodity_focus_lifecycle.get("done_when") or ""),
-                crypto_route_alignment_status=str(checklist_crypto_route_alignment.get("status") or ""),
-                crypto_route_alignment_recovery_status=str(
-                    checklist_crypto_route_alignment_recovery.get("status") or ""
+                "done_when": _action_checklist_done_when(
+                    action=str(row.get("action") or ""),
+                    symbol=str(row.get("symbol") or ""),
+                    row_done_when=str(
+                        action_queue_detail_overrides.get(
+                            (
+                                str(row.get("area") or ""),
+                                str(row.get("target") or ""),
+                                str(row.get("action") or ""),
+                            ),
+                            {},
+                        ).get("done_when")
+                        or ""
+                    ),
+                    focus_lifecycle_status=str(commodity_focus_lifecycle.get("status") or ""),
+                    focus_lifecycle_done_when=str(commodity_focus_lifecycle.get("done_when") or ""),
+                    crypto_focus_execution_done_when=crypto_route_focus_execution_done_when,
+                    crypto_route_alignment_status=str(checklist_crypto_route_alignment.get("status") or ""),
+                    crypto_route_alignment_recovery_status=str(
+                        checklist_crypto_route_alignment_recovery.get("status") or ""
+                    ),
                 ),
-            ),
-        }
-        for idx, row in enumerate(action_queue, start=1)
-    ]
-    operator_action_checklist_brief = _action_checklist_brief(operator_action_checklist)
+            }
+            for idx, row in enumerate(action_queue, start=1)
+        ]
+        operator_action_checklist_brief = _action_checklist_brief(operator_action_checklist)
+
+    if source_operator_repair_queue:
+        operator_repair_queue = source_operator_repair_queue
+        operator_repair_queue_brief = source_operator_repair_queue_brief or _action_queue_brief(
+            operator_repair_queue
+        )
+        if source_operator_repair_checklist:
+            operator_repair_checklist = source_operator_repair_checklist
+        else:
+            operator_repair_checklist = [
+                {
+                    **row,
+                    "rank": idx,
+                    "state": _action_checklist_state(
+                        area=str(row.get("area") or ""),
+                        action=str(row.get("action") or ""),
+                        rank=idx,
+                    ),
+                    "blocker_detail": str(row.get("clear_when") or "").strip()
+                    or repair_gate_blocker_detail
+                    or repair_head_clear_when,
+                    "done_when": str(row.get("clear_when") or "").strip()
+                    or repair_done_when
+                    or repair_clearing_done_when,
+                }
+                for idx, row in enumerate(operator_repair_queue, start=1)
+            ]
+        operator_repair_checklist_brief = source_operator_repair_checklist_brief or _action_checklist_brief(
+            operator_repair_checklist
+        )
+    else:
+        repair_queue_items = [
+            dict(row)
+            for row in repair_queue_payload.get("items", [])
+            if isinstance(row, dict)
+        ]
+        operator_repair_queue = []
+        for idx, row in enumerate(repair_queue_items, start=1):
+            row_area = str(row.get("area") or "").strip()
+            row_code = str(row.get("code") or "").strip()
+            row_action = str(row.get("action") or "").strip()
+            if not row_area or not row_code or not row_action:
+                continue
+            operator_repair_queue.append(
+                {
+                    "rank": idx,
+                    "area": row_area,
+                    "target": row_code,
+                    "symbol": row_code.upper(),
+                    "action": row_action,
+                    "reason": str(
+                        row.get("clear_when")
+                        or row.get("goal")
+                        or repair_queue_payload.get("brief")
+                        or ""
+                    ).strip(),
+                    "priority_score": int(row.get("priority_score") or 0),
+                    "priority_tier": str(row.get("priority_tier") or "").strip(),
+                    "command": str(row.get("command") or "").strip(),
+                    "clear_when": str(row.get("clear_when") or "").strip(),
+                    "goal": str(row.get("goal") or "").strip(),
+                    "actions": [
+                        str(item).strip()
+                        for item in row.get("actions", [])
+                        if str(item).strip()
+                    ]
+                    if isinstance(row.get("actions"), list)
+                    else [],
+                }
+            )
+        operator_repair_queue_brief = _action_queue_brief(operator_repair_queue)
+        operator_repair_checklist = [
+            {
+                **row,
+                "rank": idx,
+                "state": _action_checklist_state(
+                    area=str(row.get("area") or ""),
+                    action=str(row.get("action") or ""),
+                    rank=idx,
+                ),
+                "blocker_detail": str(row.get("clear_when") or "").strip()
+                or repair_gate_blocker_detail
+                or repair_head_clear_when,
+                "done_when": str(row.get("clear_when") or "").strip()
+                or repair_done_when
+                or repair_clearing_done_when,
+            }
+            for idx, row in enumerate(operator_repair_queue, start=1)
+        ]
+        operator_repair_checklist_brief = _action_checklist_brief(operator_repair_checklist)
     next_focus_state = "-"
     next_focus_blocker_detail = "-"
     next_focus_done_when = "-"
@@ -3294,26 +5473,126 @@ def build_operator_brief(
     secondary_focus_state = "-"
     secondary_focus_blocker_detail = "-"
     secondary_focus_done_when = "-"
-    if operator_action_checklist:
-        active_row = dict(operator_action_checklist[0])
-        next_focus_state = str(active_row.get("state") or "-")
-        next_focus_blocker_detail = str(active_row.get("blocker_detail") or "-")
-        next_focus_done_when = str(active_row.get("done_when") or "-")
-    if len(operator_action_checklist) >= 2:
-        followup_checklist_row = dict(operator_action_checklist[1])
-        followup_focus_state = str(followup_checklist_row.get("state") or "-")
-        followup_focus_blocker_detail = str(followup_checklist_row.get("blocker_detail") or "-")
-        followup_focus_done_when = str(followup_checklist_row.get("done_when") or "-")
-    if len(operator_action_checklist) >= 3:
-        secondary_checklist_row = dict(operator_action_checklist[2])
-        secondary_focus_area = str(secondary_checklist_row.get("area") or secondary_focus_area or "-")
-        secondary_focus_target = str(secondary_checklist_row.get("target") or secondary_focus_target or "-")
-        secondary_focus_symbol = str(secondary_checklist_row.get("symbol") or secondary_focus_symbol or "-")
-        secondary_focus_action = str(secondary_checklist_row.get("action") or secondary_focus_action or "-")
-        secondary_focus_reason = str(secondary_checklist_row.get("reason") or secondary_focus_reason or "-")
-        secondary_focus_state = str(secondary_checklist_row.get("state") or "-")
-        secondary_focus_blocker_detail = str(secondary_checklist_row.get("blocker_detail") or "-")
-        secondary_focus_done_when = str(secondary_checklist_row.get("done_when") or "-")
+    secondary_focus_priority_bound = False
+    primary_slot_row: dict[str, Any] = {}
+    followup_slot_row: dict[str, Any] = {}
+    secondary_slot_row: dict[str, Any] = {}
+    source_focus_slot_rows = {
+        str(row.get("slot") or "").strip(): dict(row)
+        for row in source_operator_focus_slots
+        if str(row.get("slot") or "").strip() in {"primary", "followup", "secondary"}
+    }
+    if source_focus_slot_rows:
+        primary_slot_row = source_focus_slot_rows.get("primary", {})
+        if primary_slot_row:
+            next_focus_area = str(primary_slot_row.get("area") or next_focus_area or "-")
+            next_focus_target = str(primary_slot_row.get("target") or next_focus_target or "-")
+            next_focus_symbol = str(primary_slot_row.get("symbol") or next_focus_symbol or "-")
+            next_focus_action = str(primary_slot_row.get("action") or next_focus_action or "-")
+            next_focus_reason = str(primary_slot_row.get("reason") or next_focus_reason or "-")
+            next_focus_state = str(primary_slot_row.get("state") or "-")
+            next_focus_blocker_detail = str(primary_slot_row.get("blocker_detail") or "-")
+            next_focus_done_when = str(primary_slot_row.get("done_when") or "-")
+        followup_slot_row = source_focus_slot_rows.get("followup", {})
+        if followup_slot_row:
+            followup_focus_area = str(followup_slot_row.get("area") or followup_focus_area or "-")
+            followup_focus_target = str(followup_slot_row.get("target") or followup_focus_target or "-")
+            followup_focus_symbol = str(followup_slot_row.get("symbol") or followup_focus_symbol or "-")
+            followup_focus_action = str(followup_slot_row.get("action") or followup_focus_action or "-")
+            followup_focus_reason = str(followup_slot_row.get("reason") or followup_focus_reason or "-")
+            followup_focus_state = str(followup_slot_row.get("state") or "-")
+            followup_focus_blocker_detail = str(followup_slot_row.get("blocker_detail") or "-")
+            followup_focus_done_when = str(followup_slot_row.get("done_when") or "-")
+        secondary_slot_row = source_focus_slot_rows.get("secondary", {})
+        if secondary_slot_row:
+            secondary_focus_area = str(secondary_slot_row.get("area") or secondary_focus_area or "-")
+            secondary_focus_target = str(secondary_slot_row.get("target") or secondary_focus_target or "-")
+            secondary_focus_symbol = str(secondary_slot_row.get("symbol") or secondary_focus_symbol or "-")
+            secondary_focus_action = str(secondary_slot_row.get("action") or secondary_focus_action or "-")
+            secondary_focus_reason = str(secondary_slot_row.get("reason") or secondary_focus_reason or "-")
+            secondary_focus_state = str(secondary_slot_row.get("state") or "-")
+            secondary_focus_blocker_detail = str(secondary_slot_row.get("blocker_detail") or "-")
+            secondary_focus_done_when = str(secondary_slot_row.get("done_when") or "-")
+            secondary_slot_priority_tier = str(secondary_slot_row.get("priority_tier") or "").strip()
+            secondary_slot_priority_score = secondary_slot_row.get("priority_score")
+            secondary_slot_queue_rank = secondary_slot_row.get("queue_rank")
+            if secondary_slot_priority_tier:
+                secondary_focus_priority_tier = secondary_slot_priority_tier
+                secondary_focus_priority_bound = True
+            if secondary_slot_priority_score not in (None, "", "-"):
+                secondary_focus_priority_score = int(secondary_slot_priority_score or 0)
+                secondary_focus_priority_bound = True
+            if secondary_slot_queue_rank not in (None, "", "-"):
+                secondary_focus_queue_rank = int(secondary_slot_queue_rank or 0)
+                secondary_focus_priority_bound = True
+    else:
+        if operator_action_checklist:
+            active_row = dict(operator_action_checklist[0])
+            next_focus_state = str(active_row.get("state") or "-")
+            next_focus_blocker_detail = str(active_row.get("blocker_detail") or "-")
+            next_focus_done_when = str(active_row.get("done_when") or "-")
+        if len(operator_action_checklist) >= 2:
+            followup_checklist_row = dict(operator_action_checklist[1])
+            followup_focus_area = str(followup_checklist_row.get("area") or followup_focus_area or "-")
+            followup_focus_target = str(followup_checklist_row.get("target") or followup_focus_target or "-")
+            followup_focus_symbol = str(followup_checklist_row.get("symbol") or followup_focus_symbol or "-")
+            followup_focus_action = str(followup_checklist_row.get("action") or followup_focus_action or "-")
+            followup_focus_reason = str(followup_checklist_row.get("reason") or followup_focus_reason or "-")
+            followup_focus_state = str(followup_checklist_row.get("state") or "-")
+            followup_focus_blocker_detail = str(followup_checklist_row.get("blocker_detail") or "-")
+            followup_focus_done_when = str(followup_checklist_row.get("done_when") or "-")
+        if len(operator_action_checklist) >= 3:
+            secondary_checklist_row = dict(operator_action_checklist[2])
+            secondary_focus_area = str(secondary_checklist_row.get("area") or secondary_focus_area or "-")
+            secondary_focus_target = str(secondary_checklist_row.get("target") or secondary_focus_target or "-")
+            secondary_focus_symbol = str(secondary_checklist_row.get("symbol") or secondary_focus_symbol or "-")
+            secondary_focus_action = str(secondary_checklist_row.get("action") or secondary_focus_action or "-")
+            secondary_focus_reason = str(secondary_checklist_row.get("reason") or secondary_focus_reason or "-")
+            secondary_focus_state = str(secondary_checklist_row.get("state") or "-")
+            secondary_focus_blocker_detail = str(secondary_checklist_row.get("blocker_detail") or "-")
+            secondary_focus_done_when = str(secondary_checklist_row.get("done_when") or "-")
+            secondary_checklist_priority_tier = str(
+                secondary_checklist_row.get("priority_tier") or ""
+            ).strip()
+            secondary_checklist_priority_score = secondary_checklist_row.get("priority_score")
+            secondary_checklist_queue_rank = secondary_checklist_row.get("queue_rank")
+            if secondary_checklist_priority_tier:
+                secondary_focus_priority_tier = secondary_checklist_priority_tier
+                secondary_focus_priority_bound = True
+            if secondary_checklist_priority_score not in (None, "", "-"):
+                secondary_focus_priority_score = int(secondary_checklist_priority_score or 0)
+                secondary_focus_priority_bound = True
+            if secondary_checklist_queue_rank not in (None, "", "-"):
+                secondary_focus_queue_rank = int(secondary_checklist_queue_rank or 0)
+                secondary_focus_priority_bound = True
+    if (
+        not secondary_focus_priority_bound
+        and (
+        secondary_focus_area == str(cross_market_review_head_lane.get("head", {}).get("area") or "").strip()
+        and secondary_focus_symbol == str(cross_market_review_head_lane.get("head", {}).get("symbol") or "").strip().upper()
+        and secondary_focus_action == str(cross_market_review_head_lane.get("head", {}).get("action") or "").strip()
+        )
+    ):
+        secondary_focus_priority_tier = str(
+            (cross_market_review_head_lane.get("head") or {}).get("priority_tier") or secondary_focus_priority_tier or "-"
+        )
+        secondary_focus_priority_score = int(
+            (cross_market_review_head_lane.get("head") or {}).get("priority_score") or secondary_focus_priority_score or 0
+        )
+        secondary_focus_queue_rank = int(
+            cross_market_review_head_lane.get("head_rank") or secondary_focus_queue_rank or 1
+        )
+        secondary_focus_priority_bound = True
+    if (
+        not secondary_focus_priority_bound
+        and (
+        secondary_focus_area != "crypto_route"
+        and secondary_focus_area != str(cross_market_review_head_lane.get("head", {}).get("area") or "").strip()
+        )
+    ):
+        secondary_focus_priority_tier = "-"
+        secondary_focus_priority_score = "-"
+        secondary_focus_queue_rank = "-"
     commodity_execution_close_evidence_status = "not_active"
     commodity_execution_close_evidence_brief = "not_active:-"
     commodity_execution_close_evidence_target = "-"
@@ -3346,42 +5625,82 @@ def build_operator_brief(
             or str(commodity_focus_lifecycle.get("done_when") or "").strip()
             or commodity_execution_close_evidence_done_when
         )
-    operator_focus_slots = [
-        {
-            "slot": "primary",
+    slot_defaults = {
+        "primary": {
             "area": next_focus_area,
             "target": next_focus_target,
             "symbol": next_focus_symbol,
             "action": next_focus_action,
             "reason": next_focus_reason,
             "state": next_focus_state,
+            "priority_score": (
+                int(primary_slot_row.get("priority_score") or 0)
+                if primary_slot_row.get("priority_score") not in (None, "", "-")
+                else "-"
+            ),
+            "priority_tier": str(primary_slot_row.get("priority_tier") or "").strip() or "-",
+            "queue_rank": (
+                int(primary_slot_row.get("queue_rank") or 0)
+                if primary_slot_row.get("queue_rank") not in (None, "", "-")
+                else "-"
+            ),
             "blocker_detail": next_focus_blocker_detail,
             "done_when": next_focus_done_when,
         },
-        {
-            "slot": "followup",
+        "followup": {
             "area": followup_focus_area,
             "target": followup_focus_target,
             "symbol": followup_focus_symbol,
             "action": followup_focus_action,
             "reason": followup_focus_reason,
             "state": followup_focus_state,
+            "priority_score": (
+                int(followup_slot_row.get("priority_score") or 0)
+                if followup_slot_row.get("priority_score") not in (None, "", "-")
+                else "-"
+            ),
+            "priority_tier": str(followup_slot_row.get("priority_tier") or "").strip() or "-",
+            "queue_rank": (
+                int(followup_slot_row.get("queue_rank") or 0)
+                if followup_slot_row.get("queue_rank") not in (None, "", "-")
+                else "-"
+            ),
             "blocker_detail": followup_focus_blocker_detail,
             "done_when": followup_focus_done_when,
         },
-        {
-            "slot": "secondary",
+        "secondary": {
             "area": secondary_focus_area,
             "target": secondary_focus_target,
             "symbol": secondary_focus_symbol,
             "action": secondary_focus_action,
             "reason": secondary_focus_reason,
             "state": secondary_focus_state,
+            "priority_score": secondary_focus_priority_score,
+            "priority_tier": secondary_focus_priority_tier,
+            "queue_rank": secondary_focus_queue_rank,
             "blocker_detail": secondary_focus_blocker_detail,
             "done_when": secondary_focus_done_when,
         },
-    ]
-    operator_focus_slots_brief = _focus_slots_brief(operator_focus_slots)
+    }
+    operator_focus_slots: list[dict[str, Any]] = []
+    for slot_name in ("primary", "followup", "secondary"):
+        default_row = dict(slot_defaults.get(slot_name) or {})
+        source_row = dict(source_focus_slot_rows.get(slot_name) or {})
+        if source_row:
+            slot_row = dict(source_row)
+            slot_row["slot"] = slot_name
+            for key, fallback_value in default_row.items():
+                if slot_row.get(key) in (None, ""):
+                    slot_row[key] = fallback_value
+        else:
+            slot_row = {"slot": slot_name, **default_row}
+        operator_focus_slots.append(slot_row)
+    if source_focus_slot_rows:
+        operator_focus_slots_brief = source_operator_focus_slots_brief or _focus_slots_brief(
+            operator_focus_slots
+        )
+    else:
+        operator_focus_slots_brief = _focus_slots_brief(operator_focus_slots)
 
     operator_stack_brief = f"commodity:{commodity_execution_brief} | crypto:{crypto_route_short_brief}"
 
@@ -3401,9 +5720,21 @@ def build_operator_brief(
         f"secondary-focus-state: {secondary_focus_state}",
         f"secondary-focus-blocker: {secondary_focus_blocker_detail}",
         f"secondary-focus-done-when: {secondary_focus_done_when}",
+        (
+            "secondary-focus-priority: "
+            + " | ".join(
+                [
+                    secondary_focus_priority_tier or "-",
+                    f"score={secondary_focus_priority_score}",
+                    f"queue_rank={secondary_focus_queue_rank}",
+                ]
+            )
+        ),
         f"focus-slots: {operator_focus_slots_brief}",
         f"action-queue: {operator_action_queue_brief}",
         f"action-checklist: {operator_action_checklist_brief}",
+        f"repair-queue: {operator_repair_queue_brief}",
+        f"repair-checklist: {operator_repair_checklist_brief}",
         f"primary: {_list_text(focus_primary)}",
         f"regime-filter: {_list_text(focus_regime)}",
         f"research-queue: {_list_text(research_queue)}",
@@ -3520,6 +5851,99 @@ def build_operator_brief(
         summary_lines.append(f"crypto-focus-gate: {focus_gate}")
     if focus_window:
         summary_lines.append(f"crypto-focus-window: {focus_window}")
+    if crypto_route_shortline_market_state_brief:
+        summary_lines.append(f"crypto-shortline-market-state: {crypto_route_shortline_market_state_brief}")
+    if crypto_route_shortline_execution_gate_brief:
+        summary_lines.append(f"crypto-shortline-trigger-stack: {crypto_route_shortline_execution_gate_brief}")
+    if crypto_route_shortline_no_trade_rule:
+        summary_lines.append(f"crypto-shortline-no-trade: {crypto_route_shortline_no_trade_rule}")
+    if crypto_route_focus_execution_state:
+        summary_lines.append(f"crypto-focus-execution-state: {crypto_route_focus_execution_state}")
+    if crypto_route_focus_execution_blocker_detail:
+        summary_lines.append(f"crypto-focus-execution-blocker: {crypto_route_focus_execution_blocker_detail}")
+    if crypto_route_focus_execution_done_when:
+        summary_lines.append(f"crypto-focus-execution-done-when: {crypto_route_focus_execution_done_when}")
+    if crypto_route_focus_execution_micro_classification:
+        summary_lines.append(
+            "crypto-focus-micro: "
+            + " | ".join(
+                [
+                    crypto_route_focus_execution_micro_classification,
+                    crypto_route_focus_execution_micro_context or "-",
+                    crypto_route_focus_execution_micro_trust_tier or "-",
+                    crypto_route_focus_execution_micro_veto or "-",
+                ]
+            )
+        )
+    if crypto_route_focus_execution_micro_reasons:
+        summary_lines.append(
+            "crypto-focus-micro-reasons: " + _list_text(crypto_route_focus_execution_micro_reasons, limit=20)
+        )
+    if str(crypto_route_focus_review_lane.get("status") or "").strip() not in {"", "not_active"}:
+        summary_lines.append(
+            "crypto-review-lane: "
+            + " | ".join(
+                [
+                    str(crypto_route_focus_review_lane.get("status") or "-"),
+                    str(crypto_route_focus_review_lane.get("primary_blocker") or "-"),
+                    str(crypto_route_focus_review_lane.get("micro_blocker") or "-"),
+                ]
+            )
+        )
+    if str(crypto_route_focus_review_scores.get("status") or "").strip() == "scored":
+        summary_lines.append(
+            "crypto-review-scores: "
+            + " | ".join(
+                [
+                    f"edge={int(crypto_route_focus_review_scores.get('edge_score') or 0)}",
+                    f"structure={int(crypto_route_focus_review_scores.get('structure_score') or 0)}",
+                    f"micro={int(crypto_route_focus_review_scores.get('micro_score') or 0)}",
+                    f"composite={int(crypto_route_focus_review_scores.get('composite_score') or 0)}",
+                ]
+            )
+        )
+    if str(crypto_route_focus_review_priority.get("status") or "").strip() == "ready":
+        summary_lines.append(
+            "crypto-review-priority: "
+            + " | ".join(
+                [
+                    str(crypto_route_focus_review_priority.get("tier") or "-"),
+                    f"score={int(crypto_route_focus_review_priority.get('score') or 0)}",
+                ]
+            )
+        )
+    if crypto_route_review_priority_queue_status:
+        summary_lines.append(
+            "crypto-review-queue: "
+            + " | ".join(
+                [
+                    crypto_route_review_priority_queue_status or "-",
+                    crypto_route_review_priority_queue_brief or "-",
+                    f"head={crypto_route_review_priority_head_symbol or '-'}:{crypto_route_review_priority_head_tier or '-'}:{crypto_route_review_priority_head_score}",
+                ]
+            )
+        )
+    if crypto_route_shortline_cvd_semantic_status:
+        summary_lines.append(
+            "crypto-cvd-semantic: "
+            + " | ".join(
+                [
+                    crypto_route_shortline_cvd_semantic_status,
+                    crypto_route_shortline_cvd_semantic_takeaway or "-",
+                ]
+            )
+        )
+    if crypto_route_shortline_cvd_queue_handoff_status:
+        summary_lines.append(
+            "crypto-cvd-queue: "
+            + " | ".join(
+                [
+                    crypto_route_shortline_cvd_queue_handoff_status,
+                    f"{crypto_route_shortline_cvd_queue_focus_batch or '-'}:{crypto_route_shortline_cvd_queue_focus_action or '-'}",
+                    crypto_route_shortline_cvd_queue_stack_brief or "-",
+                ]
+            )
+        )
     if focus_window_floor:
         summary_lines.append(f"crypto-focus-window-floor: {focus_window_floor}")
     if price_state_window_floor:
@@ -3564,6 +5988,11 @@ def build_operator_brief(
         "operator_action_queue_brief": operator_action_queue_brief,
         "operator_action_checklist": operator_action_checklist,
         "operator_action_checklist_brief": operator_action_checklist_brief,
+        "operator_repair_queue": operator_repair_queue,
+        "operator_repair_queue_brief": operator_repair_queue_brief,
+        "operator_repair_queue_count": len(operator_repair_queue),
+        "operator_repair_checklist": operator_repair_checklist,
+        "operator_repair_checklist_brief": operator_repair_checklist_brief,
         "secondary_focus_area": secondary_focus_area,
         "secondary_focus_target": secondary_focus_target,
         "secondary_focus_symbol": secondary_focus_symbol,
@@ -3572,6 +6001,80 @@ def build_operator_brief(
         "secondary_focus_state": secondary_focus_state,
         "secondary_focus_blocker_detail": secondary_focus_blocker_detail,
         "secondary_focus_done_when": secondary_focus_done_when,
+        "secondary_focus_priority_tier": secondary_focus_priority_tier,
+        "secondary_focus_priority_score": secondary_focus_priority_score,
+        "secondary_focus_queue_rank": secondary_focus_queue_rank,
+        "crypto_route_shortline_market_state_brief": crypto_route_shortline_market_state_brief,
+        "crypto_route_shortline_execution_gate_brief": crypto_route_shortline_execution_gate_brief,
+        "crypto_route_shortline_no_trade_rule": crypto_route_shortline_no_trade_rule,
+        "crypto_route_shortline_session_map_brief": crypto_route_shortline_session_map_brief,
+        "crypto_route_shortline_cvd_semantic_status": crypto_route_shortline_cvd_semantic_status,
+        "crypto_route_shortline_cvd_semantic_takeaway": crypto_route_shortline_cvd_semantic_takeaway,
+        "crypto_route_shortline_cvd_queue_handoff_status": crypto_route_shortline_cvd_queue_handoff_status,
+        "crypto_route_shortline_cvd_queue_handoff_takeaway": crypto_route_shortline_cvd_queue_handoff_takeaway,
+        "crypto_route_shortline_cvd_queue_focus_batch": crypto_route_shortline_cvd_queue_focus_batch,
+        "crypto_route_shortline_cvd_queue_focus_action": crypto_route_shortline_cvd_queue_focus_action,
+        "crypto_route_shortline_cvd_queue_stack_brief": crypto_route_shortline_cvd_queue_stack_brief,
+        "crypto_route_focus_execution_state": crypto_route_focus_execution_state,
+        "crypto_route_focus_execution_blocker_detail": crypto_route_focus_execution_blocker_detail,
+        "crypto_route_focus_execution_done_when": crypto_route_focus_execution_done_when,
+        "crypto_route_focus_execution_micro_classification": crypto_route_focus_execution_micro_classification,
+        "crypto_route_focus_execution_micro_context": crypto_route_focus_execution_micro_context,
+        "crypto_route_focus_execution_micro_trust_tier": crypto_route_focus_execution_micro_trust_tier,
+        "crypto_route_focus_execution_micro_veto": crypto_route_focus_execution_micro_veto,
+        "crypto_route_focus_execution_micro_locality_status": crypto_route_focus_execution_micro_locality_status,
+        "crypto_route_focus_execution_micro_drift_risk": crypto_route_focus_execution_micro_drift_risk,
+        "crypto_route_focus_execution_micro_attack_side": crypto_route_focus_execution_micro_attack_side,
+        "crypto_route_focus_execution_micro_attack_presence": crypto_route_focus_execution_micro_attack_presence,
+        "crypto_route_focus_execution_micro_reasons": crypto_route_focus_execution_micro_reasons,
+        "crypto_route_focus_review_status": str(crypto_route_focus_review_lane.get("status") or ""),
+        "crypto_route_focus_review_brief": str(crypto_route_focus_review_lane.get("brief") or ""),
+        "crypto_route_focus_review_primary_blocker": str(
+            crypto_route_focus_review_lane.get("primary_blocker") or ""
+        ),
+        "crypto_route_focus_review_micro_blocker": str(
+            crypto_route_focus_review_lane.get("micro_blocker") or ""
+        ),
+        "crypto_route_focus_review_blocker_detail": str(
+            crypto_route_focus_review_lane.get("blocker_detail") or ""
+        ),
+        "crypto_route_focus_review_done_when": str(
+            crypto_route_focus_review_lane.get("done_when") or ""
+        ),
+        "crypto_route_focus_review_score_status": str(crypto_route_focus_review_scores.get("status") or ""),
+        "crypto_route_focus_review_edge_score": int(crypto_route_focus_review_scores.get("edge_score") or 0),
+        "crypto_route_focus_review_structure_score": int(
+            crypto_route_focus_review_scores.get("structure_score") or 0
+        ),
+        "crypto_route_focus_review_micro_score": int(crypto_route_focus_review_scores.get("micro_score") or 0),
+        "crypto_route_focus_review_composite_score": int(
+            crypto_route_focus_review_scores.get("composite_score") or 0
+        ),
+        "crypto_route_focus_review_score_brief": str(crypto_route_focus_review_scores.get("brief") or ""),
+        "crypto_route_focus_review_priority_status": str(
+            crypto_route_focus_review_priority.get("status") or ""
+        ),
+        "crypto_route_focus_review_priority_score": int(
+            crypto_route_focus_review_priority.get("score") or 0
+        ),
+        "crypto_route_focus_review_priority_tier": str(
+            crypto_route_focus_review_priority.get("tier") or ""
+        ),
+        "crypto_route_focus_review_priority_brief": str(
+            crypto_route_focus_review_priority.get("brief") or ""
+        ),
+        "crypto_route_review_priority_queue_status": crypto_route_review_priority_queue_status,
+        "crypto_route_review_priority_queue_count": crypto_route_review_priority_queue_count,
+        "crypto_route_review_priority_queue_brief": crypto_route_review_priority_queue_brief,
+        "crypto_route_review_priority_head_symbol": crypto_route_review_priority_head_symbol,
+        "crypto_route_review_priority_head_tier": crypto_route_review_priority_head_tier,
+        "crypto_route_review_priority_head_score": crypto_route_review_priority_head_score,
+        "crypto_route_review_priority_head_action": crypto_route_review_priority_head_action,
+        "crypto_route_review_priority_head_reason": crypto_route_review_priority_head_reason,
+        "crypto_route_review_priority_head_blocker_detail": crypto_route_review_priority_head_blocker_detail,
+        "crypto_route_review_priority_head_done_when": crypto_route_review_priority_head_done_when,
+        "crypto_route_review_priority_head_rank": crypto_route_review_priority_head_rank,
+        "crypto_route_review_priority_queue": crypto_route_review_priority_queue,
         "commodity_remainder_focus_area": commodity_remainder_focus_area,
         "commodity_remainder_focus_target": commodity_remainder_focus_target,
         "commodity_remainder_focus_symbol": commodity_remainder_focus_symbol,
@@ -3755,8 +6258,39 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- source_commodity_execution_bridge_status: `{payload.get('source_commodity_execution_bridge_status') or ''}`",
         f"- source_crypto_artifact: `{payload.get('source_crypto_artifact') or payload.get('source_artifact') or ''}`",
         f"- source_crypto_status: `{payload.get('source_crypto_status') or payload.get('source_status') or ''}`",
-        f"- source_crypto_route_artifact: `{payload.get('source_crypto_route_artifact') or ''}`",
-        f"- source_crypto_route_status: `{payload.get('source_crypto_route_status') or ''}`",
+        *_crypto_route_source_debug_lines(payload),
+        *_remote_live_source_debug_lines(payload),
+        *_brooks_source_debug_lines(payload),
+        *_cross_market_source_debug_lines(payload),
+        *_cross_market_runtime_debug_lines(payload),
+        f"- brooks_structure_review_status: `{payload.get('brooks_structure_review_status') or ''}`",
+        f"- brooks_structure_review_brief: `{payload.get('brooks_structure_review_brief') or ''}`",
+        f"- brooks_structure_review_queue_status: `{payload.get('brooks_structure_review_queue_status') or ''}`",
+        f"- brooks_structure_review_queue_count: `{payload.get('brooks_structure_review_queue_count')}`",
+        f"- brooks_structure_review_queue_brief: `{payload.get('brooks_structure_review_queue_brief') or ''}`",
+        f"- brooks_structure_review_head_symbol: `{payload.get('brooks_structure_review_head_symbol') or ''}`",
+        f"- brooks_structure_review_head_strategy_id: `{payload.get('brooks_structure_review_head_strategy_id') or ''}`",
+        f"- brooks_structure_review_head_direction: `{payload.get('brooks_structure_review_head_direction') or ''}`",
+        f"- brooks_structure_review_head_tier: `{payload.get('brooks_structure_review_head_tier') or ''}`",
+        f"- brooks_structure_review_head_plan_status: `{payload.get('brooks_structure_review_head_plan_status') or ''}`",
+        f"- brooks_structure_review_head_action: `{payload.get('brooks_structure_review_head_action') or ''}`",
+        f"- brooks_structure_review_head_blocker_detail: `{payload.get('brooks_structure_review_head_blocker_detail') or ''}`",
+        f"- brooks_structure_review_head_done_when: `{payload.get('brooks_structure_review_head_done_when') or ''}`",
+        f"- brooks_structure_review_blocker_detail: `{payload.get('brooks_structure_review_blocker_detail') or ''}`",
+        f"- brooks_structure_review_done_when: `{payload.get('brooks_structure_review_done_when') or ''}`",
+        f"- brooks_structure_operator_status: `{payload.get('brooks_structure_operator_status') or ''}`",
+        f"- brooks_structure_operator_brief: `{payload.get('brooks_structure_operator_brief') or ''}`",
+        f"- brooks_structure_operator_head_symbol: `{payload.get('brooks_structure_operator_head_symbol') or ''}`",
+        f"- brooks_structure_operator_head_strategy_id: `{payload.get('brooks_structure_operator_head_strategy_id') or ''}`",
+        f"- brooks_structure_operator_head_direction: `{payload.get('brooks_structure_operator_head_direction') or ''}`",
+        f"- brooks_structure_operator_head_action: `{payload.get('brooks_structure_operator_head_action') or ''}`",
+        f"- brooks_structure_operator_head_plan_status: `{payload.get('brooks_structure_operator_head_plan_status') or ''}`",
+        f"- brooks_structure_operator_head_priority_score: `{payload.get('brooks_structure_operator_head_priority_score')}`",
+        f"- brooks_structure_operator_head_priority_tier: `{payload.get('brooks_structure_operator_head_priority_tier') or ''}`",
+        f"- brooks_structure_operator_backlog_count: `{payload.get('brooks_structure_operator_backlog_count')}`",
+        f"- brooks_structure_operator_backlog_brief: `{payload.get('brooks_structure_operator_backlog_brief') or ''}`",
+        f"- brooks_structure_operator_blocker_detail: `{payload.get('brooks_structure_operator_blocker_detail') or ''}`",
+        f"- brooks_structure_operator_done_when: `{payload.get('brooks_structure_operator_done_when') or ''}`",
         f"- operator_research_embedding_quality_status: `{payload.get('operator_research_embedding_quality_status') or ''}`",
         f"- operator_research_embedding_quality_brief: `{payload.get('operator_research_embedding_quality_brief') or ''}`",
         f"- operator_research_embedding_quality_blocker_detail: `{payload.get('operator_research_embedding_quality_blocker_detail') or ''}`",
@@ -3857,6 +6391,10 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- operator_source_refresh_pipeline_head_checkpoint_state: `{payload.get('operator_source_refresh_pipeline_head_checkpoint_state') or ''}`",
         f"- operator_source_refresh_pipeline_head_expected_artifact_kind: `{payload.get('operator_source_refresh_pipeline_head_expected_artifact_kind') or ''}`",
         f"- operator_source_refresh_pipeline_head_current_artifact: `{payload.get('operator_source_refresh_pipeline_head_current_artifact') or ''}`",
+        f"- operator_source_refresh_pipeline_relevance_status: `{payload.get('operator_source_refresh_pipeline_relevance_status') or ''}`",
+        f"- operator_source_refresh_pipeline_relevance_brief: `{payload.get('operator_source_refresh_pipeline_relevance_brief') or ''}`",
+        f"- operator_source_refresh_pipeline_relevance_blocker_detail: `{payload.get('operator_source_refresh_pipeline_relevance_blocker_detail') or ''}`",
+        f"- operator_source_refresh_pipeline_relevance_done_when: `{payload.get('operator_source_refresh_pipeline_relevance_done_when') or ''}`",
         f"- operator_source_refresh_pipeline_deferred_brief: `{payload.get('operator_source_refresh_pipeline_deferred_brief') or ''}`",
         f"- operator_source_refresh_pipeline_deferred_count: `{payload.get('operator_source_refresh_pipeline_deferred_count')}`",
         f"- operator_source_refresh_pipeline_deferred_status: `{payload.get('operator_source_refresh_pipeline_deferred_status') or ''}`",
@@ -3917,10 +6455,37 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- operator_source_refresh_next_recipe_steps_brief: `{payload.get('operator_source_refresh_next_recipe_steps_brief') or ''}`",
         f"- operator_source_refresh_next_recipe_step_checkpoint_brief: `{payload.get('operator_source_refresh_next_recipe_step_checkpoint_brief') or ''}`",
         f"- operator_source_refresh_next_recipe_steps: `{json.dumps(payload.get('operator_source_refresh_next_recipe_steps', []), ensure_ascii=False, sort_keys=True)}`",
+        f"- crypto_route_head_source_refresh_status: `{payload.get('crypto_route_head_source_refresh_status') or ''}`",
+        f"- crypto_route_head_source_refresh_brief: `{payload.get('crypto_route_head_source_refresh_brief') or ''}`",
+        f"- crypto_route_head_source_refresh_slot: `{payload.get('crypto_route_head_source_refresh_slot') or ''}`",
+        f"- crypto_route_head_source_refresh_symbol: `{payload.get('crypto_route_head_source_refresh_symbol') or ''}`",
+        f"- crypto_route_head_source_refresh_action: `{payload.get('crypto_route_head_source_refresh_action') or ''}`",
+        f"- crypto_route_head_source_refresh_source_kind: `{payload.get('crypto_route_head_source_refresh_source_kind') or ''}`",
+        f"- crypto_route_head_source_refresh_source_health: `{payload.get('crypto_route_head_source_refresh_source_health') or ''}`",
+        f"- crypto_route_head_source_refresh_source_artifact: `{payload.get('crypto_route_head_source_refresh_source_artifact') or ''}`",
+        f"- crypto_route_head_source_refresh_blocker_detail: `{payload.get('crypto_route_head_source_refresh_blocker_detail') or ''}`",
+        f"- crypto_route_head_source_refresh_done_when: `{payload.get('crypto_route_head_source_refresh_done_when') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_script: `{payload.get('crypto_route_head_source_refresh_recipe_script') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_command_hint: `{payload.get('crypto_route_head_source_refresh_recipe_command_hint') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_expected_status: `{payload.get('crypto_route_head_source_refresh_recipe_expected_status') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_expected_artifact_kind: `{payload.get('crypto_route_head_source_refresh_recipe_expected_artifact_kind') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_expected_artifact_path_hint: `{payload.get('crypto_route_head_source_refresh_recipe_expected_artifact_path_hint') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_note: `{payload.get('crypto_route_head_source_refresh_recipe_note') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_followup_script: `{payload.get('crypto_route_head_source_refresh_recipe_followup_script') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_followup_command_hint: `{payload.get('crypto_route_head_source_refresh_recipe_followup_command_hint') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_verify_hint: `{payload.get('crypto_route_head_source_refresh_recipe_verify_hint') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_steps_brief: `{payload.get('crypto_route_head_source_refresh_recipe_steps_brief') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_step_checkpoint_brief: `{payload.get('crypto_route_head_source_refresh_recipe_step_checkpoint_brief') or ''}`",
+        f"- crypto_route_head_source_refresh_recipe_steps: `{json.dumps(payload.get('crypto_route_head_source_refresh_recipe_steps', []), ensure_ascii=False, sort_keys=True)}`",
         f"- operator_action_queue_brief: `{payload.get('operator_action_queue_brief') or ''}`",
         f"- operator_action_queue: `{json.dumps(payload.get('operator_action_queue', []), ensure_ascii=False, sort_keys=True)}`",
         f"- operator_action_checklist_brief: `{payload.get('operator_action_checklist_brief') or ''}`",
         f"- operator_action_checklist: `{json.dumps(payload.get('operator_action_checklist', []), ensure_ascii=False, sort_keys=True)}`",
+        f"- operator_repair_queue_brief: `{payload.get('operator_repair_queue_brief') or ''}`",
+        f"- operator_repair_queue_count: `{payload.get('operator_repair_queue_count')}`",
+        f"- operator_repair_queue: `{json.dumps(payload.get('operator_repair_queue', []), ensure_ascii=False, sort_keys=True)}`",
+        f"- operator_repair_checklist_brief: `{payload.get('operator_repair_checklist_brief') or ''}`",
+        f"- operator_repair_checklist: `{json.dumps(payload.get('operator_repair_checklist', []), ensure_ascii=False, sort_keys=True)}`",
         f"- secondary_focus_area: `{payload.get('secondary_focus_area') or ''}`",
         f"- secondary_focus_target: `{payload.get('secondary_focus_target') or ''}`",
         f"- secondary_focus_symbol: `{payload.get('secondary_focus_symbol') or ''}`",
@@ -3929,6 +6494,59 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- secondary_focus_state: `{payload.get('secondary_focus_state') or ''}`",
         f"- secondary_focus_blocker_detail: `{payload.get('secondary_focus_blocker_detail') or ''}`",
         f"- secondary_focus_done_when: `{payload.get('secondary_focus_done_when') or ''}`",
+        f"- secondary_focus_priority_tier: `{payload.get('secondary_focus_priority_tier') or ''}`",
+        f"- secondary_focus_priority_score: `{payload.get('secondary_focus_priority_score')}`",
+        f"- secondary_focus_queue_rank: `{payload.get('secondary_focus_queue_rank')}`",
+        f"- crypto_route_shortline_market_state_brief: `{payload.get('crypto_route_shortline_market_state_brief') or ''}`",
+        f"- crypto_route_shortline_execution_gate_brief: `{payload.get('crypto_route_shortline_execution_gate_brief') or ''}`",
+        f"- crypto_route_shortline_no_trade_rule: `{payload.get('crypto_route_shortline_no_trade_rule') or ''}`",
+        f"- crypto_route_shortline_session_map_brief: `{payload.get('crypto_route_shortline_session_map_brief') or ''}`",
+        f"- crypto_route_shortline_cvd_semantic_status: `{payload.get('crypto_route_shortline_cvd_semantic_status') or ''}`",
+        f"- crypto_route_shortline_cvd_semantic_takeaway: `{payload.get('crypto_route_shortline_cvd_semantic_takeaway') or ''}`",
+        f"- crypto_route_shortline_cvd_queue_handoff_status: `{payload.get('crypto_route_shortline_cvd_queue_handoff_status') or ''}`",
+        f"- crypto_route_shortline_cvd_queue_handoff_takeaway: `{payload.get('crypto_route_shortline_cvd_queue_handoff_takeaway') or ''}`",
+        f"- crypto_route_shortline_cvd_queue_focus_batch: `{payload.get('crypto_route_shortline_cvd_queue_focus_batch') or ''}`",
+        f"- crypto_route_shortline_cvd_queue_focus_action: `{payload.get('crypto_route_shortline_cvd_queue_focus_action') or ''}`",
+        f"- crypto_route_shortline_cvd_queue_stack_brief: `{payload.get('crypto_route_shortline_cvd_queue_stack_brief') or ''}`",
+        f"- crypto_route_focus_execution_state: `{payload.get('crypto_route_focus_execution_state') or ''}`",
+        f"- crypto_route_focus_execution_blocker_detail: `{payload.get('crypto_route_focus_execution_blocker_detail') or ''}`",
+        f"- crypto_route_focus_execution_done_when: `{payload.get('crypto_route_focus_execution_done_when') or ''}`",
+        f"- crypto_route_focus_execution_micro_classification: `{payload.get('crypto_route_focus_execution_micro_classification') or ''}`",
+        f"- crypto_route_focus_execution_micro_context: `{payload.get('crypto_route_focus_execution_micro_context') or ''}`",
+        f"- crypto_route_focus_execution_micro_trust_tier: `{payload.get('crypto_route_focus_execution_micro_trust_tier') or ''}`",
+        f"- crypto_route_focus_execution_micro_veto: `{payload.get('crypto_route_focus_execution_micro_veto') or ''}`",
+        f"- crypto_route_focus_execution_micro_locality_status: `{payload.get('crypto_route_focus_execution_micro_locality_status') or ''}`",
+        f"- crypto_route_focus_execution_micro_drift_risk: `{payload.get('crypto_route_focus_execution_micro_drift_risk') or ''}`",
+        f"- crypto_route_focus_execution_micro_attack_side: `{payload.get('crypto_route_focus_execution_micro_attack_side') or ''}`",
+        f"- crypto_route_focus_execution_micro_attack_presence: `{payload.get('crypto_route_focus_execution_micro_attack_presence') or ''}`",
+        f"- crypto_route_focus_execution_micro_reasons: `{_list_text(payload.get('crypto_route_focus_execution_micro_reasons', []), limit=20)}`",
+        f"- crypto_route_focus_review_status: `{payload.get('crypto_route_focus_review_status') or ''}`",
+        f"- crypto_route_focus_review_brief: `{payload.get('crypto_route_focus_review_brief') or ''}`",
+        f"- crypto_route_focus_review_primary_blocker: `{payload.get('crypto_route_focus_review_primary_blocker') or ''}`",
+        f"- crypto_route_focus_review_micro_blocker: `{payload.get('crypto_route_focus_review_micro_blocker') or ''}`",
+        f"- crypto_route_focus_review_blocker_detail: `{payload.get('crypto_route_focus_review_blocker_detail') or ''}`",
+        f"- crypto_route_focus_review_done_when: `{payload.get('crypto_route_focus_review_done_when') or ''}`",
+        f"- crypto_route_focus_review_score_status: `{payload.get('crypto_route_focus_review_score_status') or ''}`",
+        f"- crypto_route_focus_review_edge_score: `{payload.get('crypto_route_focus_review_edge_score')}`",
+        f"- crypto_route_focus_review_structure_score: `{payload.get('crypto_route_focus_review_structure_score')}`",
+        f"- crypto_route_focus_review_micro_score: `{payload.get('crypto_route_focus_review_micro_score')}`",
+        f"- crypto_route_focus_review_composite_score: `{payload.get('crypto_route_focus_review_composite_score')}`",
+        f"- crypto_route_focus_review_score_brief: `{payload.get('crypto_route_focus_review_score_brief') or ''}`",
+        f"- crypto_route_focus_review_priority_status: `{payload.get('crypto_route_focus_review_priority_status') or ''}`",
+        f"- crypto_route_focus_review_priority_score: `{payload.get('crypto_route_focus_review_priority_score')}`",
+        f"- crypto_route_focus_review_priority_tier: `{payload.get('crypto_route_focus_review_priority_tier') or ''}`",
+        f"- crypto_route_focus_review_priority_brief: `{payload.get('crypto_route_focus_review_priority_brief') or ''}`",
+        f"- crypto_route_review_priority_queue_status: `{payload.get('crypto_route_review_priority_queue_status') or ''}`",
+        f"- crypto_route_review_priority_queue_count: `{payload.get('crypto_route_review_priority_queue_count')}`",
+        f"- crypto_route_review_priority_queue_brief: `{payload.get('crypto_route_review_priority_queue_brief') or ''}`",
+        f"- crypto_route_review_priority_head_symbol: `{payload.get('crypto_route_review_priority_head_symbol') or ''}`",
+        f"- crypto_route_review_priority_head_tier: `{payload.get('crypto_route_review_priority_head_tier') or ''}`",
+        f"- crypto_route_review_priority_head_score: `{payload.get('crypto_route_review_priority_head_score')}`",
+        f"- crypto_route_review_priority_head_action: `{payload.get('crypto_route_review_priority_head_action') or ''}`",
+        f"- crypto_route_review_priority_head_reason: `{payload.get('crypto_route_review_priority_head_reason') or ''}`",
+        f"- crypto_route_review_priority_head_blocker_detail: `{payload.get('crypto_route_review_priority_head_blocker_detail') or ''}`",
+        f"- crypto_route_review_priority_head_done_when: `{payload.get('crypto_route_review_priority_head_done_when') or ''}`",
+        f"- crypto_route_review_priority_head_rank: `{payload.get('crypto_route_review_priority_head_rank')}`",
         f"- commodity_remainder_focus_area: `{payload.get('commodity_remainder_focus_area') or ''}`",
         f"- commodity_remainder_focus_target: `{payload.get('commodity_remainder_focus_target') or ''}`",
         f"- commodity_remainder_focus_symbol: `{payload.get('commodity_remainder_focus_symbol') or ''}`",
@@ -3997,6 +6615,22 @@ def main(argv: list[str] | None = None) -> int:
     action_source_path = latest_hot_universe_action_source(review_dir, runtime_now)
     crypto_source_path = latest_hot_universe_crypto_source(review_dir, runtime_now)
     crypto_route_source_path = latest_crypto_route_focus_source(review_dir, runtime_now)
+    crypto_route_refresh_source_path = latest_crypto_route_refresh_source(review_dir, runtime_now)
+    remote_live_history_audit_source_path = latest_remote_live_history_audit_source(review_dir, runtime_now)
+    remote_live_handoff_source_path = latest_remote_live_handoff_source(review_dir, runtime_now)
+    live_gate_blocker_source_path = latest_live_gate_blocker_report_source(review_dir, runtime_now)
+    brooks_route_report_source_path = latest_brooks_price_action_route_report_source(review_dir, runtime_now)
+    brooks_execution_plan_source_path = latest_brooks_price_action_execution_plan_source(review_dir, runtime_now)
+    brooks_structure_review_queue_source_path = latest_brooks_structure_review_queue_source(review_dir, runtime_now)
+    brooks_structure_refresh_source_path = latest_brooks_structure_refresh_source(review_dir, runtime_now)
+    cross_market_operator_state_source_path = latest_cross_market_operator_state_source(review_dir, runtime_now)
+    system_time_sync_repair_plan_source_path = latest_system_time_sync_repair_plan_source(review_dir, runtime_now)
+    system_time_sync_repair_verification_source_path = latest_system_time_sync_repair_verification_source(
+        review_dir, runtime_now
+    )
+    openclaw_orderflow_blueprint_source_path = latest_openclaw_orderflow_blueprint_source(
+        review_dir, runtime_now
+    )
     commodity_source_path = latest_commodity_execution_lane_source(review_dir, runtime_now)
     commodity_ticket_source_path = latest_commodity_paper_ticket_lane_source(review_dir, runtime_now)
     commodity_ticket_book_source_path = latest_commodity_paper_ticket_book_source(review_dir, runtime_now)
@@ -4013,6 +6647,70 @@ def main(argv: list[str] | None = None) -> int:
         json.loads(crypto_route_source_path.read_text(encoding="utf-8"))
         if crypto_route_source_path and crypto_route_source_path.exists()
         else None
+    )
+    crypto_route_refresh_source_payload = (
+        json.loads(crypto_route_refresh_source_path.read_text(encoding="utf-8"))
+        if crypto_route_refresh_source_path and crypto_route_refresh_source_path.exists()
+        else None
+    )
+    remote_live_history_audit_source_payload = (
+        json.loads(remote_live_history_audit_source_path.read_text(encoding="utf-8"))
+        if remote_live_history_audit_source_path and remote_live_history_audit_source_path.exists()
+        else None
+    )
+    remote_live_handoff_source_payload = (
+        json.loads(remote_live_handoff_source_path.read_text(encoding="utf-8"))
+        if remote_live_handoff_source_path and remote_live_handoff_source_path.exists()
+        else None
+    )
+    live_gate_blocker_source_payload = (
+        json.loads(live_gate_blocker_source_path.read_text(encoding="utf-8"))
+        if live_gate_blocker_source_path and live_gate_blocker_source_path.exists()
+        else None
+    )
+    brooks_route_report_source_payload = (
+        json.loads(brooks_route_report_source_path.read_text(encoding="utf-8"))
+        if brooks_route_report_source_path and brooks_route_report_source_path.exists()
+        else None
+    )
+    brooks_execution_plan_source_payload = (
+        json.loads(brooks_execution_plan_source_path.read_text(encoding="utf-8"))
+        if brooks_execution_plan_source_path and brooks_execution_plan_source_path.exists()
+        else None
+    )
+    brooks_structure_review_queue_source_payload = (
+        json.loads(brooks_structure_review_queue_source_path.read_text(encoding="utf-8"))
+        if brooks_structure_review_queue_source_path and brooks_structure_review_queue_source_path.exists()
+        else None
+    )
+    brooks_structure_refresh_source_payload = (
+        json.loads(brooks_structure_refresh_source_path.read_text(encoding="utf-8"))
+        if brooks_structure_refresh_source_path and brooks_structure_refresh_source_path.exists()
+        else None
+    )
+    cross_market_operator_state_source_payload = (
+        json.loads(cross_market_operator_state_source_path.read_text(encoding="utf-8"))
+        if cross_market_operator_state_source_path and cross_market_operator_state_source_path.exists()
+        else None
+    )
+    system_time_sync_repair_plan_source_payload = (
+        json.loads(system_time_sync_repair_plan_source_path.read_text(encoding="utf-8"))
+        if system_time_sync_repair_plan_source_path and system_time_sync_repair_plan_source_path.exists()
+        else None
+    )
+    system_time_sync_repair_verification_source_payload = (
+        json.loads(system_time_sync_repair_verification_source_path.read_text(encoding="utf-8"))
+        if system_time_sync_repair_verification_source_path
+        and system_time_sync_repair_verification_source_path.exists()
+        else None
+    )
+    openclaw_orderflow_blueprint_source_payload = (
+        json.loads(openclaw_orderflow_blueprint_source_path.read_text(encoding="utf-8"))
+        if openclaw_orderflow_blueprint_source_path and openclaw_orderflow_blueprint_source_path.exists()
+        else None
+    )
+    remote_live_handoff_operator_payload = _unwrap_remote_live_handoff_operator_payload(
+        remote_live_handoff_source_payload
     )
     commodity_source_payload = (
         _normalize_commodity_payload(json.loads(commodity_source_path.read_text(encoding="utf-8")))
@@ -4065,6 +6763,99 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
     research_embedding_quality = _research_embedding_quality(action_source_payload)
+    crypto_route_refresh_reuse_audit = _crypto_route_refresh_reuse_audit(crypto_route_refresh_source_payload)
+    crypto_route_refresh_reuse_gate = _crypto_route_refresh_reuse_gate(
+        crypto_route_refresh_source_payload,
+        crypto_route_refresh_reuse_audit,
+    )
+    remote_live_history_window_map = _remote_live_history_window_map(remote_live_history_audit_source_payload)
+    remote_live_history_snapshot = _remote_live_history_snapshot_row(remote_live_history_window_map)
+    remote_live_history_longest = _remote_live_history_longest_row(remote_live_history_window_map)
+    remote_live_history_window_brief = " | ".join(
+        [
+            brief_text
+            for brief_text in (
+                _remote_live_history_window_brief(remote_live_history_window_map.get(24, {})),
+                _remote_live_history_window_brief(remote_live_history_window_map.get(168, {})),
+                _remote_live_history_window_brief(remote_live_history_window_map.get(720, {})),
+            )
+            if brief_text != "-"
+        ]
+    )
+    brooks_route_candidates = (
+        list((brooks_route_report_source_payload or {}).get("current_candidates") or [])
+        if isinstance((brooks_route_report_source_payload or {}).get("current_candidates"), list)
+        else []
+    )
+    brooks_route_head = (
+        dict(brooks_route_candidates[0]) if brooks_route_candidates and isinstance(brooks_route_candidates[0], dict) else {}
+    )
+    brooks_execution_head = (
+        dict((brooks_execution_plan_source_payload or {}).get("head_plan_item") or {})
+        if isinstance((brooks_execution_plan_source_payload or {}).get("head_plan_item"), dict)
+        else {}
+    )
+    brooks_structure_review_lane = (
+        {
+            "status": str((brooks_structure_review_queue_source_payload or {}).get("review_status") or ""),
+            "brief": str((brooks_structure_review_queue_source_payload or {}).get("review_brief") or ""),
+            "queue_status": str((brooks_structure_review_queue_source_payload or {}).get("queue_status") or ""),
+            "queue_count": int((brooks_structure_review_queue_source_payload or {}).get("queue_count") or 0),
+            "queue": [
+                dict(row)
+                for row in list((brooks_structure_review_queue_source_payload or {}).get("queue") or [])
+                if isinstance(row, dict)
+            ],
+            "queue_brief": str((brooks_structure_review_queue_source_payload or {}).get("queue_brief") or ""),
+            "head": dict((brooks_structure_review_queue_source_payload or {}).get("head") or {})
+            if isinstance((brooks_structure_review_queue_source_payload or {}).get("head"), dict)
+            else {},
+            "priority_status": str((brooks_structure_review_queue_source_payload or {}).get("priority_status") or ""),
+            "priority_brief": str((brooks_structure_review_queue_source_payload or {}).get("priority_brief") or ""),
+            "blocker_detail": str((brooks_structure_review_queue_source_payload or {}).get("blocker_detail") or ""),
+            "done_when": str((brooks_structure_review_queue_source_payload or {}).get("done_when") or ""),
+        }
+        if brooks_structure_review_queue_source_payload
+        else _brooks_structure_review_lane(
+            route_report_payload=brooks_route_report_source_payload,
+            execution_plan_payload=brooks_execution_plan_source_payload,
+        )
+    )
+    brooks_structure_operator_lane = _brooks_structure_operator_lane(
+        queue_payload=brooks_structure_review_queue_source_payload,
+        fallback_lane=brooks_structure_review_lane,
+    )
+    cross_market_review_head_lane = _cross_market_review_head_lane(
+        source_payload=cross_market_operator_state_source_payload,
+    )
+    cross_market_operator_head_lane = _cross_market_operator_head_lane(
+        source_payload=cross_market_operator_state_source_payload,
+    )
+    cross_market_operator_repair_head_lane = _cross_market_operator_repair_head_lane(
+        source_payload=cross_market_operator_state_source_payload,
+        live_gate_blocker_source_payload=live_gate_blocker_source_payload,
+    )
+    cross_market_source_snapshot_chunk = _build_cross_market_source_snapshot_chunk(
+        cross_market_operator_state_source_payload
+    )
+    source_cross_market_operator_state_operator_snapshot_brief = str(
+        cross_market_source_snapshot_chunk.get("source_cross_market_operator_state_operator_snapshot_brief")
+        or ""
+    )
+    source_cross_market_operator_state_review_snapshot_brief = str(
+        cross_market_source_snapshot_chunk.get("source_cross_market_operator_state_review_snapshot_brief")
+        or ""
+    )
+    source_cross_market_operator_state_remote_live_snapshot_brief = str(
+        cross_market_source_snapshot_chunk.get(
+            "source_cross_market_operator_state_remote_live_snapshot_brief"
+        )
+        or ""
+    )
+    source_cross_market_operator_state_snapshot_brief = str(
+        cross_market_source_snapshot_chunk.get("source_cross_market_operator_state_snapshot_brief")
+        or ""
+    )
     brief = build_operator_brief(
         action_source_payload,
         crypto_source_payload,
@@ -4079,6 +6870,8 @@ def main(argv: list[str] | None = None) -> int:
         commodity_execution_retro_source_payload,
         commodity_execution_gap_source_payload,
         commodity_execution_bridge_source_payload,
+        cross_market_operator_state_source_payload,
+        live_gate_blocker_source_payload,
     )
 
     source_mode = "single-hot-universe-source"
@@ -4103,6 +6896,16 @@ def main(argv: list[str] | None = None) -> int:
         unique_sources.add(str(commodity_execution_gap_source_path))
     if commodity_execution_bridge_source_path:
         unique_sources.add(str(commodity_execution_bridge_source_path))
+    if brooks_route_report_source_path:
+        unique_sources.add(str(brooks_route_report_source_path))
+    if brooks_execution_plan_source_path:
+        unique_sources.add(str(brooks_execution_plan_source_path))
+    if brooks_structure_review_queue_source_path:
+        unique_sources.add(str(brooks_structure_review_queue_source_path))
+    if brooks_structure_refresh_source_path:
+        unique_sources.add(str(brooks_structure_refresh_source_path))
+    if cross_market_operator_state_source_path:
+        unique_sources.add(str(cross_market_operator_state_source_path))
     if len(unique_sources) > 1:
         if commodity_source_path or commodity_ticket_source_path or commodity_ticket_book_source_path:
             source_mode = "merged-action-commodity-crypto-sources"
@@ -4113,6 +6916,84 @@ def main(argv: list[str] | None = None) -> int:
     json_path = review_dir / f"{stamp}_hot_universe_operator_brief.json"
     md_path = review_dir / f"{stamp}_hot_universe_operator_brief.md"
     checksum_path = review_dir / f"{stamp}_hot_universe_operator_brief_checksum.json"
+
+    crypto_route_source_chunk = _build_crypto_route_source_chunk(
+        crypto_route_source_path=crypto_route_source_path,
+        crypto_route_source_payload=crypto_route_source_payload,
+        crypto_route_refresh_source_path=crypto_route_refresh_source_path,
+        crypto_route_refresh_source_payload=crypto_route_refresh_source_payload,
+        crypto_route_refresh_reuse_audit=crypto_route_refresh_reuse_audit,
+        crypto_route_refresh_reuse_gate=crypto_route_refresh_reuse_gate,
+    )
+    remote_live_source_chunk = _build_remote_live_source_chunk(
+        remote_live_history_audit_source_path=remote_live_history_audit_source_path,
+        remote_live_history_audit_source_payload=remote_live_history_audit_source_payload,
+        remote_live_history_window_brief=remote_live_history_window_brief,
+        remote_live_history_snapshot=remote_live_history_snapshot,
+        remote_live_history_window_map=remote_live_history_window_map,
+        remote_live_history_longest=remote_live_history_longest,
+        remote_live_handoff_source_path=remote_live_handoff_source_path,
+        remote_live_handoff_source_payload=remote_live_handoff_source_payload,
+        remote_live_handoff_operator_payload=remote_live_handoff_operator_payload,
+        live_gate_blocker_source_path=live_gate_blocker_source_path,
+        live_gate_blocker_source_payload=live_gate_blocker_source_payload,
+        mapping_text_fn=_mapping_text,
+    )
+    brooks_source_chunk = _build_brooks_source_chunk(
+        brooks_route_report_source_path=brooks_route_report_source_path,
+        brooks_route_report_source_payload=brooks_route_report_source_payload,
+        brooks_route_head=brooks_route_head,
+        brooks_execution_plan_source_path=brooks_execution_plan_source_path,
+        brooks_execution_plan_source_payload=brooks_execution_plan_source_payload,
+        brooks_execution_head=brooks_execution_head,
+        brooks_structure_review_queue_source_path=brooks_structure_review_queue_source_path,
+        brooks_structure_review_queue_source_payload=brooks_structure_review_queue_source_payload,
+        brooks_structure_refresh_source_path=brooks_structure_refresh_source_path,
+        brooks_structure_refresh_source_payload=brooks_structure_refresh_source_payload,
+    )
+    cross_market_runtime_chunk = _build_cross_market_runtime_chunk(
+        cross_market_operator_state_source_payload=cross_market_operator_state_source_payload,
+        cross_market_operator_head_lane=cross_market_operator_head_lane,
+        cross_market_operator_repair_head_lane=cross_market_operator_repair_head_lane,
+        cross_market_review_head_lane=cross_market_review_head_lane,
+        live_gate_blocker_source_payload=live_gate_blocker_source_payload,
+    )
+    brooks_runtime_chunk = _build_brooks_runtime_chunk(
+        brooks_structure_review_lane=brooks_structure_review_lane,
+        brooks_structure_operator_lane=brooks_structure_operator_lane,
+    )
+    research_embedding_quality_chunk = _build_research_embedding_quality_chunk(
+        research_embedding_quality
+    )
+    openclaw_orderflow_blueprint_current = dict(
+        (openclaw_orderflow_blueprint_source_payload or {}).get("current_status") or {}
+    )
+    openclaw_orderflow_blueprint_backlog = list(
+        (openclaw_orderflow_blueprint_source_payload or {}).get("immediate_backlog") or []
+    )
+    openclaw_orderflow_blueprint_top = (
+        dict(openclaw_orderflow_blueprint_backlog[0])
+        if openclaw_orderflow_blueprint_backlog
+        and isinstance(openclaw_orderflow_blueprint_backlog[0], dict)
+        else {}
+    )
+    openclaw_orderflow_blueprint_brief = " | ".join(
+        [
+            " -> ".join(
+                [
+                    str(openclaw_orderflow_blueprint_current.get("current_life_stage") or "").strip(),
+                    str(openclaw_orderflow_blueprint_current.get("target_life_stage") or "").strip(),
+                ]
+            ).strip(" ->"),
+            ":".join(
+                [
+                    f"P{str(openclaw_orderflow_blueprint_top.get('priority') or '').strip()}".strip(":"),
+                    str(openclaw_orderflow_blueprint_top.get("target_artifact") or "").strip(),
+                    str(openclaw_orderflow_blueprint_top.get("title") or "").strip(),
+                ]
+            ).strip(":"),
+        ]
+    ).strip(" | ")
 
     payload = {
         "ok": True,
@@ -4145,19 +7026,374 @@ def main(argv: list[str] | None = None) -> int:
         "source_commodity_execution_bridge_status": str((commodity_execution_bridge_source_payload or {}).get("status") or ""),
         "source_crypto_artifact": str(crypto_source_path),
         "source_crypto_status": str(crypto_source_payload.get("status") or ""),
-        "source_crypto_route_artifact": str(crypto_route_source_path) if crypto_route_source_path else "",
-        "source_crypto_route_status": str((crypto_route_source_payload or {}).get("status") or ""),
-        "operator_research_embedding_quality_status": str(research_embedding_quality.get("status") or ""),
-        "operator_research_embedding_quality_brief": str(research_embedding_quality.get("brief") or ""),
-        "operator_research_embedding_quality_blocker_detail": str(
-            research_embedding_quality.get("blocker_detail") or ""
+        **crypto_route_source_chunk,
+        **remote_live_source_chunk,
+        **brooks_source_chunk,
+        "source_cross_market_operator_state_artifact": str(
+            cross_market_operator_state_source_path
+        )
+        if cross_market_operator_state_source_path
+        else "",
+        "source_system_time_sync_repair_plan_artifact": str(system_time_sync_repair_plan_source_path)
+        if system_time_sync_repair_plan_source_path
+        else "",
+        "source_system_time_sync_repair_plan_status": str(
+            (system_time_sync_repair_plan_source_payload or {}).get("status") or ""
         ),
-        "operator_research_embedding_quality_done_when": str(research_embedding_quality.get("done_when") or ""),
-        "operator_research_embedding_active_batches": list(research_embedding_quality.get("active_batches") or []),
-        "operator_research_embedding_avoid_batches": list(research_embedding_quality.get("avoid_batches") or []),
-        "operator_research_embedding_zero_trade_deprioritized_batches": list(
-            research_embedding_quality.get("zero_trade_deprioritized_batches") or []
+        "source_system_time_sync_repair_plan_brief": str(
+            (system_time_sync_repair_plan_source_payload or {}).get("plan_brief") or ""
         ),
+        "source_system_time_sync_repair_plan_admin_required": bool(
+            (system_time_sync_repair_plan_source_payload or {}).get("admin_required", False)
+        ),
+        "source_system_time_sync_repair_plan_done_when": str(
+            (system_time_sync_repair_plan_source_payload or {}).get("done_when") or ""
+        ),
+        "source_system_time_sync_repair_verification_artifact": str(
+            system_time_sync_repair_verification_source_path
+        )
+        if system_time_sync_repair_verification_source_path
+        else "",
+        "source_system_time_sync_repair_verification_status": str(
+            (system_time_sync_repair_verification_source_payload or {}).get("status") or ""
+        ),
+        "source_system_time_sync_repair_verification_brief": str(
+            (system_time_sync_repair_verification_source_payload or {}).get("verification_brief") or ""
+        ),
+        "source_system_time_sync_repair_verification_cleared": bool(
+            (system_time_sync_repair_verification_source_payload or {}).get("cleared", False)
+        ),
+        "source_openclaw_orderflow_blueprint_artifact": str(openclaw_orderflow_blueprint_source_path)
+        if openclaw_orderflow_blueprint_source_path
+        else "",
+        "source_openclaw_orderflow_blueprint_status": str(
+            (openclaw_orderflow_blueprint_source_payload or {}).get("status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_brief": openclaw_orderflow_blueprint_brief,
+        "source_openclaw_orderflow_blueprint_current_life_stage": str(
+            openclaw_orderflow_blueprint_current.get("current_life_stage") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_target_life_stage": str(
+            openclaw_orderflow_blueprint_current.get("target_life_stage") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_intent_queue_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_intent_queue_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_intent_queue_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_intent_queue_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_intent_queue_recommendation": str(
+            openclaw_orderflow_blueprint_current.get("remote_intent_queue_recommendation") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_journal_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_journal_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_journal_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_journal_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_journal_append_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_journal_append_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_feedback_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_feedback_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_feedback_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_feedback_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_feedback_recommendation": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_feedback_recommendation") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_policy_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_policy_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_policy_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_policy_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_policy_decision": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_policy_decision") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_ack_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_ack_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_ack_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_ack_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_ack_decision": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_ack_decision") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_actor_canary_gate_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_actor_canary_gate_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_actor_canary_gate_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_actor_canary_gate_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_execution_actor_canary_gate_decision": str(
+            openclaw_orderflow_blueprint_current.get("remote_execution_actor_canary_gate_decision") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_quality_report_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_quality_report_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_quality_report_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_quality_report_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_quality_report_recommendation": str(
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_quality_report_recommendation") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_quality_report_score": (
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_quality_report_score")
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_quality_shadow_learning_score": (
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_quality_shadow_learning_score")
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_quality_execution_readiness_score": (
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_quality_execution_readiness_score")
+        ),
+        "source_openclaw_orderflow_blueprint_remote_orderflow_quality_transport_observability_score": (
+            openclaw_orderflow_blueprint_current.get("remote_orderflow_quality_transport_observability_score")
+        ),
+        "source_openclaw_orderflow_blueprint_remote_live_boundary_hold_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_live_boundary_hold_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_live_boundary_hold_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_live_boundary_hold_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_live_boundary_hold_decision": str(
+            openclaw_orderflow_blueprint_current.get("remote_live_boundary_hold_decision") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_live_boundary_hold_next_transition": str(
+            openclaw_orderflow_blueprint_current.get("remote_live_boundary_hold_next_transition") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guarded_canary_promotion_gate_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_guarded_canary_promotion_gate_brief")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guarded_canary_promotion_gate_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_guarded_canary_promotion_gate_status")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guarded_canary_promotion_gate_decision": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_guarded_canary_promotion_gate_decision"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guarded_canary_promotion_gate_blocker_title": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_guarded_canary_promotion_gate_blocker_title"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guarded_canary_promotion_gate_blocker_code": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_guarded_canary_promotion_gate_blocker_code"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guarded_canary_promotion_gate_blocker_target_artifact": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_guarded_canary_promotion_gate_blocker_target_artifact"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_shadow_learning_continuity_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_shadow_learning_continuity_brief")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_shadow_learning_continuity_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_shadow_learning_continuity_status")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_shadow_learning_continuity_decision": str(
+            openclaw_orderflow_blueprint_current.get("remote_shadow_learning_continuity_decision")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_shadow_learning_continuity_blocker_detail": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_shadow_learning_continuity_blocker_detail"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_readiness_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_promotion_unblock_readiness_brief")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_readiness_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_promotion_unblock_readiness_status")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_readiness_decision": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_promotion_unblock_readiness_decision"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_primary_blocker_scope": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_promotion_unblock_primary_blocker_scope"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_primary_local_repair_title": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_promotion_unblock_primary_local_repair_title"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_primary_local_repair_target_artifact": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_promotion_unblock_primary_local_repair_target_artifact"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_primary_local_repair_plan_brief": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_promotion_unblock_primary_local_repair_plan_brief"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_primary_local_repair_environment_classification": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_promotion_unblock_primary_local_repair_environment_classification"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_promotion_unblock_primary_local_repair_environment_blocker_detail": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_promotion_unblock_primary_local_repair_environment_blocker_detail"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_ticket_actionability_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_ticket_actionability_brief")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_ticket_actionability_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_ticket_actionability_status")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_ticket_actionability_decision": str(
+            openclaw_orderflow_blueprint_current.get("remote_ticket_actionability_decision")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_ticket_actionability_next_action": str(
+            openclaw_orderflow_blueprint_current.get("remote_ticket_actionability_next_action")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_ticket_actionability_next_action_target_artifact": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_ticket_actionability_next_action_target_artifact"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_backtest_slice_brief": str(
+            openclaw_orderflow_blueprint_current.get("crypto_shortline_backtest_slice_brief")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_backtest_slice_status": str(
+            openclaw_orderflow_blueprint_current.get("crypto_shortline_backtest_slice_status")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_backtest_slice_decision": str(
+            openclaw_orderflow_blueprint_current.get("crypto_shortline_backtest_slice_decision")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_backtest_slice_selected_symbol": str(
+            openclaw_orderflow_blueprint_current.get(
+                "crypto_shortline_backtest_slice_selected_symbol"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_backtest_slice_universe_brief": str(
+            openclaw_orderflow_blueprint_current.get(
+                "crypto_shortline_backtest_slice_universe_brief"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_cross_section_backtest_brief": str(
+            openclaw_orderflow_blueprint_current.get(
+                "crypto_shortline_cross_section_backtest_brief"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_cross_section_backtest_status": str(
+            openclaw_orderflow_blueprint_current.get(
+                "crypto_shortline_cross_section_backtest_status"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_cross_section_backtest_decision": str(
+            openclaw_orderflow_blueprint_current.get(
+                "crypto_shortline_cross_section_backtest_decision"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_crypto_shortline_cross_section_backtest_selected_edge_status": str(
+            openclaw_orderflow_blueprint_current.get(
+                "crypto_shortline_cross_section_backtest_selected_edge_status"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_time_sync_mode": str(
+            openclaw_orderflow_blueprint_current.get("remote_time_sync_mode") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_shadow_clock_evidence_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_shadow_clock_evidence_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_shadow_clock_evidence_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_shadow_clock_evidence_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_shadow_clock_shadow_learning_allowed": bool(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_shadow_clock_shadow_learning_allowed", False
+            )
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guardian_blocker_clearance_brief": str(
+            openclaw_orderflow_blueprint_current.get("remote_guardian_blocker_clearance_brief") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guardian_blocker_clearance_status": str(
+            openclaw_orderflow_blueprint_current.get("remote_guardian_blocker_clearance_status") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guardian_blocker_clearance_score": (
+            openclaw_orderflow_blueprint_current.get("remote_guardian_blocker_clearance_score")
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guardian_blocker_clearance_top_blocker_code": str(
+            openclaw_orderflow_blueprint_current.get("remote_guardian_blocker_clearance_top_blocker_code")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guardian_blocker_clearance_top_blocker_title": str(
+            openclaw_orderflow_blueprint_current.get("remote_guardian_blocker_clearance_top_blocker_title")
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guardian_blocker_clearance_top_blocker_target_artifact": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_guardian_blocker_clearance_top_blocker_target_artifact"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_remote_guardian_blocker_clearance_top_blocker_next_action": str(
+            openclaw_orderflow_blueprint_current.get(
+                "remote_guardian_blocker_clearance_top_blocker_next_action"
+            )
+            or ""
+        ),
+        "source_openclaw_orderflow_blueprint_top_backlog_title": str(
+            openclaw_orderflow_blueprint_top.get("title") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_top_backlog_target_artifact": str(
+            openclaw_orderflow_blueprint_top.get("target_artifact") or ""
+        ),
+        "source_openclaw_orderflow_blueprint_top_backlog_why": str(
+            openclaw_orderflow_blueprint_top.get("why") or ""
+        ),
+        **_mirror_source_prefixed_fields(
+            prefix="source_cross_market_operator_state_",
+            source_payload=cross_market_operator_state_source_payload,
+            specs=_CROSS_MARKET_SOURCE_MIRROR_SPECS,
+        ),
+        **cross_market_source_snapshot_chunk,
+        **cross_market_runtime_chunk,
+        **brooks_runtime_chunk,
+        **research_embedding_quality_chunk,
         **brief,
     }
     crypto_route_alignment_focus = _crypto_route_alignment_focus(payload)
@@ -4168,8 +7404,17 @@ def main(argv: list[str] | None = None) -> int:
         quality_brief=str(payload.get("operator_research_embedding_quality_brief") or ""),
         active_batches=list(payload.get("operator_research_embedding_active_batches") or []),
     )
+    payload["operator_crypto_route_alignment_focus_area"] = str(
+        crypto_route_alignment_focus.get("area") or "-"
+    )
     payload["operator_crypto_route_alignment_focus_slot"] = str(
         crypto_route_alignment_focus.get("slot") or "-"
+    )
+    payload["operator_crypto_route_alignment_focus_symbol"] = str(
+        crypto_route_alignment_focus.get("symbol") or "-"
+    )
+    payload["operator_crypto_route_alignment_focus_action"] = str(
+        crypto_route_alignment_focus.get("action") or "-"
     )
     payload["operator_crypto_route_alignment_status"] = str(crypto_route_alignment.get("status") or "")
     payload["operator_crypto_route_alignment_brief"] = str(crypto_route_alignment.get("brief") or "")
@@ -4294,11 +7539,18 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(row, dict):
             continue
         slot = dict(row)
-        source_kind, source_artifact = _focus_slot_source(
-            payload,
-            area=str(slot.get("area") or ""),
-            action=str(slot.get("action") or ""),
-        )
+        source_kind = str(slot.get("source_kind") or "").strip()
+        source_artifact = str(slot.get("source_artifact") or "").strip()
+        if not source_kind or not source_artifact:
+            derived_source_kind, derived_source_artifact = _focus_slot_source(
+                payload,
+                area=str(slot.get("area") or ""),
+                action=str(slot.get("action") or ""),
+            )
+            if not source_kind:
+                source_kind = derived_source_kind
+            if not source_artifact:
+                source_artifact = derived_source_artifact
         slot["source_kind"] = source_kind
         slot["source_artifact"] = source_artifact
         focus_slots.append(slot)
@@ -4309,33 +7561,39 @@ def main(argv: list[str] | None = None) -> int:
         enriched_slots: list[dict[str, Any]] = []
         for slot in focus_slots:
             enriched = dict(slot)
-            enriched["source_status"] = _focus_slot_source_status(
-                payload,
-                source_kind=str(enriched.get("source_kind") or ""),
-            )
-            enriched["source_as_of"] = _focus_slot_source_as_of(str(enriched.get("source_artifact") or ""))
-            enriched["source_age_minutes"] = _focus_slot_source_age_minutes(
-                reference_now=runtime_now,
-                source_as_of=str(enriched.get("source_as_of") or ""),
-            )
-            enriched["source_recency"] = _focus_slot_source_recency(
-                source_age_minutes=enriched.get("source_age_minutes")
-            )
-            enriched["source_health"] = _focus_slot_source_health(
-                source_status=str(enriched.get("source_status") or ""),
-                source_recency=str(enriched.get("source_recency") or ""),
-                source_kind=str(enriched.get("source_kind") or ""),
-                crypto_route_alignment_cooldown_status=str(
-                    payload.get("operator_crypto_route_alignment_cooldown_status") or ""
-                ),
-            )
-            enriched["source_refresh_action"] = _focus_slot_source_refresh_action(
-                source_health=str(enriched.get("source_health") or ""),
-                source_kind=str(enriched.get("source_kind") or ""),
-                crypto_route_alignment_cooldown_status=str(
-                    payload.get("operator_crypto_route_alignment_cooldown_status") or ""
-                ),
-            )
+            if not str(enriched.get("source_status") or "").strip():
+                enriched["source_status"] = _focus_slot_source_status(
+                    payload,
+                    source_kind=str(enriched.get("source_kind") or ""),
+                )
+            if not str(enriched.get("source_as_of") or "").strip():
+                enriched["source_as_of"] = _focus_slot_source_as_of(str(enriched.get("source_artifact") or ""))
+            if enriched.get("source_age_minutes") in (None, ""):
+                enriched["source_age_minutes"] = _focus_slot_source_age_minutes(
+                    reference_now=runtime_now,
+                    source_as_of=str(enriched.get("source_as_of") or ""),
+                )
+            if not str(enriched.get("source_recency") or "").strip():
+                enriched["source_recency"] = _focus_slot_source_recency(
+                    source_age_minutes=enriched.get("source_age_minutes")
+                )
+            if not str(enriched.get("source_health") or "").strip():
+                enriched["source_health"] = _focus_slot_source_health(
+                    source_status=str(enriched.get("source_status") or ""),
+                    source_recency=str(enriched.get("source_recency") or ""),
+                    source_kind=str(enriched.get("source_kind") or ""),
+                    crypto_route_alignment_cooldown_status=str(
+                        payload.get("operator_crypto_route_alignment_cooldown_status") or ""
+                    ),
+                )
+            if not str(enriched.get("source_refresh_action") or "").strip():
+                enriched["source_refresh_action"] = _focus_slot_source_refresh_action(
+                    source_health=str(enriched.get("source_health") or ""),
+                    source_kind=str(enriched.get("source_kind") or ""),
+                    crypto_route_alignment_cooldown_status=str(
+                        payload.get("operator_crypto_route_alignment_cooldown_status") or ""
+                    ),
+                )
             enriched_slots.append(enriched)
         focus_slots = enriched_slots
         payload["operator_focus_slots"] = focus_slots
@@ -4344,6 +7602,19 @@ def main(argv: list[str] | None = None) -> int:
         payload["operator_focus_slot_status_brief"] = _focus_slot_status_brief(focus_slots)
         payload["operator_focus_slot_recency_brief"] = _focus_slot_recency_brief(focus_slots)
         payload["operator_focus_slot_health_brief"] = _focus_slot_health_brief(focus_slots)
+        crypto_route_alignment_focus = _crypto_route_alignment_focus(payload, focus_slots=focus_slots)
+        payload["operator_crypto_route_alignment_focus_area"] = str(
+            crypto_route_alignment_focus.get("area") or "-"
+        )
+        payload["operator_crypto_route_alignment_focus_slot"] = str(
+            crypto_route_alignment_focus.get("slot") or "-"
+        )
+        payload["operator_crypto_route_alignment_focus_symbol"] = str(
+            crypto_route_alignment_focus.get("symbol") or "-"
+        )
+        payload["operator_crypto_route_alignment_focus_action"] = str(
+            crypto_route_alignment_focus.get("action") or "-"
+        )
         refresh_backlog = _focus_slot_refresh_backlog(focus_slots)
         source_refresh_queue = _source_refresh_queue(refresh_backlog)
         source_refresh_checklist = _source_refresh_checklist(source_refresh_queue, reference_now=runtime_now)
@@ -4387,6 +7658,7 @@ def main(argv: list[str] | None = None) -> int:
         actionability_backlog = _focus_slot_actionability_backlog(
             focus_slots,
             alignment_focus_slot=str(payload.get("operator_crypto_route_alignment_focus_slot") or ""),
+            alignment_focus_symbol=str(payload.get("operator_crypto_route_alignment_focus_symbol") or ""),
             alignment_status=str(payload.get("operator_crypto_route_alignment_status") or ""),
             alignment_brief=str(payload.get("operator_crypto_route_alignment_brief") or ""),
             alignment_recovery_status=str(payload.get("operator_crypto_route_alignment_recovery_status") or ""),
@@ -4467,15 +7739,27 @@ def main(argv: list[str] | None = None) -> int:
         refresh_head = dict(refresh_backlog[0]) if refresh_backlog else {}
         source_refresh_head = dict(source_refresh_queue[0]) if source_refresh_queue else {}
         source_refresh_checklist_head = dict(source_refresh_checklist[0]) if source_refresh_checklist else {}
+        crypto_alignment_focus_row = _find_focus_slot_row(
+            focus_slots,
+            area=str(payload.get("operator_crypto_route_alignment_focus_area") or ""),
+            symbol=str(payload.get("operator_crypto_route_alignment_focus_symbol") or ""),
+            action=str(payload.get("operator_crypto_route_alignment_focus_action") or ""),
+        )
+        pipeline_focus_row = (
+            dict(crypto_alignment_focus_row)
+            if crypto_alignment_focus_row
+            else (dict(source_refresh_head) if source_refresh_head else dict(secondary_slot))
+        )
         pipeline_source_kind = str(
-            secondary_slot.get("source_kind") or source_refresh_head.get("source_kind") or ""
+            pipeline_focus_row.get("source_kind") or source_refresh_head.get("source_kind") or ""
         )
         pipeline_source_artifact = str(
-            secondary_slot.get("source_artifact") or source_refresh_head.get("source_artifact") or ""
+            pipeline_focus_row.get("source_artifact") or source_refresh_head.get("source_artifact") or ""
         )
         pipeline_recipe = _source_refresh_recipe(
             source_kind=pipeline_source_kind,
             source_artifact=pipeline_source_artifact,
+            symbol=str(pipeline_focus_row.get("symbol") or source_refresh_head.get("symbol") or ""),
             reference_now=runtime_now,
         )
         pipeline_steps = list(pipeline_recipe.get("steps") or [])
@@ -4610,6 +7894,106 @@ def main(argv: list[str] | None = None) -> int:
         payload["operator_source_refresh_next_recipe_steps"] = list(
             source_refresh_checklist_head.get("recipe_steps") or []
         )
+        crypto_route_head_source_refresh_source = dict(
+            crypto_route_source_payload
+            or crypto_source_payload.get("crypto_route_operator_brief")
+            or crypto_source_payload.get("crypto_route_brief")
+            or {}
+        )
+        crypto_route_head_source_refresh = _crypto_route_head_source_refresh_lane(
+            row=crypto_alignment_focus_row,
+            reference_now=runtime_now,
+            cooldown_next_eligible_end_date=str(
+                payload.get("operator_crypto_route_alignment_cooldown_next_eligible_end_date") or ""
+            ),
+            source_payload=crypto_route_head_source_refresh_source,
+        )
+        crypto_route_head_source_refresh_recipe = dict(
+            crypto_route_head_source_refresh.get("recipe") or {}
+        )
+        payload["crypto_route_head_source_refresh_status"] = str(
+            crypto_route_head_source_refresh.get("status") or ""
+        )
+        payload["crypto_route_head_source_refresh_brief"] = str(
+            crypto_route_head_source_refresh.get("brief") or ""
+        )
+        payload["crypto_route_head_source_refresh_slot"] = str(
+            crypto_route_head_source_refresh.get("slot") or "-"
+        )
+        payload["crypto_route_head_source_refresh_symbol"] = str(
+            crypto_route_head_source_refresh.get("symbol") or "-"
+        )
+        payload["crypto_route_head_source_refresh_action"] = str(
+            crypto_route_head_source_refresh.get("action") or "-"
+        )
+        payload["crypto_route_head_source_refresh_source_kind"] = str(
+            crypto_route_head_source_refresh.get("source_kind") or "-"
+        )
+        payload["crypto_route_head_source_refresh_source_health"] = str(
+            crypto_route_head_source_refresh.get("source_health") or "-"
+        )
+        payload["crypto_route_head_source_refresh_source_artifact"] = str(
+            crypto_route_head_source_refresh.get("source_artifact") or ""
+        )
+        payload["crypto_route_head_source_refresh_blocker_detail"] = str(
+            crypto_route_head_source_refresh.get("blocker_detail") or ""
+        )
+        payload["crypto_route_head_source_refresh_done_when"] = str(
+            crypto_route_head_source_refresh.get("done_when") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_script"] = str(
+            crypto_route_head_source_refresh_recipe.get("script") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_command_hint"] = str(
+            crypto_route_head_source_refresh_recipe.get("command_hint") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_expected_status"] = str(
+            crypto_route_head_source_refresh_recipe.get("expected_status") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_expected_artifact_kind"] = str(
+            crypto_route_head_source_refresh_recipe.get("expected_artifact_kind") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_expected_artifact_path_hint"] = str(
+            crypto_route_head_source_refresh_recipe.get("expected_artifact_path_hint") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_note"] = str(
+            crypto_route_head_source_refresh_recipe.get("note") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_followup_script"] = str(
+            crypto_route_head_source_refresh_recipe.get("followup_script") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_followup_command_hint"] = str(
+            crypto_route_head_source_refresh_recipe.get("followup_command_hint") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_verify_hint"] = str(
+            crypto_route_head_source_refresh_recipe.get("verify_hint") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_steps_brief"] = str(
+            crypto_route_head_source_refresh_recipe.get("steps_brief") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_step_checkpoint_brief"] = str(
+            crypto_route_head_source_refresh_recipe.get("step_checkpoint_brief") or ""
+        )
+        payload["crypto_route_head_source_refresh_recipe_steps"] = list(
+            crypto_route_head_source_refresh_recipe.get("steps") or []
+        )
+        pipeline_relevance = _source_refresh_pipeline_relevance(
+            crypto_head_source_refresh=crypto_route_head_source_refresh,
+            pending_steps=pipeline_pending_steps,
+            deferred_steps=pipeline_deferred_steps,
+        )
+        payload["operator_source_refresh_pipeline_relevance_status"] = str(
+            pipeline_relevance.get("status") or ""
+        )
+        payload["operator_source_refresh_pipeline_relevance_brief"] = str(
+            pipeline_relevance.get("brief") or ""
+        )
+        payload["operator_source_refresh_pipeline_relevance_blocker_detail"] = str(
+            pipeline_relevance.get("blocker_detail") or ""
+        )
+        payload["operator_source_refresh_pipeline_relevance_done_when"] = str(
+            pipeline_relevance.get("done_when") or ""
+        )
         summary_lines = list(payload.get("summary_lines", []))
         summary_lines.append(f"focus-slot-sources: {payload.get('operator_focus_slot_sources_brief') or '-'}")
         summary_lines.append(f"focus-slot-source-status: {payload.get('operator_focus_slot_status_brief') or '-'}")
@@ -4622,6 +8006,179 @@ def main(argv: list[str] | None = None) -> int:
         )
         summary_lines.append(
             f"focus-slot-readiness-gate: {payload.get('operator_focus_slot_readiness_gate_brief') or '-'}"
+        )
+        summary_lines.append(
+            f"crypto-head-source-refresh: {payload.get('crypto_route_head_source_refresh_brief') or '-'}"
+        )
+        summary_lines.append(
+            f"crypto-route-refresh-reuse: {payload.get('source_crypto_route_refresh_reuse_brief') or '-'}"
+        )
+        summary_lines.append(
+            "crypto-route-refresh-reuse-gate: "
+            f"{payload.get('source_crypto_route_refresh_reuse_gate_brief') or '-'}"
+        )
+        summary_lines.append(
+            f"remote-live-history: {payload.get('source_remote_live_history_audit_window_brief') or '-'}"
+        )
+        summary_lines.append(
+            "remote-live-risk-guard: "
+            f"{payload.get('source_remote_live_history_audit_risk_guard_status') or '-'}:"
+            f"{_list_text(payload.get('source_remote_live_history_audit_risk_guard_reasons', []), limit=8)}"
+        )
+        summary_lines.append(
+            "remote-live-scope: "
+            f"{payload.get('source_remote_live_handoff_account_scope_alignment_brief') or '-'}"
+        )
+        summary_lines.append(
+            "remote-live-diagnosis: "
+            f"{payload.get('source_live_gate_blocker_remote_live_diagnosis_brief') or '-'}"
+        )
+        summary_lines.append(
+            "remote-live-clearing: "
+            f"{payload.get('source_live_gate_blocker_remote_live_takeover_clearing_brief') or '-'}"
+        )
+        summary_lines.append(
+            "remote-live-repair-queue: "
+            f"{payload.get('remote_live_takeover_repair_queue_brief') or '-'}"
+        )
+        summary_lines.append(
+            "remote-live-operator-alignment: "
+            f"{payload.get('source_live_gate_blocker_remote_live_operator_alignment_brief') or '-'}"
+        )
+        summary_lines.append(
+            "cross-market-remote-live-alignment: "
+            f"{payload.get('source_cross_market_operator_state_remote_live_operator_alignment_brief') or '-'}"
+        )
+        summary_lines.append(
+            "cross-market-remote-live-takeover-gate: "
+            f"{payload.get('source_cross_market_operator_state_remote_live_takeover_gate_brief') or '-'}"
+        )
+        summary_lines.append(
+            "cross-market-remote-live-clearing: "
+            f"{payload.get('cross_market_remote_live_takeover_clearing_brief') or '-'}"
+        )
+        summary_lines.append(
+            "cross-market-remote-live-clearing-freshness: "
+            f"{payload.get('cross_market_remote_live_takeover_clearing_source_freshness_brief') or '-'}"
+        )
+        summary_lines.append(
+            "cross-market-remote-live-slot-anomaly: "
+            f"{payload.get('cross_market_remote_live_takeover_slot_anomaly_breakdown_brief') or '-'}"
+        )
+        summary_lines.append(
+            "brooks-route: "
+            f"{payload.get('source_brooks_route_report_selected_routes_brief') or '-'}"
+            f" | head={payload.get('source_brooks_route_report_head_symbol') or '-'}"
+            f":{payload.get('source_brooks_route_report_head_strategy_id') or '-'}"
+            f":{payload.get('source_brooks_route_report_head_bridge_status') or '-'}"
+        )
+        summary_lines.append(
+            "brooks-exec-plan: "
+            f"{payload.get('source_brooks_execution_plan_head_symbol') or '-'}"
+            f":{payload.get('source_brooks_execution_plan_head_strategy_id') or '-'}"
+            f":{payload.get('source_brooks_execution_plan_head_plan_status') or '-'}"
+            f":{payload.get('source_brooks_execution_plan_head_execution_action') or '-'}"
+        )
+        summary_lines.append(
+            "brooks-review-queue: "
+            + " | ".join(
+                [
+                    payload.get("brooks_structure_review_queue_status") or "-",
+                    payload.get("brooks_structure_review_queue_brief") or "-",
+                    f"head={payload.get('brooks_structure_review_head_symbol') or '-'}:{payload.get('brooks_structure_review_head_tier') or '-'}:{payload.get('brooks_structure_review_head_plan_status') or '-'}",
+                ]
+            )
+        )
+        summary_lines.append(
+            "brooks-review-priority: "
+            + " | ".join(
+                [
+                    payload.get("brooks_structure_review_priority_status") or "-",
+                    payload.get("brooks_structure_review_priority_brief") or "-",
+                    f"head={payload.get('brooks_structure_review_head_symbol') or '-'}:{payload.get('brooks_structure_review_head_priority_tier') or '-'}:{payload.get('brooks_structure_review_head_priority_score') or 0}",
+                ]
+            )
+        )
+        summary_lines.append(
+            "brooks-operator-lane: "
+            + " | ".join(
+                [
+                    payload.get("brooks_structure_operator_status") or "-",
+                    payload.get("brooks_structure_operator_brief") or "-",
+                    f"backlog={payload.get('brooks_structure_operator_backlog_count') or 0}:{payload.get('brooks_structure_operator_backlog_brief') or '-'}",
+                ]
+            )
+        )
+        summary_lines.append(
+            "brooks-refresh: "
+            + " | ".join(
+                [
+                    payload.get("source_brooks_structure_refresh_status") or "-",
+                    payload.get("source_brooks_structure_refresh_brief") or "-",
+                    f"head={payload.get('source_brooks_structure_refresh_head_symbol') or '-'}:{payload.get('source_brooks_structure_refresh_head_action') or '-'}:{payload.get('source_brooks_structure_refresh_head_priority_score') or '-'}",
+                    f"queue={payload.get('source_brooks_structure_refresh_queue_count') or 0}",
+                ]
+            )
+        )
+        summary_lines.append(
+            "cross-market-operator: "
+            + " | ".join(
+                [
+                    payload.get("cross_market_operator_head_status") or "-",
+                    payload.get("cross_market_operator_head_brief") or "-",
+                    f"backlog={payload.get('cross_market_operator_backlog_count') or 0}:{payload.get('cross_market_operator_backlog_brief') or '-'}",
+                ]
+            )
+        )
+        summary_lines.append(
+            "cross-market-operator-lanes: "
+            + " | ".join(
+                [
+                    f"waiting={payload.get('cross_market_operator_waiting_lane_count') or 0}@{payload.get('cross_market_operator_waiting_lane_priority_total') or 0}",
+                    f"review={payload.get('cross_market_operator_review_lane_count') or 0}@{payload.get('cross_market_operator_review_lane_priority_total') or 0}",
+                    f"watch={payload.get('cross_market_operator_watch_lane_count') or 0}@{payload.get('cross_market_operator_watch_lane_priority_total') or 0}",
+                    f"blocked={payload.get('cross_market_operator_blocked_lane_count') or 0}@{payload.get('cross_market_operator_blocked_lane_priority_total') or 0}",
+                    f"repair={payload.get('cross_market_operator_repair_lane_count') or 0}@{payload.get('cross_market_operator_repair_lane_priority_total') or 0}",
+                ]
+            )
+        )
+        summary_lines.append(
+            "cross-market-operator-lane-heads: "
+            + str(payload.get("cross_market_operator_lane_heads_brief") or "-")
+        )
+        summary_lines.append(
+            "cross-market-operator-lane-order: "
+            + str(payload.get("cross_market_operator_lane_priority_order_brief") or "-")
+        )
+        summary_lines.append(
+            "cross-market-repair-head: "
+            + " | ".join(
+                [
+                    payload.get("cross_market_operator_repair_head_status") or "-",
+                    payload.get("cross_market_operator_repair_head_brief") or "-",
+                    f"backlog={payload.get('cross_market_operator_repair_backlog_count') or 0}:{payload.get('cross_market_operator_repair_backlog_brief') or '-'}",
+                ]
+            )
+        )
+        summary_lines.append(
+            "cross-market-head: "
+            + " | ".join(
+                [
+                    payload.get("cross_market_review_head_status") or "-",
+                    payload.get("cross_market_review_head_brief") or "-",
+                    f"backlog={payload.get('cross_market_review_backlog_count') or 0}:{payload.get('cross_market_review_backlog_brief') or '-'}",
+                ]
+            )
+        )
+        summary_lines.append(
+            "cross-market-review: "
+            + " | ".join(
+                [
+                    payload.get("source_cross_market_operator_state_review_backlog_status") or "-",
+                    payload.get("source_cross_market_operator_state_review_backlog_brief") or "-",
+                    f"head={payload.get('source_cross_market_operator_state_review_head_area') or '-'}:{payload.get('source_cross_market_operator_state_review_head_symbol') or '-'}:{payload.get('source_cross_market_operator_state_review_head_action') or '-'}:{payload.get('source_cross_market_operator_state_review_head_priority_score') or '-'}",
+                ]
+            )
         )
         summary_lines.append(
             f"research-embedding-quality: {payload.get('operator_research_embedding_quality_brief') or '-'}"
@@ -4654,6 +8211,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         summary_lines.append(
             f"source-refresh-pipeline-deferred: {payload.get('operator_source_refresh_pipeline_deferred_brief') or '-'}"
+        )
+        summary_lines.append(
+            f"source-refresh-pipeline-relevance: {payload.get('operator_source_refresh_pipeline_relevance_brief') or '-'}"
         )
         payload["summary_lines"] = summary_lines
         payload["summary_text"] = " | ".join(summary_lines)

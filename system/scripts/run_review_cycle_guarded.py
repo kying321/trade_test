@@ -12,12 +12,15 @@ import subprocess
 import time
 from typing import Any
 
+RUN_HALFHOUR_MUTEX_HELD_ENV = "LIE_RUN_HALFHOUR_MUTEX_HELD"
+
 
 @contextmanager
 def _run_halfhour_mutex(output_root: Path, timeout_seconds: float):
     lock_path = output_root / "state" / "run-halfhour-pulse.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = lock_path.open("a+", encoding="utf-8")
+    prev_env = os.environ.get(RUN_HALFHOUR_MUTEX_HELD_ENV)
     try:
         import fcntl
 
@@ -30,9 +33,14 @@ def _run_halfhour_mutex(output_root: Path, timeout_seconds: float):
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"run-halfhour-pulse mutex timeout: {timeout_seconds:.1f}s")
                 time.sleep(0.1)
+        os.environ[RUN_HALFHOUR_MUTEX_HELD_ENV] = "run_review_cycle_guarded"
         yield
     finally:
         try:
+            if prev_env is None:
+                os.environ.pop(RUN_HALFHOUR_MUTEX_HELD_ENV, None)
+            else:
+                os.environ[RUN_HALFHOUR_MUTEX_HELD_ENV] = prev_env
             import fcntl
 
             fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
@@ -104,9 +112,20 @@ def _parse_args() -> argparse.Namespace:
         default="review-loop",
         help="Use one-shot review or review-loop before gate/ops.",
     )
+    parser.add_argument(
+        "--fast-tests-only",
+        action="store_true",
+        help="When review-mode=review-loop, force fast tests only and skip round-one full tests.",
+    )
     parser.add_argument("--ops-window-days", type=int, default=14)
     parser.add_argument("--review-timeout-seconds", type=int, default=180)
     parser.add_argument("--gate-timeout-seconds", type=int, default=120)
+    parser.add_argument(
+        "--gate-stable-replay-mode",
+        choices=("cached", "execute"),
+        default="cached",
+        help="Stable replay mode for gate-report step.",
+    )
     parser.add_argument("--ops-timeout-seconds", type=int, default=120)
     parser.add_argument("--health-timeout-seconds", type=int, default=90)
     parser.add_argument("--skip-health-check", action="store_true", help="Skip final health-check step.")
@@ -125,9 +144,7 @@ def main() -> int:
     logs_dir.mkdir(parents=True, exist_ok=True)
     review_dir.mkdir(parents=True, exist_ok=True)
 
-    env = dict(os.environ)
-    env["PYTHONPATH"] = "src"
-    python_exec = str(env.get("PYTHON", "")).strip() or "python3"
+    python_exec = str(os.environ.get("PYTHON", "")).strip() or "python3"
 
     review_mode = str(args.review_mode).strip().lower()
     review_step_name = "review_loop" if review_mode == "review-loop" else "review"
@@ -143,6 +160,8 @@ def main() -> int:
     ]
     if review_mode == "review-loop":
         review_cmd.extend(["--max-rounds", str(max(0, int(args.max_rounds)))])
+        if bool(args.fast_tests_only):
+            review_cmd.append("--fast-tests-only")
 
     steps = [
         (
@@ -161,6 +180,8 @@ def main() -> int:
                 "gate-report",
                 "--date",
                 as_of.isoformat(),
+                "--stable-replay-mode",
+                str(args.gate_stable_replay_mode),
             ],
             int(args.gate_timeout_seconds),
         ),
@@ -203,6 +224,9 @@ def main() -> int:
     started_at = datetime.now().isoformat()
     lock_cm = nullcontext() if bool(args.skip_mutex) else _run_halfhour_mutex(output_root=output_root, timeout_seconds=float(args.mutex_timeout_seconds))
     with lock_cm:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = "src"
+        env["PYTHON"] = python_exec
         for name, cmd, timeout_s in steps:
             step_out = _run_step(
                 name=name,

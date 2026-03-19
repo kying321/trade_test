@@ -7,7 +7,7 @@ Usage:
   system/scripts/newapi_model_probe.sh [options]
 
 Options:
-  --base-url URL          API base URL (default: https://x666.me)
+  --base-url URL          API base URL (default: http://127.0.0.1:8317)
   --api-key-env NAME      API key env name (default: NEWAPI_API_KEY; fallback: X666_API_KEY)
   --models CSV            Requested model list (default: gpt-5.4,gemini-3.1-pro-preview-bs)
   --required-models CSV   Required models for gate (default: gpt-5.4)
@@ -31,7 +31,7 @@ Notes:
 USAGE
 }
 
-base_url="https://x666.me"
+base_url="http://127.0.0.1:8317"
 api_key_env="NEWAPI_API_KEY"
 models_csv="gpt-5.4,gemini-3.1-pro-preview-bs"
 required_models_csv="gpt-5.4"

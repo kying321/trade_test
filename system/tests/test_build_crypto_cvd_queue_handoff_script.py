@@ -159,3 +159,149 @@ def test_build_crypto_cvd_queue_handoff_reports_missing_queue_profile(tmp_path: 
     payload = json.loads(proc.stdout)
     assert payload["ok"] is False
     assert payload["status"] == "queue_profile_missing"
+
+
+def test_build_crypto_cvd_queue_handoff_falls_back_to_hot_universe_research_profile(tmp_path: Path) -> None:
+    review_dir = tmp_path / "review"
+    semantic_path = review_dir / "20260310T095206Z_crypto_cvd_semantic_snapshot.json"
+    hot_path = review_dir / "20260312T054639Z_hot_universe_research.json"
+    _write_json(
+        hot_path,
+        {
+            "ok": True,
+            "status": "ok",
+            "crypto_cvd_queue_profile": {
+                "priority_batches": ["crypto_beta"],
+                "overall_takeaway": "Use micro queue as a secondary filter.",
+                "batch_profiles": [
+                    {
+                        "batch": "crypto_beta",
+                        "status_label": "pilot_only",
+                        "queue_mode": "trend_confirmation",
+                        "trust_requirement": "dual_leader_alignment",
+                        "dominant_regime": "uptrend",
+                        "leader_symbols": ["BNBUSDT"],
+                        "preferred_contexts": ["continuation"],
+                        "veto_biases": ["effort_result_divergence"],
+                        "cvd_eligible_symbols": ["BNBUSDT"],
+                    }
+                ],
+            },
+        },
+    )
+    _write_json(
+        semantic_path,
+        {
+            "action": "build_crypto_cvd_semantic_snapshot",
+            "ok": True,
+            "status": "ok",
+            "source_status": "ok",
+            "takeaway": "BNB is aligned for trend confirmation.",
+            "symbols": [
+                {
+                    "symbol": "BNBUSDT",
+                    "classification": "trend_confirmation_watch",
+                    "cvd_context_mode": "continuation",
+                    "cvd_trust_tier_hint": "single_exchange_ok",
+                    "cvd_veto_hint": "",
+                    "active_reasons": [],
+                }
+            ],
+        },
+    )
+
+    proc = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT_PATH),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            "2026-03-10T18:00:00+08:00",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["queue_source_artifact"] == str(hot_path)
+    assert payload["ready_now_batches"] == ["crypto_beta"]
+    assert payload["next_focus_batch"] == "crypto_beta"
+    assert payload["next_focus_action"] == "inspect_first"
+
+
+def test_build_crypto_cvd_queue_handoff_defers_when_local_cvd_is_stale(tmp_path: Path) -> None:
+    review_dir = tmp_path / "review"
+    queue_path = review_dir / "20260310T174352Z_crypto_cvd_queue_profile.json"
+    semantic_path = review_dir / "20260310T095206Z_crypto_cvd_semantic_snapshot.json"
+    _write_json(
+        queue_path,
+        {
+            "action": "derive_crypto_cvd_queue_profile",
+            "status": "derived",
+            "crypto_cvd_queue_profile": {
+                "priority_batches": ["crypto_hot"],
+                "overall_takeaway": "Use CVD-lite as a queue filter.",
+                "batch_profiles": [
+                    {
+                        "batch": "crypto_hot",
+                        "status_label": "pilot_only",
+                        "queue_mode": "trend_confirmation",
+                        "trust_requirement": "dual_leader_alignment",
+                        "dominant_regime": "uptrend",
+                        "leader_symbols": ["BTCUSDT"],
+                        "preferred_contexts": ["continuation"],
+                        "veto_biases": ["effort_result_divergence"],
+                        "cvd_eligible_symbols": ["BTCUSDT"],
+                    }
+                ],
+            },
+        },
+    )
+    _write_json(
+        semantic_path,
+        {
+            "action": "build_crypto_cvd_semantic_snapshot",
+            "ok": True,
+            "status": "ok",
+            "source_status": "ok",
+            "takeaway": "Current CVD-lite snapshot is stale near the key level.",
+            "symbols": [
+                {
+                    "symbol": "BTCUSDT",
+                    "classification": "watch_only",
+                    "cvd_context_mode": "continuation",
+                    "cvd_trust_tier_hint": "single_exchange_ok",
+                    "cvd_veto_hint": "",
+                    "cvd_locality_status": "outside_local_window",
+                    "cvd_drift_risk": True,
+                    "cvd_attack_side": "buyers",
+                    "active_reasons": ["cvd_drift_risk"],
+                }
+            ],
+        },
+    )
+
+    proc = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT_PATH),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            "2026-03-10T18:00:00+08:00",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["operator_status"] == "queue-local-cvd-drift-risk"
+    assert payload["drift_risk_batches"] == ["crypto_hot"]
+    assert payload["runtime_queue"][0]["runtime_status"] == "local_window_drift_risk"
+    assert payload["runtime_queue"][0]["queue_action"] == "defer_until_local_cvd_recovers"

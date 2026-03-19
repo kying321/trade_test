@@ -311,7 +311,7 @@ def main() -> int:
     lab_state_path = lab_state_dir / "spot_paper_state.json"
     lab_ack_path = lab_state_dir / "paper_consecutive_loss_ack.json"
     lab_checksum_path = lab_state_dir / "paper_consecutive_loss_ack_checksum.json"
-    lab_pulse_lock_path = lab_state_dir / "run_halfhour_pulse.lock"
+    lab_pulse_lock_path = lab_state_dir / "run-halfhour-pulse.lock"
     lab_ledger_path = lab_log_dir / "paper_execution_ledger.jsonl"
     lab_archive_manifest_path = lab_archive_dir / "manifest.jsonl"
 

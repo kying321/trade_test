@@ -33,16 +33,42 @@ shortline:
   execution_timeframe: "15m"
   structure_engine: "fixed_range_volume_profile_proxy"
   structure_reference: "vpvr_concepts_deterministic_proxy"
+  market_state_engine: "bias_only_vs_setup_ready"
+  default_market_state: "Bias_Only"
+  setup_ready_state: "Setup_Ready"
   profile_lookback_bars: 120
   profile_value_area_pct: 0.70
   location_priority: ["HVN", "POC"]
   avoid_location: "LVN"
+  no_trade_zone: "range_mid"
+  no_trade_rule: "no_sweep_no_mss_no_cvd_no_trade"
   flow_confirmation_engine: "cvd_lite"
-  flow_confirmation_role: "confirm_and_veto_only"
+  flow_confirmation_role: "local_key_level_confirm_and_veto_only"
   flow_confirmation_half_life_seconds: 180
+  cvd_key_level_only: true
+  cvd_local_window_minutes: 15
+  cvd_reference_max_age_minutes: 15
+  cvd_drift_guard_enabled: true
+  cvd_attack_confirmation_required: true
+  cvd_attack_alignment_min_abs: 0.05
+  cvd_drift_rule: "ignore_long_horizon_cvd_drift_and_only_compare_recent_local_swings"
+  cvd_attack_rule: "confirm_who_is_actively_attacking_near_key_level_before_entry"
+  micro_structure_engine: "ict_sweep_mss"
+  micro_structure_timeframes: ["1m", "5m"]
+  liquidity_sweep_required: true
+  mss_required: true
+  entry_retest_priority: ["FVG", "OB", "Breaker"]
+  session_liquidity_map: ["asia_high_low", "london_high_low", "prior_day_high_low", "equal_highs_lows"]
+  execution_style: "right_side_only"
+  holding_window_minutes:
+    min: 15
+    max: 180
   trigger_stack:
     - "4h_profile_location"
+    - "liquidity_sweep"
+    - "1m_5m_mss_or_choch"
     - "15m_cvd_divergence_or_confirmation"
+    - "fvg_ob_breaker_retest"
     - "15m_reversal_or_breakout_candle"
   supported_symbols: ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
   caution_symbols: ["PAXGUSDT"]
@@ -87,8 +113,8 @@ validation:
   micro_time_sync_min_samples: 1
   system_time_sync_probe_enabled: true
   system_time_sync_hard_fuse_enabled: true
-  system_time_sync_primary_source: "time.google.com"
-  system_time_sync_secondary_source: "time.cloudflare.com"
+  system_time_sync_primary_source: "ntp.aliyun.com"
+  system_time_sync_secondary_source: "pool.ntp.org"
   system_time_sync_probe_timeout_seconds: 5.0
   system_time_sync_max_offset_ms: 5
   system_time_sync_max_rtt_ms: 120

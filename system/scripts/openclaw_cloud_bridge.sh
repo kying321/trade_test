@@ -58,14 +58,14 @@ Actions:
   apply-local-pi-recovery-step  Execute or preview the recommended local paper recovery step derived from consecutive-loss guardrail status.
   run-local-pi-recovery-flow  Execute a bounded multi-step local paper recovery flow (backfill -> ack -> full-cycle), stopping at safe boundaries.
   ack-local-pi-consecutive-loss-guardrail  Dry-run or write a manual ack for the local paper consecutive-loss guardrail.
-  ensure-local-openclaw-runtime-model  Ensure local ~/.openclaw/openclaw.json can resolve openai/gpt-5.4 through the 9999 proxy.
-  ensure-remote-openclaw-runtime-model Ensure remote ~/.openclaw/openclaw.json can resolve openai/gpt-5.4 through the 9999 proxy.
+  ensure-local-openclaw-runtime-model  Ensure local ~/.openclaw/openclaw.json can resolve openai/gpt-5.4 through the 8317 CLIProxyAPI proxy.
+  ensure-remote-openclaw-runtime-model Ensure remote ~/.openclaw/openclaw.json can resolve openai/gpt-5.4 through the 8317 CLIProxyAPI proxy.
   live-fast-skill         Run fast order+risk skill (plan + guarded live order + optional auto-close).
   cut-local               Disable local OpenClaw launchd services.
   probe-cloud             Probe cloud host/project availability.
   compare                 Compare local/remote git heads.
   backup-remote           Create remote tgz backup snapshot.
-  tunnel-up               Start SSH local forwarding (9999/8000/5173).
+  tunnel-up               Start SSH local forwarding (8000/5173).
   tunnel-probe            Probe local forwarded ports.
   tunnel-down             Close forwarding tunnel.
   sync-dry-run            Rsync preview (delete-aware, no mutation).
@@ -95,9 +95,10 @@ Environment:
   LIVE_TAKEOVER_RATE_LIMIT_PER_MINUTE default: 10
   LIVE_TAKEOVER_TIMEOUT_MS           default: 5000
   LIVE_TAKEOVER_TRADE_WINDOW_HOURS   default: 24
-  LIVE_TAKEOVER_MARKET               default: spot (spot|futures_usdm)
+  LIVE_TAKEOVER_MARKET               default: spot (spot|futures_usdm|portfolio_margin_um)
   LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK default: true
   LIVE_TAKEOVER_FORWARD_LOCAL_CREDS  default: false (forward local BINANCE_API_KEY/BINANCE_SECRET to remote run env)
+  LIVE_TAKEOVER_PROBE_CAPTURE_MODE   default: direct (direct|remote_capture|remote_async)
   LIVE_FAST_SKILL_SYMBOLS            default: BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XAUUSD
   LIVE_FAST_SKILL_MAX_AGE_DAYS       default: 14
   LIVE_FAST_SKILL_MIN_CONFIDENCE     optional override; default inherits config.yaml thresholds.signal_confidence_min
@@ -214,10 +215,10 @@ if [[ -n "${system_root}" && ! -d "${system_root}" ]]; then
 fi
 
 if [[ -z "${system_root}" ]]; then
-  if [[ -n "${repo_root}" && -d "${repo_root}/system" ]]; then
-    system_root="${repo_root}/system"
-  elif [[ -d "${script_system_root}/src" && -d "${script_system_root}/scripts" ]]; then
+  if [[ -d "${script_system_root}/src" && -d "${script_system_root}/scripts" ]]; then
     system_root="${script_system_root}"
+  elif [[ -n "${repo_root}" && -d "${repo_root}/system" ]]; then
+    system_root="${repo_root}/system"
   else
     echo "ERROR: unable to resolve system root. Set FENLIE_SYSTEM_ROOT explicitly." >&2
     exit 2
@@ -252,8 +253,10 @@ live_takeover_rate_limit_per_minute="${LIVE_TAKEOVER_RATE_LIMIT_PER_MINUTE:-10}"
 live_takeover_timeout_ms="${LIVE_TAKEOVER_TIMEOUT_MS:-5000}"
 live_takeover_trade_window_hours="${LIVE_TAKEOVER_TRADE_WINDOW_HOURS:-24}"
 live_takeover_market="$(printf '%s' "${LIVE_TAKEOVER_MARKET:-spot}" | tr '[:upper:]' '[:lower:]')"
+openclaw_orderflow_executor_mode="$(printf '%s' "${OPENCLAW_ORDERFLOW_EXECUTOR_MODE:-shadow_guarded}" | tr '[:upper:]' '[:lower:]')"
 live_takeover_allow_daemon_env_fallback="${LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK:-true}"
 live_takeover_forward_local_creds="${LIVE_TAKEOVER_FORWARD_LOCAL_CREDS:-false}"
+live_takeover_probe_capture_mode="$(printf '%s' "${LIVE_TAKEOVER_PROBE_CAPTURE_MODE:-direct}" | tr '[:upper:]' '[:lower:]')"
 live_fast_skill_symbols="${LIVE_FAST_SKILL_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XAUUSD}"
 live_fast_skill_max_age_days="${LIVE_FAST_SKILL_MAX_AGE_DAYS:-14}"
 live_fast_skill_min_confidence="${LIVE_FAST_SKILL_MIN_CONFIDENCE:-}"
@@ -340,8 +343,13 @@ local_pi_recovery_auto_rollback_write="${LOCAL_PI_RECOVERY_AUTO_ROLLBACK_WRITE:-
 local_pi_recovery_artifacts_enabled="${LOCAL_PI_RECOVERY_ARTIFACTS_ENABLED:-true}"
 local_pi_recovery_artifact_dir="${LOCAL_PI_RECOVERY_ARTIFACT_DIR:-${local_pi_workspace_system_root}/output/review}"
 
-if [[ "${live_takeover_market}" != "spot" && "${live_takeover_market}" != "futures_usdm" ]]; then
-  echo "ERROR: LIVE_TAKEOVER_MARKET must be one of: spot, futures_usdm." >&2
+if [[ "${live_takeover_market}" != "spot" && "${live_takeover_market}" != "futures_usdm" && "${live_takeover_market}" != "portfolio_margin_um" ]]; then
+  echo "ERROR: LIVE_TAKEOVER_MARKET must be one of: spot, futures_usdm, portfolio_margin_um." >&2
+  exit 2
+fi
+
+if [[ "${live_takeover_probe_capture_mode}" != "direct" && "${live_takeover_probe_capture_mode}" != "remote_capture" && "${live_takeover_probe_capture_mode}" != "remote_async" ]]; then
+  echo "ERROR: LIVE_TAKEOVER_PROBE_CAPTURE_MODE must be one of: direct, remote_capture, remote_async." >&2
   exit 2
 fi
 
@@ -939,14 +947,12 @@ action_tunnel_up() {
   if [[ -n "${cloud_pass}" ]] && command -v sshpass >/dev/null 2>&1; then
     SSHPASS="${cloud_pass}" sshpass -e ssh "${opts[@]}" \
       -fN -M -S "${tunnel_socket}" \
-      -L 127.0.0.1:19999:127.0.0.1:9999 \
       -L 127.0.0.1:18000:127.0.0.1:8000 \
       -L 127.0.0.1:15173:127.0.0.1:5173 \
       "${cloud_user}@${cloud_host}"
   else
     ssh "${opts[@]}" \
       -fN -M -S "${tunnel_socket}" \
-      -L 127.0.0.1:19999:127.0.0.1:9999 \
       -L 127.0.0.1:18000:127.0.0.1:8000 \
       -L 127.0.0.1:15173:127.0.0.1:5173 \
       "${cloud_user}@${cloud_host}"
@@ -977,7 +983,6 @@ PY
 }
 
 action_tunnel_probe() {
-  probe_local_port "adaptor_9999" 19999
   probe_local_port "api_8000" 18000
   probe_local_port "dashboard_5173" 15173
 }
@@ -1096,6 +1101,332 @@ run_guarded_exec_remote() {
   run_live_takeover_remote \
     "guarded-exec-${guard_mode}" \
     "set -e; wd=\$(${remote_workdir_expr}); cd \"\$wd\"; ${cred_env_arg}PYTHONPATH=src python3 scripts/guarded_exec.py ${date_arg} --mode ${guard_mode} --market ${live_takeover_market} --canary-quote-usdt ${live_takeover_canary_usdt} --rate-limit-per-minute ${live_takeover_rate_limit_per_minute} --timeout-ms ${live_takeover_timeout_ms} --max-drawdown ${live_takeover_max_drawdown} --trade-window-hours ${live_takeover_trade_window_hours} --risk-fuse-max-age-seconds ${live_risk_guard_ticket_freshness_seconds} --panic-cooldown-seconds ${live_risk_guard_panic_cooldown_seconds} --max-daily-loss-ratio ${live_risk_guard_max_daily_loss_ratio} --max-open-exposure-ratio ${live_risk_guard_max_open_exposure_ratio} --refresh-tickets --ticket-symbols ${live_fast_skill_symbols} --ticket-max-age-days ${live_fast_skill_max_age_days} ${min_conf_arg} ${min_conv_arg} --idempotency-ttl-seconds ${idempotency_ttl_seconds} --idempotency-max-entries ${idempotency_max_entries} ${allow_live_arg} ${daemon_env_arg}"
+}
+
+run_guarded_exec_remote_capture() {
+  local guard_mode="$1"
+  local allow_live_flag="$2"
+  local cred_env_arg="$3"
+  local daemon_env_arg="$4"
+  local date_arg="$5"
+  local allow_live_arg min_conf_arg min_conv_arg
+  allow_live_arg=""
+  min_conf_arg=""
+  min_conv_arg=""
+  if [[ "${allow_live_flag}" == "true" ]]; then
+    allow_live_arg="--allow-live-order"
+  fi
+  if [[ -n "${live_fast_skill_min_confidence}" ]]; then
+    min_conf_arg="--ticket-min-confidence ${live_fast_skill_min_confidence}"
+  fi
+  if [[ -n "${live_fast_skill_min_convexity}" ]]; then
+    min_conv_arg="--ticket-min-convexity ${live_fast_skill_min_convexity}"
+  fi
+  run_live_takeover_remote \
+    "guarded-exec-${guard_mode}-capture" \
+    "set -e; wd=\$(${remote_workdir_expr}); cd \"\$wd\"; ts=\$(date -u +%Y%m%dT%H%M%SZ); stdout_path=\"output/review/\${ts}_guarded_exec_${guard_mode}_capture_stdout.json\"; stderr_path=\"output/review/\${ts}_guarded_exec_${guard_mode}_capture_stderr.log\"; set +e; ${cred_env_arg}PYTHONPATH=src python3 scripts/guarded_exec.py ${date_arg} --mode ${guard_mode} --market ${live_takeover_market} --canary-quote-usdt ${live_takeover_canary_usdt} --rate-limit-per-minute ${live_takeover_rate_limit_per_minute} --timeout-ms ${live_takeover_timeout_ms} --max-drawdown ${live_takeover_max_drawdown} --trade-window-hours ${live_takeover_trade_window_hours} --risk-fuse-max-age-seconds ${live_risk_guard_ticket_freshness_seconds} --panic-cooldown-seconds ${live_risk_guard_panic_cooldown_seconds} --max-daily-loss-ratio ${live_risk_guard_max_daily_loss_ratio} --max-open-exposure-ratio ${live_risk_guard_max_open_exposure_ratio} --refresh-tickets --ticket-symbols ${live_fast_skill_symbols} --ticket-max-age-days ${live_fast_skill_max_age_days} ${min_conf_arg} ${min_conv_arg} --idempotency-ttl-seconds ${idempotency_ttl_seconds} --idempotency-max-entries ${idempotency_max_entries} ${allow_live_arg} ${daemon_env_arg} >\"\${stdout_path}\" 2>\"\${stderr_path}\"; guard_rc=\$?; set -e; python3 - \"\${stdout_path}\" \"\${stderr_path}\" \"\${guard_rc}\" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+stdout_path = Path(sys.argv[1])
+stderr_path = Path(sys.argv[2])
+guard_rc = int(sys.argv[3])
+
+def parse_payload(text: str):
+    clean = str(text or '').strip()
+    if not clean:
+        return {}
+    candidates = [clean]
+    first = clean.find('{')
+    last = clean.rfind('}')
+    if 0 <= first < last:
+        candidates.append(clean[first:last + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
+    for line in reversed([x.strip() for x in clean.splitlines() if x.strip()]):
+        try:
+            payload = json.loads(line)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
+    return {'raw': clean}
+
+stdout_text = stdout_path.read_text(encoding='utf-8') if stdout_path.exists() else ''
+stderr_text = stderr_path.read_text(encoding='utf-8') if stderr_path.exists() else ''
+payload = parse_payload(stdout_text)
+stderr_lines = [line for line in stderr_text.splitlines() if line.strip()]
+out = {
+    'action': 'guarded-exec-capture',
+    'capture_mode': 'remote_stdout_capture',
+    'guard_returncode': guard_rc,
+    'stdout_path': str(stdout_path),
+    'stderr_path': str(stderr_path),
+    'stdout_size_bytes': len(stdout_text.encode('utf-8')),
+    'stderr_size_bytes': len(stderr_text.encode('utf-8')),
+    'stderr_tail': stderr_lines[-10:],
+    'payload': payload if isinstance(payload, dict) else {},
+}
+print(json.dumps(out, ensure_ascii=False, indent=2))
+PY"
+}
+
+run_guarded_exec_remote_capture_async() {
+  local guard_mode="$1"
+  local allow_live_flag="$2"
+  local cred_env_arg="$3"
+  local daemon_env_arg="$4"
+  local date_arg="$5"
+  local allow_live_arg min_conf_arg min_conv_arg start_cmd start_json state_path deadline poll_cmd poll_json
+  allow_live_arg=""
+  min_conf_arg=""
+  min_conv_arg=""
+  if [[ "${allow_live_flag}" == "true" ]]; then
+    allow_live_arg="--allow-live-order"
+  fi
+  if [[ -n "${live_fast_skill_min_confidence}" ]]; then
+    min_conf_arg="--ticket-min-confidence ${live_fast_skill_min_confidence}"
+  fi
+  if [[ -n "${live_fast_skill_min_convexity}" ]]; then
+    min_conv_arg="--ticket-min-convexity ${live_fast_skill_min_convexity}"
+  fi
+
+  start_cmd="$(cat <<EOF
+set -e
+wd=\$(${remote_workdir_expr})
+cd "\$wd"
+python3 - '${guard_mode}' '${live_takeover_market}' '${live_takeover_trade_window_hours}' <<'PY'
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+guard_mode = str(sys.argv[1]).strip()
+market = str(sys.argv[2]).strip()
+window_hours = str(sys.argv[3]).strip()
+wd = Path.cwd()
+state_dir = wd / 'output' / 'state'
+review_dir = wd / 'output' / 'review'
+state_dir.mkdir(parents=True, exist_ok=True)
+review_dir.mkdir(parents=True, exist_ok=True)
+state_path = state_dir / f'live_takeover_probe_capture_{guard_mode}_{market}_{window_hours}.json'
+
+def read_state(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+def write_state(path: Path, payload: dict) -> None:
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\\n', encoding='utf-8')
+    os.replace(tmp, path)
+
+existing = read_state(state_path)
+pid = int(existing.get('pid', 0) or 0)
+alive = False
+if pid > 0:
+    try:
+        os.kill(pid, 0)
+        alive = True
+    except OSError:
+        alive = False
+
+if alive:
+    out = {
+        'action': 'guarded-exec-capture-async',
+        'status': 'running',
+        'started': False,
+        'reused': True,
+        'pid': pid,
+        'state_path': str(state_path),
+        'stdout_path': str(existing.get('stdout_path', '')),
+        'stderr_path': str(existing.get('stderr_path', '')),
+        'rc_path': str(existing.get('rc_path', '')),
+        'capture_mode': 'remote_async_capture',
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    raise SystemExit(0)
+
+ts = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+stdout_path = review_dir / f'{ts}_guarded_exec_{guard_mode}_capture_stdout.json'
+stderr_path = review_dir / f'{ts}_guarded_exec_{guard_mode}_capture_stderr.log'
+rc_path = review_dir / f'{ts}_guarded_exec_{guard_mode}_capture_rc.txt'
+cmd = """${cred_env_arg}PYTHONPATH=src python3 scripts/guarded_exec.py ${date_arg} --mode ${guard_mode} --market ${live_takeover_market} --canary-quote-usdt ${live_takeover_canary_usdt} --rate-limit-per-minute ${live_takeover_rate_limit_per_minute} --timeout-ms ${live_takeover_timeout_ms} --max-drawdown ${live_takeover_max_drawdown} --trade-window-hours ${live_takeover_trade_window_hours} --risk-fuse-max-age-seconds ${live_risk_guard_ticket_freshness_seconds} --panic-cooldown-seconds ${live_risk_guard_panic_cooldown_seconds} --max-daily-loss-ratio ${live_risk_guard_max_daily_loss_ratio} --max-open-exposure-ratio ${live_risk_guard_max_open_exposure_ratio} --refresh-tickets --ticket-symbols ${live_fast_skill_symbols} --ticket-max-age-days ${live_fast_skill_max_age_days} ${min_conf_arg} ${min_conv_arg} --idempotency-ttl-seconds ${idempotency_ttl_seconds} --idempotency-max-entries ${idempotency_max_entries} ${allow_live_arg} ${daemon_env_arg}"""
+wrapped = f'{cmd} >"{stdout_path}" 2>"{stderr_path}"; rc=\$?; printf "%s" "\$rc" >"{rc_path}"'
+child = subprocess.Popen(
+    ['bash', '-lc', wrapped],
+    cwd=str(wd),
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    start_new_session=True,
+)
+payload = {
+    'action': 'guarded-exec-capture-async',
+    'status': 'started',
+    'started': True,
+    'reused': False,
+    'pid': int(child.pid),
+    'state_path': str(state_path),
+    'stdout_path': str(stdout_path),
+    'stderr_path': str(stderr_path),
+    'rc_path': str(rc_path),
+    'capture_mode': 'remote_async_capture',
+    'market': market,
+    'trade_window_hours': int(window_hours or 0),
+}
+write_state(state_path, payload)
+print(json.dumps(payload, ensure_ascii=False, indent=2))
+PY
+EOF
+)"
+  start_json="$(ssh_exec "${start_cmd}")"
+  state_path="$(python3 - "${start_json}" <<'PY'
+import json
+import sys
+data = json.loads(sys.argv[1])
+print(str(data.get('state_path', '')).strip())
+PY
+)"
+  if [[ -z "${state_path}" ]]; then
+    echo "${start_json}"
+    return 2
+  fi
+
+  deadline=$(( $(date +%s) + 300 ))
+  while (( $(date +%s) <= deadline )); do
+    poll_cmd="$(cat <<EOF
+set -e
+wd=\$(${remote_workdir_expr})
+cd "\$wd"
+python3 - '${state_path}' <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+
+def parse_payload(text: str):
+    clean = str(text or '').strip()
+    if not clean:
+        return {}
+    candidates = [clean]
+    first = clean.find('{')
+    last = clean.rfind('}')
+    if 0 <= first < last:
+        candidates.append(clean[first:last + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
+    for line in reversed([x.strip() for x in clean.splitlines() if x.strip()]):
+        try:
+            payload = json.loads(line)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
+    return {'raw': clean}
+
+if not state_path.exists():
+    print(json.dumps({'action': 'guarded-exec-capture-async', 'status': 'missing_state', 'finished': True}, ensure_ascii=False, indent=2))
+    raise SystemExit(0)
+
+state = json.loads(state_path.read_text(encoding='utf-8'))
+pid = int(state.get('pid', 0) or 0)
+alive = False
+if pid > 0:
+    try:
+        os.kill(pid, 0)
+        alive = True
+    except OSError:
+        alive = False
+
+stdout_path = Path(str(state.get('stdout_path', '')).strip())
+stderr_path = Path(str(state.get('stderr_path', '')).strip())
+rc_path = Path(str(state.get('rc_path', '')).strip())
+stdout_text = stdout_path.read_text(encoding='utf-8', errors='replace') if stdout_path.exists() else ''
+stderr_text = stderr_path.read_text(encoding='utf-8', errors='replace') if stderr_path.exists() else ''
+stderr_lines = [line for line in stderr_text.splitlines() if line.strip()]
+guard_returncode = None
+if rc_path.exists():
+    try:
+        guard_returncode = int(rc_path.read_text(encoding='utf-8', errors='replace').strip() or '0')
+    except Exception:
+        guard_returncode = None
+
+out = {
+    'action': 'guarded-exec-capture-async',
+    'status': 'running' if alive else 'finished',
+    'finished': not bool(alive),
+    'alive': bool(alive),
+    'capture_mode': 'remote_async_capture',
+    'pid': pid,
+    'state_path': str(state_path),
+    'stdout_path': str(stdout_path),
+    'stderr_path': str(stderr_path),
+    'rc_path': str(rc_path),
+    'stdout_size_bytes': len(stdout_text.encode('utf-8')),
+    'stderr_size_bytes': len(stderr_text.encode('utf-8')),
+    'stderr_tail': stderr_lines[-10:],
+}
+if guard_returncode is not None:
+    out['guard_returncode'] = int(guard_returncode)
+if not alive:
+    payload = parse_payload(stdout_text)
+    out['payload'] = payload if isinstance(payload, dict) else {}
+print(json.dumps(out, ensure_ascii=False, indent=2))
+PY
+EOF
+)"
+    poll_json="$(ssh_exec "${poll_cmd}")"
+    if python3 - "${poll_json}" <<'PY'
+import json
+import sys
+data = json.loads(sys.argv[1])
+raise SystemExit(0 if bool(data.get('finished', False)) else 1)
+PY
+    then
+      echo "${poll_json}"
+      return 0
+    fi
+    sleep 5
+  done
+  python3 - "${start_json}" "${poll_json:-{}}" <<'PY'
+import json
+import sys
+start = json.loads(sys.argv[1]) if len(sys.argv) > 1 and str(sys.argv[1]).strip() else {}
+poll = json.loads(sys.argv[2]) if len(sys.argv) > 2 and str(sys.argv[2]).strip() else {}
+out = {
+    'action': 'guarded-exec-capture-async',
+    'status': 'running_timeout',
+    'finished': False,
+    'capture_mode': 'remote_async_capture',
+    'pid': int(start.get('pid', 0) or 0),
+    'state_path': str(start.get('state_path', '')),
+    'stdout_path': str(start.get('stdout_path', '')),
+    'stderr_path': str(start.get('stderr_path', '')),
+    'rc_path': str(start.get('rc_path', '')),
+    'poll': poll,
+}
+print(json.dumps(out, ensure_ascii=False, indent=2))
+PY
 }
 
 action_live_risk_guard() {
@@ -1505,6 +1836,21 @@ out.update(
             if str(x).strip()
         ],
         'live_gate': payload.get('live_gate', {}) if isinstance(payload.get('live_gate', {}), dict) else {},
+        'live_runtime_health': (
+            payload.get('live_runtime_health', {})
+            if isinstance(payload.get('live_runtime_health', {}), dict)
+            else {}
+        ),
+        'live_runtime_replay': (
+            payload.get('live_runtime_replay', {})
+            if isinstance(payload.get('live_runtime_replay', {}), dict)
+            else {}
+        ),
+        'live_slot_anomaly': (
+            payload.get('slot_anomaly', {})
+            if isinstance(payload.get('slot_anomaly', {}), dict)
+            else {}
+        ),
         'state_stability_live': (
             payload.get('state_stability_live', {})
             if isinstance(payload.get('state_stability_live', {}), dict)
@@ -1868,7 +2214,7 @@ action_sync_local_pi_workspace() {
     --target-root "${local_pi_workspace_system_root}"
     --backup-keep "${local_pi_workspace_backup_keep}"
     --backup-max-age-hours "${local_pi_workspace_backup_max_age_hours}"
-    --pulse-lock-path "${local_pi_workspace_system_root}/output/state/run_halfhour_pulse.lock"
+    --pulse-lock-path "${local_pi_workspace_system_root}/output/state/run-halfhour-pulse.lock"
   )
   if is_true "${local_pi_workspace_dry_run}"; then
     cmd+=(--dry-run)
@@ -1889,7 +2235,7 @@ action_publish_local_pi_runtime_scripts() {
     --output-root "${local_pi_workspace_system_root}/output"
     --backup-keep "${local_pi_runtime_scripts_backup_keep}"
     --backup-max-age-hours "${local_pi_runtime_scripts_backup_max_age_hours}"
-    --pulse-lock-path "${local_pi_workspace_system_root}/output/state/run_halfhour_pulse.lock"
+    --pulse-lock-path "${local_pi_workspace_system_root}/output/state/run-halfhour-pulse.lock"
   )
   if is_true "${local_pi_runtime_scripts_dry_run}"; then
     cmd+=(--dry-run)
@@ -2160,7 +2506,7 @@ action_snapshot_local_pi_recovery_state() {
     --checkpoint-dir "${local_pi_recovery_checkpoint_dir}"
     --checkpoint-keep "${local_pi_recovery_checkpoint_keep}"
     --checkpoint-max-age-hours "${local_pi_recovery_checkpoint_max_age_hours}"
-    --pulse-lock-path "${local_pi_workspace_system_root}/output/state/run_halfhour_pulse.lock"
+    --pulse-lock-path "${local_pi_workspace_system_root}/output/state/run-halfhour-pulse.lock"
   )
   if [[ -n "${local_pi_recovery_checkpoint_note}" ]]; then
     cmd+=(--note "${local_pi_recovery_checkpoint_note}")
@@ -2189,7 +2535,7 @@ PY
     "${system_root}/scripts/restore_local_pi_recovery_state.py"
     --workspace-system-root "${local_pi_workspace_system_root}"
     --checkpoint "${local_pi_recovery_restore_checkpoint}"
-    --pulse-lock-path "${local_pi_workspace_system_root}/output/state/run_halfhour_pulse.lock"
+    --pulse-lock-path "${local_pi_workspace_system_root}/output/state/run-halfhour-pulse.lock"
   )
   if [[ -n "${local_pi_recovery_restore_expected_state_fingerprint}" ]]; then
     cmd+=(--expected-current-state-fingerprint "${local_pi_recovery_restore_expected_state_fingerprint}")
@@ -2249,7 +2595,7 @@ action_ack_local_pi_consecutive_loss_guardrail() {
   script_path="${local_pi_workspace_system_root}/scripts/ack_paper_consecutive_loss_guardrail.py"
   ack_path="${local_pi_workspace_system_root}/output/state/paper_consecutive_loss_ack.json"
   checksum_path="${local_pi_workspace_system_root}/output/state/paper_consecutive_loss_ack_checksum.json"
-  pulse_lock_path="${local_pi_workspace_system_root}/output/state/run_halfhour_pulse.lock"
+  pulse_lock_path="${local_pi_workspace_system_root}/output/state/run-halfhour-pulse.lock"
   expected_state_fingerprint="${LOCAL_PI_EXPECTED_STATE_FINGERPRINT:-}"
 
   if [[ ! -r "${script_path}" ]]; then
@@ -2422,9 +2768,12 @@ PY
 
 action_remote_live_handoff() {
   local script_path
-  local tmp_ready tmp_daemon tmp_ops tmp_journal tmp_security
-  local rc_ready rc_daemon rc_ops rc_journal rc_security
+  local tmp_ready_spot tmp_ready_portfolio tmp_daemon tmp_ops tmp_journal tmp_security
+  local rc_ready_spot rc_ready_portfolio rc_daemon rc_ops rc_journal rc_security
   local latest_noaf_probe
+  local original_live_takeover_market
+  local stamp
+  local ready_spot_artifact ready_portfolio_artifact daemon_artifact ops_artifact journal_artifact security_artifact context_artifact
   local -a cmd
 
   script_path="${system_root}/scripts/build_remote_live_handoff.py"
@@ -2443,15 +2792,106 @@ PY
     return 4
   fi
 
-  tmp_ready="$(mktemp)"
+  original_live_takeover_market="${live_takeover_market}"
+  stamp="$(command python3 - <<'PY'
+import datetime as dt
+print(dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
+PY
+)"
+  tmp_ready_spot="$(mktemp)"
+  tmp_ready_portfolio="$(mktemp)"
   tmp_daemon="$(mktemp)"
   tmp_ops="$(mktemp)"
   tmp_journal="$(mktemp)"
   tmp_security="$(mktemp)"
 
+  persist_remote_live_handoff_input() {
+    local kind="$1"
+    local src="$2"
+    local rc="$3"
+    local dest="${output_dir}/${stamp}_${kind}.json"
+    command python3 - "$kind" "$src" "$dest" "$rc" "${artifact_ttl_hours}" "${remote_live_handoff_keep}" <<'PY'
+import datetime as dt
+import json
+import sys
+from pathlib import Path
+
+kind = str(sys.argv[1]).strip()
+src = Path(sys.argv[2]).expanduser().resolve()
+dest = Path(sys.argv[3]).expanduser().resolve()
+returncode = int(sys.argv[4])
+ttl_hours = max(1.0, float(sys.argv[5]))
+keep = max(1, int(sys.argv[6]))
+
+def parse_payload(text: str):
+    clean = str(text or "").strip()
+    if not clean:
+        return {}
+    candidates = [clean]
+    first = clean.find("{")
+    last = clean.rfind("}")
+    if 0 <= first < last:
+        candidates.append(clean[first:last + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
+    for line in reversed([x.strip() for x in clean.splitlines() if x.strip()]):
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {"raw": clean}
+
+text = src.read_text(encoding="utf-8") if src.exists() else ""
+payload = parse_payload(text)
+captured_at = dt.datetime.now(dt.timezone.utc)
+out = {
+    "action": "capture_remote_live_handoff_input",
+    "capture_kind": kind,
+    "captured_at_utc": captured_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "returncode": returncode,
+    "payload": payload,
+}
+dest.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+cutoff = captured_at - dt.timedelta(hours=ttl_hours)
+candidates = sorted(dest.parent.glob(f"*_{kind}.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+survivors = []
+for path in candidates:
+    if path == dest:
+        survivors.append(path)
+        continue
+    try:
+        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, tz=dt.timezone.utc)
+    except OSError:
+        continue
+    if mtime < cutoff:
+        path.unlink(missing_ok=True)
+    else:
+        survivors.append(path)
+for path in survivors[keep:]:
+    if path == dest:
+        continue
+    path.unlink(missing_ok=True)
+
+print(dest)
+PY
+  }
+
   set +e
-  action_live_takeover_ready_check >"${tmp_ready}" 2>/dev/null
-  rc_ready=$?
+  live_takeover_market="spot"
+  action_live_takeover_ready_check >"${tmp_ready_spot}" 2>/dev/null
+  rc_ready_spot=$?
+  live_takeover_market="portfolio_margin_um"
+  action_live_takeover_ready_check >"${tmp_ready_portfolio}" 2>/dev/null
+  rc_ready_portfolio=$?
+  live_takeover_market="${original_live_takeover_market}"
   action_live_risk_daemon_status >"${tmp_daemon}" 2>/dev/null
   rc_daemon=$?
   action_live_ops_reconcile_status >"${tmp_ops}" 2>/dev/null
@@ -2462,22 +2902,80 @@ PY
   rc_security=$?
   set -e
   latest_noaf_probe="$(ls -1t "${output_dir}"/*_remote_live_noaf_probe.json 2>/dev/null | head -n 1 || true)"
+  ready_spot_artifact="$(persist_remote_live_handoff_input "remote_live_ready_check_spot" "${tmp_ready_spot}" "${rc_ready_spot}")"
+  ready_portfolio_artifact="$(persist_remote_live_handoff_input "remote_live_ready_check_portfolio_margin_um" "${tmp_ready_portfolio}" "${rc_ready_portfolio}")"
+  daemon_artifact="$(persist_remote_live_handoff_input "remote_live_risk_daemon_status" "${tmp_daemon}" "${rc_daemon}")"
+  ops_artifact="$(persist_remote_live_handoff_input "remote_live_ops_reconcile_status" "${tmp_ops}" "${rc_ops}")"
+  journal_artifact="$(persist_remote_live_handoff_input "remote_live_risk_daemon_journal" "${tmp_journal}" "${rc_journal}")"
+  security_artifact="$(persist_remote_live_handoff_input "remote_live_risk_daemon_security_status" "${tmp_security}" "${rc_security}")"
+  context_artifact="${output_dir}/${stamp}_remote_live_bridge_context.json"
+  command python3 - "${context_artifact}" "${cloud_host}" "${cloud_user}" "${cloud_project_dir}" "${live_risk_daemon_security_accept_max_exposure}" "${live_takeover_market}" "${openclaw_orderflow_executor_mode}" "${artifact_ttl_hours}" "${remote_live_handoff_keep}" <<'PY'
+import datetime as dt
+import json
+import sys
+from pathlib import Path
+
+dest = Path(sys.argv[1]).expanduser().resolve()
+remote_host = str(sys.argv[2]).strip()
+remote_user = str(sys.argv[3]).strip()
+remote_project_dir = str(sys.argv[4]).strip()
+security_accept_max_exposure = float(sys.argv[5])
+live_takeover_market = str(sys.argv[6]).strip().lower()
+openclaw_orderflow_executor_mode = str(sys.argv[7]).strip().lower()
+ttl_hours = max(1.0, float(sys.argv[8]))
+keep = max(1, int(sys.argv[9]))
+captured_at = dt.datetime.now(dt.timezone.utc)
+payload = {
+    "action": "capture_remote_live_handoff_context",
+    "capture_kind": "remote_live_bridge_context",
+    "captured_at_utc": captured_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "remote_host": remote_host,
+    "remote_user": remote_user,
+    "remote_project_dir": remote_project_dir,
+    "security_accept_max_exposure": security_accept_max_exposure,
+    "live_takeover_market": live_takeover_market,
+    "openclaw_orderflow_executor_mode": openclaw_orderflow_executor_mode,
+}
+dest.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+cutoff = captured_at - dt.timedelta(hours=ttl_hours)
+candidates = sorted(dest.parent.glob("*_remote_live_bridge_context.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+survivors = []
+for path in candidates:
+    if path == dest:
+        survivors.append(path)
+        continue
+    try:
+        mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, tz=dt.timezone.utc)
+    except OSError:
+        continue
+    if mtime < cutoff:
+        path.unlink(missing_ok=True)
+    else:
+        survivors.append(path)
+for path in survivors[keep:]:
+    if path == dest:
+        continue
+    path.unlink(missing_ok=True)
+PY
 
   cmd=(
     python3 "${script_path}"
     --review-dir "${output_dir}"
-    --ready-check-file "${tmp_ready}"
-    --ready-check-returncode "${rc_ready}"
-    --risk-daemon-status-file "${tmp_daemon}"
+    --ready-check-spot-file "${ready_spot_artifact}"
+    --ready-check-spot-returncode "${rc_ready_spot}"
+    --ready-check-portfolio-margin-file "${ready_portfolio_artifact}"
+    --ready-check-portfolio-margin-returncode "${rc_ready_portfolio}"
+    --risk-daemon-status-file "${daemon_artifact}"
     --risk-daemon-status-returncode "${rc_daemon}"
-    --ops-status-file "${tmp_ops}"
+    --ops-status-file "${ops_artifact}"
     --ops-status-returncode "${rc_ops}"
-    --journal-file "${tmp_journal}"
+    --journal-file "${journal_artifact}"
     --journal-returncode "${rc_journal}"
-    --security-status-file "${tmp_security}"
+    --security-status-file "${security_artifact}"
     --security-status-returncode "${rc_security}"
     --noaf-probe-file "${latest_noaf_probe}"
     --security-accept-max-exposure "${live_risk_daemon_security_accept_max_exposure}"
+    --openclaw-orderflow-executor-mode "${openclaw_orderflow_executor_mode}"
     --remote-host "${cloud_host}"
     --remote-user "${cloud_user}"
     --remote-project-dir "${cloud_project_dir}"
@@ -2486,7 +2984,7 @@ PY
   )
 
   "${cmd[@]}"
-  rm -f "${tmp_ready}" "${tmp_daemon}" "${tmp_ops}" "${tmp_journal}" "${tmp_security}" >/dev/null 2>&1 || true
+  rm -f "${tmp_ready_spot}" "${tmp_ready_portfolio}" "${tmp_daemon}" "${tmp_ops}" "${tmp_journal}" "${tmp_security}" >/dev/null 2>&1 || true
 }
 
 action_remote_live_notification_preview() {
@@ -3299,7 +3797,7 @@ action_backfill_local_pi_last_loss_ts() {
   local -a cmd
 
   script_path="${local_pi_workspace_system_root}/scripts/backfill_paper_last_loss_ts.py"
-  pulse_lock_path="${local_pi_workspace_system_root}/output/state/run_halfhour_pulse.lock"
+  pulse_lock_path="${local_pi_workspace_system_root}/output/state/run-halfhour-pulse.lock"
   expected_state_fingerprint="${LOCAL_PI_EXPECTED_STATE_FINGERPRINT:-}"
 
   if [[ ! -r "${script_path}" ]]; then
@@ -6487,8 +6985,14 @@ action_live_takeover_probe() {
   if is_true "${live_takeover_allow_daemon_env_fallback}"; then
     daemon_env_arg="--allow-daemon-env-fallback"
   fi
-  guarded_stdout="$(run_guarded_exec_remote "probe" "false" "${cred_env_arg}" "${daemon_env_arg}" "${date_arg}")"
-  python3 - "${guarded_stdout}" <<'PY'
+  if [[ "${live_takeover_probe_capture_mode}" == "remote_capture" ]]; then
+    guarded_stdout="$(run_guarded_exec_remote_capture "probe" "false" "${cred_env_arg}" "${daemon_env_arg}" "${date_arg}")"
+  elif [[ "${live_takeover_probe_capture_mode}" == "remote_async" ]]; then
+    guarded_stdout="$(run_guarded_exec_remote_capture_async "probe" "false" "${cred_env_arg}" "${daemon_env_arg}" "${date_arg}")"
+  else
+    guarded_stdout="$(run_guarded_exec_remote "probe" "false" "${cred_env_arg}" "${daemon_env_arg}" "${date_arg}")"
+  fi
+  python3 - "${guarded_stdout}" "${live_takeover_probe_capture_mode}" <<'PY'
 import json
 import sys
 
@@ -6496,12 +7000,18 @@ def parse_payload(text: str):
     clean = str(text or "").strip()
     if not clean:
         return {}
-    try:
-        payload = json.loads(clean)
-        if isinstance(payload, dict):
-            return payload
-    except Exception:
-        pass
+    candidates = [clean]
+    first = clean.find("{")
+    last = clean.rfind("}")
+    if 0 <= first < last:
+        candidates.append(clean[first : last + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
     for line in reversed([x.strip() for x in clean.splitlines() if x.strip()]):
         try:
             payload = json.loads(line)
@@ -6511,12 +7021,30 @@ def parse_payload(text: str):
             continue
     return {"raw": clean}
 
-guarded = parse_payload(str(sys.argv[1] if len(sys.argv) > 1 else ""))
+raw = parse_payload(str(sys.argv[1] if len(sys.argv) > 1 else ""))
+capture_mode = str(sys.argv[2] if len(sys.argv) > 2 else "direct")
+probe_transport = {}
+guarded = raw
+if capture_mode in {"remote_capture", "remote_async"} and isinstance(raw, dict):
+    probe_transport = {
+        "capture_mode": str(raw.get("capture_mode", "remote_stdout_capture" if capture_mode == "remote_capture" else "remote_async_capture")),
+        "guard_returncode": int(raw.get("guard_returncode", 0) or 0),
+        "stdout_path": str(raw.get("stdout_path", "")),
+        "stderr_path": str(raw.get("stderr_path", "")),
+        "stdout_size_bytes": int(raw.get("stdout_size_bytes", 0) or 0),
+        "stderr_size_bytes": int(raw.get("stderr_size_bytes", 0) or 0),
+        "stderr_tail": raw.get("stderr_tail", []),
+        "state_path": str(raw.get("state_path", "")),
+        "rc_path": str(raw.get("rc_path", "")),
+    }
+    payload = raw.get("payload", {})
+    guarded = payload if isinstance(payload, dict) else {}
 out = {
     "action": "live-takeover-probe",
     "executed": bool(guarded.get("executed", False)),
     "status": str(guarded.get("status", "unknown")),
     "guarded_exec": guarded,
+    "probe_transport": probe_transport,
 }
 print(json.dumps(out, ensure_ascii=False, indent=2))
 PY
@@ -6604,12 +7132,18 @@ def parse_payload(text: str):
     clean = str(text or "").strip()
     if not clean:
         return {}
-    try:
-        payload = json.loads(clean)
-        if isinstance(payload, dict):
-            return payload
-    except Exception:
-        pass
+    candidates = [clean]
+    first = clean.find("{")
+    last = clean.rfind("}")
+    if 0 <= first < last:
+        candidates.append(clean[first : last + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
     for line in reversed([x.strip() for x in clean.splitlines() if x.strip()]):
         try:
             payload = json.loads(line)
@@ -6674,11 +7208,18 @@ def parse_payload(text: str):
     clean = str(text or "").strip()
     if not clean:
         return {}
-    try:
-        payload = json.loads(clean)
-        return payload if isinstance(payload, dict) else {}
-    except Exception:
-        pass
+    candidates = [clean]
+    first = clean.find("{")
+    last = clean.rfind("}")
+    if 0 <= first < last:
+        candidates.append(clean[first : last + 1])
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
     for line in reversed([x.strip() for x in clean.splitlines() if x.strip()]):
         try:
             payload = json.loads(line)
@@ -6727,6 +7268,8 @@ elif market == "spot" and available + 1e-12 < required:
     reasons.append("insufficient_quote_balance")
 elif market == "futures_usdm" and available <= 0.0:
     reasons.append("insufficient_futures_balance")
+elif market == "portfolio_margin_um":
+    reasons.append("portfolio_margin_um_read_only_mode")
 
 if int(risk_block.get("returncode", 0)) == 3:
     reasons.append("risk_guard_blocked")

@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import ssl
 import sys
 import time
 import urllib.error
@@ -17,6 +18,11 @@ from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    certifi = None
 
 
 def resolve_system_root() -> Path:
@@ -77,6 +83,20 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _public_ssl_context() -> ssl.SSLContext:
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
+def _public_https_opener(*, ctx: ssl.SSLContext):
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPSHandler(context=ctx),
+    )
+
+
 def request_json(*, url: str, bucket: TokenBucket, timeout_ms: int, retries: int = 3) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
@@ -85,11 +105,12 @@ def request_json(*, url: str, bucket: TokenBucket, timeout_ms: int, retries: int
             "Accept": "application/json",
         },
     )
+    opener = _public_https_opener(ctx=_public_ssl_context())
     last_err: Exception | None = None
     for attempt in range(max(1, int(retries))):
         bucket.take()
         try:
-            with urllib.request.urlopen(request, timeout=max(0.1, timeout_ms / 1000.0)) as response:
+            with opener.open(request, timeout=max(0.1, timeout_ms / 1000.0)) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             return payload
         except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:

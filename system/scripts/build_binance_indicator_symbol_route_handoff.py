@@ -31,6 +31,16 @@ def now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def parse_now(raw: str | None) -> dt.datetime:
+    text = str(raw or "").strip()
+    if not text:
+        return now_utc()
+    parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
 def fmt_utc(value: dt.datetime | None) -> str | None:
     if value is None:
         return None
@@ -57,29 +67,30 @@ def parsed_artifact_stamp(path: Path) -> dt.datetime | None:
     return dt.datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.timezone.utc)
 
 
-def artifact_sort_key(path: Path) -> tuple[int, str, float, str]:
+def artifact_sort_key(path: Path, reference_now: dt.datetime | None = None) -> tuple[int, str, float, str]:
     stamp_dt = parsed_artifact_stamp(path)
-    future_cutoff = now_utc() + dt.timedelta(minutes=FUTURE_STAMP_GRACE_MINUTES)
+    effective_now = reference_now or now_utc()
+    future_cutoff = effective_now + dt.timedelta(minutes=FUTURE_STAMP_GRACE_MINUTES)
     is_future = bool(stamp_dt and stamp_dt > future_cutoff)
     return (0 if is_future else 1, artifact_stamp(path), path.stat().st_mtime, path.name)
 
 
-def latest_combo_playbook(review_dir: Path) -> Path:
+def latest_combo_playbook(review_dir: Path, reference_now: dt.datetime | None = None) -> Path:
     candidates = list(review_dir.glob("*_binance_indicator_combo_playbook.json"))
     if not candidates:
         raise FileNotFoundError("no_binance_indicator_combo_playbook_artifact")
-    return max(candidates, key=artifact_sort_key)
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
 
 
-def latest_beta_leg_window_report(review_dir: Path) -> tuple[Path | None, dict[str, Any] | None]:
+def latest_beta_leg_window_report(review_dir: Path, reference_now: dt.datetime | None = None) -> tuple[Path | None, dict[str, Any] | None]:
     candidates = list(review_dir.glob("*_binance_indicator_native_beta_leg_window_report.json"))
     if not candidates:
         return None, None
-    path = max(candidates, key=artifact_sort_key)
+    path = max(candidates, key=lambda item: artifact_sort_key(item, reference_now))
     return path, json.loads(path.read_text(encoding="utf-8"))
 
 
-def latest_bnb_flow_focus(review_dir: Path) -> tuple[Path | None, dict[str, Any] | None]:
+def latest_bnb_flow_focus(review_dir: Path, reference_now: dt.datetime | None = None) -> tuple[Path | None, dict[str, Any] | None]:
     candidates = list(review_dir.glob("*_binance_indicator_bnb_flow_focus.json"))
     if not candidates:
         return None, None
@@ -95,12 +106,122 @@ def latest_bnb_flow_focus(review_dir: Path) -> tuple[Path | None, dict[str, Any]
             richness += 1
         if str(payload.get("comparative_window_takeaway") or "").strip():
             richness += 1
-        candidate_key = (richness, artifact_sort_key(path))
+        candidate_key = (richness, artifact_sort_key(path, reference_now))
         if best_key is None or candidate_key > best_key:
             best_key = candidate_key
             best_path = path
             best_payload = payload
     return best_path, best_payload
+
+
+def latest_crypto_route_refresh(review_dir: Path, reference_now: dt.datetime | None = None) -> tuple[Path | None, dict[str, Any] | None]:
+    candidates = list(review_dir.glob("*_crypto_route_refresh.json"))
+    if not candidates:
+        return None, None
+    path = max(candidates, key=lambda item: artifact_sort_key(item, reference_now))
+    return path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def _crypto_route_refresh_audit_lane(
+    review_dir: Path,
+    reference_now: dt.datetime | None = None,
+) -> dict[str, Any]:
+    refresh_path, refresh_payload = latest_crypto_route_refresh(review_dir, reference_now)
+    if refresh_path is None or refresh_payload is None:
+        return {
+            "status": "not_available",
+            "brief": "not_available",
+            "artifact": None,
+            "as_of": None,
+            "native_mode": None,
+            "native_step_count": 0,
+            "reused_native_count": 0,
+            "missing_reused_count": 0,
+            "note": "no crypto_route_refresh artifact is available yet",
+            "done_when": "run refresh_crypto_route_state to record refresh audit",
+        }
+
+    native_mode = str(refresh_payload.get("native_refresh_mode") or "").strip() or None
+    steps = list(refresh_payload.get("steps") or [])
+    native_steps = [step for step in steps if str(step.get("name") or "").startswith("native_")]
+    reused_native_count = sum(
+        1 for step in native_steps if str(step.get("status") or "").strip() == "reused_previous_artifact"
+    )
+    native_step_count = len(native_steps)
+    missing_reused_count = max(0, native_step_count - reused_native_count)
+    if native_step_count == 0:
+        status = "native_audit_unavailable"
+        brief = "native_audit_unavailable"
+    elif reused_native_count == native_step_count:
+        status = "reused_native_inputs"
+        brief = f"reused_native_inputs:{native_mode or 'unknown'}:{reused_native_count}/{native_step_count}"
+    elif reused_native_count > 0:
+        status = "mixed_native_inputs"
+        brief = f"mixed_native_inputs:{native_mode or 'unknown'}:{reused_native_count}/{native_step_count}"
+    else:
+        status = "fresh_native_inputs"
+        brief = f"fresh_native_inputs:{native_mode or 'unknown'}:{reused_native_count}/{native_step_count}"
+
+    return {
+        "status": status,
+        "brief": brief,
+        "artifact": str(refresh_path),
+        "as_of": refresh_payload.get("as_of"),
+        "native_mode": native_mode,
+        "native_step_count": native_step_count,
+        "reused_native_count": reused_native_count,
+        "missing_reused_count": missing_reused_count,
+        "note": f"latest crypto_route_refresh reports {reused_native_count}/{native_step_count} native steps reused.",
+        "done_when": "run full native refresh only when fresh native recomputation is required",
+    }
+
+
+def _crypto_route_refresh_reuse_gate(audit: dict[str, Any]) -> dict[str, Any]:
+    status = str(audit.get("status") or "").strip()
+    brief = str(audit.get("brief") or "").strip()
+    native_mode = str(audit.get("native_mode") or "").strip() or "unknown"
+    reused_native_count = int(audit.get("reused_native_count") or 0)
+    native_step_count = int(audit.get("native_step_count") or 0)
+    if status == "reused_native_inputs":
+        return {
+            "level": "informational",
+            "status": "reuse_non_blocking",
+            "brief": f"reuse_non_blocking:{native_mode}:{reused_native_count}/{native_step_count}",
+            "blocking": False,
+            "blocker_detail": "latest crypto_route_refresh reused all tracked native steps; current route handoff may safely read the reused native path.",
+            "done_when": "run full native refresh only when fresh native recomputation is explicitly required",
+        }
+    if status == "fresh_native_inputs":
+        return {
+            "level": "informational",
+            "status": "fresh_non_blocking",
+            "brief": f"fresh_non_blocking:{native_mode}:{reused_native_count}/{native_step_count}",
+            "blocking": False,
+            "blocker_detail": "latest crypto_route_refresh used fresh native inputs across tracked native steps.",
+            "done_when": "keep using current fresh native inputs until the next required recomputation window",
+        }
+    if status in {"mixed_native_inputs", "native_audit_unavailable", "not_available"}:
+        gate_status = (
+            "mixed_requires_full_native_refresh"
+            if status == "mixed_native_inputs"
+            else "audit_missing_requires_full_native_refresh"
+        )
+        return {
+            "level": "blocking",
+            "status": gate_status,
+            "brief": f"{gate_status}:{native_mode}:{reused_native_count}/{native_step_count}",
+            "blocking": True,
+            "blocker_detail": f"latest crypto_route_refresh audit is not fully reusable-safe ({brief or status}); force a full native refresh before trusting route handoff reuse.",
+            "done_when": "rerun refresh_crypto_route_state without skip_native_refresh and confirm all native steps are either fresh or intentionally reused end-to-end",
+        }
+    return {
+        "level": "blocking",
+        "status": "unknown_requires_review",
+        "brief": f"unknown_requires_review:{brief or status or 'unknown'}",
+        "blocking": True,
+        "blocker_detail": "latest crypto_route_refresh audit returned an unknown reuse status; manual review or a clean full native refresh is required.",
+        "done_when": "rerun refresh_crypto_route_state with a known-good native refresh outcome",
+    }
 
 
 def prune_review_artifacts(
@@ -363,6 +484,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- route_stack: `{payload.get('route_stack_brief') or ''}`",
         f"- next_focus_symbol: `{payload.get('next_focus_symbol') or '-'}`",
         f"- next_focus_action: `{payload.get('next_focus_action') or '-'}`",
+        f"- latest_refresh_audit: `{payload.get('latest_crypto_route_refresh_brief') or '-'}`",
+        f"- latest_refresh_reuse_gate: `{payload.get('latest_crypto_route_refresh_reuse_gate_brief') or '-'}`",
         "",
         "## Routes",
     ]
@@ -424,6 +547,15 @@ def render_markdown(payload: dict[str, Any]) -> str:
             f"- watch_only: `{', '.join(payload.get('watch_only_symbols', [])) or '-'}`",
             f"- review: `{', '.join(payload.get('review_symbols', [])) or '-'}`",
             "",
+            "## Latest Crypto Route Refresh Audit",
+            f"- status: `{payload.get('latest_crypto_route_refresh_status') or '-'}`",
+            f"- brief: `{payload.get('latest_crypto_route_refresh_brief') or '-'}`",
+            f"- reuse_gate: `{payload.get('latest_crypto_route_refresh_reuse_gate_brief') or '-'}`",
+            f"- reuse_level: `{payload.get('latest_crypto_route_refresh_reuse_level') or '-'}`",
+            f"- artifact: `{payload.get('latest_crypto_route_refresh_artifact') or '-'}`",
+            f"- native_mode: `{payload.get('latest_crypto_route_refresh_native_mode') or '-'}`",
+            f"- native_reuse: `{payload.get('latest_crypto_route_refresh_reused_native_count') or 0}/{payload.get('latest_crypto_route_refresh_native_step_count') or 0}`",
+            "",
             "## Overall Takeaway",
             f"- {payload.get('overall_takeaway') or ''}",
         ]
@@ -434,22 +566,25 @@ def render_markdown(payload: dict[str, Any]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a symbol-level handoff from the latest Binance indicator combo playbook artifact.")
     parser.add_argument("--review-dir", required=True)
+    parser.add_argument("--now", default="")
     parser.add_argument("--artifact-ttl-hours", type=float, default=168.0)
     parser.add_argument("--artifact-keep", type=int, default=12)
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     review_dir = Path(args.review_dir).expanduser().resolve()
     review_dir.mkdir(parents=True, exist_ok=True)
-    runtime_now = now_utc()
+    runtime_now = parse_now(args.now)
 
-    source_path = latest_combo_playbook(review_dir)
+    source_path = latest_combo_playbook(review_dir, runtime_now)
     source_payload = json.loads(source_path.read_text(encoding="utf-8"))
-    beta_leg_window_path, beta_leg_window_payload = latest_beta_leg_window_report(review_dir)
-    bnb_focus_path, bnb_focus_payload = latest_bnb_flow_focus(review_dir)
+    beta_leg_window_path, beta_leg_window_payload = latest_beta_leg_window_report(review_dir, runtime_now)
+    bnb_focus_path, bnb_focus_payload = latest_bnb_flow_focus(review_dir, runtime_now)
     handoff = classify_handoff(source_payload, beta_leg_window_payload, bnb_focus_payload)
+    latest_refresh_audit = _crypto_route_refresh_audit_lane(review_dir, runtime_now)
+    latest_refresh_reuse_gate = _crypto_route_refresh_reuse_gate(latest_refresh_audit)
 
     stamp = runtime_now.astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     json_path = review_dir / f"{stamp}_binance_indicator_symbol_route_handoff.json"
@@ -463,6 +598,22 @@ def main() -> int:
         "source_artifact": str(source_path),
         "beta_leg_window_report_artifact": str(beta_leg_window_path) if beta_leg_window_path else None,
         "bnb_flow_focus_artifact": str(bnb_focus_path) if bnb_focus_path else None,
+        "latest_crypto_route_refresh_status": latest_refresh_audit["status"],
+        "latest_crypto_route_refresh_brief": latest_refresh_audit["brief"],
+        "latest_crypto_route_refresh_artifact": latest_refresh_audit["artifact"],
+        "latest_crypto_route_refresh_as_of": latest_refresh_audit["as_of"],
+        "latest_crypto_route_refresh_native_mode": latest_refresh_audit["native_mode"],
+        "latest_crypto_route_refresh_native_step_count": latest_refresh_audit["native_step_count"],
+        "latest_crypto_route_refresh_reused_native_count": latest_refresh_audit["reused_native_count"],
+        "latest_crypto_route_refresh_missing_reused_count": latest_refresh_audit["missing_reused_count"],
+        "latest_crypto_route_refresh_note": latest_refresh_audit["note"],
+        "latest_crypto_route_refresh_done_when": latest_refresh_audit["done_when"],
+        "latest_crypto_route_refresh_reuse_level": latest_refresh_reuse_gate["level"],
+        "latest_crypto_route_refresh_reuse_gate_status": latest_refresh_reuse_gate["status"],
+        "latest_crypto_route_refresh_reuse_gate_brief": latest_refresh_reuse_gate["brief"],
+        "latest_crypto_route_refresh_reuse_gate_blocking": latest_refresh_reuse_gate["blocking"],
+        "latest_crypto_route_refresh_reuse_gate_blocker_detail": latest_refresh_reuse_gate["blocker_detail"],
+        "latest_crypto_route_refresh_reuse_gate_done_when": latest_refresh_reuse_gate["done_when"],
         **handoff,
         "artifact_label": "binance-indicator-symbol-route-handoff:ok",
     }

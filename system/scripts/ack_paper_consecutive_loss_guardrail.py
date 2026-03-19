@@ -24,7 +24,7 @@ SYSTEM_ROOT = resolve_system_root()
 DEFAULT_STATE_PATH = SYSTEM_ROOT / "output" / "state" / "spot_paper_state.json"
 DEFAULT_ACK_PATH = SYSTEM_ROOT / "output" / "state" / "paper_consecutive_loss_ack.json"
 DEFAULT_CHECKSUM_PATH = SYSTEM_ROOT / "output" / "state" / "paper_consecutive_loss_ack_checksum.json"
-DEFAULT_PULSE_LOCK_PATH = SYSTEM_ROOT / "output" / "state" / "run_halfhour_pulse.lock"
+DEFAULT_PULSE_LOCK_PATH = SYSTEM_ROOT / "output" / "state" / "run-halfhour-pulse.lock"
 
 
 def parse_ts(value: Any) -> dt.datetime | None:

@@ -102,17 +102,50 @@ def test_request_json_retries_then_succeeds(monkeypatch) -> None:
 
     calls = {"count": 0}
 
-    def _fake_urlopen(request, timeout=0):  # noqa: ANN001
-        calls["count"] += 1
-        if calls["count"] < 3:
-            raise urllib.error.URLError("timeout")
-        return _FakeResponse()
+    class _FakeOpener:
+        def open(self, request, timeout=0):  # noqa: ANN001
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise urllib.error.URLError("timeout")
+            return _FakeResponse()
 
-    monkeypatch.setattr(module.urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(module.urllib.request, "build_opener", lambda *handlers: _FakeOpener())
     bucket = module.TokenBucket(rate_per_minute=120, capacity=5)
     payload = module.request_json(url="https://example.com", bucket=bucket, timeout_ms=5000, retries=3)
     assert payload == {"ok": True}
     assert calls["count"] == 3
+
+
+def test_request_json_uses_proxy_bypass_https_opener(monkeypatch) -> None:
+    module = _load_module()
+    captured = {"handlers": None}
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{\"ok\": true}'
+
+    class _FakeOpener:
+        def open(self, request, timeout=0):  # noqa: ANN001
+            return _FakeResponse()
+
+    def _fake_build_opener(*handlers):  # noqa: ANN001
+        captured["handlers"] = handlers
+        return _FakeOpener()
+
+    monkeypatch.setattr(module.urllib.request, "build_opener", _fake_build_opener)
+    bucket = module.TokenBucket(rate_per_minute=120, capacity=5)
+    payload = module.request_json(url="https://fapi.binance.com/fapi/v1/time", bucket=bucket, timeout_ms=5000, retries=1)
+    assert payload == {"ok": True}
+    assert captured["handlers"] is not None
+    proxy_handler = captured["handlers"][0]
+    assert isinstance(proxy_handler, module.urllib.request.ProxyHandler)
+    assert getattr(proxy_handler, "proxies", None) == {}
 
 
 def test_evaluate_lag_metrics_zero_delay_is_not_treated_as_missing() -> None:

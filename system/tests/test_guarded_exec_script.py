@@ -380,6 +380,172 @@ def test_guarded_exec_probe_does_not_idempotent_skip_duplicate_runs(tmp_path: Pa
     assert bool(idem.get("applied", True)) is False
 
 
+def test_guarded_exec_allows_portfolio_margin_um_probe_market(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    system_root = tmp_path / "system"
+    (system_root / "output" / "review").mkdir(parents=True, exist_ok=True)
+    (system_root / "output" / "state").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mod, "resolve_workspace", lambda raw: (tmp_path, system_root))
+    monkeypatch.setattr(mod, "RunHalfhourMutex", _DummyMutex)
+
+    calls: list[list[str]] = []
+
+    def _fake_run_json_command(*, cmd, cwd, timeout_seconds):
+        _ = (cwd, timeout_seconds)
+        calls.append(list(cmd))
+        script = Path(cmd[1]).name
+        if script == "live_risk_guard.py":
+            return {"returncode": 0, "payload": {"allowed": True, "status": "pass"}, "stdout": "", "stderr": "", "timeout": False}
+        if script == "binance_live_takeover.py":
+            return {
+                "returncode": 0,
+                "payload": {"mode": "live_ready", "market": "portfolio_margin_um", "steps": {"canary_order": {"executed": False, "reason": "allow_live_order_false"}}},
+                "stdout": "",
+                "stderr": "",
+                "timeout": False,
+            }
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(mod, "run_json_command", _fake_run_json_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "guarded_exec.py",
+            "--workspace",
+            str(tmp_path),
+            "--mode",
+            "probe",
+            "--market",
+            "portfolio_margin_um",
+        ],
+    )
+
+    rc = mod.main()
+    assert rc == 0
+    takeover_cmd = calls[1]
+    assert takeover_cmd[takeover_cmd.index("--market") + 1] == "portfolio_margin_um"
+    parsed = json.loads(sorted((system_root / "output" / "review").glob("*_trade_live_exec_guard.json"))[-1].read_text(encoding="utf-8"))
+    assert str(((parsed.get("takeover") or {}).get("payload") or {}).get("market", "")) == "portfolio_margin_um"
+
+
+def test_guarded_exec_treats_takeover_preflight_transport_block_as_controlled_failure(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    system_root = tmp_path / "system"
+    (system_root / "output" / "review").mkdir(parents=True, exist_ok=True)
+    (system_root / "output" / "state").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mod, "resolve_workspace", lambda raw: (tmp_path, system_root))
+    monkeypatch.setattr(mod, "RunHalfhourMutex", _DummyMutex)
+
+    def _fake_run_json_command(*, cmd, cwd, timeout_seconds):
+        _ = (cwd, timeout_seconds)
+        script = Path(cmd[1]).name
+        if script == "live_risk_guard.py":
+            return {"returncode": 0, "payload": {"allowed": True, "status": "pass"}, "stdout": "", "stderr": "", "timeout": False}
+        if script == "binance_live_takeover.py":
+            return {
+                "returncode": 2,
+                "payload": {
+                    "mode": "probe_preflight_blocked",
+                    "steps": {
+                        "canary_order": {
+                            "executed": False,
+                            "reason": "preflight_transport_blocked",
+                            "failed_step": "canary_plan",
+                        }
+                    },
+                },
+                "stdout": "",
+                "stderr": "",
+                "timeout": False,
+            }
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(mod, "run_json_command", _fake_run_json_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "guarded_exec.py",
+            "--workspace",
+            str(tmp_path),
+            "--mode",
+            "probe",
+            "--market",
+            "spot",
+        ],
+    )
+
+    rc = mod.main()
+    assert rc == 0
+    parsed = json.loads(sorted((system_root / "output" / "review").glob("*_trade_live_exec_guard.json"))[-1].read_text(encoding="utf-8"))
+    assert str(parsed.get("status", "")) == "probe_controlled_block"
+    takeover = parsed.get("takeover", {})
+    assert isinstance(takeover, dict)
+    assert int(takeover.get("returncode", 0)) == 2
+    assert str((((takeover.get("payload") or {}).get("steps") or {}).get("canary_order") or {}).get("reason", "")) == "preflight_transport_blocked"
+
+
+def test_guarded_exec_treats_takeover_preflight_runtime_block_as_controlled_failure(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    system_root = tmp_path / "system"
+    (system_root / "output" / "review").mkdir(parents=True, exist_ok=True)
+    (system_root / "output" / "state").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mod, "resolve_workspace", lambda raw: (tmp_path, system_root))
+    monkeypatch.setattr(mod, "RunHalfhourMutex", _DummyMutex)
+
+    def _fake_run_json_command(*, cmd, cwd, timeout_seconds):
+        _ = (cwd, timeout_seconds)
+        script = Path(cmd[1]).name
+        if script == "live_risk_guard.py":
+            return {"returncode": 0, "payload": {"allowed": True, "status": "pass"}, "stdout": "", "stderr": "", "timeout": False}
+        if script == "binance_live_takeover.py":
+            return {
+                "returncode": 2,
+                "payload": {
+                    "mode": "live_ready_preflight_blocked",
+                    "steps": {
+                        "canary_order": {
+                            "executed": False,
+                            "reason": "preflight_runtime_blocked",
+                            "failed_step": "account_overview",
+                        }
+                    },
+                },
+                "stdout": "",
+                "stderr": "",
+                "timeout": False,
+            }
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(mod, "run_json_command", _fake_run_json_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "guarded_exec.py",
+            "--workspace",
+            str(tmp_path),
+            "--mode",
+            "probe",
+            "--market",
+            "spot",
+        ],
+    )
+
+    rc = mod.main()
+    assert rc == 0
+    parsed = json.loads(sorted((system_root / "output" / "review").glob("*_trade_live_exec_guard.json"))[-1].read_text(encoding="utf-8"))
+    assert str(parsed.get("status", "")) == "probe_controlled_block"
+    takeover = parsed.get("takeover", {})
+    assert isinstance(takeover, dict)
+    assert int(takeover.get("returncode", 0)) == 2
+    assert str((((takeover.get("payload") or {}).get("steps") or {}).get("canary_order") or {}).get("reason", "")) == "preflight_runtime_blocked"
+
+
 def test_guarded_exec_canary_still_idempotent_skips_duplicate_runs(tmp_path: Path, monkeypatch) -> None:
     mod = _load_module()
     system_root = tmp_path / "system"

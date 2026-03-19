@@ -26,7 +26,7 @@ class EnsureOpenClawRuntimeModelScriptTests(unittest.TestCase):
             cfg.write_text(
                 json.dumps(
                     {
-                        "models": {"providers": {"google": {"baseUrl": "http://127.0.0.1:9999/v1beta", "models": []}}},
+                        "models": {"providers": {"google": {"baseUrl": "https://generativelanguage.googleapis.com/v1beta", "models": []}}},
                         "agents": {"defaults": {"model": {"primary": "openai/gpt-5.4", "fallbacks": []}, "models": {}}},
                     }
                 ),
@@ -42,7 +42,7 @@ class EnsureOpenClawRuntimeModelScriptTests(unittest.TestCase):
             out = json.loads(cfg.read_text(encoding="utf-8"))
             provider = out["models"]["providers"]["openai"]
             self.assertEqual(provider["api"], "openai-responses")
-            self.assertEqual(provider["baseUrl"], "http://127.0.0.1:9999/v1")
+            self.assertEqual(provider["baseUrl"], "http://127.0.0.1:8317/v1")
             self.assertEqual(provider["models"][0]["id"], "gpt-5.4")
             self.assertIn("openai/gpt-5.4", out["agents"]["defaults"]["models"])
             self.assertIn("gpt-5.4", out["agents"]["defaults"]["models"])
@@ -55,7 +55,7 @@ class EnsureOpenClawRuntimeModelScriptTests(unittest.TestCase):
                     "providers": {
                         "openai": {
                             "api": "openai-responses",
-                            "baseUrl": "http://127.0.0.1:9999/v1",
+                            "baseUrl": "http://127.0.0.1:8317/v1",
                             "models": [
                                 {
                                     "id": "gpt-5.4",
@@ -92,7 +92,7 @@ class EnsureOpenClawRuntimeModelScriptTests(unittest.TestCase):
                             "providers": {
                                 "openai": {
                                     "api": "openai-responses",
-                                    "baseUrl": "http://127.0.0.1:9999/v1",
+                                    "baseUrl": "http://127.0.0.1:8317/v1",
                                     "models": [{"id": "gpt-4o", "name": "gpt-4o"}],
                                 }
                             }
