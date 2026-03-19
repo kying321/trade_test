@@ -75,6 +75,7 @@ def main() -> None:
     p_rc.add_argument("--health-timeout-seconds", default="90")
     p_rc.add_argument("--mutex-timeout-seconds", default="5.0")
     p_rc.add_argument("--review-mode", default="review-loop", help="review | review-loop")
+    p_rc.add_argument("--fast-tests-only", action="store_true", help="When review-mode=review-loop, force fast tests only and skip round-one full tests.")
     p_rc.add_argument("--skip-health-check", action="store_true")
     p_rc.add_argument("--fail-fast", action="store_true")
 
@@ -88,6 +89,7 @@ def main() -> None:
     p_rcg.add_argument("--health-timeout-seconds", default="90")
     p_rcg.add_argument("--mutex-timeout-seconds", default="5.0")
     p_rcg.add_argument("--review-mode", default="review-loop", help="review | review-loop")
+    p_rcg.add_argument("--fast-tests-only", action="store_true", help="When review-mode=review-loop, force fast tests only and skip round-one full tests.")
     p_rcg.add_argument("--skip-health-check", action="store_true")
     p_rcg.add_argument("--fail-fast", action="store_true")
     p_rcg.add_argument("--skip-mutex", action="store_true")
@@ -119,6 +121,7 @@ def main() -> None:
     p_gr.add_argument("--date", required=True)
     p_gr.add_argument("--run-tests", action="store_true")
     p_gr.add_argument("--run-review-if-missing", action="store_true")
+    p_gr.add_argument("--stable-replay-mode", default="execute", help="execute | cached")
 
     p_or = sub.add_parser("ops-report", help="Run operations health summary report")
     p_or.add_argument("--date", required=True)
@@ -147,6 +150,7 @@ def main() -> None:
     p_loop = sub.add_parser("review-loop", help="Run review->tests loop until pass or max rounds")
     p_loop.add_argument("--date", required=True)
     p_loop.add_argument("--max-rounds", default="3")
+    p_loop.add_argument("--fast-tests-only", action="store_true", help="Force fast tests only and skip round-one full tests.")
 
     p_brd = sub.add_parser("baseline-rollback-drill", help="Rollback active artifact-governance baseline to rollback_anchor")
     p_brd.add_argument("--date", required=True)
@@ -213,6 +217,7 @@ def main() -> None:
                 as_of=_parse_date(args.date),
                 max_rounds=int(args.max_rounds),
                 ops_window_days=int(args.ops_window_days) if args.ops_window_days not in {None, "", "none", "None"} else None,
+                fast_tests_only=bool(args.fast_tests_only),
             )
             if isinstance(out, dict):
                 out.setdefault("execution_path", "legacy")
@@ -227,6 +232,7 @@ def main() -> None:
                 health_timeout_seconds=int(args.health_timeout_seconds),
                 mutex_timeout_seconds=float(args.mutex_timeout_seconds),
                 review_mode=str(args.review_mode),
+                fast_tests_only=bool(args.fast_tests_only),
                 skip_health_check=bool(args.skip_health_check),
                 fail_fast=bool(args.fail_fast),
             )
@@ -243,6 +249,7 @@ def main() -> None:
             health_timeout_seconds=int(args.health_timeout_seconds),
             mutex_timeout_seconds=float(args.mutex_timeout_seconds),
             review_mode=str(args.review_mode),
+            fast_tests_only=bool(args.fast_tests_only),
             skip_health_check=bool(args.skip_health_check),
             fail_fast=bool(args.fail_fast),
             skip_mutex=bool(args.skip_mutex),
@@ -279,6 +286,7 @@ def main() -> None:
             as_of=_parse_date(args.date),
             run_tests=bool(args.run_tests),
             run_review_if_missing=bool(args.run_review_if_missing),
+            stable_replay_mode=str(args.stable_replay_mode),
         )
     elif args.cmd == "ops-report":
         out = eng.ops_report(
@@ -308,7 +316,11 @@ def main() -> None:
             ),
         )
     elif args.cmd == "review-loop":
-        out = eng.review_until_pass(as_of=_parse_date(args.date), max_rounds=int(args.max_rounds))
+        out = eng.review_until_pass(
+            as_of=_parse_date(args.date),
+            max_rounds=int(args.max_rounds),
+            fast_tests_only=bool(args.fast_tests_only),
+        )
     elif args.cmd == "baseline-rollback-drill":
         out = eng.baseline_rollback_drill(
             as_of=_parse_date(args.date),

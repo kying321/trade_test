@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -11,7 +12,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lie_engine.config import SystemSettings
-from lie_engine.orchestration.scheduler import SchedulerOrchestrator
+from lie_engine.orchestration.scheduler import RUN_HALFHOUR_MUTEX_HELD_ENV, SchedulerOrchestrator
 
 
 class SchedulerOrchestratorTests(unittest.TestCase):
@@ -97,6 +98,17 @@ class SchedulerOrchestratorTests(unittest.TestCase):
         self.assertEqual(out_ops["slot"], "ops")
         self.assertEqual(calls["premarket"], 1)
         self.assertEqual(calls["ops"], [{"date": "2026-02-13", "window_days": 3}])
+
+    def test_run_halfhour_mutex_sets_env_marker(self) -> None:
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(td, ignore_errors=True))
+        orch, _ = self._make_orchestrator(td)
+        original = os.environ.get(RUN_HALFHOUR_MUTEX_HELD_ENV)
+
+        with orch._run_halfhour_mutex("scheduler:test"):
+            self.assertEqual(os.environ.get(RUN_HALFHOUR_MUTEX_HELD_ENV), "scheduler:test")
+
+        self.assertEqual(os.environ.get(RUN_HALFHOUR_MUTEX_HELD_ENV), original)
 
     def test_run_slot_intraday_aliases(self) -> None:
         td = Path(tempfile.mkdtemp())

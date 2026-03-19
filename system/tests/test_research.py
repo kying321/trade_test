@@ -30,6 +30,53 @@ def _load_theory_ablation_module():
 
 
 class ResearchTests(unittest.TestCase):
+    def test_optimizer_sample_params_seeds_low_floor_direct_market_space(self) -> None:
+        import numpy as np
+        import lie_engine.research.optimizer as opt_mod
+        from lie_engine.research.modes import ModeSpace
+
+        space = ModeSpace(
+            name="ultra_short",
+            hold_days_min=1,
+            hold_days_max=3,
+            trades_min=2,
+            trades_max=5,
+            confidence_min=14.0,
+            confidence_max=70.0,
+            convexity_min=0.85,
+            convexity_max=3.2,
+            min_total_trades=48,
+        )
+        params = opt_mod._sample_params(np.random.default_rng(7), space, None, trial_idx=1)  # type: ignore[attr-defined]
+        self.assertEqual(int(params["hold_days"]), 1)
+        self.assertEqual(int(params["max_daily_trades"]), 5)
+        self.assertLessEqual(float(params["signal_confidence_min"]), 16.0)
+        self.assertLessEqual(float(params["convexity_min"]), 1.1)
+
+    def test_optimizer_resolve_proxy_lookback_adapts_for_direct_market_no_info(self) -> None:
+        import lie_engine.research.optimizer as opt_mod
+
+        ts = pd.date_range(start="2025-11-01", periods=128, freq="D")
+        bars = pd.DataFrame(
+            {
+                "ts": ts,
+                "symbol": ["BTCUSDT"] * len(ts),
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.0,
+                "volume": 1000.0,
+                "asset_class": "crypto",
+            }
+        )
+        lookback = opt_mod._resolve_proxy_lookback(  # type: ignore[attr-defined]
+            bars=bars,
+            asset_classes={"crypto", "future"},
+            info_available=False,
+        )
+        self.assertGreaterEqual(int(lookback), 72)
+        self.assertLess(int(lookback), 180)
+
     def test_run_research_backtest_with_mock_bundle(self) -> None:
         import lie_engine.research.optimizer as opt_mod
 
@@ -69,6 +116,8 @@ class ResearchTests(unittest.TestCase):
                 self.assertTrue(Path(summary.output_dir).exists())
                 self.assertTrue((Path(summary.output_dir) / "summary.json").exists())
                 self.assertTrue((Path(summary.output_dir) / "report.md").exists())
+                self.assertTrue(hasattr(summary.mode_summaries[0], "best_by_symbol"))
+                self.assertTrue(hasattr(summary.mode_summaries[0], "best_by_symbol_regime"))
         finally:
             opt_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
 
@@ -172,6 +221,21 @@ class ResearchTests(unittest.TestCase):
         finally:
             rd.ak.index_stock_cons_csindex = original_cons  # type: ignore[assignment]
 
+    def test_load_universe_direct_market_mode_keeps_core_symbols_only(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_cons = rd.ak.index_stock_cons_csindex
+
+        def _unexpected_cons_call(symbol: str):
+            raise AssertionError(f"index constituent fetch should not run in direct market mode: {symbol}")
+
+        rd.ak.index_stock_cons_csindex = _unexpected_cons_call  # type: ignore[assignment]
+        try:
+            out = rd.load_universe(core_symbols=["btcusdt", "XAUUSD", "au2604", "wti-usd"], max_symbols=10)
+            self.assertEqual(out, ["BTCUSDT", "XAUUSD", "AU2604", "WTIUSD"])
+        finally:
+            rd.ak.index_stock_cons_csindex = original_cons  # type: ignore[assignment]
+
     def test_fetch_one_symbol_supports_crypto_pair(self) -> None:
         import lie_engine.research.real_data as rd
 
@@ -205,6 +269,70 @@ class ResearchTests(unittest.TestCase):
             self.assertIn("source", df.columns)
         finally:
             rd._get_binance_provider = original_get_provider  # type: ignore[assignment]
+
+    def test_fetch_crypto_daily_falls_back_to_yfinance_proxy(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_get_provider = rd._get_binance_provider
+        original_download = rd._yfinance_download
+
+        class _EmptyProvider:
+            def fetch_ohlcv(self, symbol: str, start: date, end: date, freq: str = "1d") -> pd.DataFrame:
+                return pd.DataFrame()
+
+        def _fake_download(*args, **kwargs):
+            self.assertEqual(args[0], "BTC-USD")
+            return pd.DataFrame(
+                {
+                    "Open": [60000.0, 60500.0],
+                    "High": [61000.0, 61200.0],
+                    "Low": [59500.0, 60000.0],
+                    "Close": [60750.0, 60880.0],
+                    "Volume": [100000.0, 120000.0],
+                },
+                index=pd.to_datetime(["2026-02-10", "2026-02-11"]),
+            )
+
+        rd._get_binance_provider = lambda: _EmptyProvider()  # type: ignore[assignment]
+        rd._yfinance_download = _fake_download  # type: ignore[assignment]
+        try:
+            df = rd.fetch_crypto_daily("BTCUSDT", date(2026, 2, 10), date(2026, 2, 11))
+            self.assertFalse(df.empty)
+            self.assertTrue((df["symbol"] == "BTCUSDT").all())
+            self.assertTrue((df["asset_class"] == "crypto").all())
+            self.assertTrue(df["source"].astype(str).str.contains("BTC-USD").all())
+        finally:
+            rd._get_binance_provider = original_get_provider  # type: ignore[assignment]
+            rd._yfinance_download = original_download  # type: ignore[assignment]
+
+    def test_fetch_one_symbol_supports_commodity_proxy(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_download = rd._yfinance_download
+
+        def _fake_download(*args, **kwargs):
+            return pd.DataFrame(
+                {
+                    "Open": [2900.0, 2910.0],
+                    "High": [2915.0, 2920.0],
+                    "Low": [2890.0, 2901.0],
+                    "Close": [2912.0, 2918.0],
+                    "Volume": [1000.0, 1200.0],
+                },
+                index=pd.to_datetime(["2026-02-10", "2026-02-11"]),
+            )
+
+        rd._yfinance_download = _fake_download  # type: ignore[assignment]
+        try:
+            symbol, df, err = rd._fetch_one_symbol("gold", date(2026, 2, 10), date(2026, 2, 11))
+            self.assertEqual(symbol, "XAUUSD")
+            self.assertIsNone(err)
+            self.assertFalse(df.empty)
+            self.assertTrue((df["symbol"] == "XAUUSD").all())
+            self.assertTrue((df["asset_class"] == "future").all())
+            self.assertTrue(df["source"].astype(str).str.contains("GC=F").all())
+        finally:
+            rd._yfinance_download = original_download  # type: ignore[assignment]
 
     def test_run_strategy_lab_with_mock_bundle(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
@@ -544,6 +672,92 @@ class ResearchTests(unittest.TestCase):
         )
         self.assertTrue(str(crypto[0].get("name", "")).startswith("crypto_tactical_"))
         self.assertTrue(str(crypto[1].get("name", "")).startswith("crypto_swing_flow_"))
+
+    def test_strategy_lab_candidate_generation_direct_market_low_info_relaxes_more(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        market = {
+            "trend_strength_z": 0.0,
+            "volatility_z": 0.0,
+            "tail_risk_z": 0.0,
+            "brooks_trend_bar_z": 0.0,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+        report = {
+            "news_bias_z": 0.0,
+            "report_bias_z": 0.0,
+            "news_report_agreement": 0.0,
+        }
+        low_info = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.20,
+            low_activity_mode=False,
+            low_info_mode=True,
+            direct_market_mode=False,
+            crypto_mode=False,
+        )[0]
+        direct_low_info = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.20,
+            low_activity_mode=False,
+            low_info_mode=True,
+            direct_market_mode=True,
+            crypto_mode=False,
+        )[0]
+        self.assertTrue(str(direct_low_info.get("name", "")).startswith("direct_market_tactical_"))
+        self.assertLess(float(direct_low_info.get("signal_confidence_min", 0.0)), float(low_info.get("signal_confidence_min", 0.0)))
+        self.assertLess(float(direct_low_info.get("convexity_min", 0.0)), float(low_info.get("convexity_min", 0.0)))
+        self.assertLessEqual(int(direct_low_info.get("hold_days", 99)), int(low_info.get("hold_days", 0)))
+        self.assertGreaterEqual(int(direct_low_info.get("max_daily_trades", 0)), int(low_info.get("max_daily_trades", 0)))
+
+    def test_strategy_lab_candidate_generation_future_only_prefers_long_template(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        market = {
+            "trend_strength_z": 0.0,
+            "volatility_z": 0.0,
+            "tail_risk_z": 0.0,
+            "brooks_trend_bar_z": 0.0,
+            "brooks_micro_channel_bias": 0.0,
+            "brooks_two_legged_bias": 0.0,
+            "brooks_exhaustion_z": 0.0,
+            "wyckoff_accumulation_bias": 0.0,
+            "wyckoff_distribution_bias": 0.0,
+            "vpa_effort_result_bias": 0.0,
+            "vpa_climax_z": 0.0,
+        }
+        report = {
+            "news_bias_z": 0.0,
+            "report_bias_z": 0.0,
+            "news_report_agreement": 0.0,
+        }
+        candidate = sl_mod._generate_candidates(  # type: ignore[attr-defined]
+            market=market,
+            report=report,
+            candidate_count=1,
+            exposure_cap=0.21,
+            low_activity_mode=False,
+            low_info_mode=True,
+            direct_market_mode=True,
+            crypto_mode=False,
+            future_only_mode=True,
+        )[0]
+        self.assertTrue(str(candidate.get("name", "")).startswith("direct_market_long_"))
+        self.assertEqual(int(candidate.get("hold_days", 0)), 13)
+        self.assertEqual(int(candidate.get("max_daily_trades", 0)), 2)
+        self.assertAlmostEqual(float(candidate.get("signal_confidence_min", 0.0)), 13.5, places=6)
+        self.assertAlmostEqual(float(candidate.get("convexity_min", 0.0)), 0.98, places=6)
+
     def test_strategy_lab_resolve_exposure_cap_prefers_feasible_ablation(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
 
@@ -722,6 +936,165 @@ class ResearchTests(unittest.TestCase):
             )
         )
         self.assertLess(score_zero, score_active)
+
+    def test_run_strategy_lab_direct_market_low_info_relaxes_acceptance_gates(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        ts = pd.date_range(start="2025-11-01", periods=70, freq="D")
+        frames = []
+        for symbol, asset_class, base in (
+            ("BTCUSDT", "crypto", 60000.0),
+            ("XAUUSD", "future", 2600.0),
+        ):
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "ts": ts,
+                        "symbol": symbol,
+                        "open": base,
+                        "high": base * 1.01,
+                        "low": base * 0.99,
+                        "close": base * 1.002,
+                        "volume": 1000.0,
+                        "source": "mock",
+                        "asset_class": asset_class,
+                    }
+                )
+            )
+        bars = pd.concat(frames, ignore_index=True)
+        bundle = RealDataBundle(
+            bars=bars,
+            review_bars=pd.DataFrame(columns=bars.columns),
+            universe=sorted(set(bars["symbol"])),
+            news_daily=pd.Series(dtype=float),
+            report_daily=pd.Series(dtype=float),
+            news_records=0,
+            report_records=0,
+            fetch_stats={"mocked": True, "strict_cutoff_enforced": True},
+            cutoff_date=date(2026, 1, 9),
+            review_days=0,
+        )
+
+        original_loader = sl_mod.load_real_data_bundle
+        original_bt = sl_mod.run_event_backtest
+
+        def _fake_backtest(*, bars, start, end, cfg, trend_thr, mean_thr, atr_extreme):  # type: ignore[no-untyped-def]
+            return BacktestResult(
+                start=start,
+                end=end,
+                total_return=0.12,
+                annual_return=0.12,
+                max_drawdown=0.04,
+                win_rate=0.60,
+                profit_factor=1.20,
+                expectancy=0.01,
+                trades=1,
+                violations=0,
+                positive_window_ratio=0.56,
+                equity_curve=[{"date": start.isoformat(), "equity": 1.0}, {"date": end.isoformat(), "equity": 1.12}],
+                by_asset={},
+            )
+
+        sl_mod.load_real_data_bundle = lambda **kwargs: bundle  # type: ignore[assignment]
+        sl_mod.run_event_backtest = _fake_backtest  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                summary = run_strategy_lab(
+                    output_root=Path(td),
+                    core_symbols=["BTCUSDT", "XAUUSD"],
+                    start=date(2025, 11, 1),
+                    end=date(2026, 1, 9),
+                    max_symbols=8,
+                    report_symbol_cap=4,
+                    workers=2,
+                    review_days=0,
+                    candidate_count=3,
+                )
+                accepted = [c for c in summary.candidates if bool(c.accepted)]
+                self.assertGreaterEqual(len(accepted), 1)
+                self.assertTrue(any(int(c.validation_metrics.get("trades", 0)) == 1 for c in accepted))
+        finally:
+            sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+            sl_mod.run_event_backtest = original_bt  # type: ignore[assignment]
+
+    def test_run_strategy_lab_future_only_low_info_adapts_validation_split(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        ts = pd.date_range(start="2025-11-01", periods=86, freq="D")
+        frames = []
+        for symbol, base in (("XAUUSD", 2600.0), ("XAGUSD", 31.0)):
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "ts": ts,
+                        "symbol": symbol,
+                        "open": base,
+                        "high": base * 1.01,
+                        "low": base * 0.99,
+                        "close": base * 1.002,
+                        "volume": 1000.0,
+                        "source": "mock",
+                        "asset_class": "future",
+                    }
+                )
+            )
+        bars = pd.concat(frames, ignore_index=True)
+        bundle = RealDataBundle(
+            bars=bars,
+            review_bars=pd.DataFrame(columns=bars.columns),
+            universe=sorted(set(bars["symbol"])),
+            news_daily=pd.Series(dtype=float),
+            report_daily=pd.Series(dtype=float),
+            news_records=0,
+            report_records=0,
+            fetch_stats={"mocked": True, "strict_cutoff_enforced": True},
+            cutoff_date=date(2026, 1, 25),
+            review_days=0,
+        )
+
+        original_loader = sl_mod.load_real_data_bundle
+        original_bt = sl_mod.run_event_backtest
+
+        def _fake_backtest(*, bars, start, end, cfg, trend_thr, mean_thr, atr_extreme):  # type: ignore[no-untyped-def]
+            zero_trade_start = date(2026, 2, 2)
+            trades = 0 if start >= zero_trade_start else 6
+            annual_return = 0.0 if trades == 0 else 0.18
+            return BacktestResult(
+                start=start,
+                end=end,
+                total_return=annual_return,
+                annual_return=annual_return,
+                max_drawdown=0.02 if trades else 0.0,
+                win_rate=0.60 if trades else 0.0,
+                profit_factor=1.20 if trades else 0.0,
+                expectancy=0.01 if trades else 0.0,
+                trades=trades,
+                violations=0,
+                positive_window_ratio=0.62 if trades else 1.0,
+                equity_curve=[{"date": start.isoformat(), "equity": 1.0}, {"date": end.isoformat(), "equity": 1.18 if trades else 1.0}],
+                by_asset={},
+            )
+
+        sl_mod.load_real_data_bundle = lambda **kwargs: bundle  # type: ignore[assignment]
+        sl_mod.run_event_backtest = _fake_backtest  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                summary = run_strategy_lab(
+                    output_root=Path(td),
+                    core_symbols=["XAUUSD", "XAGUSD"],
+                    start=date(2025, 11, 1),
+                    end=date(2026, 3, 9),
+                    max_symbols=2,
+                    report_symbol_cap=2,
+                    workers=1,
+                    review_days=0,
+                    candidate_count=3,
+                )
+                self.assertLess(summary.validation_start_date, "2026-02-02")
+                self.assertGreaterEqual(len([c for c in summary.candidates if bool(c.accepted)]), 1)
+        finally:
+            sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+            sl_mod.run_event_backtest = original_bt  # type: ignore[assignment]
 
     def test_theory_ablation_auto_exposure_search_fields(self) -> None:
         ab_mod = _load_theory_ablation_module()

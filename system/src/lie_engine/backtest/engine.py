@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+import time as time_module
 
 import numpy as np
 import pandas as pd
@@ -183,7 +184,46 @@ def run_event_backtest(
     trend_thr: float,
     mean_thr: float,
     atr_extreme: float,
+    timing_callback: object | None = None,
 ) -> BacktestResult:
+    started_mono = time_module.monotonic()
+    last_emit_mono = started_mono
+    timing: dict[str, object] = {
+        "status": "running",
+        "elapsed_sec": 0.0,
+        "current_stage": "",
+        "current_date": "",
+        "eval_day_count": 0,
+        "regime_recalc_count": 0,
+        "signal_scan_count": 0,
+        "candidate_days": 0,
+        "signals_considered": 0,
+        "executed_trade_count": 0,
+        "history_slice_elapsed_sec": 0.0,
+        "regime_recalc_elapsed_sec": 0.0,
+        "market_proxy_elapsed_sec": 0.0,
+        "hurst_elapsed_sec": 0.0,
+        "hmm_elapsed_sec": 0.0,
+        "atr_elapsed_sec": 0.0,
+        "derive_regime_elapsed_sec": 0.0,
+        "day_universe_elapsed_sec": 0.0,
+        "signal_scan_elapsed_sec": 0.0,
+        "signal_scan_detail": {},
+        "trade_path_elapsed_sec": 0.0,
+        "metrics_aggregate_elapsed_sec": 0.0,
+    }
+
+    def _emit_timing(*, force: bool = False) -> None:
+        nonlocal last_emit_mono
+        if not callable(timing_callback):
+            return
+        now_mono = time_module.monotonic()
+        if (not force) and (now_mono - last_emit_mono < 1.0):
+            return
+        timing["elapsed_sec"] = round(now_mono - started_mono, 3)
+        timing_callback(dict(timing))
+        last_emit_mono = now_mono
+
     bars_all = bars.copy()
     bars_all["ts"] = pd.to_datetime(bars_all["ts"])
     warmup_days = max(int(cfg.proxy_lookback) * 3, 260)
@@ -191,7 +231,7 @@ def run_event_backtest(
     bars_all = bars_all[(bars_all["ts"].dt.date >= warmup_start) & (bars_all["ts"].dt.date <= end)].sort_values(["ts", "symbol"])
     eval_slice = bars_all[(bars_all["ts"].dt.date >= start) & (bars_all["ts"].dt.date <= end)]
     if eval_slice.empty:
-        return BacktestResult(
+        result = BacktestResult(
             start=start,
             end=end,
             total_return=0.0,
@@ -206,8 +246,18 @@ def run_event_backtest(
             equity_curve=[],
             by_asset={},
         )
+        timing["status"] = "completed"
+        timing["current_stage"] = ""
+        timing["current_date"] = ""
+        timing["trades"] = int(result.trades)
+        timing["violations"] = int(result.violations)
+        timing["positive_window_ratio"] = float(result.positive_window_ratio)
+        _emit_timing(force=True)
+        return result
 
     dates = sorted(eval_slice["ts"].dt.date.unique())
+    timing["eval_day_count"] = int(len(dates))
+    _emit_timing(force=True)
     equity = 1.0
     equity_points = []
     trades_rows = []
@@ -216,22 +266,62 @@ def run_event_backtest(
     symbol_size_scale: dict[str, float] = {}
 
     for i, d in enumerate(dates):
+        hist_started_mono = time_module.monotonic()
         hist = bars_all[bars_all["ts"].dt.date <= d]
+        timing["history_slice_elapsed_sec"] = round(
+            float(timing.get("history_slice_elapsed_sec", 0.0)) + (time_module.monotonic() - hist_started_mono),
+            3,
+        )
         if hist["symbol"].nunique() < 2:
             equity_points.append({"date": d.isoformat(), "equity": equity})
             continue
 
         if last_regime is None or (i % max(1, cfg.regime_recalc_interval) == 0):
+            stage_started_mono = time_module.monotonic()
+            timing["current_stage"] = "regime_recalc"
+            timing["current_date"] = d.isoformat()
+            _emit_timing()
+            market_proxy_started_mono = time_module.monotonic()
             market_proxy = hist.groupby("ts", as_index=False)["close"].mean().sort_values("ts").tail(cfg.proxy_lookback)
+            timing["market_proxy_elapsed_sec"] = round(
+                float(timing.get("market_proxy_elapsed_sec", 0.0)) + (time_module.monotonic() - market_proxy_started_mono),
+                3,
+            )
             if len(market_proxy) < _effective_proxy_min_points(int(cfg.proxy_lookback), hist):
+                timing["regime_recalc_count"] = int(timing.get("regime_recalc_count", 0)) + 1
+                timing["regime_recalc_elapsed_sec"] = round(
+                    float(timing.get("regime_recalc_elapsed_sec", 0.0)) + (time_module.monotonic() - stage_started_mono),
+                    3,
+                )
+                _emit_timing()
                 equity_points.append({"date": d.isoformat(), "equity": equity})
                 continue
 
+            hurst_started_mono = time_module.monotonic()
             h = latest_multi_scale_hurst(market_proxy["close"].to_numpy())
-            hmm = infer_hmm_state(market_proxy.rename(columns={"close": "close", "volume": "volume"}).assign(volume=1e6))
+            timing["hurst_elapsed_sec"] = round(
+                float(timing.get("hurst_elapsed_sec", 0.0)) + (time_module.monotonic() - hurst_started_mono),
+                3,
+            )
+            hmm_started_mono = time_module.monotonic()
+            hmm = infer_hmm_state(
+                market_proxy.rename(columns={"close": "close", "volume": "volume"}).assign(volume=1e6),
+                n_iter=10,
+                max_points=72,
+            )
+            timing["hmm_elapsed_sec"] = round(
+                float(timing.get("hmm_elapsed_sec", 0.0)) + (time_module.monotonic() - hmm_started_mono),
+                3,
+            )
+            atr_started_mono = time_module.monotonic()
             atr_z = compute_atr_zscore(
                 market_proxy.assign(open=market_proxy["close"], high=market_proxy["close"], low=market_proxy["close"])
             )
+            timing["atr_elapsed_sec"] = round(
+                float(timing.get("atr_elapsed_sec", 0.0)) + (time_module.monotonic() - atr_started_mono),
+                3,
+            )
+            derive_started_mono = time_module.monotonic()
             last_regime = derive_regime_consensus(
                 as_of=d,
                 hurst=h,
@@ -241,6 +331,16 @@ def run_event_backtest(
                 mean_thr=mean_thr,
                 atr_extreme=atr_extreme,
             )
+            timing["derive_regime_elapsed_sec"] = round(
+                float(timing.get("derive_regime_elapsed_sec", 0.0)) + (time_module.monotonic() - derive_started_mono),
+                3,
+            )
+            timing["regime_recalc_count"] = int(timing.get("regime_recalc_count", 0)) + 1
+            timing["regime_recalc_elapsed_sec"] = round(
+                float(timing.get("regime_recalc_elapsed_sec", 0.0)) + (time_module.monotonic() - stage_started_mono),
+                3,
+            )
+            _emit_timing()
         regime = last_regime
 
         if regime.consensus in {RegimeLabel.UNCERTAIN, RegimeLabel.EXTREME_VOL}:
@@ -251,7 +351,19 @@ def run_event_backtest(
             equity_points.append({"date": d.isoformat(), "equity": equity})
             continue
 
+        day_universe_started_mono = time_module.monotonic()
         day_universe = hist.groupby("symbol", as_index=False).tail(130)
+        timing["day_universe_elapsed_sec"] = round(
+            float(timing.get("day_universe_elapsed_sec", 0.0)) + (time_module.monotonic() - day_universe_started_mono),
+            3,
+        )
+        stage_started_mono = time_module.monotonic()
+        timing["current_stage"] = "scan_signals"
+        timing["current_date"] = d.isoformat()
+        timing["signal_scan_detail"] = {}
+        _emit_timing()
+        def _scan_timing_callback(payload: dict[str, object]) -> None:
+            timing["signal_scan_detail"] = dict(payload)
         sigs = scan_signals(
             bars=day_universe,
             regime=regime.consensus,
@@ -269,8 +381,18 @@ def run_event_backtest(
                 theory_min_confluence=float(cfg.theory_min_confluence),
                 theory_conflict_fuse=float(cfg.theory_conflict_fuse),
             ),
+            timing_callback=_scan_timing_callback,
+        )
+        timing["signal_scan_count"] = int(timing.get("signal_scan_count", 0)) + 1
+        timing["signal_scan_elapsed_sec"] = round(
+            float(timing.get("signal_scan_elapsed_sec", 0.0)) + (time_module.monotonic() - stage_started_mono),
+            3,
         )
         sigs = sigs[: cfg.max_daily_trades]
+        if sigs:
+            timing["candidate_days"] = int(timing.get("candidate_days", 0)) + 1
+            timing["signals_considered"] = int(timing.get("signals_considered", 0)) + int(len(sigs))
+        _emit_timing()
 
         if not sigs:
             equity_points.append({"date": d.isoformat(), "equity": equity})
@@ -278,6 +400,10 @@ def run_event_backtest(
 
         day_ret = 0.0
         executed_count = 0
+        stage_started_mono = time_module.monotonic()
+        timing["current_stage"] = "trade_path_simulation"
+        timing["current_date"] = d.isoformat()
+        _emit_timing()
         for sig in sigs:
             symbol_df = bars_all[bars_all["symbol"] == sig.symbol].sort_values("ts").reset_index(drop=True)
             entry_row = symbol_df[symbol_df["ts"].dt.date == d]
@@ -355,6 +481,7 @@ def run_event_backtest(
                 {
                     "date": d.isoformat(),
                     "symbol": sig.symbol,
+                    "regime": regime.consensus.value,
                     "side": sig.side.value,
                     "asset_class": asset_class,
                     "hit_target": bool(hit_target),
@@ -368,6 +495,12 @@ def run_event_backtest(
                 }
             )
 
+        timing["trade_path_elapsed_sec"] = round(
+            float(timing.get("trade_path_elapsed_sec", 0.0)) + (time_module.monotonic() - stage_started_mono),
+            3,
+        )
+        timing["executed_trade_count"] = int(timing.get("executed_trade_count", 0)) + int(executed_count)
+        _emit_timing()
         if executed_count:
             day_ret /= executed_count
             day_ret *= max(0.0, min(1.5, float(cfg.exposure_scale)))
@@ -378,6 +511,10 @@ def run_event_backtest(
 
     eq_df = pd.DataFrame(equity_points)
     tr_df = pd.DataFrame(trades_rows)
+    stage_started_mono = time_module.monotonic()
+    timing["current_stage"] = "metrics_aggregate"
+    timing["current_date"] = ""
+    _emit_timing()
 
     (
         total_return,
@@ -391,14 +528,37 @@ def run_event_backtest(
     ) = _compute_metrics(eq_df["equity"], tr_df, window_returns)
 
     by_asset = {}
+    by_symbol: dict[str, dict[str, float | int]] = {}
+    by_symbol_regime: dict[str, dict[str, dict[str, float | int]]] = {}
     if not tr_df.empty:
         by_asset = tr_df.groupby("asset_class")["pnl"].mean().to_dict()
+        by_symbol = {
+            str(symbol): {
+                "total_pnl": float(group["pnl"].sum()),
+                "avg_pnl": float(group["pnl"].mean()),
+                "trade_count": int(len(group)),
+                "win_rate": float((group["pnl"] > 0).mean()),
+            }
+            for symbol, group in tr_df.groupby("symbol")
+        }
+        by_symbol_regime = {
+            str(symbol): {
+                str(regime_name): {
+                    "total_pnl": float(group["pnl"].sum()),
+                    "avg_pnl": float(group["pnl"].mean()),
+                    "trade_count": int(len(group)),
+                    "win_rate": float((group["pnl"] > 0).mean()),
+                }
+                for regime_name, group in symbol_group.groupby("regime")
+            }
+            for symbol, symbol_group in tr_df.groupby("symbol")
+        }
 
     violations = 0
     if max_drawdown > 0.18:
         violations += 1
 
-    return BacktestResult(
+    result = BacktestResult(
         start=start,
         end=end,
         total_return=total_return,
@@ -412,4 +572,15 @@ def run_event_backtest(
         positive_window_ratio=positive_window_ratio,
         equity_curve=eq_df.to_dict(orient="records"),
         by_asset=by_asset,
+        by_symbol=by_symbol,
+        by_symbol_regime=by_symbol_regime,
     )
+    timing["metrics_aggregate_elapsed_sec"] = round(time_module.monotonic() - stage_started_mono, 3)
+    timing["status"] = "completed"
+    timing["current_stage"] = ""
+    timing["current_date"] = ""
+    timing["trades"] = int(result.trades)
+    timing["violations"] = int(result.violations)
+    timing["positive_window_ratio"] = float(result.positive_window_ratio)
+    _emit_timing(force=True)
+    return result

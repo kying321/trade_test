@@ -1,0 +1,28 @@
+{
+  "date": "2026-03-06",
+  "generated_at": "2026-03-05T16:38:22Z",
+  "source": "binance_spot",
+  "open_positions": 1,
+  "closed_count": 0,
+  "closed_pnl": 0.0,
+  "positions": [
+    {
+      "symbol": "BTCUSDT",
+      "qty": 4.987e-05,
+      "side": "LONG",
+      "entry_price": 0.0,
+      "market_price": 71309.61,
+      "notional": 3.5562102507,
+      "status": "OPEN",
+      "recv_ts_ms": 1772728701533
+    }
+  ],
+  "stats": {
+    "symbol_pool": [
+      "BTCUSDT"
+    ],
+    "trade_window_hours": 6,
+    "market": "spot",
+    "recv_ts_ms": 1772728702189
+  }
+}

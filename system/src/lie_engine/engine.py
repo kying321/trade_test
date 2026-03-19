@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from contextlib import closing
+from contextlib import closing, contextmanager
+import fcntl
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
+import time as time_module
 from typing import Any
 
 import numpy as np
@@ -46,6 +50,8 @@ from lie_engine.signal import (
     scan_signals,
     summarize_microstructure_snapshot,
 )
+
+RUN_HALFHOUR_MUTEX_HELD_ENV = "LIE_RUN_HALFHOUR_MUTEX_HELD"
 
 
 @dataclass(slots=True)
@@ -107,6 +113,39 @@ class LieEngine:
         return out
 
     @staticmethod
+    def _looks_like_crypto_pair(symbol: str) -> bool:
+        sym = re.sub(r"[^A-Za-z0-9]", "", str(symbol or "").upper())
+        if len(sym) < 6:
+            return False
+        if not re.search(r"[A-Z]", sym):
+            return False
+        quote_assets = ("USDT", "USDC", "BUSD", "FDUSD", "BTC", "ETH", "BNB", "EUR")
+        return any(sym.endswith(q) and len(sym) > len(q) + 1 for q in quote_assets)
+
+    def _provider_stack_is_public_crypto_only(self) -> bool:
+        provider_names = {
+            str(getattr(provider, "name", "")).strip()
+            for provider in self.providers
+            if str(getattr(provider, "name", "")).strip()
+        }
+        return bool(provider_names) and provider_names.issubset({"binance_spot_public", "bybit_spot_public"})
+
+    def _filter_expanded_symbols_for_provider_stack(self, symbols: list[str]) -> tuple[list[str], list[str]]:
+        ordered: list[str] = []
+        filtered_out: list[str] = []
+        seen: set[str] = set()
+        for raw in symbols:
+            sym = str(raw).strip()
+            if (not sym) or (sym in seen):
+                continue
+            seen.add(sym)
+            if self._provider_stack_is_public_crypto_only() and not self._looks_like_crypto_pair(sym):
+                filtered_out.append(sym)
+                continue
+            ordered.append(sym)
+        return ordered, filtered_out
+
+    @staticmethod
     def _load_json_safely(path: Path) -> dict[str, Any]:
         if not path.exists():
             return {}
@@ -116,8 +155,155 @@ class LieEngine:
             return {}
 
     @staticmethod
+    def _snapshot_json_if_exists(source_path: Path, target_path: Path) -> bool:
+        if not source_path.exists():
+            return False
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+        return True
+
+    def _run_halfhour_mutex_path(self) -> Path:
+        path = self.ctx.output_dir / "state" / "run-halfhour-pulse.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _run_halfhour_mutex_timeout_seconds(self) -> float:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        try:
+            timeout = float(val.get("run_halfhour_pulse_mutex_timeout_seconds", 5.0))
+        except Exception:
+            timeout = 5.0
+        return float(min(60.0, max(1.0, timeout)))
+
+    @contextmanager
+    def _run_halfhour_mutex(self, owner: str):
+        inherited_owner = str(os.environ.get(RUN_HALFHOUR_MUTEX_HELD_ENV, "")).strip()
+        if inherited_owner:
+            yield
+            return
+
+        lock_path = self._run_halfhour_mutex_path()
+        fd = lock_path.open("a+", encoding="utf-8")
+        timeout_seconds = self._run_halfhour_mutex_timeout_seconds()
+        deadline = time_module.monotonic() + timeout_seconds
+        acquired = False
+        prev_env = os.environ.get(RUN_HALFHOUR_MUTEX_HELD_ENV)
+        try:
+            while True:
+                try:
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    if time_module.monotonic() >= deadline:
+                        raise TimeoutError(f"run-halfhour-pulse mutex timeout: {timeout_seconds:.1f}s")
+                    time_module.sleep(0.05)
+            payload = {
+                "owner": str(owner),
+                "pid": int(os.getpid()),
+                "acquired_at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            fd.seek(0)
+            fd.truncate()
+            fd.write(json.dumps(payload, ensure_ascii=False, indent=2))
+            fd.flush()
+            os.fsync(fd.fileno())
+            os.environ[RUN_HALFHOUR_MUTEX_HELD_ENV] = str(owner)
+            yield
+        finally:
+            try:
+                if acquired:
+                    if prev_env is None:
+                        os.environ.pop(RUN_HALFHOUR_MUTEX_HELD_ENV, None)
+                    else:
+                        os.environ[RUN_HALFHOUR_MUTEX_HELD_ENV] = prev_env
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+            finally:
+                fd.close()
+
+    @staticmethod
     def _clamp_float(v: float, lo: float, hi: float) -> float:
         return float(max(lo, min(hi, v)))
+
+    @staticmethod
+    def _time_sync_addr_classification(server_addr: str) -> str:
+        addr_text = str(server_addr or "").strip()
+        if not addr_text:
+            return ""
+        try:
+            ip = ipaddress.ip_address(addr_text)
+        except ValueError:
+            return ""
+        if ip in ipaddress.ip_network("198.18.0.0/15"):
+            return "fake_ip_dns_intercept"
+        return ""
+
+    @staticmethod
+    def _time_sync_diagnostic_hosts(primary: str, secondary: str) -> list[str]:
+        ordered: list[str] = []
+        for host in (
+            primary,
+            secondary,
+            "time.apple.com",
+            "time.windows.com",
+            "time.nist.gov",
+            "ntp.aliyun.com",
+            "cn.ntp.org.cn",
+            "pool.ntp.org",
+        ):
+            host_text = str(host or "").strip()
+            if host_text and host_text not in ordered:
+                ordered.append(host_text)
+        return ordered
+
+    def _collect_time_sync_dns_diagnostics(self, hosts: list[str]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for host in hosts:
+            addr_list: list[str] = []
+            error = ""
+            try:
+                infos = socket.getaddrinfo(host, 123, type=socket.SOCK_DGRAM)
+                seen: set[str] = set()
+                for info in infos:
+                    sockaddr = info[4] if len(info) >= 5 else None
+                    if not sockaddr:
+                        continue
+                    addr = str(sockaddr[0]).strip()
+                    if addr and addr not in seen:
+                        seen.add(addr)
+                        addr_list.append(addr)
+            except socket.gaierror as exc:
+                error = f"gaierror:{exc}"
+            except Exception as exc:  # noqa: BLE001
+                error = f"dns_error:{exc}"
+            classifications = [self._time_sync_addr_classification(addr) for addr in addr_list]
+            fake_ip_detected = any(item == "fake_ip_dns_intercept" for item in classifications)
+            rows.append(
+                {
+                    "source": str(host),
+                    "resolved_addrs": addr_list,
+                    "addr_classifications": classifications,
+                    "fake_ip_detected": bool(fake_ip_detected),
+                    "error": error,
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _normalize_cvd_semantics(state: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(state, dict):
+            return {}
+        normalized = dict(state)
+        trust = str(normalized.get("cvd_trust_tier_hint", "unavailable")).strip() or "unavailable"
+        note = str(normalized.get("cvd_context_note", "")).strip()
+        time_sync_ok = bool(normalized.get("time_sync_ok", True))
+        if (not time_sync_ok) and trust in {"single_exchange_ok", "cross_exchange_confirmed"}:
+            normalized["cvd_trust_tier_hint"] = "single_exchange_low"
+            note_parts = [part for part in note.split("|") if str(part).strip()]
+            if "time_sync_risk" not in note_parts:
+                note_parts.append("time_sync_risk")
+            normalized["cvd_context_note"] = "|".join(note_parts) if note_parts else "time_sync_risk"
+        return normalized
 
     @staticmethod
     def _clamp_int(v: float | int, lo: int, hi: int) -> int:
@@ -279,21 +465,124 @@ class LieEngine:
             available = bool(row.get("available", False))
             offset_abs = float(row.get("offset_abs_ms", np.nan)) if available else np.nan
             rtt_ms = float(row.get("rtt_ms", np.nan)) if available else np.nan
+            addr_classification = self._time_sync_addr_classification(str(row.get("server_addr", "")))
+            fake_ip_detected = bool(addr_classification == "fake_ip_dns_intercept")
+            breach_reasons: list[str] = []
+            if available and np.isfinite(offset_abs) and offset_abs > max_offset_ms:
+                breach_reasons.append(f"offset_abs_ms={offset_abs:.3f}>{int(max_offset_ms)}")
+            if available and np.isfinite(rtt_ms) and rtt_ms > max_rtt_ms:
+                breach_reasons.append(f"rtt_ms={rtt_ms:.3f}>{int(max_rtt_ms)}")
             ok = bool(available and np.isfinite(offset_abs) and offset_abs <= max_offset_ms and np.isfinite(rtt_ms) and rtt_ms <= max_rtt_ms)
+            if fake_ip_detected:
+                ok = False
             row["ok"] = bool(ok)
+            row["addr_classification"] = addr_classification
+            row["fake_ip_detected"] = fake_ip_detected
+            row["breach_reasons"] = breach_reasons
             row["offset_limit_ms"] = int(max_offset_ms)
             row["rtt_limit_ms"] = int(max_rtt_ms)
             rows.append(row)
 
         available_count = int(sum(1 for r in rows if bool(r.get("available", False))))
         ok_count = int(sum(1 for r in rows if bool(r.get("ok", False))))
+        fake_ip_sources = [str(r.get("source", "")).strip() for r in rows if bool(r.get("fake_ip_detected", False))]
         status = "ok" if ok_count >= min_ok_sources else "degraded"
         if available_count == 0:
             status = "unavailable"
+        classification = "none"
+        remediation_hint = "keep current time sync path"
+        diagnostic_hosts = self._time_sync_diagnostic_hosts(primary, secondary)
+        dns_diagnostics = self._collect_time_sync_dns_diagnostics(diagnostic_hosts) if diagnostic_hosts else []
+        diagnostic_fake_ip_sources = [
+            str(row.get("source", "")).strip()
+            for row in dns_diagnostics
+            if bool(row.get("fake_ip_detected", False))
+        ]
+        diagnostic_resolved_sources = [
+            str(row.get("source", "")).strip()
+            for row in dns_diagnostics
+            if list(row.get("resolved_addrs", []))
+        ]
+        fake_ip_intercept_scope = ""
+        threshold_breach_scope = ""
+        threshold_breach_offset_sources: list[str] = []
+        threshold_breach_latency_sources: list[str] = []
+        threshold_breach_estimated_offset_ms: float | None = None
+        threshold_breach_estimated_rtt_ms: float | None = None
+        environment_wide_fake_ip = bool(
+            diagnostic_resolved_sources and len(diagnostic_fake_ip_sources) == len(diagnostic_resolved_sources)
+        )
+        threshold_breach_sources = [
+            f"{str(row.get('source', '')).strip()}:{','.join(str(x) for x in list(row.get('breach_reasons', [])) if str(x).strip())}"
+            for row in rows
+            if list(row.get("breach_reasons", []))
+        ]
+        threshold_breach_offset_sources = [
+            str(row.get("source", "")).strip()
+            for row in rows
+            if any(str(reason).startswith("offset_abs_ms=") for reason in list(row.get("breach_reasons", [])))
+        ]
+        threshold_breach_latency_sources = [
+            str(row.get("source", "")).strip()
+            for row in rows
+            if any(str(reason).startswith("rtt_ms=") for reason in list(row.get("breach_reasons", [])))
+        ]
+        offset_breach_values = [
+            float(row.get("offset_abs_ms", np.nan))
+            for row in rows
+            if str(row.get("source", "")).strip() in threshold_breach_offset_sources
+            and np.isfinite(float(row.get("offset_abs_ms", np.nan)))
+        ]
+        latency_breach_values = [
+            float(row.get("rtt_ms", np.nan))
+            for row in rows
+            if str(row.get("source", "")).strip() in threshold_breach_latency_sources
+            and np.isfinite(float(row.get("rtt_ms", np.nan)))
+        ]
+        if offset_breach_values and latency_breach_values:
+            threshold_breach_scope = "clock_skew_and_latency"
+        elif offset_breach_values:
+            threshold_breach_scope = "clock_skew_only"
+        elif latency_breach_values:
+            threshold_breach_scope = "latency_only"
+        if offset_breach_values:
+            threshold_breach_estimated_offset_ms = round(float(np.median(offset_breach_values)), 3)
+        if latency_breach_values:
+            threshold_breach_estimated_rtt_ms = round(float(np.median(latency_breach_values)), 3)
+        if (not fake_ip_sources) and environment_wide_fake_ip:
+            fake_ip_sources = [host for host in ordered if host in diagnostic_fake_ip_sources]
+        if fake_ip_sources:
+            classification = "fake_ip_dns_intercept"
+            fake_ip_intercept_scope = "configured_sources_only"
+            if environment_wide_fake_ip:
+                fake_ip_intercept_scope = "environment_wide"
+            remediation_hint = (
+                "disable fake-ip DNS interception for SNTP/NTP hosts or switch system_time_sync sources to directly reachable hosts, then rerun time_sync_probe"
+            )
+            if fake_ip_intercept_scope == "environment_wide":
+                remediation_hint = (
+                    "disable fake-ip DNS interception or bypass proxy DNS for SNTP/NTP hosts; switching source hostnames is unlikely to help until environment routing is fixed, then rerun time_sync_probe"
+                )
+        elif available_count > 0 and ok_count < min_ok_sources and threshold_breach_sources:
+            classification = "threshold_breach"
+            if threshold_breach_scope == "clock_skew_only":
+                remediation_hint = (
+                    "synchronize system clock until time-sync offset stays within configured limits, then rerun time_sync_probe"
+                )
+            elif threshold_breach_scope == "latency_only":
+                remediation_hint = (
+                    "reduce network latency/jitter until time-sync RTT stays within configured limits, then rerun time_sync_probe"
+                )
+            else:
+                remediation_hint = (
+                    "synchronize system clock and reduce network latency/jitter until time-sync offset and RTT stay within configured limits, then rerun time_sync_probe"
+                )
         payload = {
             "enabled": True,
             "active": True,
             "status": str(status),
+            "classification": classification,
+            "remediation_hint": remediation_hint,
             "primary_source": primary,
             "secondary_source": secondary,
             "probe_backend": "sntp",
@@ -305,12 +594,29 @@ class LieEngine:
             "sources": rows,
             "available_sources": int(available_count),
             "ok_sources": int(ok_count),
+            "fake_ip_sources": fake_ip_sources,
+            "fake_ip_intercept_scope": fake_ip_intercept_scope,
+            "threshold_breach_sources": threshold_breach_sources,
+            "threshold_breach_scope": threshold_breach_scope,
+            "threshold_breach_offset_sources": threshold_breach_offset_sources,
+            "threshold_breach_latency_sources": threshold_breach_latency_sources,
+            "threshold_breach_estimated_offset_ms": threshold_breach_estimated_offset_ms,
+            "threshold_breach_estimated_rtt_ms": threshold_breach_estimated_rtt_ms,
+            "diagnostic_candidate_sources": diagnostic_hosts,
+            "diagnostic_candidate_fake_ip_sources": diagnostic_fake_ip_sources,
+            "dns_diagnostics": dns_diagnostics,
             "pass": bool(ok_count >= min_ok_sources),
         }
         artifact_dir = self.ctx.output_dir / "artifacts" / "time_sync"
-        artifact_path = artifact_dir / f"{as_of.isoformat()}_probe.json"
-        write_json(artifact_path, payload)
-        payload["artifact_path"] = str(artifact_path)
+        run_ts = datetime.now(tz=timezone.utc).replace(microsecond=0)
+        stamp = run_ts.strftime("%Y%m%dT%H%M%SZ")
+        immutable_artifact_path = artifact_dir / f"{stamp}_time_sync_probe.json"
+        latest_artifact_path = artifact_dir / f"{as_of.isoformat()}_probe.json"
+        payload["captured_at_utc"] = run_ts.isoformat()
+        write_json(immutable_artifact_path, payload)
+        write_json(latest_artifact_path, payload)
+        payload["artifact_path"] = str(immutable_artifact_path)
+        payload["latest_artifact_path"] = str(latest_artifact_path)
         return payload
 
     def _mode_history_stats(self, *, as_of: date, lookback_days: int | None = None) -> dict[str, Any]:
@@ -370,14 +676,37 @@ class LieEngine:
             }
         return {"as_of": as_of.isoformat(), "lookback_days": lb, "modes": modes}
 
-    def _review_backtest_start(self, as_of: date) -> date:
+    def _review_backtest_fast_mode_enabled(self) -> bool:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        raw = val.get("review_backtest_fast_mode_enabled", True)
+        if isinstance(raw, bool):
+            return bool(raw)
+        if isinstance(raw, (int, float)):
+            return bool(float(raw) >= 0.5)
+        text = str(raw).strip().lower()
+        if text in {"0", "false", "no", "off"}:
+            return False
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        return True
+
+    def _review_backtest_start(self, as_of: date, fast_mode: bool = False) -> date:
         default_start = date(2015, 1, 1)
         val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+
+        if bool(fast_mode):
+            fast_lookback_raw = val.get("review_backtest_fast_lookback_days")
+            if isinstance(fast_lookback_raw, (int, float)) and int(fast_lookback_raw) > 0:
+                fast_lookback_days = max(30, int(fast_lookback_raw))
+                return max(default_start, as_of - timedelta(days=fast_lookback_days))
 
         lookback_raw = val.get("review_backtest_lookback_days")
         if isinstance(lookback_raw, (int, float)) and int(lookback_raw) > 0:
             lookback_days = max(30, int(lookback_raw))
             return max(default_start, as_of - timedelta(days=lookback_days))
+
+        if bool(fast_mode):
+            return max(default_start, as_of - timedelta(days=540))
 
         start_raw = val.get("review_backtest_start_date")
         parsed = self._parse_iso_date(start_raw)
@@ -1061,9 +1390,84 @@ class LieEngine:
         path = self.ctx.output_dir / "artifacts" / f"{as_of.isoformat()}_quality.json"
         return self._load_json_safely(path)
 
+    def _resolve_backtest_snapshot_path(self, *, as_of: date) -> tuple[Path | None, dict[str, Any]]:
+        start = self._review_backtest_start(as_of=as_of)
+        preferred = self.ctx.output_dir / "artifacts" / f"backtest_{start.isoformat()}_{as_of.isoformat()}.json"
+        max_age_days = max(
+            0,
+            int(
+                self.settings.validation.get(
+                    "ops_backtest_snapshot_max_age_days",
+                    self.settings.validation.get("required_stable_replay_days", 3),
+                )
+            ),
+        )
+        if preferred.exists():
+            return preferred, {
+                "snapshot_start": start.isoformat(),
+                "snapshot_end": as_of.isoformat(),
+                "snapshot_path": str(preferred),
+                "snapshot_age_days": 0,
+                "snapshot_exact_match": True,
+                "snapshot_fresh_enough": True,
+                "snapshot_max_age_days": int(max_age_days),
+            }
+
+        candidates: list[tuple[date, Path]] = []
+        prefix = f"backtest_{start.isoformat()}_"
+        for path in (self.ctx.output_dir / "artifacts").glob(f"{prefix}*.json"):
+            suffix = path.stem[len(prefix) :]
+            try:
+                end_date = date.fromisoformat(suffix)
+            except ValueError:
+                continue
+            if end_date <= as_of:
+                candidates.append((end_date, path))
+        if not candidates:
+            return None, {
+                "snapshot_start": start.isoformat(),
+                "snapshot_end": "",
+                "snapshot_path": "",
+                "snapshot_age_days": None,
+                "snapshot_exact_match": False,
+                "snapshot_fresh_enough": False,
+                "snapshot_max_age_days": int(max_age_days),
+            }
+
+        candidates.sort(key=lambda item: item[0])
+        end_date, path = candidates[-1]
+        age_days = (as_of - end_date).days
+        fresh_enough = age_days <= max_age_days
+        if not fresh_enough:
+            return None, {
+                "snapshot_start": start.isoformat(),
+                "snapshot_end": end_date.isoformat(),
+                "snapshot_path": str(path),
+                "snapshot_age_days": int(age_days),
+                "snapshot_exact_match": False,
+                "snapshot_fresh_enough": False,
+                "snapshot_max_age_days": int(max_age_days),
+            }
+        return path, {
+            "snapshot_start": start.isoformat(),
+            "snapshot_end": end_date.isoformat(),
+            "snapshot_path": str(path),
+            "snapshot_age_days": int(age_days),
+            "snapshot_exact_match": False,
+            "snapshot_fresh_enough": True,
+            "snapshot_max_age_days": int(max_age_days),
+        }
+
     def _backtest_snapshot(self, as_of: date) -> dict[str, Any]:
-        path = self.ctx.output_dir / "artifacts" / f"backtest_{date(2015, 1, 1).isoformat()}_{as_of.isoformat()}.json"
-        return self._load_json_safely(path)
+        path, meta = self._resolve_backtest_snapshot_path(as_of=as_of)
+        if path is None:
+            return {}
+        payload = self._load_json_safely(path)
+        if not payload:
+            return {}
+        out = dict(payload)
+        out.update(meta)
+        return out
 
     @staticmethod
     def _filter_model_path_bars(bars: pd.DataFrame) -> pd.DataFrame:
@@ -1140,6 +1544,7 @@ class LieEngine:
         start = as_of - timedelta(days=420)
         start_ts = datetime.combine(as_of, time(0, 0)) - timedelta(days=1)
         end_ts = datetime.combine(as_of, time(23, 59))
+        symbols, _ = self._filter_expanded_symbols_for_provider_stack(symbols)
 
         result = self.data_bus.ingest(
             symbols=symbols,
@@ -1154,6 +1559,7 @@ class LieEngine:
             bars=result.normalized_bars,
             max_additions=int(self.settings.universe.get("max_dynamic_additions", 5)),
         )
+        expanded, _ = self._filter_expanded_symbols_for_provider_stack(expanded)
         if set(expanded) - set(symbols):
             result = self.data_bus.ingest(
                 symbols=expanded,
@@ -1170,34 +1576,151 @@ class LieEngine:
         return model_bars, result
 
     def _run_ingestion_range(self, start: date, end: date, symbols: list[str]) -> tuple[pd.DataFrame, Any]:
+        review_dir = self.ctx.output_dir / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        timing_path = review_dir / f"{end.isoformat()}_ingestion_range_timing.json"
+        generic_ingest_timing_path = review_dir / f"{end.isoformat()}_data_ingest_timing.json"
+        generic_persist_timing_path = review_dir / f"{end.isoformat()}_data_persist_timing.json"
+        pass1_ingest_snapshot = review_dir / f"{end.isoformat()}_data_ingest_timing_pass1.json"
+        pass2_ingest_snapshot = review_dir / f"{end.isoformat()}_data_ingest_timing_pass2.json"
+        persist_snapshot = review_dir / f"{end.isoformat()}_data_persist_timing_ingestion_range.json"
+        for stale_path in (pass1_ingest_snapshot, pass2_ingest_snapshot, persist_snapshot):
+            try:
+                stale_path.unlink()
+            except FileNotFoundError:
+                pass
+        ingestion_started_mono = time_module.monotonic()
+        ingestion_timing: dict[str, Any] = {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "status": "running",
+            "elapsed_sec": 0.0,
+            "current_stage": "",
+            "last_completed_stage": "",
+            "stages": [],
+        }
+
+        def _persist_ingestion_timing() -> None:
+            ingestion_timing["elapsed_sec"] = round(time_module.monotonic() - ingestion_started_mono, 3)
+            write_json(timing_path, ingestion_timing)
+
+        def _run_ingestion_stage(
+            name: str,
+            fn: Any,
+            *,
+            summary_fn: Any = None,
+        ) -> Any:
+            stage_started_mono = time_module.monotonic()
+            ingestion_timing["status"] = "running"
+            ingestion_timing["current_stage"] = name
+            ingestion_timing["current_stage_started_elapsed_sec"] = round(
+                stage_started_mono - ingestion_started_mono,
+                3,
+            )
+            _persist_ingestion_timing()
+            try:
+                result = fn()
+            except Exception as exc:
+                ingestion_timing["status"] = "failed"
+                ingestion_timing["failed_stage"] = name
+                ingestion_timing["error"] = f"{type(exc).__name__}:{exc}"
+                ingestion_timing["current_stage_elapsed_sec"] = round(
+                    time_module.monotonic() - stage_started_mono,
+                    3,
+                )
+                _persist_ingestion_timing()
+                raise
+            stage_row: dict[str, Any] = {
+                "name": name,
+                "elapsed_sec": round(time_module.monotonic() - stage_started_mono, 3),
+            }
+            if summary_fn is not None:
+                summary = summary_fn(result)
+                if summary:
+                    stage_row["summary"] = summary
+            ingestion_timing.setdefault("stages", []).append(stage_row)
+            ingestion_timing["last_completed_stage"] = name
+            ingestion_timing["current_stage"] = ""
+            ingestion_timing.pop("current_stage_started_elapsed_sec", None)
+            ingestion_timing.pop("current_stage_elapsed_sec", None)
+            ingestion_timing.pop("failed_stage", None)
+            ingestion_timing.pop("error", None)
+            _persist_ingestion_timing()
+            return result
+
         start_ts = datetime.combine(start, time(0, 0))
         end_ts = datetime.combine(end, time(23, 59))
+        input_symbols = [str(sym).strip() for sym in symbols if str(sym).strip()]
+        symbols, filtered_input_symbols = self._filter_expanded_symbols_for_provider_stack(input_symbols)
 
-        result = self.data_bus.ingest(
-            symbols=symbols,
-            start=start,
-            end=end,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            langs=("zh", "en"),
-        )
-        expanded = expand_universe(
-            core_symbols=symbols,
-            bars=result.normalized_bars,
-            max_additions=int(self.settings.universe.get("max_dynamic_additions", 5)),
-        )
-        if set(expanded) - set(symbols):
-            result = self.data_bus.ingest(
-                symbols=expanded,
+        result = _run_ingestion_stage(
+            "pass1_ingest",
+            lambda: self.data_bus.ingest(
+                symbols=symbols,
                 start=start,
                 end=end,
                 start_ts=start_ts,
                 end_ts=end_ts,
                 langs=("zh", "en"),
+            ),
+            summary_fn=lambda out: {
+                "original_input_symbol_count": int(len(input_symbols)),
+                "requested_symbol_count": int(len(symbols)),
+                "filtered_out_input_symbols": sorted(filtered_input_symbols),
+                "normalized_rows": int(len(out.normalized_bars)),
+            },
+        )
+        self._snapshot_json_if_exists(generic_ingest_timing_path, pass1_ingest_snapshot)
+        expanded = expand_universe(
+            core_symbols=symbols,
+            bars=result.normalized_bars,
+            max_additions=int(self.settings.universe.get("max_dynamic_additions", 5)),
+        )
+        expanded, filtered_out = self._filter_expanded_symbols_for_provider_stack(expanded)
+        if set(expanded) - set(symbols):
+            result = _run_ingestion_stage(
+                "pass2_ingest",
+                lambda: self.data_bus.ingest(
+                    symbols=expanded,
+                    start=start,
+                    end=end,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    langs=("zh", "en"),
+                ),
+                summary_fn=lambda out: {
+                    "requested_symbol_count": int(len(expanded)),
+                    "new_symbols": sorted(str(sym) for sym in (set(expanded) - set(symbols))),
+                    "filtered_out_symbols": sorted(filtered_out),
+                    "normalized_rows": int(len(out.normalized_bars)),
+                },
             )
+            self._snapshot_json_if_exists(generic_ingest_timing_path, pass2_ingest_snapshot)
 
-        self.data_bus.persist(as_of=end, result=result)
-        model_bars = self._filter_model_path_bars(result.normalized_bars)
+        _run_ingestion_stage(
+            "persist",
+            lambda: self.data_bus.persist(as_of=end, result=result),
+            summary_fn=lambda _out: {
+                "persist_snapshot_path": str(persist_snapshot),
+                "persist_generic_timing_path": str(generic_persist_timing_path),
+            },
+        )
+        self._snapshot_json_if_exists(generic_persist_timing_path, persist_snapshot)
+        model_bars = _run_ingestion_stage(
+            "filter_model_bars",
+            lambda: self._filter_model_path_bars(result.normalized_bars),
+            summary_fn=lambda out: {
+                "model_bar_rows": int(len(out)),
+                "model_bar_symbol_count": int(out["symbol"].nunique()) if not out.empty and "symbol" in out.columns else 0,
+            },
+        )
+        ingestion_timing["status"] = "completed"
+        ingestion_timing["current_stage"] = ""
+        ingestion_timing.pop("current_stage_started_elapsed_sec", None)
+        ingestion_timing.pop("current_stage_elapsed_sec", None)
+        ingestion_timing.pop("failed_stage", None)
+        ingestion_timing.pop("error", None)
+        _persist_ingestion_timing()
         return model_bars, result
 
     def _regime_from_bars(self, as_of: date, bars: pd.DataFrame):
@@ -1422,12 +1945,18 @@ class LieEngine:
         as_of: date,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
         profile, mapping = self._resolve_live_mapping_profile()
         positions_key_paths = mapping.get("positions", ["positions"])
         positions_raw = self._pick_first(payload, positions_key_paths if isinstance(positions_key_paths, list) else ["positions"])
         positions_in = positions_raw if isinstance(positions_raw, list) else []
         pf = mapping.get("position_fields", {}) if isinstance(mapping.get("position_fields", {}), dict) else {}
+        min_position_notional_abs = max(
+            0.0,
+            self._to_float(val.get("broker_snapshot_live_min_position_notional_abs", 1.0), 1.0),
+        )
         positions: list[dict[str, Any]] = []
+        filtered_dust_rows = 0
         for row in positions_in:
             if not isinstance(row, dict):
                 continue
@@ -1448,6 +1977,9 @@ class LieEngine:
             notional = self._to_float(notional_raw, 0.0)
             if abs(notional) <= 1e-12 and qty > 0 and market_price > 0:
                 notional = qty * market_price
+            if qty > 0.0 and abs(notional) < min_position_notional_abs:
+                filtered_dust_rows += 1
+                continue
             positions.append(
                 {
                     "symbol": str(symbol_raw or ""),
@@ -1461,6 +1993,10 @@ class LieEngine:
             )
         open_positions_raw = self._pick_first(payload, mapping.get("open_positions", ["open_positions"]))
         open_positions = int(round(self._to_float(open_positions_raw, len(positions))))
+        if positions_in and filtered_dust_rows > 0:
+            open_positions = int(len(positions))
+        else:
+            open_positions = max(open_positions, int(len(positions)))
         open_positions = max(0, open_positions)
         closed_pnl_raw = self._pick_first(payload, mapping.get("closed_pnl", ["closed_pnl"]))
         closed_count_raw = self._pick_first(payload, mapping.get("closed_count", ["closed_count"]))
@@ -1484,6 +2020,8 @@ class LieEngine:
                 "raw_path": str(self._broker_snapshot_live_inbox_path(as_of)),
                 "positions_rows_in": int(len(positions_in)),
                 "positions_rows_out": int(len(positions)),
+                "positions_rows_filtered_dust": int(filtered_dust_rows),
+                "min_position_notional_abs": float(min_position_notional_abs),
             },
         }
 
@@ -1504,6 +2042,39 @@ class LieEngine:
                 "positions": positions,
             },
         )
+
+    def _replace_latest_positions_snapshot(self, *, as_of: date, plans_df: pd.DataFrame) -> None:
+        dstr = as_of.isoformat()
+        if self.ctx.sqlite_path.exists():
+            with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", ("latest_positions",))
+                    if cur.fetchone() is not None:
+                        cur.execute("DELETE FROM latest_positions WHERE date = ?", (dstr,))
+                        conn.commit()
+        if plans_df is None or len(plans_df.columns) == 0:
+            return
+        append_sqlite(
+            self.ctx.sqlite_path,
+            "latest_positions",
+            plans_df.assign(date=dstr),
+        )
+
+    def _replace_closed_paper_executions(self, *, as_of: date, closed_df: pd.DataFrame) -> None:
+        dstr = as_of.isoformat()
+        if self.ctx.sqlite_path.exists():
+            with closing(get_sqlite_conn(self.ctx.sqlite_path)) as conn:
+                with closing(conn.cursor()) as cur:
+                    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", ("executed_plans",))
+                    if cur.fetchone() is not None:
+                        cur.execute(
+                            "DELETE FROM executed_plans WHERE date = ? AND (status = 'CLOSED' OR status IS NULL)",
+                            (dstr,),
+                        )
+                        conn.commit()
+        if closed_df is None or closed_df.empty:
+            return
+        append_sqlite(self.ctx.sqlite_path, "executed_plans", closed_df)
 
     def _write_paper_broker_snapshot(
         self,
@@ -1677,6 +2248,8 @@ class LieEngine:
             risk_pct = float(pos.get("risk_pct", 0.0))
             hold_days = max(1, int(pos.get("hold_days", 1)))
             open_date = self._parse_iso_date(pos.get("open_date")) or as_of
+            if open_date > as_of:
+                continue
             holding_days = max(0, (as_of - open_date).days)
             runtime_mode = str(pos.get("runtime_mode", "base")).strip() or "base"
             entry = float(pos.get("entry_price", 0.0))
@@ -1769,8 +2342,7 @@ class LieEngine:
             )
 
         closed_df = pd.DataFrame(closed_rows)
-        if not closed_df.empty:
-            append_sqlite(self.ctx.sqlite_path, "executed_plans", closed_df)
+        self._replace_closed_paper_executions(as_of=as_of, closed_df=closed_df)
 
         return {
             "closed_df": closed_df,
@@ -1941,19 +2513,37 @@ class LieEngine:
 
         out: dict[str, dict[str, Any]] = {}
         source_rows: list[dict[str, Any]] = []
+        provider_time_sync_cache: dict[str, dict[str, Any]] = {}
         for symbol in scan_symbols:
             best_state: dict[str, Any] | None = None
             best_rank = -1e9
             for provider in provider_pool:
                 source_name = str(getattr(provider, "name", ""))
+                provider_cache_key = source_name.strip().lower() or f"provider_{id(provider)}"
+                l2 = pd.DataFrame()
+                trades = pd.DataFrame()
+                fetch_error_parts: list[str] = []
                 try:
                     l2 = provider.fetch_l2(symbol=symbol, start_ts=start_ts, end_ts=end_ts, depth=depth)
+                except NotImplementedError:
+                    fetch_error_parts.append("l2_not_implemented")
+                except Exception as exc:
+                    fetch_error_parts.append(f"l2_error:{type(exc).__name__}:{str(exc).strip() or 'unknown'}")
+                try:
                     trades = provider.fetch_trades(symbol=symbol, start_ts=start_ts, end_ts=end_ts, limit=trade_limit)
                 except NotImplementedError:
-                    continue
-                except Exception:
-                    continue
-                time_sync = self._provider_time_sync_sample(provider=provider)
+                    fetch_error_parts.append("trades_not_implemented")
+                except Exception as exc:
+                    fetch_error_parts.append(f"trades_error:{type(exc).__name__}:{str(exc).strip() or 'unknown'}")
+                provider_l2_error = str(getattr(provider, "_last_l2_error", "")).strip()
+                provider_trade_error = str(getattr(provider, "_last_trade_error", "")).strip()
+                if provider_l2_error and not any(part.startswith("l2_error:") for part in fetch_error_parts):
+                    fetch_error_parts.append(f"l2_error:{provider_l2_error}")
+                if provider_trade_error and not any(part.startswith("trades_error:") for part in fetch_error_parts):
+                    fetch_error_parts.append(f"trades_error:{provider_trade_error}")
+                if provider_cache_key not in provider_time_sync_cache:
+                    provider_time_sync_cache[provider_cache_key] = self._provider_time_sync_sample(provider=provider)
+                time_sync = dict(provider_time_sync_cache.get(provider_cache_key, {}))
                 sync_available = bool(time_sync)
                 time_offset_ms = int(abs(int(time_sync.get("offset_ms", 0)))) if sync_available else -1
                 time_rtt_ms = int(max(0, int(time_sync.get("rtt_ms", 0)))) if sync_available else -1
@@ -1983,7 +2573,9 @@ class LieEngine:
                     "schema_ok": bool(schema_ok),
                     "sync_ok": bool(sync_ok),
                     "gap_ok": bool(gap_ok),
+                    "l2_rows": int(len(l2.index)) if isinstance(l2, pd.DataFrame) else 0,
                     "trade_count": int(state.get("trade_count", 0)),
+                    "trade_rows": int(len(trades.index)) if isinstance(trades, pd.DataFrame) else 0,
                     "evidence_score": float(state.get("evidence_score", 0.0)),
                     "time_sync_available": bool(sync_available),
                     "time_sync_ok": bool(time_sync_ok),
@@ -1991,6 +2583,7 @@ class LieEngine:
                     "time_sync_rtt_ms": int(time_rtt_ms),
                     "time_sync_max_offset_ms": int(time_sync_max_offset_ms),
                     "time_sync_max_rtt_ms": int(time_sync_max_rtt_ms),
+                    "fetch_error": " | ".join(part[:160] for part in fetch_error_parts[:4]),
                 }
                 source_rows.append(source_row)
                 if not has_data and schema_ok:
@@ -2003,6 +2596,7 @@ class LieEngine:
                 state["time_sync_max_offset_ms"] = int(time_sync_max_offset_ms)
                 state["time_sync_max_rtt_ms"] = int(time_sync_max_rtt_ms)
                 state["time_sync_hard_fuse_enabled"] = bool(time_sync_hard_fuse)
+                state = self._normalize_cvd_semantics(state)
                 rank = float(state.get("evidence_score", 0.0))
                 rank += 0.10 if schema_ok else -0.20
                 rank += 0.10 if sync_ok else -0.10
@@ -2018,6 +2612,81 @@ class LieEngine:
     def _collect_micro_factor_map(self, *, as_of: date, symbols: list[str]) -> dict[str, dict[str, Any]]:
         out, _ = self._collect_micro_factor_map_with_rows(as_of=as_of, symbols=symbols)
         return out
+
+    def _summarize_micro_capture_environment(self, *, source_rows: list[dict[str, Any]]) -> dict[str, Any]:
+        proxy_keys = (
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "SSL_CERT_FILE",
+            "REQUESTS_CA_BUNDLE",
+            "CURL_CA_BUNDLE",
+        )
+        env_overrides = {key: str(os.environ.get(key, "")).strip() for key in proxy_keys if str(os.environ.get(key, "")).strip()}
+        ssl_verify_failed_rows: list[str] = []
+        http_blocked_rows: list[str] = []
+        failing_rows: list[dict[str, str]] = []
+
+        for row in source_rows:
+            fetch_error = str(row.get("fetch_error", "")).strip()
+            if not fetch_error:
+                continue
+            source = str(row.get("source", "")).strip() or "-"
+            symbol = str(row.get("symbol", "")).strip().upper() or "-"
+            failing_rows.append(
+                {
+                    "source": source,
+                    "symbol": symbol,
+                    "fetch_error": fetch_error[:320],
+                }
+            )
+            upper_error = fetch_error.upper()
+            tag = f"{source}:{symbol}"
+            if "CERTIFICATE_VERIFY_FAILED" in upper_error:
+                ssl_verify_failed_rows.append(tag)
+            if "HTTP_ERROR:451" in upper_error or "HTTP_ERROR:403" in upper_error:
+                http_blocked_rows.append(tag)
+
+        proxy_enabled = bool(any(key in env_overrides for key in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")))
+        status = "ok"
+        classification = "none"
+        blocker_detail = "micro public data environment looks normal."
+        remediation_hint = "keep current network path"
+
+        if ssl_verify_failed_rows or http_blocked_rows:
+            status = "environment_blocked"
+            if ssl_verify_failed_rows and http_blocked_rows:
+                classification = "proxy_tls_and_http_access_block"
+            elif ssl_verify_failed_rows:
+                classification = "proxy_tls_intercept_or_missing_ca"
+            else:
+                classification = "http_access_block"
+            detail_parts: list[str] = []
+            if proxy_enabled:
+                detail_parts.append("proxy_env_present")
+            if ssl_verify_failed_rows:
+                detail_parts.append(f"ssl_verify_failed={','.join(ssl_verify_failed_rows[:4])}")
+            if http_blocked_rows:
+                detail_parts.append(f"http_blocked={','.join(http_blocked_rows[:4])}")
+            blocker_detail = "; ".join(detail_parts) if detail_parts else "micro public data environment is blocked."
+            remediation_hint = (
+                "fix proxy certificate trust or bypass proxy for exchange hosts, then rerun micro_capture"
+                if proxy_enabled
+                else "fix exchange network reachability or certificate trust, then rerun micro_capture"
+            )
+
+        return {
+            "status": status,
+            "classification": classification,
+            "proxy_enabled": proxy_enabled,
+            "env_overrides": env_overrides,
+            "ssl_verify_failed_count": int(len(ssl_verify_failed_rows)),
+            "http_blocked_count": int(len(http_blocked_rows)),
+            "blocker_detail": blocker_detail,
+            "remediation_hint": remediation_hint,
+            "failing_rows": failing_rows[:6],
+        }
 
     def _provider_by_name(self, name: str) -> Any | None:
         target = str(name or "").strip().lower()
@@ -2370,11 +3039,18 @@ class LieEngine:
         ok_sources = int(probe.get("ok_sources", 0))
         min_ok_sources = int(probe.get("min_ok_sources", 1))
         status = str(probe.get("status", "unknown"))
+        classification = str(probe.get("classification", "")).strip()
+        fake_ip_sources = [str(x).strip() for x in list(probe.get("fake_ip_sources", [])) if str(x).strip()]
+        classification_note = ""
+        if classification == "fake_ip_dns_intercept":
+            suffix = f"; fake_ip_sources={','.join(fake_ip_sources[:4])}" if fake_ip_sources else ""
+            classification_note = f"; classification=fake_ip_dns_intercept{suffix}"
         return [
             "系统授时熔断："
             + f"ok_sources={ok_sources} < min_ok_sources={min_ok_sources}; status={status}; "
             + f"offset_thr={int(probe.get('max_offset_ms', 0))}ms; "
             + f"rtt_thr={int(probe.get('max_rtt_ms', 0))}ms"
+            + classification_note
         ]
 
     def _cross_source_stress_from_audit(self, *, audit: dict[str, Any]) -> float:
@@ -2573,17 +3249,83 @@ class LieEngine:
             ),
         )
 
+    def _latest_reusable_time_sync_probe(
+        self,
+        *,
+        as_of: date,
+        exclude_artifact_path: str = "",
+    ) -> dict[str, Any] | None:
+        artifact_dir = self.ctx.output_dir / "artifacts" / "time_sync"
+        if not artifact_dir.exists():
+            return None
+        excluded = str(exclude_artifact_path or "").strip()
+        for path in sorted(artifact_dir.glob("*_time_sync_probe.json"), reverse=True):
+            if excluded and str(path) == excluded:
+                continue
+            payload = self._load_json_safely(path)
+            if not payload:
+                continue
+            captured_at = str(payload.get("captured_at_utc", "")).strip()
+            if not captured_at.startswith(as_of.isoformat()):
+                continue
+            if int(payload.get("available_sources", 0) or 0) <= 0:
+                continue
+            payload["artifact_path"] = str(payload.get("artifact_path", "") or path)
+            return payload
+        return None
+
+    def _resolve_micro_capture_time_sync_probe(
+        self,
+        *,
+        as_of: date,
+        probe: dict[str, Any],
+    ) -> dict[str, Any]:
+        current = dict(probe or {})
+        current["source_mode"] = "live_probe"
+        current["source_reason"] = "current_probe"
+        if not bool(current.get("enabled", False)):
+            return current
+        if int(current.get("available_sources", 0) or 0) > 0:
+            return current
+        reusable = self._latest_reusable_time_sync_probe(
+            as_of=as_of,
+            exclude_artifact_path=str(current.get("artifact_path", "")).strip(),
+        )
+        if not reusable:
+            return current
+        resolved = dict(reusable)
+        resolved["source_mode"] = "reused_previous_artifact"
+        resolved["source_reason"] = "current_probe_unavailable"
+        resolved["current_probe_status"] = str(current.get("status", ""))
+        resolved["current_probe_classification"] = str(current.get("classification", ""))
+        resolved["current_probe_artifact_path"] = str(current.get("artifact_path", ""))
+        return resolved
+
     def run_time_sync_probe(self, as_of: date) -> dict[str, Any]:
         probe = self._collect_system_time_sync_probe(as_of=as_of)
         self._persist_system_time_sync_probe(as_of=as_of, probe=probe)
         return {
             "date": as_of.isoformat(),
             "status": str(probe.get("status", "")),
+            "classification": str(probe.get("classification", "")),
+            "remediation_hint": str(probe.get("remediation_hint", "")),
             "pass": bool(probe.get("pass", False)),
             "ok_sources": int(probe.get("ok_sources", 0)),
             "available_sources": int(probe.get("available_sources", 0)),
+            "fake_ip_sources": list(probe.get("fake_ip_sources", [])),
+            "fake_ip_intercept_scope": str(probe.get("fake_ip_intercept_scope", "")),
+            "threshold_breach_sources": list(probe.get("threshold_breach_sources", [])),
+            "threshold_breach_scope": str(probe.get("threshold_breach_scope", "")),
+            "threshold_breach_offset_sources": list(probe.get("threshold_breach_offset_sources", [])),
+            "threshold_breach_latency_sources": list(probe.get("threshold_breach_latency_sources", [])),
+            "threshold_breach_estimated_offset_ms": probe.get("threshold_breach_estimated_offset_ms"),
+            "threshold_breach_estimated_rtt_ms": probe.get("threshold_breach_estimated_rtt_ms"),
+            "diagnostic_candidate_sources": list(probe.get("diagnostic_candidate_sources", [])),
+            "diagnostic_candidate_fake_ip_sources": list(probe.get("diagnostic_candidate_fake_ip_sources", [])),
             "hard_fuse_enabled": bool(probe.get("hard_fuse_enabled", False)),
+            "captured_at_utc": str(probe.get("captured_at_utc", "")),
             "artifact": str(probe.get("artifact_path", "")),
+            "latest_artifact": str(probe.get("latest_artifact_path", "")),
             "sources": list(probe.get("sources", [])),
         }
 
@@ -2856,6 +3598,11 @@ class LieEngine:
         cross_source_audit = self._collect_cross_source_audit(as_of=as_of, symbols=target_symbols)
         system_time_sync_probe = self._collect_system_time_sync_probe(as_of=as_of)
         self._persist_system_time_sync_probe(as_of=as_of, probe=system_time_sync_probe)
+        system_time_sync_probe = self._resolve_micro_capture_time_sync_probe(
+            as_of=as_of,
+            probe=system_time_sync_probe,
+        )
+        environment_diagnostics = self._summarize_micro_capture_environment(source_rows=micro_source_rows)
 
         run_ts = datetime.now(tz=timezone.utc).replace(microsecond=0)
         run_ts_utc = run_ts.isoformat()
@@ -2865,6 +3612,14 @@ class LieEngine:
         for symbol, state in micro_factor_map.items():
             if not isinstance(state, dict):
                 continue
+            state = self._normalize_cvd_semantics(state)
+            cvd_context_mode = str(state.get("cvd_context_mode", "unclear")).strip()
+            cvd_trust_tier_hint = str(state.get("cvd_trust_tier_hint", "unavailable")).strip()
+            cvd_veto_hint = ""
+            if cvd_trust_tier_hint == "single_exchange_low":
+                cvd_veto_hint = "low_sample_or_gap_risk"
+            elif cvd_context_mode in {"absorption", "failed_auction"}:
+                cvd_veto_hint = "effort_result_divergence"
             selected_rows.append(
                 {
                     "symbol": str(symbol),
@@ -2878,6 +3633,18 @@ class LieEngine:
                     "queue_imbalance": float(state.get("queue_imbalance", 0.0)),
                     "ofi_norm": float(state.get("ofi_norm", 0.0)),
                     "micro_alignment": float(state.get("micro_alignment", 0.0)),
+                    "buy_qty": float(state.get("buy_qty", 0.0)),
+                    "sell_qty": float(state.get("sell_qty", 0.0)),
+                    "net_qty": float(state.get("net_qty", 0.0)),
+                    "trade_notional": float(state.get("trade_notional", 0.0)),
+                    "cvd_delta_ratio": float(state.get("cvd_delta_ratio", 0.0)),
+                    "cvd_price_move_pct": float(state.get("cvd_price_move_pct", 0.0)),
+                    "cvd_range_pct": float(state.get("cvd_range_pct", 0.0)),
+                    "cvd_effort_result_ratio": float(state.get("cvd_effort_result_ratio", 0.0)),
+                    "cvd_context_mode": cvd_context_mode,
+                    "cvd_context_note": str(state.get("cvd_context_note", "")),
+                    "cvd_trust_tier_hint": cvd_trust_tier_hint,
+                    "cvd_veto_hint": cvd_veto_hint,
                     "max_trade_gap_ms": int(state.get("max_trade_gap_ms", 0)),
                     "sync_skew_ms": float(state.get("sync_skew_ms", 0.0)),
                     "time_sync_available": bool(state.get("time_sync_available", False)),
@@ -2897,6 +3664,17 @@ class LieEngine:
             sum(1 for r in selected_rows if bool(r.get("time_sync_ok", False))) / max(1, selected_count)
         )
         sync_ok_ratio = float(sum(1 for r in selected_rows if bool(r.get("sync_ok", False))) / max(1, selected_count))
+        cvd_context_counts: dict[str, int] = {}
+        cvd_trust_counts: dict[str, int] = {}
+        cvd_veto_hint_counts: dict[str, int] = {}
+        for row in selected_rows:
+            context = str(row.get("cvd_context_mode", "unclear")).strip() or "unclear"
+            trust = str(row.get("cvd_trust_tier_hint", "unavailable")).strip() or "unavailable"
+            veto_hint = str(row.get("cvd_veto_hint", "")).strip()
+            cvd_context_counts[context] = int(cvd_context_counts.get(context, 0)) + 1
+            cvd_trust_counts[trust] = int(cvd_trust_counts.get(trust, 0)) + 1
+            if veto_hint:
+                cvd_veto_hint_counts[veto_hint] = int(cvd_veto_hint_counts.get(veto_hint, 0)) + 1
 
         cross_active = bool(cross_source_audit.get("active", False))
         cross_status = str(cross_source_audit.get("status", ""))
@@ -2930,9 +3708,17 @@ class LieEngine:
                 "system_time_sync_pass": bool(system_time_sync_probe.get("pass", False)),
                 "system_time_sync_ok_sources": int(system_time_sync_probe.get("ok_sources", 0)),
                 "system_time_sync_available_sources": int(system_time_sync_probe.get("available_sources", 0)),
+                "environment_status": str(environment_diagnostics.get("status", "")),
+                "environment_classification": str(environment_diagnostics.get("classification", "")),
+            },
+            "cvd_semantics": {
+                "context_counts": cvd_context_counts,
+                "trust_counts": cvd_trust_counts,
+                "veto_hint_counts": cvd_veto_hint_counts,
             },
             "selected_micro": selected_rows,
             "source_rows": list(micro_source_rows),
+            "environment_diagnostics": environment_diagnostics,
             "cross_source_audit": cross_source_audit,
             "system_time_sync": system_time_sync_probe,
         }
@@ -3031,6 +3817,9 @@ class LieEngine:
             "pass": bool(capture_pass),
             "symbols": list(target_symbols),
             "summary": dict(capture_payload.get("summary", {})),
+            "cvd_semantics": dict(capture_payload.get("cvd_semantics", {})),
+            "selected_micro": list(selected_rows),
+            "environment_diagnostics": dict(environment_diagnostics),
             "rolling_7d": rolling,
             "live_takeover": live_takeover,
             "artifact": str(artifact_path),
@@ -3519,11 +4308,7 @@ class LieEngine:
         )
 
         # latest positions snapshot for risk budgeting
-        append_sqlite(
-            self.ctx.sqlite_path,
-            "latest_positions",
-            plans_df.assign(date=as_of.isoformat()),
-        )
+        self._replace_latest_positions_snapshot(as_of=as_of, plans_df=plans_df)
         open_positions = self._build_open_positions_from_plans(
             as_of=as_of,
             plans=plans,
@@ -3740,13 +4525,106 @@ class LieEngine:
         return payload
 
     def run_backtest(self, start: date, end: date) -> BacktestResult:
+        review_dir = self.ctx.output_dir / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        timing_path = review_dir / f"{end.isoformat()}_backtest_timing.json"
+        timing_started_mono = time_module.monotonic()
+        review_fast_mode = bool(getattr(self, "_review_backtest_fast_mode_active", False))
+        backtest_timing: dict[str, Any] = {
+            "run_id": f"{start.isoformat()}_{end.isoformat()}",
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "review_fast_mode": bool(review_fast_mode),
+            "status": "running",
+            "elapsed_sec": 0.0,
+            "current_stage": "",
+            "last_completed_stage": "",
+            "stages": [],
+        }
+
+        def _persist_backtest_timing() -> None:
+            backtest_timing["elapsed_sec"] = round(time_module.monotonic() - timing_started_mono, 3)
+            write_json(timing_path, backtest_timing)
+
+        def _run_backtest_stage(
+            name: str,
+            fn: Callable[[], Any],
+            *,
+            summary_fn: Callable[[Any], dict[str, Any]] | None = None,
+        ) -> Any:
+            stage_started_mono = time_module.monotonic()
+            backtest_timing["status"] = "running"
+            backtest_timing["current_stage"] = name
+            backtest_timing["current_stage_started_elapsed_sec"] = round(
+                stage_started_mono - timing_started_mono,
+                3,
+            )
+            _persist_backtest_timing()
+            try:
+                result = fn()
+            except Exception as exc:
+                backtest_timing["status"] = "failed"
+                backtest_timing["failed_stage"] = name
+                backtest_timing["error"] = f"{type(exc).__name__}:{exc}"
+                backtest_timing["current_stage_elapsed_sec"] = round(
+                    time_module.monotonic() - stage_started_mono,
+                    3,
+                )
+                _persist_backtest_timing()
+                raise
+            stage_elapsed_sec = round(time_module.monotonic() - stage_started_mono, 3)
+            stage_row: dict[str, Any] = {
+                "name": name,
+                "elapsed_sec": stage_elapsed_sec,
+            }
+            if summary_fn is not None:
+                summary = summary_fn(result)
+                if summary:
+                    stage_row["summary"] = summary
+            backtest_timing.setdefault("stages", []).append(stage_row)
+            backtest_timing["last_completed_stage"] = name
+            backtest_timing["current_stage"] = ""
+            backtest_timing.pop("current_stage_started_elapsed_sec", None)
+            backtest_timing.pop("current_stage_elapsed_sec", None)
+            backtest_timing.pop("failed_stage", None)
+            backtest_timing.pop("error", None)
+            _persist_backtest_timing()
+            return result
+
         symbols = self._core_symbols()
         # include dynamic candidates for wider stress
         symbols = expand_universe(symbols, pd.DataFrame(), int(self.settings.universe.get("max_dynamic_additions", 5)))
-        bars, _ = self._run_ingestion_range(start=start, end=end, symbols=symbols)
-        params = self._load_live_params()
-        runtime_regime = self._regime_from_bars(as_of=end, bars=bars)
-        runtime_params = self._resolve_runtime_params(regime=runtime_regime, live_params=params)
+        bars, _ = _run_backtest_stage(
+            "ingestion_range",
+            lambda: self._run_ingestion_range(start=start, end=end, symbols=symbols),
+            summary_fn=lambda out: {
+                "input_symbol_count": int(len(symbols)),
+                "bar_rows": int(len(out[0])) if isinstance(out, tuple) else 0,
+                "bar_symbol_count": int(out[0]["symbol"].nunique()) if isinstance(out, tuple) and isinstance(out[0], pd.DataFrame) and not out[0].empty and "symbol" in out[0].columns else 0,
+            },
+        )
+        params = _run_backtest_stage(
+            "load_live_params",
+            lambda: self._load_live_params(),
+            summary_fn=lambda out: {"param_count": int(len(out))},
+        )
+        runtime_regime = _run_backtest_stage(
+            "resolve_runtime_regime",
+            lambda: self._regime_from_bars(as_of=end, bars=bars),
+            summary_fn=lambda out: {
+                "consensus": str(getattr(getattr(out, "consensus", ""), "value", "")),
+                "protection_mode": bool(getattr(out, "protection_mode", False)),
+            },
+        )
+        runtime_params = _run_backtest_stage(
+            "resolve_runtime_params",
+            lambda: self._resolve_runtime_params(regime=runtime_regime, live_params=params),
+            summary_fn=lambda out: {
+                "mode": str(out.get("mode", "")),
+                "signal_confidence_min": float(out.get("signal_confidence_min", 0.0)),
+                "convexity_min": float(out.get("convexity_min", 0.0)),
+            },
+        )
         signal_conf = float(runtime_params["signal_confidence_min"])
         convexity_min = float(runtime_params["convexity_min"])
         hold_days = self._clamp_int(runtime_params["hold_days"], 1, 20)
@@ -3796,38 +4674,92 @@ class LieEngine:
                 2.0,
             ),
         )
+        val = self.settings.validation if isinstance(self.settings.validation, dict) else {}
+        train_years = 3
+        valid_years = 1
+        step_months = 3
+        if review_fast_mode:
+            fast_signal_eval_interval = self._clamp_int(val.get("review_backtest_fast_signal_eval_interval", 5), 1, 30)
+            fast_regime_recalc_interval = self._clamp_int(val.get("review_backtest_fast_regime_recalc_interval", 10), 1, 60)
+            bt_cfg.signal_eval_interval = max(int(bt_cfg.signal_eval_interval), int(fast_signal_eval_interval))
+            bt_cfg.regime_recalc_interval = max(int(bt_cfg.regime_recalc_interval), int(fast_regime_recalc_interval))
+            train_years = self._clamp_int(val.get("review_backtest_fast_train_years", 3), 1, 5)
+            valid_years = self._clamp_int(val.get("review_backtest_fast_valid_years", 1), 1, 3)
+            step_months = self._clamp_int(val.get("review_backtest_fast_step_months", 12), 1, 24)
+        walk_forward_timing_path = self.ctx.output_dir / "review" / f"{end.isoformat()}_walk_forward_backtest_timing.json"
 
-        result = run_walk_forward_backtest(
-            bars=bars,
-            start=start,
-            end=end,
-            trend_thr=float(self.settings.thresholds.get("hurst_trend", 0.6)),
-            mean_thr=float(self.settings.thresholds.get("hurst_mean_revert", 0.4)),
-            atr_extreme=float(self.settings.thresholds.get("atr_extreme", 2.0)),
-            cfg_template=bt_cfg,
-            train_years=3,
-            valid_years=1,
-            step_months=3,
+        result = _run_backtest_stage(
+            "walk_forward_backtest",
+            lambda: run_walk_forward_backtest(
+                bars=bars,
+                start=start,
+                end=end,
+                trend_thr=float(self.settings.thresholds.get("hurst_trend", 0.6)),
+                mean_thr=float(self.settings.thresholds.get("hurst_mean_revert", 0.4)),
+                atr_extreme=float(self.settings.thresholds.get("atr_extreme", 2.0)),
+                cfg_template=bt_cfg,
+                train_years=train_years,
+                valid_years=valid_years,
+                step_months=step_months,
+                timing_path=walk_forward_timing_path,
+            ),
+            summary_fn=lambda out: {
+                "trades": int(out.trades),
+                "violations": int(out.violations),
+                "max_drawdown": float(out.max_drawdown),
+                "positive_window_ratio": float(out.positive_window_ratio),
+                "review_fast_mode": bool(review_fast_mode),
+                "signal_eval_interval": int(bt_cfg.signal_eval_interval),
+                "regime_recalc_interval": int(bt_cfg.regime_recalc_interval),
+                "train_years": int(train_years),
+                "valid_years": int(valid_years),
+                "step_months": int(step_months),
+                "timing_path": str(walk_forward_timing_path),
+            },
         )
 
         out_path = self.ctx.output_dir / "artifacts" / f"backtest_{start.isoformat()}_{end.isoformat()}.json"
-        write_json(out_path, result.to_dict())
-        append_sqlite(self.ctx.sqlite_path, "backtest_runs", pd.DataFrame([result.to_dict()]))
-        write_run_manifest(
-            output_dir=self.ctx.output_dir,
-            run_type="backtest",
-            run_id=f"{start.isoformat()}_{end.isoformat()}",
-            artifacts={"result": str(out_path)},
-            metrics={
-                "annual_return": float(result.annual_return),
-                "max_drawdown": float(result.max_drawdown),
-                "win_rate": float(result.win_rate),
-                "profit_factor": float(result.profit_factor),
-                "trades": int(result.trades),
-                "runtime_mode": str(runtime_params.get("mode", "base")),
-            },
-            checks={"violations": int(result.violations)},
+        _run_backtest_stage(
+            "write_backtest_artifact",
+            lambda: write_json(out_path, result.to_dict()),
+            summary_fn=lambda _out: {"path": str(out_path)},
         )
+        _run_backtest_stage(
+            "append_backtest_runs_sqlite",
+            lambda: append_sqlite(self.ctx.sqlite_path, "backtest_runs", pd.DataFrame([result.to_dict()])),
+            summary_fn=lambda _out: {"sqlite_path": str(self.ctx.sqlite_path)},
+        )
+        _run_backtest_stage(
+            "write_backtest_manifest",
+            lambda: write_run_manifest(
+                output_dir=self.ctx.output_dir,
+                run_type="backtest",
+                run_id=f"{start.isoformat()}_{end.isoformat()}",
+                artifacts={
+                    "result": str(out_path),
+                    "timing": str(timing_path),
+                    "walk_forward_timing": str(walk_forward_timing_path),
+                },
+                metrics={
+                    "annual_return": float(result.annual_return),
+                    "max_drawdown": float(result.max_drawdown),
+                    "win_rate": float(result.win_rate),
+                    "profit_factor": float(result.profit_factor),
+                    "trades": int(result.trades),
+                    "runtime_mode": str(runtime_params.get("mode", "base")),
+                    "backtest_elapsed_sec": float(backtest_timing.get("elapsed_sec", 0.0)),
+                },
+                checks={"violations": int(result.violations)},
+            ),
+            summary_fn=lambda out: {"manifest_path": str(out)},
+        )
+        backtest_timing["status"] = "completed"
+        backtest_timing["current_stage"] = ""
+        backtest_timing.pop("current_stage_started_elapsed_sec", None)
+        backtest_timing.pop("current_stage_elapsed_sec", None)
+        backtest_timing.pop("failed_stage", None)
+        backtest_timing.pop("error", None)
+        _persist_backtest_timing()
         return result
 
     @staticmethod
@@ -4707,35 +5639,70 @@ class LieEngine:
         min_win_rate = float(validation.get("mode_health_min_win_rate", 0.40))
         max_drawdown = float(validation.get("mode_health_max_drawdown_max", validation.get("max_drawdown_max", 0.18)))
         max_violations = max(0, int(validation.get("mode_health_max_violations", 0)))
+        hard_min_profit_factor = max(
+            0.0,
+            float(validation.get("mode_health_hard_min_profit_factor", max(0.0, min_profit_factor - 0.10))),
+        )
+        hard_min_win_rate = self._clamp_float(
+            float(validation.get("mode_health_hard_min_win_rate", max(0.0, min_win_rate - 0.10))),
+            0.0,
+            1.0,
+        )
+        hard_max_drawdown = self._clamp_float(
+            float(validation.get("mode_health_hard_max_drawdown_max", max_drawdown)),
+            0.0,
+            1.0,
+        )
+        hard_max_violations = max(0, int(validation.get("mode_health_hard_max_violations", max_violations)))
 
         if samples < min_samples:
             return {
                 "passed": True,
+                "degraded": False,
                 "active": False,
                 "runtime_mode": runtime_mode,
                 "reason": "insufficient_samples",
                 "samples": samples,
                 "min_samples": min_samples,
+                "failed_rules": [],
+                "soft_failed_rules": [],
+                "hard_failed_rules": [],
             }
 
         pf = float(stats.get("avg_profit_factor", 0.0))
         wr = float(stats.get("avg_win_rate", 0.0))
         dd = float(stats.get("worst_drawdown", 1.0))
         viol = int(stats.get("total_violations", 0))
-        failed_rules: list[str] = []
+        soft_failed_rules: list[str] = []
         if pf < min_profit_factor:
-            failed_rules.append("profit_factor")
+            soft_failed_rules.append("profit_factor")
         if wr < min_win_rate:
-            failed_rules.append("win_rate")
+            soft_failed_rules.append("win_rate")
         if dd > max_drawdown:
-            failed_rules.append("max_drawdown")
+            soft_failed_rules.append("max_drawdown")
         if viol > max_violations:
-            failed_rules.append("violations")
+            soft_failed_rules.append("violations")
+
+        hard_failed_rules: list[str] = []
+        if pf < hard_min_profit_factor:
+            hard_failed_rules.append("profit_factor")
+        if wr < hard_min_win_rate:
+            hard_failed_rules.append("win_rate")
+        if dd > hard_max_drawdown:
+            hard_failed_rules.append("max_drawdown")
+        if viol > hard_max_violations:
+            hard_failed_rules.append("violations")
 
         return {
-            "passed": len(failed_rules) == 0,
+            "passed": len(hard_failed_rules) == 0,
+            "degraded": len(soft_failed_rules) > 0,
             "active": True,
             "runtime_mode": runtime_mode,
+            "reason": (
+                "hard_failed"
+                if hard_failed_rules
+                else ("degraded" if soft_failed_rules else "ok")
+            ),
             "samples": samples,
             "thresholds": {
                 "min_profit_factor": min_profit_factor,
@@ -4744,13 +5711,21 @@ class LieEngine:
                 "max_violations": max_violations,
                 "min_samples": min_samples,
             },
+            "hard_thresholds": {
+                "min_profit_factor": hard_min_profit_factor,
+                "min_win_rate": hard_min_win_rate,
+                "max_drawdown_max": hard_max_drawdown,
+                "max_violations": hard_max_violations,
+            },
             "stats": {
                 "avg_profit_factor": pf,
                 "avg_win_rate": wr,
                 "worst_drawdown": dd,
                 "total_violations": viol,
             },
-            "failed_rules": failed_rules,
+            "failed_rules": hard_failed_rules,
+            "soft_failed_rules": soft_failed_rules,
+            "hard_failed_rules": hard_failed_rules,
         }
 
     def _apply_mode_health_guard(
@@ -4792,7 +5767,7 @@ class LieEngine:
         review.parameter_changes["hold_days"] = shorter_hold
         review.change_reasons["hold_days"] = "模式健康劣化触发保护收敛（缩短持有期暴露）"
 
-        failed_rules = mode_health.get("failed_rules", [])
+        failed_rules = mode_health.get("hard_failed_rules", mode_health.get("failed_rules", []))
         review.notes.append(
             "mode_health_guard="
             + f"runtime_mode={mode_health.get('runtime_mode', 'base')}; "
@@ -4970,7 +5945,7 @@ class LieEngine:
 
         mode_mult = 1.0
         mode_reason = "healthy"
-        if not bool(mode_health.get("passed", True)):
+        if bool(mode_health.get("degraded", False)):
             mode_mult = mode_degraded_mult
             mode_reason = "degraded"
         elif not bool(mode_health.get("active", False)):
@@ -5170,7 +6145,7 @@ class LieEngine:
                 columns=[
                     "ts",
                     "symbol",
-                    "fwd_ret1",
+                    "ret1_obs",
                     "momentum_score",
                     "value_score",
                     "size_score",
@@ -5183,13 +6158,13 @@ class LieEngine:
         work["ts"] = pd.to_datetime(work["ts"], errors="coerce")
         work = work.dropna(subset=["ts"]).sort_values(["symbol", "ts"]).reset_index(drop=True)
         if work.empty:
-            return pd.DataFrame(columns=["ts", "symbol", "fwd_ret1", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
+            return pd.DataFrame(columns=["ts", "symbol", "ret1_obs", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
 
         work["close"] = pd.to_numeric(work["close"], errors="coerce")
         work["volume"] = pd.to_numeric(work["volume"], errors="coerce")
         work = work.dropna(subset=["close"])
         if work.empty:
-            return pd.DataFrame(columns=["ts", "symbol", "fwd_ret1", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
+            return pd.DataFrame(columns=["ts", "symbol", "ret1_obs", "momentum_score", "value_score", "size_score", "dividend_score", "crowd_score"])
 
         by_symbol = work.groupby("symbol", group_keys=False)
         work["ret1"] = by_symbol["close"].pct_change()
@@ -5199,7 +6174,8 @@ class LieEngine:
 
         turnover = work["close"] * work["volume"].fillna(0.0)
         work["turnover20"] = turnover.groupby(work["symbol"]).transform(lambda s: s.rolling(20, min_periods=10).mean())
-        work["fwd_ret1"] = by_symbol["close"].shift(-1) / work["close"] - 1.0
+        # Deterministic non-lookahead label: observed one-step return.
+        work["ret1_obs"] = work["ret1"]
 
         if "market_cap" in work.columns:
             mc = pd.to_numeric(work["market_cap"], errors="coerce")
@@ -5237,18 +6213,18 @@ class LieEngine:
         keep_cols = [
             "ts",
             "symbol",
-            "fwd_ret1",
+            "ret1_obs",
             "momentum_score",
             "value_score",
             "size_score",
             "dividend_score",
             "crowd_score",
         ]
-        panel = work[keep_cols].replace([np.inf, -np.inf], np.nan).dropna(subset=["fwd_ret1"])
+        panel = work[keep_cols].replace([np.inf, -np.inf], np.nan).dropna(subset=["ret1_obs"])
         return panel
 
     @staticmethod
-    def _bucket_spread(day_df: pd.DataFrame, score_col: str, ret_col: str = "fwd_ret1") -> float | None:
+    def _bucket_spread(day_df: pd.DataFrame, score_col: str, ret_col: str = "ret1_obs") -> float | None:
         if day_df.empty or score_col not in day_df.columns or ret_col not in day_df.columns:
             return None
         frame = day_df[[score_col, ret_col]].dropna()
@@ -5308,7 +6284,7 @@ class LieEngine:
         spreads_by_style: dict[str, list[float]] = {k: [] for k in style_map}
         for _, day_df in daily:
             for style, col in style_map.items():
-                spread = self._bucket_spread(day_df, score_col=col, ret_col="fwd_ret1")
+                spread = self._bucket_spread(day_df, score_col=col, ret_col="ret1_obs")
                 if spread is not None and np.isfinite(spread):
                     spreads_by_style[style].append(float(spread))
 
@@ -5563,15 +6539,25 @@ class LieEngine:
             0.0,
             1.5,
         )
+        flow_quality_pressure = self._clamp_float(
+            0.22
+            + 0.22 * (crypto_stress / 1.5)
+            + 0.16 * self._clamp_float((btc_spread_bps - 2.0) / 20.0, 0.0, 1.0)
+            + 0.12 * self._clamp_float((btc_funding_abs - 0.0002) * 2000.0, 0.0, 1.0),
+            0.0,
+            1.5,
+        )
         valuation_pressure = self._clamp_float(valuation_pressure + 0.20 * crypto_stress, 0.0, 1.5)
         momentum_preference = self._clamp_float(momentum_preference - 0.10 * crypto_stress, 0.0, 1.5)
         crowding_aversion = self._clamp_float(crowding_aversion + 0.35 * crypto_stress, 0.0, 1.5)
         small_cap_pressure = self._clamp_float(small_cap_pressure + 0.22 * crypto_stress, 0.0, 1.5)
+        flow_quality_pressure = self._clamp_float(flow_quality_pressure + 0.20 * crypto_stress, 0.0, 1.5)
 
         if regime.consensus in {RegimeLabel.RANGE, RegimeLabel.UNCERTAIN, RegimeLabel.DOWNTREND}:
             valuation_pressure = self._clamp_float(valuation_pressure + 0.12, 0.0, 1.5)
             small_cap_pressure = self._clamp_float(small_cap_pressure + 0.10, 0.0, 1.5)
             dividend_preference = self._clamp_float(dividend_preference + 0.08, 0.0, 1.5)
+            flow_quality_pressure = self._clamp_float(flow_quality_pressure + 0.10, 0.0, 1.5)
 
         style_value = self._clamp_float(0.30 + 0.90 * float(style_state.get("value_preference", 0.50)), 0.0, 1.5)
         style_mom = self._clamp_float(float(style_state.get("momentum_preference", 0.55)), 0.0, 1.5)
@@ -5608,6 +6594,11 @@ class LieEngine:
             0.0,
             1.5,
         )
+        flow_quality_pressure = self._clamp_float(
+            (1.0 - style_weight) * flow_quality_pressure + style_weight * (0.25 + 0.55 * style_crowd),
+            0.0,
+            1.5,
+        )
 
         return {
             "valuation_pressure": float(valuation_pressure),
@@ -5615,6 +6606,7 @@ class LieEngine:
             "crowding_aversion": float(crowding_aversion),
             "small_cap_pressure": float(small_cap_pressure),
             "dividend_preference": float(dividend_preference),
+            "flow_quality_pressure": float(flow_quality_pressure),
             "style_weight": float(style_weight),
             "style_signal_strength": float(style_strength),
             "style_sample_size": float(style_state.get("style_sample_size", 0.0)),
@@ -5628,179 +6620,419 @@ class LieEngine:
         }
 
     def run_review(self, as_of: date) -> ReviewDelta:
-        start = self._review_backtest_start(as_of=as_of)
-        bt = self.run_backtest(start=start, end=as_of)
-        params = self._load_live_params()
-        rollback_anchor = self._backup_live_params(as_of)
-        factor_weights = {
-            "macro": 0.20,
-            "industry": 0.18,
-            "news": 0.17,
-            "sentiment": 0.15,
-            "fundamental": 0.10,
-            "technical": 0.20,
-        }
-        factor_contrib = self._estimate_factor_contrib_120d(as_of=as_of)
-        thresholds = ReviewThresholds(
-            positive_window_ratio_min=float(self.settings.validation.get("positive_window_ratio_min", 0.70)),
-            max_drawdown_max=float(self.settings.validation.get("max_drawdown_max", 0.18)),
-        )
-        review = build_review_delta(
-            as_of=as_of,
-            backtest=bt,
-            current_params=params,
-            factor_weights=factor_weights,
-            factor_contrib=factor_contrib,
-            thresholds=thresholds,
-        )
-        style_diag = self._review_style_diagnostics(start=start, as_of=as_of)
-        review.style_diagnostics = style_diag
-        review.notes.append(
-            "style_diag="
-            + f"active={bool(style_diag.get('active', False))}; "
-            + f"dominant={style_diag.get('dominant_style', 'neutral')}; "
-            + f"dir={style_diag.get('dominant_direction', 'na')}; "
-            + f"drift={float(style_diag.get('style_drift_score', 0.0)):.4f}; "
-            + f"sample_days={int(style_diag.get('sample_days', 0))}"
-        )
-        if bool(style_diag.get("active", False)) and style_diag.get("alerts"):
-            review.notes.append("style_diag_alerts=" + ",".join(str(x) for x in style_diag.get("alerts", [])))
-        strategy_candidate = self._load_latest_strategy_candidate(as_of=as_of)
-        strategy_lab_autorun: dict[str, Any] = {}
-        if not strategy_candidate and bool(self.settings.validation.get("review_autorun_strategy_lab_if_missing", False)):
-            strategy_lab_autorun = self._autorun_strategy_lab_for_review(as_of=as_of)
-            if strategy_lab_autorun:
-                strategy_candidate = self._load_latest_strategy_candidate(as_of=as_of)
-                review.notes.append(
-                    "strategy_lab_autorun="
-                    + f"manifest={strategy_lab_autorun.get('manifest', '')}; "
-                    + f"candidate_count={len(strategy_lab_autorun.get('candidates', []))}"
-                )
-        if strategy_candidate:
-            self._merge_strategy_candidate_into_review(
-                review=review,
-                current_params=params,
-                candidate_payload=strategy_candidate,
-            )
-        else:
-            review.notes.append("No accepted strategy-lab candidate found within lookback window")
-
-        runtime_mode = self._resolve_review_runtime_mode(start=start, as_of=as_of)
-        mode_history = self._mode_history_stats(as_of=as_of)
-        mode_health = self._evaluate_mode_health(runtime_mode=runtime_mode, mode_history=mode_history)
-        mode_adaptive = self._apply_mode_adaptive_update(
-            review=review,
-            current_params=params,
-            runtime_mode=runtime_mode,
-            mode_history=mode_history,
-        )
-        slot_regime_tuning = self._tune_slot_regime_thresholds(as_of=as_of)
-        self._apply_mode_health_guard(
-            review=review,
-            current_params=params,
-            mode_health=mode_health,
-        )
-        style_drift_guard = self._apply_style_drift_adaptive_guard(
-            review=review,
-            current_params=params,
-            style_diag=style_diag,
-        )
-        style_diag["adaptive_guard"] = style_drift_guard
-        review.style_diagnostics = style_diag
-        review.notes.append(
-            "mode_health="
-            + f"runtime_mode={runtime_mode}; passed={mode_health.get('passed', True)}; "
-            + f"active={mode_health.get('active', False)}"
-        )
-        review.notes.append(
-            "slot_regime_tuning="
-            + f"applied={bool(slot_regime_tuning.get('applied', False))}; "
-            + f"changed={bool(slot_regime_tuning.get('changed', False))}; "
-            + f"path={slot_regime_tuning.get('path', '')}"
-        )
-        review.rollback_anchor = rollback_anchor
-
-        report = render_review_report(as_of=as_of, backtest=bt, review=review)
+        review_fast_mode = self._review_backtest_fast_mode_enabled()
+        start = self._review_backtest_start(as_of=as_of, fast_mode=review_fast_mode)
         review_dir = self.ctx.output_dir / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
         review_path = review_dir / f"{as_of.isoformat()}_review.md"
         delta_path = review_dir / f"{as_of.isoformat()}_param_delta.yaml"
-        write_markdown(review_path, report)
-
-        prev_params = params
-        deltas = {
-            k: float(review.parameter_changes.get(k, 0.0) - prev_params.get(k, 0.0))
-            for k in review.parameter_changes.keys()
+        timing_path = review_dir / f"{as_of.isoformat()}_review_timing.json"
+        timing_started_at = datetime.now().isoformat()
+        timing_started_mono = time_module.monotonic()
+        review_timing: dict[str, Any] = {
+            "date": as_of.isoformat(),
+            "review_backtest_fast_mode": bool(review_fast_mode),
+            "review_backtest_start": start.isoformat(),
+            "status": "running",
+            "started_at": timing_started_at,
+            "elapsed_sec": 0.0,
+            "current_stage": "",
+            "last_completed_stage": "",
+            "stages": [],
         }
-        audit_payload = review.to_dict()
-        audit_payload["previous_parameters"] = prev_params
-        audit_payload["parameter_deltas"] = deltas
-        audit_payload["impact_window_days"] = review.impact_window_days
-        audit_payload["rollback_anchor"] = rollback_anchor
-        audit_payload["strategy_lab_candidate"] = strategy_candidate
-        audit_payload["strategy_lab_autorun"] = strategy_lab_autorun
-        audit_payload["runtime_mode"] = runtime_mode
-        audit_payload["mode_history"] = mode_history
-        audit_payload["mode_health"] = mode_health
-        audit_payload["mode_adaptive"] = mode_adaptive
-        audit_payload["style_drift_guard"] = style_drift_guard
-        audit_payload["slot_regime_tuning"] = slot_regime_tuning
-        audit_payload["style_diagnostics"] = style_diag
-        audit_payload["generated_at"] = datetime.now().isoformat()
 
-        live_params_path = self.ctx.output_dir / "artifacts" / "params_live.yaml"
-        write_markdown(live_params_path, yaml.safe_dump(review.parameter_changes, allow_unicode=True, sort_keys=False))
+        def _persist_review_timing() -> None:
+            review_timing["elapsed_sec"] = round(time_module.monotonic() - timing_started_mono, 3)
+            write_json(timing_path, review_timing)
 
-        baseline_promotion = self._promote_artifact_governance_baseline(
-            as_of=as_of,
-            round_no=1,
-            review_passed=bool(review.pass_gate),
+        def _run_timed_stage(
+            name: str,
+            fn: Callable[[], Any],
+            *,
+            summary_fn: Callable[[Any], dict[str, Any]] | None = None,
+        ) -> Any:
+            stage_started_mono = time_module.monotonic()
+            review_timing["status"] = "running"
+            review_timing["current_stage"] = name
+            review_timing["current_stage_started_at"] = datetime.now().isoformat()
+            review_timing["current_stage_started_elapsed_sec"] = round(
+                stage_started_mono - timing_started_mono,
+                3,
+            )
+            _persist_review_timing()
+            try:
+                result = fn()
+            except Exception as exc:
+                review_timing["status"] = "failed"
+                review_timing["failed_stage"] = name
+                review_timing["error"] = f"{type(exc).__name__}:{exc}"
+                review_timing["current_stage_elapsed_sec"] = round(
+                    time_module.monotonic() - stage_started_mono,
+                    3,
+                )
+                _persist_review_timing()
+                raise
+            stage_elapsed_sec = round(time_module.monotonic() - stage_started_mono, 3)
+            stage_row: dict[str, Any] = {
+                "name": name,
+                "started_at": str(review_timing.get("current_stage_started_at", "")),
+                "elapsed_sec": stage_elapsed_sec,
+            }
+            if summary_fn is not None:
+                summary = summary_fn(result)
+                if summary:
+                    stage_row["summary"] = summary
+            review_timing.setdefault("stages", []).append(stage_row)
+            review_timing["last_completed_stage"] = name
+            review_timing["current_stage"] = ""
+            review_timing.pop("current_stage_started_at", None)
+            review_timing.pop("current_stage_started_elapsed_sec", None)
+            review_timing.pop("current_stage_elapsed_sec", None)
+            review_timing.pop("failed_stage", None)
+            review_timing.pop("error", None)
+            _persist_review_timing()
+            return result
+
+        def _run_review_backtest() -> BacktestResult:
+            prev = getattr(self, "_review_backtest_fast_mode_active", False)
+            self._review_backtest_fast_mode_active = bool(review_fast_mode)
+            try:
+                return self.run_backtest(start=start, end=as_of)
+            finally:
+                self._review_backtest_fast_mode_active = prev
+
+        bt = _run_timed_stage(
+            "backtest",
+            _run_review_backtest,
+            summary_fn=lambda out: {
+                "start": out.start.isoformat(),
+                "end": out.end.isoformat(),
+                "trades": int(out.trades),
+                "positive_window_ratio": float(out.positive_window_ratio),
+                "max_drawdown": float(out.max_drawdown),
+                "violations": int(out.violations),
+                "review_fast_mode": bool(review_fast_mode),
+            },
+        )
+        with self._run_halfhour_mutex(f"run-review:{as_of.isoformat()}"):
+            params = _run_timed_stage(
+                "load_live_params",
+                lambda: self._load_live_params(),
+                summary_fn=lambda out: {"param_count": int(len(out))},
+            )
+            rollback_anchor = _run_timed_stage(
+                "backup_live_params",
+                lambda: self._backup_live_params(as_of),
+                summary_fn=lambda out: {"rollback_anchor": str(out)},
+            )
+            factor_weights = {
+                "macro": 0.20,
+                "industry": 0.18,
+                "news": 0.17,
+                "sentiment": 0.15,
+                "fundamental": 0.10,
+                "technical": 0.20,
+            }
+            factor_contrib = _run_timed_stage(
+                "estimate_factor_contrib",
+                lambda: self._estimate_factor_contrib_120d(as_of=as_of),
+                summary_fn=lambda out: {"factor_count": int(len(out))},
+            )
+            thresholds = ReviewThresholds(
+                positive_window_ratio_min=float(self.settings.validation.get("positive_window_ratio_min", 0.70)),
+                max_drawdown_max=float(self.settings.validation.get("max_drawdown_max", 0.18)),
+            )
+            review = _run_timed_stage(
+                "build_review_delta",
+                lambda: build_review_delta(
+                    as_of=as_of,
+                    backtest=bt,
+                    current_params=params,
+                    factor_weights=factor_weights,
+                    factor_contrib=factor_contrib,
+                    thresholds=thresholds,
+                ),
+                summary_fn=lambda out: {
+                    "pass_gate": bool(out.pass_gate),
+                    "defect_count": int(len(out.defects)),
+                    "changed_param_count": int(len(out.parameter_changes)),
+                },
+            )
+            style_diag = _run_timed_stage(
+                "review_style_diagnostics",
+                lambda: self._review_style_diagnostics(start=start, as_of=as_of),
+                summary_fn=lambda out: {
+                    "active": bool(out.get("active", False)),
+                    "sample_days": int(out.get("sample_days", 0)),
+                    "alert_count": int(len(out.get("alerts", []))),
+                },
+            )
+            review.style_diagnostics = style_diag
+            review.notes.append(
+                "style_diag="
+                + f"active={bool(style_diag.get('active', False))}; "
+                + f"dominant={style_diag.get('dominant_style', 'neutral')}; "
+                + f"dir={style_diag.get('dominant_direction', 'na')}; "
+                + f"drift={float(style_diag.get('style_drift_score', 0.0)):.4f}; "
+                + f"sample_days={int(style_diag.get('sample_days', 0))}"
+            )
+            if bool(style_diag.get("active", False)) and style_diag.get("alerts"):
+                review.notes.append("style_diag_alerts=" + ",".join(str(x) for x in style_diag.get("alerts", [])))
+            strategy_candidate = _run_timed_stage(
+                "load_strategy_candidate",
+                lambda: self._load_latest_strategy_candidate(as_of=as_of),
+                summary_fn=lambda out: {
+                    "found": bool(out),
+                    "keys": int(len(out.keys())) if isinstance(out, dict) else 0,
+                },
+            )
+            strategy_lab_autorun: dict[str, Any] = {}
+            if not strategy_candidate and bool(self.settings.validation.get("review_autorun_strategy_lab_if_missing", False)):
+                strategy_lab_autorun = _run_timed_stage(
+                    "autorun_strategy_lab",
+                    lambda: self._autorun_strategy_lab_for_review(as_of=as_of),
+                    summary_fn=lambda out: {
+                        "manifest": str(out.get("manifest", "")),
+                        "candidate_count": int(len(out.get("candidates", []))),
+                    },
+                )
+                if strategy_lab_autorun:
+                    strategy_candidate = _run_timed_stage(
+                        "reload_strategy_candidate",
+                        lambda: self._load_latest_strategy_candidate(as_of=as_of),
+                        summary_fn=lambda out: {
+                            "found": bool(out),
+                            "keys": int(len(out.keys())) if isinstance(out, dict) else 0,
+                        },
+                    )
+                    review.notes.append(
+                        "strategy_lab_autorun="
+                        + f"manifest={strategy_lab_autorun.get('manifest', '')}; "
+                        + f"candidate_count={len(strategy_lab_autorun.get('candidates', []))}"
+                    )
+            if strategy_candidate:
+                _run_timed_stage(
+                    "merge_strategy_candidate",
+                    lambda: self._merge_strategy_candidate_into_review(
+                        review=review,
+                        current_params=params,
+                        candidate_payload=strategy_candidate,
+                    ),
+                    summary_fn=lambda _out: {"candidate_applied": True},
+                )
+            else:
+                review.notes.append("No accepted strategy-lab candidate found within lookback window")
+
+            runtime_mode = _run_timed_stage(
+                "resolve_review_runtime_mode",
+                lambda: self._resolve_review_runtime_mode(start=start, as_of=as_of),
+                summary_fn=lambda out: {"runtime_mode": str(out)},
+            )
+            mode_history = _run_timed_stage(
+                "mode_history_stats",
+                lambda: self._mode_history_stats(as_of=as_of),
+                summary_fn=lambda out: {"mode_count": int(len((out.get("modes", {}) if isinstance(out, dict) else {})))},
+            )
+            mode_health = _run_timed_stage(
+                "evaluate_mode_health",
+                lambda: self._evaluate_mode_health(runtime_mode=runtime_mode, mode_history=mode_history),
+                summary_fn=lambda out: {
+                    "active": bool(out.get("active", False)),
+                    "passed": bool(out.get("passed", False)),
+                    "degraded": bool(out.get("degraded", False)),
+                    "runtime_mode": str(out.get("runtime_mode", runtime_mode)),
+                },
+            )
+            mode_adaptive = _run_timed_stage(
+                "apply_mode_adaptive_update",
+                lambda: self._apply_mode_adaptive_update(
+                    review=review,
+                    current_params=params,
+                    runtime_mode=runtime_mode,
+                    mode_history=mode_history,
+                ),
+                summary_fn=lambda out: {
+                    "applied": bool(out.get("applied", False)),
+                    "direction": str(out.get("direction", "")),
+                },
+            )
+            slot_regime_tuning = _run_timed_stage(
+                "tune_slot_regime_thresholds",
+                lambda: self._tune_slot_regime_thresholds(as_of=as_of),
+                summary_fn=lambda out: {
+                    "applied": bool(out.get("applied", False)),
+                    "changed": bool(out.get("changed", False)),
+                    "path": str(out.get("path", "")),
+                },
+            )
+            _run_timed_stage(
+                "apply_mode_health_guard",
+                lambda: self._apply_mode_health_guard(
+                    review=review,
+                    current_params=params,
+                    mode_health=mode_health,
+                ),
+                summary_fn=lambda _out: {"mode_health_passed": bool(mode_health.get("passed", False))},
+            )
+            style_drift_guard = _run_timed_stage(
+                "apply_style_drift_guard",
+                lambda: self._apply_style_drift_adaptive_guard(
+                    review=review,
+                    current_params=params,
+                    style_diag=style_diag,
+                ),
+                summary_fn=lambda out: {
+                    "applied": bool(out.get("applied", False)),
+                    "blocked": bool(out.get("blocked", False)),
+                    "intensity": float(out.get("intensity", 0.0)),
+                },
+            )
+            style_diag["adaptive_guard"] = style_drift_guard
+            review.style_diagnostics = style_diag
+            review.notes.append(
+                "mode_health="
+                + f"runtime_mode={runtime_mode}; passed={mode_health.get('passed', True)}; "
+                + f"degraded={mode_health.get('degraded', False)}; "
+                + f"active={mode_health.get('active', False)}"
+            )
+            review.notes.append(
+                "slot_regime_tuning="
+                + f"applied={bool(slot_regime_tuning.get('applied', False))}; "
+                + f"changed={bool(slot_regime_tuning.get('changed', False))}; "
+                + f"path={slot_regime_tuning.get('path', '')}"
+            )
+            review.rollback_anchor = rollback_anchor
+
+            report = _run_timed_stage(
+                "render_review_report",
+                lambda: render_review_report(as_of=as_of, backtest=bt, review=review),
+                summary_fn=lambda out: {"chars": int(len(out))},
+            )
+            _run_timed_stage(
+                "write_review_report",
+                lambda: write_markdown(review_path, report),
+                summary_fn=lambda _out: {"path": str(review_path)},
+            )
+
+            prev_params = params
+            deltas = {
+                k: float(review.parameter_changes.get(k, 0.0) - prev_params.get(k, 0.0))
+                for k in review.parameter_changes.keys()
+            }
+            audit_payload = review.to_dict()
+            audit_payload["previous_parameters"] = prev_params
+            audit_payload["parameter_deltas"] = deltas
+            audit_payload["impact_window_days"] = review.impact_window_days
+            audit_payload["rollback_anchor"] = rollback_anchor
+            audit_payload["strategy_lab_candidate"] = strategy_candidate
+            audit_payload["strategy_lab_autorun"] = strategy_lab_autorun
+            audit_payload["runtime_mode"] = runtime_mode
+            audit_payload["mode_history"] = mode_history
+            audit_payload["mode_health"] = mode_health
+            audit_payload["mode_adaptive"] = mode_adaptive
+            audit_payload["style_drift_guard"] = style_drift_guard
+            audit_payload["slot_regime_tuning"] = slot_regime_tuning
+            audit_payload["style_diagnostics"] = style_diag
+            audit_payload["generated_at"] = datetime.now().isoformat()
+            audit_payload["review_timing_artifact"] = str(timing_path)
+
+            live_params_path = self.ctx.output_dir / "artifacts" / "params_live.yaml"
+            _run_timed_stage(
+                "write_live_params",
+                lambda: write_markdown(
+                    live_params_path,
+                    yaml.safe_dump(review.parameter_changes, allow_unicode=True, sort_keys=False),
+                ),
+                summary_fn=lambda _out: {"path": str(live_params_path), "param_count": int(len(review.parameter_changes))},
+            )
+
+        baseline_promotion = _run_timed_stage(
+            "promote_artifact_governance_baseline",
+            lambda: self._promote_artifact_governance_baseline(
+                as_of=as_of,
+                round_no=1,
+                review_passed=bool(review.pass_gate),
+            ),
+            summary_fn=lambda out: {
+                "promoted": bool(out.get("promoted", False)),
+                "reason": str(out.get("reason", "")),
+            },
         )
         baseline_promotion_path = review_dir / f"{as_of.isoformat()}_baseline_promotion.json"
-        write_json(baseline_promotion_path, baseline_promotion)
+        _run_timed_stage(
+            "write_baseline_promotion",
+            lambda: write_json(baseline_promotion_path, baseline_promotion),
+            summary_fn=lambda _out: {"path": str(baseline_promotion_path)},
+        )
         audit_payload["baseline_promotion"] = baseline_promotion
-        write_markdown(delta_path, yaml.safe_dump(audit_payload, allow_unicode=True, sort_keys=False))
+        _run_timed_stage(
+            "write_param_delta",
+            lambda: write_markdown(delta_path, yaml.safe_dump(audit_payload, allow_unicode=True, sort_keys=False)),
+            summary_fn=lambda _out: {"path": str(delta_path)},
+        )
         review.notes.append(
             "baseline_promotion="
             + f"promoted={bool(baseline_promotion.get('promoted', False))}; "
             + f"reason={str(baseline_promotion.get('reason', ''))}; "
             + f"snapshot={str(baseline_promotion.get('snapshot_path', ''))}"
         )
+        review.notes.append(f"review_timing_artifact={timing_path}")
 
-        append_sqlite(self.ctx.sqlite_path, "review_runs", pd.DataFrame([audit_payload]))
-        manifest_path = write_run_manifest(
-            output_dir=self.ctx.output_dir,
-            run_type="review",
-            run_id=as_of.isoformat(),
-            artifacts={
-                "review_report": str(review_path),
-                "param_delta": str(delta_path),
-                "live_params": str(live_params_path),
-                "baseline_promotion": str(baseline_promotion_path),
-            },
-            metrics={
-                "pass_gate": bool(review.pass_gate),
-                "defects": int(len(review.defects)),
-                "changed_params": int(len(review.parameter_changes)),
-                "runtime_mode": runtime_mode,
-                "mode_health_passed": bool(mode_health.get("passed", True)),
-                "mode_adaptive_applied": bool(mode_adaptive.get("applied", False)),
-                "mode_adaptive_direction": str(mode_adaptive.get("direction", "none")),
-                "slot_regime_tuning_changed": bool(slot_regime_tuning.get("changed", False)),
-                "style_drift_score": float(style_diag.get("style_drift_score", 0.0)),
-                "style_drift_alerts": int(
-                    sum(1 for x in style_diag.get("alerts", []) if str(x).startswith("style_drift:"))
-                ),
-                "style_drift_guard_applied": bool(style_drift_guard.get("applied", False)),
-                "style_drift_guard_blocked": bool(style_drift_guard.get("blocked", False)),
-                "style_drift_guard_intensity": float(style_drift_guard.get("intensity", 0.0)),
-            },
-            checks={
-                "positive_window_ratio": float(bt.positive_window_ratio),
-                "max_drawdown": float(bt.max_drawdown),
-                "violations": int(bt.violations),
-            },
+        _run_timed_stage(
+            "append_review_runs_sqlite",
+            lambda: append_sqlite(self.ctx.sqlite_path, "review_runs", pd.DataFrame([audit_payload])),
+            summary_fn=lambda _out: {"sqlite_path": str(self.ctx.sqlite_path)},
+        )
+        manifest_path = _run_timed_stage(
+            "write_run_manifest",
+            lambda: write_run_manifest(
+                output_dir=self.ctx.output_dir,
+                run_type="review",
+                run_id=as_of.isoformat(),
+                artifacts={
+                    "review_report": str(review_path),
+                    "param_delta": str(delta_path),
+                    "live_params": str(live_params_path),
+                    "baseline_promotion": str(baseline_promotion_path),
+                    "review_timing": str(timing_path),
+                },
+                metrics={
+                    "pass_gate": bool(review.pass_gate),
+                    "defects": int(len(review.defects)),
+                    "changed_params": int(len(review.parameter_changes)),
+                    "runtime_mode": runtime_mode,
+                    "mode_health_passed": bool(mode_health.get("passed", True)),
+                    "mode_health_degraded": bool(mode_health.get("degraded", False)),
+                    "mode_adaptive_applied": bool(mode_adaptive.get("applied", False)),
+                    "mode_adaptive_direction": str(mode_adaptive.get("direction", "none")),
+                    "slot_regime_tuning_changed": bool(slot_regime_tuning.get("changed", False)),
+                    "style_drift_score": float(style_diag.get("style_drift_score", 0.0)),
+                    "style_drift_alerts": int(
+                        sum(1 for x in style_diag.get("alerts", []) if str(x).startswith("style_drift:"))
+                    ),
+                    "style_drift_guard_applied": bool(style_drift_guard.get("applied", False)),
+                    "style_drift_guard_blocked": bool(style_drift_guard.get("blocked", False)),
+                    "style_drift_guard_intensity": float(style_drift_guard.get("intensity", 0.0)),
+                    "review_elapsed_sec": float(review_timing.get("elapsed_sec", 0.0)),
+                },
+                checks={
+                    "positive_window_ratio": float(bt.positive_window_ratio),
+                    "max_drawdown": float(bt.max_drawdown),
+                    "violations": int(bt.violations),
+                },
+            ),
+            summary_fn=lambda out: {"manifest_path": str(out)},
         )
         review.notes.append(f"manifest={manifest_path}")
+        review_timing["status"] = "completed"
+        review_timing["ended_at"] = datetime.now().isoformat()
+        review_timing["current_stage"] = ""
+        review_timing.pop("current_stage_started_at", None)
+        review_timing.pop("current_stage_started_elapsed_sec", None)
+        review_timing.pop("current_stage_elapsed_sec", None)
+        review_timing.pop("failed_stage", None)
+        review_timing.pop("error", None)
+        _persist_review_timing()
         return review
 
     def test_all(
@@ -5910,18 +7142,29 @@ class LieEngine:
         as_of: date,
         run_tests: bool = False,
         run_review_if_missing: bool = True,
+        stable_replay_mode: str = "execute",
     ) -> dict[str, Any]:
         return self._release_orchestrator().gate_report(
             as_of=as_of,
             run_tests=run_tests,
             run_review_if_missing=run_review_if_missing,
+            stable_replay_mode=stable_replay_mode,
         )
 
     def ops_report(self, as_of: date, window_days: int = 7) -> dict[str, Any]:
         return self._release_orchestrator().ops_report(as_of=as_of, window_days=window_days)
 
-    def review_until_pass(self, as_of: date, max_rounds: int = 3) -> dict[str, Any]:
-        return self._release_orchestrator().review_until_pass(as_of=as_of, max_rounds=max_rounds)
+    def review_until_pass(
+        self,
+        as_of: date,
+        max_rounds: int = 3,
+        fast_tests_only: bool = False,
+    ) -> dict[str, Any]:
+        return self._release_orchestrator().review_until_pass(
+            as_of=as_of,
+            max_rounds=max_rounds,
+            fast_tests_only=fast_tests_only,
+        )
 
     @staticmethod
     def _parse_guarded_stdout_json(stdout: str) -> dict[str, Any] | None:
@@ -5956,6 +7199,7 @@ class LieEngine:
         health_timeout_seconds: int = 90,
         mutex_timeout_seconds: float = 5.0,
         review_mode: str = "review-loop",
+        fast_tests_only: bool = False,
         skip_health_check: bool = False,
         fail_fast: bool = False,
         skip_mutex: bool = False,
@@ -6000,6 +7244,8 @@ class LieEngine:
             "--mutex-timeout-seconds",
             str(max(0.1, float(mutex_timeout_seconds))),
         ]
+        if bool(fast_tests_only) and mode == "review-loop":
+            cmd.append("--fast-tests-only")
         if bool(skip_health_check):
             cmd.append("--skip-health-check")
         if bool(fail_fast):
@@ -6037,11 +7283,18 @@ class LieEngine:
             payload["ok"] = False
         return payload
 
-    def run_review_cycle(self, as_of: date, max_rounds: int = 2, ops_window_days: int | None = None) -> dict[str, Any]:
+    def run_review_cycle(
+        self,
+        as_of: date,
+        max_rounds: int = 2,
+        ops_window_days: int | None = None,
+        fast_tests_only: bool = False,
+    ) -> dict[str, Any]:
         return self._release_orchestrator().run_review_cycle(
             as_of=as_of,
             max_rounds=max_rounds,
             ops_window_days=ops_window_days,
+            fast_tests_only=fast_tests_only,
         )
 
     def run_slot(self, as_of: date, slot: str, max_review_rounds: int = 2) -> dict[str, Any]:

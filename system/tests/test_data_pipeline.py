@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import sys
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -204,6 +206,77 @@ class DataPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(float(out.sentiment["pcr_50etf"]), 1.0, places=6)
         self.assertIn("btc_return_24h", out.sentiment)
         self.assertAlmostEqual(float(out.sentiment["btc_return_24h"]), 0.01, places=6)
+
+    def test_ingest_writes_timing_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            p1 = _MiniProvider(name="src_a", sentiment={"pcr_50etf": 1.10})
+            p2 = _MiniProvider(name="src_b", sentiment={"pcr_50etf": 0.90})
+            bus = DataBus(
+                providers=[p1, p2],  # type: ignore[list-item]
+                output_dir=root / "output",
+                sqlite_path=root / "output" / "artifacts.db",
+                completeness_min=0.99,
+                conflict_max=0.005,
+            )
+            out = bus.ingest(
+                symbols=["TEST1"],
+                start=datetime(2026, 2, 13).date(),
+                end=datetime(2026, 2, 13).date(),
+                start_ts=datetime(2026, 2, 13, 0, 0),
+                end_ts=datetime(2026, 2, 13, 23, 59),
+                langs=("zh",),
+            )
+            self.assertFalse(out.normalized_bars.empty)
+            timing_path = root / "output" / "review" / "2026-02-13_data_ingest_timing.json"
+            self.assertTrue(timing_path.exists())
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+            self.assertEqual(str(timing.get("status", "")), "completed")
+            stage_names = [str(x.get("name", "")) for x in timing.get("stages", []) if isinstance(x, dict)]
+            self.assertIn("collect_bars", stage_names)
+            self.assertIn("collect_enrichments", stage_names)
+            self.assertIn("evaluate_quality", stage_names)
+            collect_stage = next(
+                x for x in timing.get("stages", []) if isinstance(x, dict) and str(x.get("name", "")) == "collect_bars"
+            )
+            providers = collect_stage.get("summary", {}).get("providers", [])
+            self.assertEqual(len(providers), 2)
+            first_provider = providers[0]
+            self.assertIn("symbols", first_provider)
+            self.assertIn("slowest_symbols", first_provider)
+            symbol_rows = first_provider.get("symbols", [])
+            self.assertEqual(len(symbol_rows), 1)
+            self.assertEqual(str(symbol_rows[0].get("symbol", "")), "TEST1")
+            self.assertEqual(str(symbol_rows[0].get("outcome", "")), "rows")
+
+    def test_persist_writes_timing_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            p1 = _MiniProvider(name="src_a", sentiment={"pcr_50etf": 1.10})
+            bus = DataBus(
+                providers=[p1],  # type: ignore[list-item]
+                output_dir=root / "output",
+                sqlite_path=root / "output" / "artifacts.db",
+                completeness_min=0.99,
+                conflict_max=0.005,
+            )
+            out = bus.ingest(
+                symbols=["TEST1"],
+                start=datetime(2026, 2, 13).date(),
+                end=datetime(2026, 2, 13).date(),
+                start_ts=datetime(2026, 2, 13, 0, 0),
+                end_ts=datetime(2026, 2, 13, 23, 59),
+                langs=("zh",),
+            )
+            bus.persist(datetime(2026, 2, 13).date(), out)
+            timing_path = root / "output" / "review" / "2026-02-13_data_persist_timing.json"
+            self.assertTrue(timing_path.exists())
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+            self.assertEqual(str(timing.get("status", "")), "completed")
+            stage_names = [str(x.get("name", "")) for x in timing.get("stages", []) if isinstance(x, dict)]
+            self.assertIn("write_artifacts", stage_names)
+            self.assertIn("append_sqlite_core", stage_names)
+            self.assertIn("append_sqlite_quality", stage_names)
 
 
 if __name__ == "__main__":

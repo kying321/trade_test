@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 import hashlib
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -51,22 +52,98 @@ class DataBus:
         self.source_confidence_min = float(source_confidence_min)
         self.low_confidence_source_ratio_max = float(low_confidence_source_ratio_max)
 
-    def _collect_bars(self, symbols: list[str], start: date, end: date, freq: str = "1d") -> pd.DataFrame:
+    def _collect_bars(self, symbols: list[str], start: date, end: date, freq: str = "1d") -> tuple[pd.DataFrame, dict[str, Any]]:
         frames: list[pd.DataFrame] = []
+        provider_rows: list[dict[str, Any]] = []
         for provider in self.providers:
+            provider_started_mono = time.monotonic()
+            provider_name = str(getattr(provider, "name", type(provider).__name__)).strip() or type(provider).__name__
+            provider_symbol_hits = 0
+            provider_row_count = 0
+            symbol_rows: list[dict[str, Any]] = []
             for symbol in symbols:
+                symbol_started_mono = time.monotonic()
                 try:
                     frame = provider.fetch_ohlcv(symbol=symbol, start=start, end=end, freq=freq)
                 except NotImplementedError:
+                    symbol_rows.append(
+                        {
+                            "symbol": str(symbol),
+                            "rows": 0,
+                            "elapsed_sec": round(time.monotonic() - symbol_started_mono, 3),
+                            "outcome": "not_implemented",
+                        }
+                    )
                     continue
+                except Exception:
+                    symbol_rows.append(
+                        {
+                            "symbol": str(symbol),
+                            "rows": 0,
+                            "elapsed_sec": round(time.monotonic() - symbol_started_mono, 3),
+                            "outcome": "error",
+                        }
+                    )
+                    raise
                 if not isinstance(frame, pd.DataFrame) or frame.empty:
+                    symbol_rows.append(
+                        {
+                            "symbol": str(symbol),
+                            "rows": 0,
+                            "elapsed_sec": round(time.monotonic() - symbol_started_mono, 3),
+                            "outcome": "empty",
+                        }
+                    )
                     continue
                 frames.append(frame)
+                provider_symbol_hits += 1
+                frame_rows = int(len(frame))
+                provider_row_count += frame_rows
+                symbol_rows.append(
+                    {
+                        "symbol": str(symbol),
+                        "rows": frame_rows,
+                        "elapsed_sec": round(time.monotonic() - symbol_started_mono, 3),
+                        "outcome": "rows",
+                    }
+                )
+            slowest_symbols = sorted(
+                symbol_rows,
+                key=lambda row: (float(row.get("elapsed_sec", 0.0)), int(row.get("rows", 0))),
+                reverse=True,
+            )[:5]
+            provider_rows.append(
+                {
+                    "provider": provider_name,
+                    "requested_symbols": int(len(symbols)),
+                    "symbols_with_rows": int(provider_symbol_hits),
+                    "rows": int(provider_row_count),
+                    "elapsed_sec": round(time.monotonic() - provider_started_mono, 3),
+                    "symbols": symbol_rows,
+                    "slowest_symbols": slowest_symbols,
+                }
+            )
         if not frames:
-            return pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"])
+            return (
+                pd.DataFrame(columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"]),
+                {
+                    "provider_count": int(len(self.providers)),
+                    "requested_symbol_count": int(len(symbols)),
+                    "raw_row_count": 0,
+                    "providers": provider_rows,
+                },
+            )
         raw = pd.concat(frames, ignore_index=True)
         raw["ts"] = pd.to_datetime(raw["ts"])
-        return raw
+        return (
+            raw,
+            {
+                "provider_count": int(len(self.providers)),
+                "requested_symbol_count": int(len(symbols)),
+                "raw_row_count": int(len(raw)),
+                "providers": provider_rows,
+            },
+        )
 
     @staticmethod
     def _resolve_prices(raw_bars: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -351,78 +428,214 @@ class DataBus:
         end_ts: datetime,
         langs: tuple[str, ...] = ("zh", "en"),
     ) -> IngestionResult:
-        raw_bars = self._collect_bars(symbols=symbols, start=start, end=end)
-        normalized_bars, conflicts = self._resolve_prices(raw_bars)
+        review_dir = self.output_dir / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        timing_path = review_dir / f"{end.isoformat()}_data_ingest_timing.json"
+        timing_started_mono = time.monotonic()
+        ingest_timing: dict[str, Any] = {
+            "date": end.isoformat(),
+            "status": "running",
+            "elapsed_sec": 0.0,
+            "current_stage": "",
+            "last_completed_stage": "",
+            "stages": [],
+        }
+
+        def _persist_ingest_timing() -> None:
+            ingest_timing["elapsed_sec"] = round(time.monotonic() - timing_started_mono, 3)
+            write_json(timing_path, ingest_timing)
+
+        def _run_ingest_stage(
+            name: str,
+            fn: Any,
+            *,
+            summary_fn: Any = None,
+        ) -> Any:
+            stage_started_mono = time.monotonic()
+            ingest_timing["status"] = "running"
+            ingest_timing["current_stage"] = name
+            ingest_timing["current_stage_started_elapsed_sec"] = round(stage_started_mono - timing_started_mono, 3)
+            _persist_ingest_timing()
+            try:
+                result = fn()
+            except Exception as exc:
+                ingest_timing["status"] = "failed"
+                ingest_timing["failed_stage"] = name
+                ingest_timing["error"] = f"{type(exc).__name__}:{exc}"
+                ingest_timing["current_stage_elapsed_sec"] = round(time.monotonic() - stage_started_mono, 3)
+                _persist_ingest_timing()
+                raise
+            stage_elapsed_sec = round(time.monotonic() - stage_started_mono, 3)
+            stage_row: dict[str, Any] = {"name": name, "elapsed_sec": stage_elapsed_sec}
+            if summary_fn is not None:
+                summary = summary_fn(result)
+                if summary:
+                    stage_row["summary"] = summary
+            ingest_timing.setdefault("stages", []).append(stage_row)
+            ingest_timing["last_completed_stage"] = name
+            ingest_timing["current_stage"] = ""
+            ingest_timing.pop("current_stage_started_elapsed_sec", None)
+            ingest_timing.pop("current_stage_elapsed_sec", None)
+            ingest_timing.pop("failed_stage", None)
+            ingest_timing.pop("error", None)
+            _persist_ingest_timing()
+            return result
+
+        raw_bars, collect_summary = _run_ingest_stage(
+            "collect_bars",
+            lambda: self._collect_bars(symbols=symbols, start=start, end=end),
+            summary_fn=lambda out: out[1] if isinstance(out, tuple) and len(out) > 1 else {},
+        )
+        normalized_bars, conflicts = _run_ingest_stage(
+            "resolve_prices",
+            lambda: self._resolve_prices(raw_bars),
+            summary_fn=lambda out: {
+                "normalized_rows": int(len(out[0])) if isinstance(out, tuple) and len(out) > 0 else 0,
+                "conflict_rows": int(len(out[1])) if isinstance(out, tuple) and len(out) > 1 else 0,
+            },
+        )
 
         macro_frames = []
         sentiment_snapshots: list[tuple[str, dict[str, float]]] = []
         sentiment_factor_count: dict[str, int] = {}
         news_events: list[NewsEvent] = []
-        for provider in self.providers:
-            try:
-                macro_frames.append(provider.fetch_macro(start=start, end=end))
-            except NotImplementedError:
-                pass
-            try:
-                snap = provider.fetch_sentiment_factors(as_of=end)
-                if not isinstance(snap, dict):
-                    snap = {}
-                src_name = str(getattr(provider, "name", "")).strip()
-                if src_name and snap:
-                    clean_snap: dict[str, float] = {}
-                    for key, value in snap.items():
-                        try:
-                            val = float(value)
-                        except (TypeError, ValueError):
-                            continue
-                        if not np.isfinite(val):
-                            continue
-                        clean_snap[str(key)] = float(val)
-                    if clean_snap:
-                        sentiment_snapshots.append((src_name, clean_snap))
-                        sentiment_factor_count[src_name] = int(len(clean_snap))
-            except NotImplementedError:
-                pass
-            for lang in langs:
+        enrichment_provider_rows: list[dict[str, Any]] = []
+
+        def _collect_enrichments() -> dict[str, Any]:
+            for provider in self.providers:
+                provider_started_mono = time.monotonic()
+                provider_name = str(getattr(provider, "name", type(provider).__name__)).strip() or type(provider).__name__
+                macro_rows = 0
+                news_count = 0
+                sentiment_count = 0
                 try:
-                    news_events.extend(provider.fetch_news(start_ts=start_ts, end_ts=end_ts, lang=lang))
+                    macro_df = provider.fetch_macro(start=start, end=end)
+                    if isinstance(macro_df, pd.DataFrame) and not macro_df.empty:
+                        macro_frames.append(macro_df)
+                        macro_rows = int(len(macro_df))
                 except NotImplementedError:
-                    continue
+                    pass
+                try:
+                    snap = provider.fetch_sentiment_factors(as_of=end)
+                    if not isinstance(snap, dict):
+                        snap = {}
+                    src_name = str(getattr(provider, "name", "")).strip()
+                    if src_name and snap:
+                        clean_snap: dict[str, float] = {}
+                        for key, value in snap.items():
+                            try:
+                                val = float(value)
+                            except (TypeError, ValueError):
+                                continue
+                            if not np.isfinite(val):
+                                continue
+                            clean_snap[str(key)] = float(val)
+                        if clean_snap:
+                            sentiment_snapshots.append((src_name, clean_snap))
+                            sentiment_factor_count[src_name] = int(len(clean_snap))
+                            sentiment_count = int(len(clean_snap))
+                except NotImplementedError:
+                    pass
+                for lang in langs:
+                    try:
+                        provider_news = provider.fetch_news(start_ts=start_ts, end_ts=end_ts, lang=lang)
+                    except NotImplementedError:
+                        continue
+                    if provider_news:
+                        news_events.extend(provider_news)
+                        news_count += int(len(provider_news))
+                enrichment_provider_rows.append(
+                    {
+                        "provider": provider_name,
+                        "macro_rows": int(macro_rows),
+                        "news_events": int(news_count),
+                        "sentiment_factors": int(sentiment_count),
+                        "elapsed_sec": round(time.monotonic() - provider_started_mono, 3),
+                    }
+                )
+            return {
+                "provider_count": int(len(self.providers)),
+                "macro_frame_count": int(len(macro_frames)),
+                "raw_news_events": int(len(news_events)),
+                "sentiment_source_count": int(len(sentiment_snapshots)),
+                "providers": enrichment_provider_rows,
+            }
+
+        _run_ingest_stage(
+            "collect_enrichments",
+            _collect_enrichments,
+            summary_fn=lambda out: out if isinstance(out, dict) else {},
+        )
 
         macro = pd.concat(macro_frames, ignore_index=True) if macro_frames else pd.DataFrame()
         sentiment: dict[str, float] = {}
-        if sentiment_snapshots:
-            seen_sources = sorted({src for src, _ in sentiment_snapshots})
-            sentiment["sentiment_source_count"] = float(len(seen_sources))
-            by_key: dict[str, list[float]] = {}
-            for src_name, snap in sentiment_snapshots:
-                for key, val in snap.items():
-                    sentiment[f"{src_name}.{key}"] = float(val)
-                    by_key.setdefault(str(key), []).append(float(val))
-            for key, vals in by_key.items():
-                if not vals:
-                    continue
-                arr = np.asarray(vals, dtype=float)
-                sentiment[key] = float(arr.mean())
-                sentiment[f"{key}__median"] = float(np.median(arr))
-                sentiment[f"{key}__std"] = float(arr.std(ddof=0))
+        def _normalize_enrichments() -> tuple[dict[str, float], list[NewsEvent]]:
+            if sentiment_snapshots:
+                seen_sources = sorted({src for src, _ in sentiment_snapshots})
+                sentiment["sentiment_source_count"] = float(len(seen_sources))
+                by_key: dict[str, list[float]] = {}
+                for src_name, snap in sentiment_snapshots:
+                    for key, val in snap.items():
+                        sentiment[f"{src_name}.{key}"] = float(val)
+                        by_key.setdefault(str(key), []).append(float(val))
+                for key, vals in by_key.items():
+                    if not vals:
+                        continue
+                    arr = np.asarray(vals, dtype=float)
+                    sentiment[key] = float(arr.mean())
+                    sentiment[f"{key}__median"] = float(np.median(arr))
+                    sentiment[f"{key}__std"] = float(arr.std(ddof=0))
+            normalized_news = self._dedupe_news(self._normalize_news(news_events))
+            return sentiment, normalized_news
 
-        news = self._dedupe_news(self._normalize_news(news_events))
-        source_conf = self._evaluate_source_confidence(
-            raw_bars=raw_bars,
-            macro=macro,
-            news=news,
-            sentiment_factor_count=sentiment_factor_count,
+        sentiment, news = _run_ingest_stage(
+            "normalize_enrichments",
+            _normalize_enrichments,
+            summary_fn=lambda out: {
+                "sentiment_keys": int(len(out[0])) if isinstance(out, tuple) and len(out) > 0 else 0,
+                "deduped_news_events": int(len(out[1])) if isinstance(out, tuple) and len(out) > 1 else 0,
+                "macro_rows": int(len(macro)),
+            },
         )
-        quality = evaluate_quality(
-            normalized_bars=normalized_bars,
-            conflicts=conflicts,
-            completeness_min=self.completeness_min,
-            conflict_max=self.conflict_max,
-            source_confidence=source_conf,
-            source_confidence_min=self.source_confidence_min,
-            low_confidence_source_ratio_max=self.low_confidence_source_ratio_max,
+        source_conf = _run_ingest_stage(
+            "evaluate_source_confidence",
+            lambda: self._evaluate_source_confidence(
+                raw_bars=raw_bars,
+                macro=macro,
+                news=news,
+                sentiment_factor_count=sentiment_factor_count,
+            ),
+            summary_fn=lambda out: {
+                "overall_score": float(out.overall_score),
+                "source_count": int(len(out.by_source)),
+                "low_confidence_source_count": int(len(out.low_confidence_sources)),
+            },
         )
+        quality = _run_ingest_stage(
+            "evaluate_quality",
+            lambda: evaluate_quality(
+                normalized_bars=normalized_bars,
+                conflicts=conflicts,
+                completeness_min=self.completeness_min,
+                conflict_max=self.conflict_max,
+                source_confidence=source_conf,
+                source_confidence_min=self.source_confidence_min,
+                low_confidence_source_ratio_max=self.low_confidence_source_ratio_max,
+            ),
+            summary_fn=lambda out: {
+                "quality_passed": bool(out.passed),
+                "completeness_ratio": float(out.completeness),
+                "unresolved_conflict_ratio": float(out.unresolved_conflict_ratio),
+                "source_confidence_score": float(out.source_confidence_score),
+            },
+        )
+        ingest_timing["status"] = "completed"
+        ingest_timing["current_stage"] = ""
+        ingest_timing.pop("current_stage_started_elapsed_sec", None)
+        ingest_timing.pop("current_stage_elapsed_sec", None)
+        ingest_timing.pop("failed_stage", None)
+        ingest_timing.pop("error", None)
+        _persist_ingest_timing()
 
         return IngestionResult(
             raw_bars=raw_bars,
@@ -436,6 +649,61 @@ class DataBus:
         )
 
     def persist(self, as_of: date, result: IngestionResult) -> None:
+        review_dir = self.output_dir / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        timing_path = review_dir / f"{as_of.isoformat()}_data_persist_timing.json"
+        timing_started_mono = time.monotonic()
+        persist_timing: dict[str, Any] = {
+            "date": as_of.isoformat(),
+            "status": "running",
+            "elapsed_sec": 0.0,
+            "current_stage": "",
+            "last_completed_stage": "",
+            "stages": [],
+        }
+
+        def _persist_timing() -> None:
+            persist_timing["elapsed_sec"] = round(time.monotonic() - timing_started_mono, 3)
+            write_json(timing_path, persist_timing)
+
+        def _run_persist_stage(
+            name: str,
+            fn: Any,
+            *,
+            summary_fn: Any = None,
+        ) -> Any:
+            stage_started_mono = time.monotonic()
+            persist_timing["status"] = "running"
+            persist_timing["current_stage"] = name
+            persist_timing["current_stage_started_elapsed_sec"] = round(stage_started_mono - timing_started_mono, 3)
+            _persist_timing()
+            try:
+                out = fn()
+            except Exception as exc:
+                persist_timing["status"] = "failed"
+                persist_timing["failed_stage"] = name
+                persist_timing["error"] = f"{type(exc).__name__}:{exc}"
+                persist_timing["current_stage_elapsed_sec"] = round(time.monotonic() - stage_started_mono, 3)
+                _persist_timing()
+                raise
+            stage_row: dict[str, Any] = {
+                "name": name,
+                "elapsed_sec": round(time.monotonic() - stage_started_mono, 3),
+            }
+            if summary_fn is not None:
+                summary = summary_fn(out)
+                if summary:
+                    stage_row["summary"] = summary
+            persist_timing.setdefault("stages", []).append(stage_row)
+            persist_timing["last_completed_stage"] = name
+            persist_timing["current_stage"] = ""
+            persist_timing.pop("current_stage_started_elapsed_sec", None)
+            persist_timing.pop("current_stage_elapsed_sec", None)
+            persist_timing.pop("failed_stage", None)
+            persist_timing.pop("error", None)
+            _persist_timing()
+            return out
+
         dstr = as_of.isoformat()
         raw_path = self.output_dir / "artifacts" / "raw" / f"{dstr}_bars_raw.csv"
         norm_path = self.output_dir / "artifacts" / "normalized" / f"{dstr}_bars_normalized.csv"
@@ -447,46 +715,74 @@ class DataBus:
         sentiment_path = self.output_dir / "artifacts" / "normalized" / f"{dstr}_sentiment.json"
         quality_path = self.output_dir / "artifacts" / f"{dstr}_quality.json"
 
-        write_csv(raw_path, result.raw_bars)
-        write_csv(norm_path, result.normalized_bars)
-        write_csv(conf_path, result.conflicts if not result.conflicts.empty else pd.DataFrame(columns=["ts", "symbol", "field", "values", "max_diff_pct"]))
-        write_csv(macro_path, result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"]))
-        write_json(news_path, [n.to_dict() for n in result.news])
-        write_json(source_conf_path, result.source_confidence.to_dict())
-        write_json(sentiment_path, {k: float(v) for k, v in result.sentiment.items()})
-        write_json(quality_path, result.quality.to_dict())
+        _run_persist_stage(
+            "write_artifacts",
+            lambda: (
+                write_csv(raw_path, result.raw_bars),
+                write_csv(norm_path, result.normalized_bars),
+                write_csv(conf_path, result.conflicts if not result.conflicts.empty else pd.DataFrame(columns=["ts", "symbol", "field", "values", "max_diff_pct"])),
+                write_csv(macro_path, result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"])),
+                write_json(news_path, [n.to_dict() for n in result.news]),
+                write_json(source_conf_path, result.source_confidence.to_dict()),
+                write_json(sentiment_path, {k: float(v) for k, v in result.sentiment.items()}),
+                write_json(quality_path, result.quality.to_dict()),
+            ),
+            summary_fn=lambda _out: {
+                "raw_rows": int(len(result.raw_bars)),
+                "normalized_rows": int(len(result.normalized_bars)),
+                "news_events": int(len(result.news)),
+            },
+        )
 
         feature_df = result.normalized_bars.copy()
         if not feature_df.empty:
             feature_df["ret_1d"] = feature_df.groupby("symbol")["close"].pct_change().fillna(0.0)
             feature_df["vol_chg"] = feature_df.groupby("symbol")["volume"].pct_change().fillna(0.0)
-        write_parquet_optional(feat_path, feature_df)
+        _run_persist_stage(
+            "write_feature_parquet",
+            lambda: write_parquet_optional(feat_path, feature_df),
+            summary_fn=lambda _out: {"feature_rows": int(len(feature_df)), "path": str(feat_path)},
+        )
 
-        append_sqlite(self.sqlite_path, "bars_normalized", result.normalized_bars)
-        append_sqlite(self.sqlite_path, "macro", result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"]))
-        news_rows = [n.to_dict() | {"as_of": dstr} for n in result.news]
-        append_sqlite(
-            self.sqlite_path,
-            "news_events",
-            (
-                pd.DataFrame(news_rows)
-                if news_rows
-                else pd.DataFrame(
-                    columns=[
-                        "event_id",
-                        "ts",
-                        "title",
-                        "content",
-                        "lang",
-                        "source",
-                        "category",
-                        "confidence",
-                        "entities",
-                        "importance",
-                        "as_of",
-                    ]
-                )
+        _run_persist_stage(
+            "append_sqlite_core",
+            lambda: (
+                append_sqlite(self.sqlite_path, "bars_normalized", result.normalized_bars),
+                append_sqlite(self.sqlite_path, "macro", result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"])),
             ),
+            summary_fn=lambda _out: {
+                "bars_normalized_rows": int(len(result.normalized_bars)),
+                "macro_rows": int(len(result.macro)),
+                "sqlite_path": str(self.sqlite_path),
+            },
+        )
+        news_rows = [n.to_dict() | {"as_of": dstr} for n in result.news]
+        _run_persist_stage(
+            "append_sqlite_news",
+            lambda: append_sqlite(
+                self.sqlite_path,
+                "news_events",
+                (
+                    pd.DataFrame(news_rows)
+                    if news_rows
+                    else pd.DataFrame(
+                        columns=[
+                            "event_id",
+                            "ts",
+                            "title",
+                            "content",
+                            "lang",
+                            "source",
+                            "category",
+                            "confidence",
+                            "entities",
+                            "importance",
+                            "as_of",
+                        ]
+                    )
+                ),
+            ),
+            summary_fn=lambda _out: {"news_rows": int(len(news_rows))},
         )
         sentiment_rows = []
         for key, value in result.sentiment.items():
@@ -497,17 +793,36 @@ class DataBus:
             if not np.isfinite(val):
                 continue
             sentiment_rows.append({"as_of": dstr, "key": str(key), "value": float(val)})
-        append_sqlite(
-            self.sqlite_path,
-            "sentiment_snapshot",
-            (
-                pd.DataFrame(sentiment_rows)
-                if sentiment_rows
-                else pd.DataFrame(columns=["as_of", "key", "value"])
+        _run_persist_stage(
+            "append_sqlite_sentiment",
+            lambda: append_sqlite(
+                self.sqlite_path,
+                "sentiment_snapshot",
+                (
+                    pd.DataFrame(sentiment_rows)
+                    if sentiment_rows
+                    else pd.DataFrame(columns=["as_of", "key", "value"])
+                ),
             ),
+            summary_fn=lambda _out: {"sentiment_rows": int(len(sentiment_rows))},
         )
         source_conf_df = pd.DataFrame([d.to_dict() | {"as_of": dstr} for d in result.source_confidence.details])
         if source_conf_df.empty:
             source_conf_df = pd.DataFrame(columns=["source", "score", "base_reliability", "bar_consistency", "bar_coverage", "macro_consistency", "macro_coverage", "news_confidence", "sentiment_coverage", "bars_rows", "macro_rows", "news_events", "sentiment_factors", "as_of"])
-        append_sqlite(self.sqlite_path, "source_confidence", source_conf_df)
-        append_sqlite(self.sqlite_path, "quality", pd.DataFrame([result.quality.to_dict() | {"as_of": dstr}]))
+        _run_persist_stage(
+            "append_sqlite_source_confidence",
+            lambda: append_sqlite(self.sqlite_path, "source_confidence", source_conf_df),
+            summary_fn=lambda _out: {"source_confidence_rows": int(len(source_conf_df))},
+        )
+        _run_persist_stage(
+            "append_sqlite_quality",
+            lambda: append_sqlite(self.sqlite_path, "quality", pd.DataFrame([result.quality.to_dict() | {"as_of": dstr}])),
+            summary_fn=lambda _out: {"quality_rows": 1},
+        )
+        persist_timing["status"] = "completed"
+        persist_timing["current_stage"] = ""
+        persist_timing.pop("current_stage_started_elapsed_sec", None)
+        persist_timing.pop("current_stage_elapsed_sec", None)
+        persist_timing.pop("failed_stage", None)
+        persist_timing.pop("error", None)
+        _persist_timing()

@@ -12,6 +12,11 @@ from typing import Any
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
 
+try:
+    import certifi
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    certifi = None
+
 import numpy as np
 import pandas as pd
 
@@ -113,6 +118,20 @@ class _TokenBucket:
             if now >= deadline:
                 return False
             time.sleep(min(0.20, max(0.01, wait_seconds)))
+
+
+def _public_ssl_context() -> ssl.SSLContext:
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
+def _public_https_opener(*, ctx: ssl.SSLContext, bypass_env_proxy: bool):
+    handlers: list[Any] = []
+    if bypass_env_proxy:
+        handlers.append(request.ProxyHandler({}))
+    handlers.extend([request.HTTPHandler(), request.HTTPSHandler(context=ctx)])
+    return request.build_opener(*handlers)
 
 
 @dataclass(slots=True)
@@ -271,16 +290,19 @@ class BinanceSpotPublicProvider:
     rate_limit_per_minute: int = 10
     rate_limit_wait_seconds: float = 30.0
     allow_insecure_ssl_fallback: bool = True
+    bypass_env_proxy: bool = True
     user_agent: str = "lie-engine/0.1"
     _bucket: _TokenBucket = field(init=False, repr=False)
     _timeout_seconds: float = field(init=False, repr=False)
     _ssl_context: ssl.SSLContext = field(init=False, repr=False)
+    _last_l2_error: str = field(init=False, repr=False, default="")
+    _last_trade_error: str = field(init=False, repr=False, default="")
 
     def __post_init__(self) -> None:
         cap = float(max(1, int(self.rate_limit_per_minute)))
         self._bucket = _TokenBucket(capacity=cap, refill_per_second=cap / 60.0)
         self._timeout_seconds = min(5.0, max(0.1, float(self.request_timeout_ms) / 1000.0))
-        self._ssl_context = ssl.create_default_context()
+        self._ssl_context = _public_ssl_context()
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
@@ -332,7 +354,8 @@ class BinanceSpotPublicProvider:
             },
         )
         def _open_with_ctx(ctx: ssl.SSLContext) -> tuple[int, str]:
-            with request.urlopen(req, timeout=self._timeout_seconds, context=ctx) as resp:
+            opener = _public_https_opener(ctx=ctx, bypass_env_proxy=bool(self.bypass_env_proxy))
+            with opener.open(req, timeout=self._timeout_seconds) as resp:
                 status_raw = getattr(resp, "status", None)
                 if status_raw is None:
                     status_raw = resp.getcode()
@@ -379,7 +402,8 @@ class BinanceSpotPublicProvider:
 
         def _open_with_ctx(ctx: ssl.SSLContext) -> tuple[int, str, int, int]:
             send_ms = int(time.time() * 1000)
-            with request.urlopen(req, timeout=self._timeout_seconds, context=ctx) as resp:
+            opener = _public_https_opener(ctx=ctx, bypass_env_proxy=bool(self.bypass_env_proxy))
+            with opener.open(req, timeout=self._timeout_seconds) as resp:
                 status_raw = getattr(resp, "status", None)
                 if status_raw is None:
                     status_raw = resp.getcode()
@@ -591,15 +615,18 @@ class BinanceSpotPublicProvider:
         }
 
     def fetch_l2(self, symbol: str, start_ts: datetime, end_ts: datetime, depth: int = 20) -> pd.DataFrame:
+        self._last_l2_error = ""
         sym = self._normalize_symbol(symbol)
         if (not sym) or (not _looks_like_crypto_pair(sym)):
             return _empty_l2_frame()
         limit = self._nearest_depth(depth)
         try:
             payload = self._http_get_json("/api/v3/depth", params={"symbol": sym, "limit": limit})
-        except Exception:
+        except Exception as exc:
+            self._last_l2_error = str(exc).strip() or type(exc).__name__
             return _empty_l2_frame()
         if not isinstance(payload, dict):
+            self._last_l2_error = "invalid_payload_type"
             return _empty_l2_frame()
 
         recv_ts_ms = int(time.time() * 1000)
@@ -625,6 +652,7 @@ class BinanceSpotPublicProvider:
         )
 
     def fetch_trades(self, symbol: str, start_ts: datetime, end_ts: datetime, limit: int = 2000) -> pd.DataFrame:
+        self._last_trade_error = ""
         sym = self._normalize_symbol(symbol)
         if (not sym) or (not _looks_like_crypto_pair(sym)):
             return _empty_trades_frame()
@@ -663,7 +691,8 @@ class BinanceSpotPublicProvider:
         if end_ms >= now_ms - 60_000 and recent_window_ms <= 3_600_000:
             try:
                 recent_payload = self._http_get_json("/api/v3/aggTrades", params={"symbol": sym, "limit": lim})
-            except Exception:
+            except Exception as exc:
+                self._last_trade_error = str(exc).strip() or type(exc).__name__
                 recent_payload = []
             recent_rows = _parse_rows(recent_payload)
             if recent_rows:
@@ -678,7 +707,8 @@ class BinanceSpotPublicProvider:
             }
             try:
                 payload = self._http_get_json("/api/v3/aggTrades", params=params)
-            except Exception:
+            except Exception as exc:
+                self._last_trade_error = str(exc).strip() or type(exc).__name__
                 return _empty_trades_frame()
             rows = _parse_rows(payload)
 
@@ -697,16 +727,19 @@ class BybitSpotPublicProvider:
     rate_limit_per_minute: int = 10
     rate_limit_wait_seconds: float = 30.0
     allow_insecure_ssl_fallback: bool = True
+    bypass_env_proxy: bool = True
     user_agent: str = "lie-engine/0.1"
     _bucket: _TokenBucket = field(init=False, repr=False)
     _timeout_seconds: float = field(init=False, repr=False)
     _ssl_context: ssl.SSLContext = field(init=False, repr=False)
+    _last_l2_error: str = field(init=False, repr=False, default="")
+    _last_trade_error: str = field(init=False, repr=False, default="")
 
     def __post_init__(self) -> None:
         cap = float(max(1, int(self.rate_limit_per_minute)))
         self._bucket = _TokenBucket(capacity=cap, refill_per_second=cap / 60.0)
         self._timeout_seconds = min(5.0, max(0.1, float(self.request_timeout_ms) / 1000.0))
-        self._ssl_context = ssl.create_default_context()
+        self._ssl_context = _public_ssl_context()
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
@@ -730,7 +763,8 @@ class BybitSpotPublicProvider:
         )
 
         def _open_with_ctx(ctx: ssl.SSLContext) -> tuple[int, str]:
-            with request.urlopen(req, timeout=self._timeout_seconds, context=ctx) as resp:
+            opener = _public_https_opener(ctx=ctx, bypass_env_proxy=bool(self.bypass_env_proxy))
+            with opener.open(req, timeout=self._timeout_seconds) as resp:
                 status_raw = getattr(resp, "status", None)
                 if status_raw is None:
                     status_raw = resp.getcode()
@@ -777,7 +811,8 @@ class BybitSpotPublicProvider:
 
         def _open_with_ctx(ctx: ssl.SSLContext) -> tuple[int, str, int, int]:
             send_ms = int(time.time() * 1000)
-            with request.urlopen(req, timeout=self._timeout_seconds, context=ctx) as resp:
+            opener = _public_https_opener(ctx=ctx, bypass_env_proxy=bool(self.bypass_env_proxy))
+            with opener.open(req, timeout=self._timeout_seconds) as resp:
                 status_raw = getattr(resp, "status", None)
                 if status_raw is None:
                     status_raw = resp.getcode()
@@ -992,6 +1027,7 @@ class BybitSpotPublicProvider:
         }
 
     def fetch_l2(self, symbol: str, start_ts: datetime, end_ts: datetime, depth: int = 20) -> pd.DataFrame:
+        self._last_l2_error = ""
         sym = self._normalize_symbol(symbol)
         if (not sym) or (not _looks_like_crypto_pair(sym)):
             return _empty_l2_frame()
@@ -1002,12 +1038,15 @@ class BybitSpotPublicProvider:
         }
         try:
             payload = self._http_get_json("/v5/market/orderbook", params=params)
-        except Exception:
+        except Exception as exc:
+            self._last_l2_error = str(exc).strip() or type(exc).__name__
             return _empty_l2_frame()
         if not isinstance(payload, dict) or int(payload.get("retCode", 1)) != 0:
+            self._last_l2_error = "invalid_payload"
             return _empty_l2_frame()
         result = payload.get("result", {})
         if not isinstance(result, dict):
+            self._last_l2_error = "invalid_result_payload"
             return _empty_l2_frame()
 
         recv_ts_ms = int(time.time() * 1000)
@@ -1034,6 +1073,7 @@ class BybitSpotPublicProvider:
         )
 
     def fetch_trades(self, symbol: str, start_ts: datetime, end_ts: datetime, limit: int = 2000) -> pd.DataFrame:
+        self._last_trade_error = ""
         sym = self._normalize_symbol(symbol)
         if (not sym) or (not _looks_like_crypto_pair(sym)):
             return _empty_trades_frame()
@@ -1047,13 +1087,16 @@ class BybitSpotPublicProvider:
         }
         try:
             payload = self._http_get_json("/v5/market/recent-trade", params=params)
-        except Exception:
+        except Exception as exc:
+            self._last_trade_error = str(exc).strip() or type(exc).__name__
             return _empty_trades_frame()
         if not isinstance(payload, dict) or int(payload.get("retCode", 1)) != 0:
+            self._last_trade_error = "invalid_payload"
             return _empty_trades_frame()
         result = payload.get("result", {})
         rows = result.get("list", []) if isinstance(result, dict) else []
         if not isinstance(rows, list):
+            self._last_trade_error = "invalid_result_payload"
             return _empty_trades_frame()
 
         out: list[dict[str, Any]] = []

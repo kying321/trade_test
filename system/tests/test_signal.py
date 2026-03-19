@@ -11,13 +11,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lie_engine.models import RegimeLabel, Side, SignalCandidate
 from lie_engine.signal import SignalEngineConfig, scan_signals
-from lie_engine.signal.engine import generate_signal_for_symbol
+from lie_engine.signal.engine import detect_symbol_regime, generate_signal_for_symbol
 from lie_engine.signal.features import add_common_features
 from lie_engine.signal.theory import compute_theory_confluence
 from tests.helpers import make_bars
 
 
 class SignalTests(unittest.TestCase):
+    def test_detect_symbol_regime_invalid_ts_returns_uncertain(self) -> None:
+        bars = make_bars("300750", n=260, trend=0.10, seed=99)
+        bars["ts"] = "invalid-ts"
+        cfg = SignalEngineConfig(confidence_min=10, convexity_min=1.0)
+        regime = detect_symbol_regime(bars, cfg)
+        self.assertEqual(regime, RegimeLabel.UNCERTAIN)
+
     def test_trend_signal_generation(self) -> None:
         bars = make_bars("300750", n=260, trend=0.15, seed=1)
         cfg = SignalEngineConfig(confidence_min=10, convexity_min=1.0)
@@ -29,6 +36,36 @@ class SignalTests(unittest.TestCase):
         cfg = SignalEngineConfig(confidence_min=30, convexity_min=1.2)
         signals = scan_signals(bars, regime=RegimeLabel.RANGE, cfg=cfg)
         self.assertIsInstance(signals, list)
+
+    def test_scan_signals_emits_symbol_timing(self) -> None:
+        bars = pd.concat(
+            [
+                make_bars("BTCUSDT", n=180, trend=0.10, seed=12, asset_class="crypto"),
+                make_bars("ETHUSDT", n=180, trend=0.08, seed=13, asset_class="crypto"),
+            ],
+            ignore_index=True,
+        )
+        cfg = SignalEngineConfig(confidence_min=10, convexity_min=1.0)
+        seen: list[dict[str, object]] = []
+
+        signals = scan_signals(
+            bars,
+            regime=RegimeLabel.WEAK_TREND,
+            cfg=cfg,
+            timing_callback=lambda payload: seen.append(payload),
+        )
+
+        self.assertIsInstance(signals, list)
+        self.assertGreaterEqual(len(seen), 1)
+        final = seen[-1]
+        self.assertEqual(final.get("status"), "completed")
+        self.assertEqual(final.get("symbol_count"), 2)
+        symbols = final.get("symbols")
+        self.assertIsInstance(symbols, list)
+        assert isinstance(symbols, list)
+        self.assertEqual(len(symbols), 2)
+        self.assertTrue(all("detect_regime_elapsed_sec" in row for row in symbols))
+        self.assertTrue(all("generate_signal_elapsed_sec" in row for row in symbols))
 
     def test_scan_uses_symbol_level_regime(self) -> None:
         bars = pd.concat(
@@ -71,6 +108,56 @@ class SignalTests(unittest.TestCase):
 
         regimes = {s.regime for s in signals}
         self.assertEqual(regimes, {RegimeLabel.STRONG_TREND, RegimeLabel.RANGE})
+
+    def test_generate_signal_short_circuits_before_factor_stack_when_raw_confidence_hopeless(self) -> None:
+        bars = make_bars("SOLUSDT", n=180, trend=0.01, seed=201, asset_class="crypto")
+        cfg = SignalEngineConfig(confidence_min=60.0, convexity_min=1.0, theory_enabled=False)
+
+        with (
+            patch(
+                "lie_engine.signal.engine.score_trend",
+                return_value={"position": 1.0, "structure": 1.0, "momentum": 1.0, "side": Side.LONG},
+            ),
+            patch("lie_engine.signal.engine._estimate_factor_exposure", side_effect=AssertionError("should short-circuit")),
+        ):
+            signal = generate_signal_for_symbol(bars, regime=RegimeLabel.STRONG_TREND, cfg=cfg)
+
+        self.assertIsNone(signal)
+
+    def test_generate_signal_short_circuits_before_theory_micro_when_penalized_confidence_hopeless(self) -> None:
+        bars = make_bars("SOLUSDT", n=180, trend=0.03, seed=202, asset_class="crypto")
+        cfg = SignalEngineConfig(
+            confidence_min=60.0,
+            convexity_min=1.0,
+            theory_enabled=True,
+            microstructure_enabled=True,
+            theory_confidence_boost_max=5.0,
+            micro_confidence_boost_max=8.0,
+            factor_penalty_max=30.0,
+            factor_drop_threshold=2.0,
+        )
+        micro_state = {"has_data": True, "micro_alignment": 1.0, "evidence_score": 1.0}
+
+        with (
+            patch(
+                "lie_engine.signal.engine.score_trend",
+                return_value={"position": 5.0, "structure": 2.0, "momentum": 1.0, "side": Side.LONG},
+            ),
+            patch("lie_engine.signal.engine._estimate_factor_exposure", return_value={"valuation": 0.0}),
+            patch("lie_engine.signal.engine._merge_market_factor_state", return_value={"valuation_pressure": 1.0}),
+            patch("lie_engine.signal.engine._factor_risk_score", return_value=(0.8, ["valuation_headwind"])),
+            patch("lie_engine.signal.engine._theory_adjustment", side_effect=AssertionError("should short-circuit")),
+            patch("lie_engine.signal.engine._microstructure_adjustment", side_effect=AssertionError("should short-circuit")),
+        ):
+            signal = generate_signal_for_symbol(
+                bars,
+                regime=RegimeLabel.STRONG_TREND,
+                cfg=cfg,
+                market_factor_state={},
+                micro_factor_state=micro_state,
+            )
+
+        self.assertIsNone(signal)
 
     def test_weak_trend_target_tighter_than_strong(self) -> None:
         bars = make_bars("300750", n=280, trend=0.12, seed=21)
@@ -181,6 +268,88 @@ class SignalTests(unittest.TestCase):
         self.assertGreater(float(stressed.factor_penalty), float(baseline.factor_penalty))
         self.assertLess(float(stressed.confidence), float(baseline.confidence))
         self.assertIn("data_quality_headwind", stressed.factor_flags)
+
+    def test_flow_effort_result_divergence_penalizes_signal(self) -> None:
+        baseline_bars = make_bars("BTCUSDT", n=320, trend=0.14, seed=71, asset_class="future").reset_index(drop=True)
+        stressed_bars = baseline_bars.copy(deep=True)
+        i = len(stressed_bars) - 1
+        anchor = float(stressed_bars.loc[i - 1, "close"])
+        open_px = anchor * 1.005
+        stressed_bars.loc[i, "open"] = open_px
+        stressed_bars.loc[i, "close"] = open_px * 1.0002
+        stressed_bars.loc[i, "high"] = open_px * 1.018
+        stressed_bars.loc[i, "low"] = open_px * 0.995
+        stressed_bars.loc[i, "volume"] = float(stressed_bars["volume"].tail(20).mean()) * 3.6
+
+        cfg = SignalEngineConfig(
+            confidence_min=0.0,
+            convexity_min=0.0,
+            factor_penalty_max=45.0,
+            factor_drop_threshold=2.0,
+            microstructure_enabled=False,
+        )
+        market_state = {
+            "valuation_pressure": 0.5,
+            "momentum_preference": 0.6,
+            "crowding_aversion": 0.6,
+            "small_cap_pressure": 0.4,
+            "dividend_preference": 0.4,
+            "flow_quality_pressure": 1.25,
+        }
+        baseline = generate_signal_for_symbol(
+            baseline_bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            market_factor_state=market_state,
+        )
+        stressed = generate_signal_for_symbol(
+            stressed_bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            market_factor_state=market_state,
+        )
+        self.assertIsNotNone(baseline)
+        self.assertIsNotNone(stressed)
+        assert baseline is not None
+        assert stressed is not None
+        self.assertLess(float(stressed.confidence), float(baseline.confidence))
+        self.assertIn("flow_effort_result_divergence", stressed.factor_flags)
+        self.assertIn("flow=", stressed.notes)
+
+    def test_flow_absorption_reversal_penalizes_trend_long(self) -> None:
+        bars = make_bars("BTCUSDT", n=320, trend=0.20, seed=72, asset_class="future").reset_index(drop=True)
+        i = len(bars) - 1
+        anchor = float(bars.loc[i - 1, "close"])
+        bars.loc[i, "open"] = anchor * 1.004
+        bars.loc[i, "close"] = anchor * 1.007
+        bars.loc[i, "high"] = anchor * 1.032
+        bars.loc[i, "low"] = anchor * 0.999
+        bars.loc[i, "volume"] = float(bars["volume"].tail(20).mean()) * 2.8
+
+        cfg = SignalEngineConfig(
+            confidence_min=0.0,
+            convexity_min=0.0,
+            factor_penalty_max=45.0,
+            factor_drop_threshold=2.0,
+            microstructure_enabled=False,
+        )
+        signal = generate_signal_for_symbol(
+            bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            market_factor_state={
+                "valuation_pressure": 0.5,
+                "momentum_preference": 0.6,
+                "crowding_aversion": 0.5,
+                "small_cap_pressure": 0.4,
+                "dividend_preference": 0.4,
+                "flow_quality_pressure": 1.2,
+            },
+        )
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal.side, Side.LONG)
+        self.assertIn("flow_absorption_reversal", signal.factor_flags)
 
     def test_micro_time_sync_risk_penalizes_signal(self) -> None:
         bars = make_bars("BTCUSDT", n=280, trend=0.12, seed=46, asset_class="future")

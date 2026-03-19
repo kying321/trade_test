@@ -17,6 +17,8 @@ from lie_engine.data.storage import write_json
 
 @dataclass(slots=True)
 class TestingOrchestrator:
+    __test__ = False  # Prevent pytest from collecting this utility class as a test case.
+
     root: Path
     output_dir: Path
     timeout_seconds: int = 1800

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from contextlib import closing
+import os
+import socket
+import subprocess
 import sys
 from pathlib import Path
 import unittest
@@ -8,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 import tempfile
 import json
 import sqlite3
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
@@ -15,7 +19,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lie_engine.engine import LieEngine
+from lie_engine.engine import RUN_HALFHOUR_MUTEX_HELD_ENV, LieEngine
 from lie_engine.models import BacktestResult, ReviewDelta
 from tests.helpers import make_bars, make_multi_symbol_bars
 
@@ -156,7 +160,7 @@ class EngineIntegrationTests(unittest.TestCase):
                 "sntp_exchange {",
                 "  delay: 0000.0000 (0.050000000)",
                 "}",
-                "+0.001000 +/- 0.050000 time.google.com 198.18.0.1",
+                "+0.001000 +/- 0.050000 time.google.com 216.239.35.0",
             ]
         )
 
@@ -174,11 +178,210 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(str(out.get("status", "")), "ok")
         self.assertTrue(bool(out.get("pass", False)))
         self.assertGreaterEqual(int(out.get("ok_sources", 0)), 1)
+        artifact_path = Path(str(out.get("artifact", "")))
+        latest_artifact_path = Path(str(out.get("latest_artifact", "")))
+        self.assertTrue(artifact_path.exists())
+        self.assertTrue(latest_artifact_path.exists())
+        self.assertTrue(artifact_path.name.endswith("_time_sync_probe.json"))
+        self.assertEqual(latest_artifact_path.name, "2026-02-13_probe.json")
         with closing(sqlite3.connect(tmp_root / "output" / "artifacts" / "lie_engine.db")) as conn:
             daily = pd.read_sql_query("SELECT status, ok_sources FROM system_time_sync_daily", conn)
             rows = pd.read_sql_query("SELECT source, ok, offset_ms, rtt_ms FROM system_time_sync_source_state", conn)
         self.assertFalse(daily.empty)
         self.assertFalse(rows.empty)
+
+    def test_run_time_sync_probe_flags_fake_ip_dns_intercept(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["system_time_sync_probe_enabled"] = True
+        eng.settings.raw["validation"]["system_time_sync_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["system_time_sync_primary_source"] = "time.google.com"
+        eng.settings.raw["validation"]["system_time_sync_secondary_source"] = "time.cloudflare.com"
+        eng.settings.raw["validation"]["system_time_sync_probe_timeout_seconds"] = 1.0
+        eng.settings.raw["validation"]["system_time_sync_max_offset_ms"] = 5
+        eng.settings.raw["validation"]["system_time_sync_max_rtt_ms"] = 120
+        eng.settings.raw["validation"]["system_time_sync_min_ok_sources"] = 1
+
+        fake_output = "\n".join(
+            [
+                "selected:",
+                "sntp_exchange {",
+                "  delay: 0000.0000 (0.050000000)",
+                "}",
+                "+0.001000 +/- 0.050000 time.google.com 198.18.0.1",
+            ]
+        )
+
+        class _FakeProc:
+            returncode = 0
+            stdout = fake_output
+            stderr = ""
+
+        def _fake_getaddrinfo(host, port, type=0, *args, **kwargs):  # noqa: ANN001
+            host_map = {
+                "time.google.com": "198.18.0.1",
+                "time.cloudflare.com": "198.18.0.2",
+                "time.apple.com": "198.18.0.3",
+                "time.windows.com": "198.18.0.4",
+                "time.nist.gov": "198.18.0.5",
+                "ntp.aliyun.com": "198.18.0.6",
+                "cn.ntp.org.cn": "198.18.0.7",
+                "pool.ntp.org": "198.18.0.8",
+            }
+            return [(socket.AF_INET, socket.SOCK_DGRAM, 17, "", (host_map[str(host)], int(port)))]
+
+        with patch("lie_engine.engine.shutil.which", return_value="/usr/bin/sntp"), patch(
+            "lie_engine.engine.subprocess.run",
+            return_value=_FakeProc(),
+        ), patch(
+            "lie_engine.engine.socket.getaddrinfo",
+            side_effect=_fake_getaddrinfo,
+        ):
+            out = eng.run_time_sync_probe(date(2026, 2, 13))
+
+        self.assertEqual(str(out.get("status", "")), "degraded")
+        self.assertEqual(str(out.get("classification", "")), "fake_ip_dns_intercept")
+        self.assertFalse(bool(out.get("pass", False)))
+        self.assertIn("time.google.com", list(out.get("fake_ip_sources", [])))
+        self.assertEqual(str(out.get("fake_ip_intercept_scope", "")), "environment_wide")
+        self.assertIn("switching source hostnames is unlikely to help", str(out.get("remediation_hint", "")))
+        self.assertEqual(
+            list(out.get("diagnostic_candidate_fake_ip_sources", [])),
+            [
+                "time.google.com",
+                "time.cloudflare.com",
+                "time.apple.com",
+                "time.windows.com",
+                "time.nist.gov",
+                "ntp.aliyun.com",
+                "cn.ntp.org.cn",
+                "pool.ntp.org",
+            ],
+        )
+        self.assertTrue(Path(str(out.get("artifact", ""))).exists())
+        self.assertTrue(Path(str(out.get("latest_artifact", ""))).exists())
+
+    def test_run_time_sync_probe_flags_environment_wide_fake_ip_even_when_sntp_times_out(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["system_time_sync_probe_enabled"] = True
+        eng.settings.raw["validation"]["system_time_sync_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["system_time_sync_primary_source"] = "time.google.com"
+        eng.settings.raw["validation"]["system_time_sync_secondary_source"] = "time.cloudflare.com"
+        eng.settings.raw["validation"]["system_time_sync_probe_timeout_seconds"] = 1.0
+        eng.settings.raw["validation"]["system_time_sync_max_offset_ms"] = 5
+        eng.settings.raw["validation"]["system_time_sync_max_rtt_ms"] = 120
+        eng.settings.raw["validation"]["system_time_sync_min_ok_sources"] = 1
+
+        def _fake_getaddrinfo(host, port, type=0, *args, **kwargs):  # noqa: ANN001
+            host_map = {
+                "time.google.com": "198.18.0.1",
+                "time.cloudflare.com": "198.18.0.2",
+                "time.apple.com": "198.18.0.3",
+                "time.windows.com": "198.18.0.4",
+                "time.nist.gov": "198.18.0.5",
+                "ntp.aliyun.com": "198.18.0.6",
+                "cn.ntp.org.cn": "198.18.0.7",
+                "pool.ntp.org": "198.18.0.8",
+            }
+            return [(socket.AF_INET, socket.SOCK_DGRAM, 17, "", (host_map[str(host)], int(port)))]
+
+        with patch("lie_engine.engine.shutil.which", return_value="/usr/bin/sntp"), patch(
+            "lie_engine.engine.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["sntp"], timeout=1.0),
+        ), patch(
+            "lie_engine.engine.socket.getaddrinfo",
+            side_effect=_fake_getaddrinfo,
+        ):
+            out = eng.run_time_sync_probe(date(2026, 2, 13))
+
+        self.assertEqual(str(out.get("status", "")), "unavailable")
+        self.assertEqual(str(out.get("classification", "")), "fake_ip_dns_intercept")
+        self.assertEqual(str(out.get("fake_ip_intercept_scope", "")), "environment_wide")
+        self.assertEqual(list(out.get("fake_ip_sources", [])), ["time.google.com", "time.cloudflare.com"])
+        self.assertIn("switching source hostnames is unlikely to help", str(out.get("remediation_hint", "")))
+
+    def test_run_time_sync_probe_flags_threshold_breach_without_fake_ip(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["system_time_sync_probe_enabled"] = True
+        eng.settings.raw["validation"]["system_time_sync_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["system_time_sync_primary_source"] = "time.google.com"
+        eng.settings.raw["validation"]["system_time_sync_secondary_source"] = "time.cloudflare.com"
+        eng.settings.raw["validation"]["system_time_sync_probe_timeout_seconds"] = 1.0
+        eng.settings.raw["validation"]["system_time_sync_max_offset_ms"] = 5
+        eng.settings.raw["validation"]["system_time_sync_max_rtt_ms"] = 120
+        eng.settings.raw["validation"]["system_time_sync_min_ok_sources"] = 1
+
+        outputs = [
+            "\n".join(
+                [
+                    "selected:",
+                    "sntp_exchange {",
+                    "  delay: 0000.0000 (0.162015000)",
+                    "}",
+                    "+0.075464 +/- 0.162091 time.google.com 216.239.35.0",
+                ]
+            ),
+            "\n".join(
+                [
+                    "selected:",
+                    "sntp_exchange {",
+                    "  delay: 0000.0000 (0.112402138)",
+                    "}",
+                    "+0.079087 +/- 0.169798 time.cloudflare.com 162.159.200.1",
+                ]
+            ),
+        ]
+
+        class _FakeProc:
+            def __init__(self, text: str) -> None:
+                self.returncode = 0
+                self.stdout = text
+                self.stderr = ""
+
+        def _fake_run(*args, **kwargs):  # noqa: ANN001
+            return _FakeProc(outputs.pop(0))
+
+        def _fake_getaddrinfo(host, port, type=0, *args, **kwargs):  # noqa: ANN001
+            host_map = {
+                "time.google.com": "216.239.35.0",
+                "time.cloudflare.com": "162.159.200.1",
+                "time.apple.com": "17.253.16.253",
+                "time.windows.com": "40.119.6.228",
+                "time.nist.gov": "129.6.15.25",
+                "ntp.aliyun.com": "203.107.6.88",
+                "cn.ntp.org.cn": "203.107.6.88",
+                "pool.ntp.org": "45.33.53.84",
+            }
+            return [(socket.AF_INET, socket.SOCK_DGRAM, 17, "", (host_map[str(host)], int(port)))]
+
+        with patch("lie_engine.engine.shutil.which", return_value="/usr/bin/sntp"), patch(
+            "lie_engine.engine.subprocess.run",
+            side_effect=_fake_run,
+        ), patch(
+            "lie_engine.engine.socket.getaddrinfo",
+            side_effect=_fake_getaddrinfo,
+        ):
+            out = eng.run_time_sync_probe(date(2026, 2, 13))
+
+        self.assertEqual(str(out.get("status", "")), "degraded")
+        self.assertEqual(str(out.get("classification", "")), "threshold_breach")
+        self.assertEqual(list(out.get("fake_ip_sources", [])), [])
+        self.assertEqual(str(out.get("fake_ip_intercept_scope", "")), "")
+        self.assertEqual(
+            list(out.get("threshold_breach_sources", [])),
+            [
+                "time.google.com:offset_abs_ms=75.464>5,rtt_ms=162.015>120",
+                "time.cloudflare.com:offset_abs_ms=79.087>5",
+            ],
+        )
+        self.assertEqual(str(out.get("threshold_breach_scope", "")), "clock_skew_and_latency")
+        self.assertEqual(list(out.get("threshold_breach_offset_sources", [])), ["time.google.com", "time.cloudflare.com"])
+        self.assertEqual(list(out.get("threshold_breach_latency_sources", [])), ["time.google.com"])
+        self.assertEqual(out.get("threshold_breach_estimated_offset_ms"), 77.275)
+        self.assertEqual(out.get("threshold_breach_estimated_rtt_ms"), 162.015)
+        self.assertIn("synchronize system clock and reduce network latency/jitter", str(out.get("remediation_hint", "")))
 
     def test_collect_micro_factor_map_builds_missing_cross_source_providers(self) -> None:
         eng, _ = self._make_engine()
@@ -278,10 +481,13 @@ class EngineIntegrationTests(unittest.TestCase):
                     "queue_imbalance": 0.2,
                     "ofi_norm": 0.1,
                     "micro_alignment": 0.15,
+                    "cvd_context_mode": "continuation",
+                    "cvd_context_note": "delta_confirms_directional_price_result",
+                    "cvd_trust_tier_hint": "single_exchange_ok",
                     "max_trade_gap_ms": 200,
                     "sync_skew_ms": 8.0,
                     "time_sync_available": True,
-                    "time_sync_ok": True,
+                    "time_sync_ok": False,
                     "time_sync_offset_ms": 1,
                     "time_sync_rtt_ms": 40,
                     "time_sync_max_offset_ms": 5,
@@ -342,15 +548,261 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(str(out.get("status", "")), "ok")
         artifact_path = Path(str(out.get("artifact", "")))
         self.assertTrue(artifact_path.exists())
+        selected = out.get("selected_micro", [])
+        self.assertTrue(isinstance(selected, list) and selected)
+        self.assertIn("cvd_context_mode", selected[0])
+        self.assertIn("cvd_trust_tier_hint", selected[0])
+        self.assertIn("cvd_veto_hint", selected[0])
+        self.assertEqual(str(selected[0]["cvd_trust_tier_hint"]), "single_exchange_low")
+        self.assertIn("time_sync_risk", str(selected[0]["cvd_context_note"]))
+        semantics = out.get("cvd_semantics", {})
+        self.assertIn("context_counts", semantics)
+        self.assertIn("trust_counts", semantics)
+        self.assertEqual(int(semantics["trust_counts"]["single_exchange_low"]), 1)
+        env_diag = out.get("environment_diagnostics", {})
+        self.assertEqual(str(env_diag.get("status", "")), "ok")
+        self.assertEqual(str(env_diag.get("classification", "")), "none")
+        self.assertEqual(str(out.get("summary", {}).get("environment_status", "")), "ok")
         with closing(sqlite3.connect(tmp_root / "output" / "artifacts" / "lie_engine.db")) as conn:
             runs = pd.read_sql_query("SELECT status, pass, symbols_selected FROM micro_capture_runs", conn)
             src = pd.read_sql_query("SELECT symbol, source FROM micro_capture_source_state", conn)
-            sel = pd.read_sql_query("SELECT symbol, source FROM micro_capture_symbol_state", conn)
+            sel = pd.read_sql_query(
+                "SELECT symbol, source, cvd_context_mode, cvd_trust_tier_hint, cvd_veto_hint FROM micro_capture_symbol_state",
+                conn,
+            )
             cross = pd.read_sql_query("SELECT symbol, audit_status FROM micro_capture_cross_source", conn)
         self.assertFalse(runs.empty)
         self.assertFalse(src.empty)
         self.assertFalse(sel.empty)
+        self.assertEqual(str(sel.iloc[0]["cvd_trust_tier_hint"]), "single_exchange_low")
         self.assertFalse(cross.empty)
+
+    def test_run_micro_capture_reuses_recent_time_sync_probe_when_current_probe_is_unavailable(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+
+        eng._collect_micro_factor_map_with_rows = lambda as_of, symbols, override_symbols=None: (  # type: ignore[method-assign]
+            {
+                "BTCUSDT": {
+                    "source": "binance_spot_public",
+                    "has_data": True,
+                    "schema_ok": True,
+                    "sync_ok": True,
+                    "gap_ok": True,
+                    "trade_count": 120,
+                    "evidence_score": 0.9,
+                    "queue_imbalance": 0.2,
+                    "ofi_norm": 0.1,
+                    "micro_alignment": 0.15,
+                    "cvd_context_mode": "continuation",
+                    "cvd_context_note": "delta_confirms_directional_price_result",
+                    "cvd_trust_tier_hint": "single_exchange_ok",
+                    "max_trade_gap_ms": 200,
+                    "sync_skew_ms": 8.0,
+                    "time_sync_available": True,
+                    "time_sync_ok": False,
+                    "time_sync_offset_ms": 1,
+                    "time_sync_rtt_ms": 40,
+                    "time_sync_max_offset_ms": 5,
+                    "time_sync_max_rtt_ms": 120,
+                }
+            },
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "source": "binance_spot_public",
+                    "has_data": True,
+                    "schema_ok": True,
+                    "sync_ok": True,
+                    "gap_ok": True,
+                    "trade_count": 120,
+                    "evidence_score": 0.9,
+                    "time_sync_available": True,
+                    "time_sync_ok": True,
+                    "time_sync_offset_ms": 1,
+                    "time_sync_rtt_ms": 40,
+                    "time_sync_max_offset_ms": 5,
+                    "time_sync_max_rtt_ms": 120,
+                }
+            ],
+        )
+        eng._collect_cross_source_audit = lambda as_of, symbols: {  # type: ignore[method-assign]
+            "enabled": False,
+            "active": False,
+            "status": "inactive",
+            "fail_ratio": 0.0,
+            "symbols_audited": 0,
+            "symbols_insufficient": 0,
+            "rows": [],
+        }
+        eng._collect_system_time_sync_probe = lambda as_of: {  # type: ignore[method-assign]
+            "enabled": True,
+            "active": True,
+            "status": "unavailable",
+            "classification": "none",
+            "pass": False,
+            "ok_sources": 0,
+            "available_sources": 0,
+            "sources": [
+                {"source": "time.google.com", "available": False, "ok": False, "error": "sntp_timeout"},
+                {"source": "time.cloudflare.com", "available": False, "ok": False, "error": "sntp_timeout"},
+            ],
+            "artifact_path": "",
+        }
+
+        prior_probe_path = tmp_root / "output" / "artifacts" / "time_sync" / "20260213T115900Z_time_sync_probe.json"
+        prior_probe_path.parent.mkdir(parents=True, exist_ok=True)
+        prior_probe_path.write_text(
+            json.dumps(
+                {
+                    "captured_at_utc": "2026-02-13T11:59:00Z",
+                    "enabled": True,
+                    "active": True,
+                    "status": "degraded",
+                    "classification": "threshold_breach",
+                    "pass": False,
+                    "ok_sources": 0,
+                    "available_sources": 2,
+                    "threshold_breach_scope": "clock_skew_and_latency",
+                    "threshold_breach_sources": [
+                        "time.google.com:offset_abs_ms=75.464>5,rtt_ms=162.015>120",
+                        "time.cloudflare.com:offset_abs_ms=79.087>5",
+                    ],
+                    "artifact_path": str(prior_probe_path),
+                    "sources": [
+                        {"source": "time.google.com", "available": True, "ok": False},
+                        {"source": "time.cloudflare.com", "available": True, "ok": False},
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out = eng.run_micro_capture(as_of=d, symbols=["BTCUSDT"])
+        artifact_payload = json.loads(Path(str(out.get("artifact", ""))).read_text(encoding="utf-8"))
+        system_time_sync = artifact_payload.get("system_time_sync", {})
+        self.assertEqual(str(system_time_sync.get("classification", "")), "threshold_breach")
+        self.assertEqual(str(system_time_sync.get("source_mode", "")), "reused_previous_artifact")
+        self.assertEqual(str(system_time_sync.get("source_reason", "")), "current_probe_unavailable")
+        self.assertEqual(str(system_time_sync.get("current_probe_status", "")), "unavailable")
+        self.assertEqual(int(out.get("summary", {}).get("system_time_sync_available_sources", 0)), 2)
+
+    def test_collect_micro_factor_map_with_rows_preserves_provider_fetch_errors(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+
+        class _FailingProvider:
+            name = "binance_spot_public"
+
+            def fetch_l2(self, symbol, start_ts, end_ts, depth=20):  # noqa: ANN001
+                raise RuntimeError("depth_unavailable")
+
+            def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # noqa: ANN001
+                raise RuntimeError("trades_unavailable")
+
+            def fetch_time_sync_sample(self):  # noqa: ANN001
+                return {"source": "binance_spot_public", "offset_ms": 1, "rtt_ms": 50}
+
+        eng.providers = [_FailingProvider()]
+        eng.settings.raw["validation"]["micro_cross_source_build_missing_provider"] = False
+        eng.settings.validation["micro_cross_source_build_missing_provider"] = False
+
+        out, source_rows = eng._collect_micro_factor_map_with_rows(as_of=d, symbols=["BTCUSDT"])
+        self.assertIn("BTCUSDT", out)
+        self.assertFalse(bool(out["BTCUSDT"].get("has_data", True)))
+        row = next(x for x in source_rows if str(x.get("source", "")) == "binance_spot_public")
+        self.assertEqual(str(row.get("symbol", "")), "BTCUSDT")
+        self.assertEqual(str(row.get("source", "")), "binance_spot_public")
+        self.assertEqual(int(row.get("l2_rows", -1)), 0)
+        self.assertEqual(int(row.get("trade_rows", -1)), 0)
+        self.assertIn("l2_error:RuntimeError:depth_unavailable", str(row.get("fetch_error", "")))
+        self.assertIn("trades_error:RuntimeError:trades_unavailable", str(row.get("fetch_error", "")))
+
+    def test_collect_micro_factor_map_with_rows_reads_provider_last_error_fields(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+
+        class _SilentFailProvider:
+            name = "binance_spot_public"
+
+            def __init__(self) -> None:
+                self._last_l2_error = ""
+                self._last_trade_error = ""
+
+            def fetch_l2(self, symbol, start_ts, end_ts, depth=20):  # noqa: ANN001
+                self._last_l2_error = "http_error:451"
+                return pd.DataFrame()
+
+            def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # noqa: ANN001
+                self._last_trade_error = "http_error:451"
+                return pd.DataFrame()
+
+            def fetch_time_sync_sample(self):  # noqa: ANN001
+                return {"source": "binance_spot_public", "offset_ms": 1, "rtt_ms": 50}
+
+        eng.providers = [_SilentFailProvider()]
+        eng.settings.raw["validation"]["micro_cross_source_build_missing_provider"] = False
+        eng.settings.validation["micro_cross_source_build_missing_provider"] = False
+
+        _, source_rows = eng._collect_micro_factor_map_with_rows(as_of=d, symbols=["BTCUSDT"])
+        row = next(x for x in source_rows if str(x.get("source", "")) == "binance_spot_public")
+        self.assertIn("l2_error:http_error:451", str(row.get("fetch_error", "")))
+        self.assertIn("trades_error:http_error:451", str(row.get("fetch_error", "")))
+
+    def test_run_micro_capture_reports_environment_block_when_proxy_tls_and_http_fail(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+
+        eng._collect_micro_factor_map_with_rows = lambda as_of, symbols, override_symbols=None: (  # type: ignore[method-assign]
+            {},
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "source": "binance_spot_public",
+                    "fetch_error": "l2_error:url_error:[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate in certificate chain | trades_error:http_error:451",
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "source": "bybit_spot_public",
+                    "fetch_error": "l2_error:url_error:[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate | trades_error:http_error:403",
+                },
+            ],
+        )
+        eng._collect_cross_source_audit = lambda as_of, symbols: {  # type: ignore[method-assign]
+            "enabled": False,
+            "active": False,
+            "status": "inactive",
+            "fail_ratio": 0.0,
+            "symbols_audited": 0,
+            "symbols_insufficient": 0,
+            "rows": [],
+        }
+        eng._collect_system_time_sync_probe = lambda as_of: {  # type: ignore[method-assign]
+            "enabled": True,
+            "active": True,
+            "status": "degraded",
+            "pass": False,
+            "ok_sources": 0,
+            "available_sources": 2,
+            "sources": [],
+            "artifact_path": "",
+        }
+
+        with patch.dict(os.environ, {"HTTPS_PROXY": "http://127.0.0.1:7897", "HTTP_PROXY": "http://127.0.0.1:7897"}, clear=False):
+            out = eng.run_micro_capture(as_of=d, symbols=["BTCUSDT"])
+
+        env_diag = out.get("environment_diagnostics", {})
+        self.assertEqual(str(env_diag.get("status", "")), "environment_blocked")
+        self.assertEqual(str(env_diag.get("classification", "")), "proxy_tls_and_http_access_block")
+        self.assertTrue(bool(env_diag.get("proxy_enabled", False)))
+        self.assertEqual(int(env_diag.get("ssl_verify_failed_count", 0)), 2)
+        self.assertEqual(int(env_diag.get("http_blocked_count", 0)), 2)
+        self.assertIn("proxy_env_present", str(env_diag.get("blocker_detail", "")))
+        self.assertEqual(str(out.get("summary", {}).get("environment_status", "")), "environment_blocked")
+        self.assertEqual(str(out.get("summary", {}).get("environment_classification", "")), "proxy_tls_and_http_access_block")
 
     def test_run_binance_live_takeover_skips_when_trigger_disabled(self) -> None:
         eng, _ = self._make_engine()
@@ -428,6 +880,7 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("value_preference", state)
         self.assertIn("size_preference", state)
         self.assertIn("dividend_preference", state)
+        self.assertIn("flow_quality_pressure", state)
         self.assertGreaterEqual(float(state.get("style_sample_size", 0.0)), 4.0)
         self.assertGreaterEqual(float(state.get("style_weight", 0.0)), 0.2)
         self.assertLessEqual(float(state.get("style_weight", 0.0)), 0.55)
@@ -540,6 +993,75 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(payload.get("runtime_mode"), "swing")
         self.assertIn("mode_health", payload)
         self.assertFalse(bool(payload.get("mode_health", {}).get("passed", True)))
+
+        timing_path = tmp_root / "output" / "review" / "2026-02-13_review_timing.json"
+        self.assertTrue(timing_path.exists())
+        timing = json.loads(timing_path.read_text(encoding="utf-8"))
+        self.assertEqual(str(timing.get("status", "")), "completed")
+        stage_names = [str(x.get("name", "")) for x in timing.get("stages", []) if isinstance(x, dict)]
+        self.assertIn("backtest", stage_names)
+        self.assertIn("write_run_manifest", stage_names)
+
+    def test_run_review_soft_mode_health_degradation_does_not_hard_block(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["mode_health_min_samples"] = 1
+        eng.settings.raw["validation"]["mode_health_min_profit_factor"] = 1.0
+        eng.settings.raw["validation"]["mode_health_min_win_rate"] = 0.40
+        eng.settings.raw["validation"]["mode_health_max_drawdown_max"] = 0.30
+        eng.settings.raw["validation"]["mode_health_max_violations"] = 1
+
+        eng.run_backtest = lambda start, end: BacktestResult(  # type: ignore[method-assign]
+            start=start,
+            end=end,
+            total_return=0.12,
+            annual_return=0.06,
+            max_drawdown=0.12,
+            win_rate=0.52,
+            profit_factor=1.3,
+            expectancy=0.01,
+            trades=120,
+            violations=0,
+            positive_window_ratio=0.85,
+            equity_curve=[],
+            by_asset={},
+        )
+        eng._estimate_factor_contrib_120d = lambda as_of: {  # type: ignore[method-assign]
+            "macro": 0.2,
+            "industry": 0.2,
+            "news": 0.2,
+            "sentiment": 0.2,
+            "fundamental": 0.1,
+            "technical": 0.1,
+        }
+        eng._resolve_review_runtime_mode = lambda start, as_of: "swing"  # type: ignore[method-assign]
+        eng._mode_history_stats = lambda as_of: {  # type: ignore[method-assign]
+            "as_of": as_of.isoformat(),
+            "lookback_days": 365,
+            "modes": {
+                "swing": {
+                    "samples": 6,
+                    "avg_profit_factor": 0.96,
+                    "avg_win_rate": 0.315,
+                    "worst_drawdown": 0.184,
+                    "total_violations": 1,
+                }
+            },
+        }
+
+        review = eng.run_review(d)
+        self.assertTrue(review.pass_gate)
+        self.assertNotIn("MODE_HEALTH_DEGRADED", review.defects)
+        delta_path = tmp_root / "output" / "review" / "2026-02-13_param_delta.yaml"
+        payload = yaml.safe_load(delta_path.read_text(encoding="utf-8"))
+        self.assertTrue(bool(payload.get("mode_health", {}).get("passed", False)))
+        self.assertTrue(bool(payload.get("mode_health", {}).get("degraded", False)))
+        self.assertEqual(list(payload.get("mode_health", {}).get("hard_failed_rules", [])), [])
+        self.assertEqual(
+            list(payload.get("mode_health", {}).get("soft_failed_rules", [])),
+            ["profit_factor", "win_rate"],
+        )
 
     def test_run_review_applies_mode_adaptive_update(self) -> None:
         eng, tmp_root = self._make_engine()
@@ -870,6 +1392,48 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(row.get("market_price", 0.0)), 51000.0, places=6)
         self.assertAlmostEqual(float(row.get("notional", 0.0)), 38250.0, places=6)
 
+    def test_run_eod_live_adapter_filters_dust_positions_from_binance_snapshot(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["broker_snapshot_source_mode"] = "live_adapter"
+        eng.settings.raw["validation"]["broker_snapshot_live_inbox"] = "output/artifacts/broker_live_inbox"
+        eng.settings.raw["validation"]["broker_snapshot_live_fallback_to_paper"] = False
+        eng.settings.raw["validation"]["broker_snapshot_live_mapping_profile"] = "binance"
+        eng.settings.raw["validation"]["broker_snapshot_live_min_position_notional_abs"] = 1.0
+
+        inbox = tmp_root / "output" / "artifacts" / "broker_live_inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        (inbox / "2026-02-13.json").write_text(
+            json.dumps(
+                {
+                    "broker": "binance_spot",
+                    "summary": {"open_positions": 1, "closed_count": 0, "realized_pnl": 0.0},
+                    "account": {
+                        "positions": [
+                            {
+                                "symbol": "BTCUSDT",
+                                "positionAmt": "0.00001314",
+                                "entryPrice": "0",
+                                "markPrice": "69196.84",
+                                "positionSide": "BOTH",
+                                "state": "OPEN",
+                            }
+                        ]
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        out = eng.run_eod(d)
+        broker_path = Path(str(out.get("broker_snapshot", "")))
+        payload = json.loads(broker_path.read_text(encoding="utf-8"))
+        self.assertEqual(int(payload.get("open_positions", 0)), 0)
+        self.assertEqual(payload.get("positions", []), [])
+        self.assertEqual(int(payload.get("stats", {}).get("positions_rows_filtered_dust", 0)), 1)
+
     def test_run_eod_live_adapter_uses_ibkr_mapping_profile(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
@@ -1004,6 +1568,18 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertNotIn("SOLUSDT", by_symbol)
         self.assertAlmostEqual(float(total), 2.5, places=6)
 
+    def test_run_eod_replaces_latest_positions_snapshot_for_same_day(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        eng.run_eod(d)
+        csv_path = tmp_root / "output" / "daily" / "2026-02-13_positions.csv"
+        csv_rows = len(pd.read_csv(csv_path))
+        with closing(sqlite3.connect(eng.ctx.sqlite_path)) as conn:
+            cur = conn.execute("SELECT COUNT(*) FROM latest_positions WHERE date = ?", (d.isoformat(),))
+            db_rows = int(cur.fetchone()[0])
+        self.assertEqual(db_rows, csv_rows)
+
     def test_run_slot_and_session(self) -> None:
         eng, tmp_root = self._make_engine()
         d = date(2026, 2, 13)
@@ -1090,6 +1666,14 @@ class EngineIntegrationTests(unittest.TestCase):
         eng.settings.raw["validation"]["review_backtest_start_date"] = "2020-01-01"
         self.assertEqual(eng._review_backtest_start(as_of=d), date(2025, 2, 14))
 
+    def test_review_backtest_start_fast_mode_defaults_to_recent_window(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 14)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"].pop("review_backtest_lookback_days", None)
+        eng.settings.raw["validation"].pop("review_backtest_start_date", None)
+        self.assertEqual(eng._review_backtest_start(as_of=d, fast_mode=True), date(2024, 8, 23))
+
     def test_review_backtest_start_rejects_future_start_date(self) -> None:
         eng, _ = self._make_engine()
         d = date(2026, 2, 14)
@@ -1097,6 +1681,62 @@ class EngineIntegrationTests(unittest.TestCase):
         eng.settings.raw["validation"].pop("review_backtest_lookback_days", None)
         eng.settings.raw["validation"]["review_backtest_start_date"] = "2030-01-01"
         self.assertEqual(eng._review_backtest_start(as_of=d), date(2015, 1, 1))
+
+    def test_backtest_snapshot_falls_back_to_recent_artifact_within_age(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 14)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["ops_backtest_snapshot_max_age_days"] = 2
+        start = eng._review_backtest_start(as_of=d)
+        path = tmp_root / "output" / "artifacts" / f"backtest_{start.isoformat()}_2026-02-13.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "start": start.isoformat(),
+                    "end": "2026-02-13",
+                    "positive_window_ratio": 0.91,
+                    "max_drawdown": 0.11,
+                    "violations": 0,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        payload = eng._backtest_snapshot(d)
+        self.assertEqual(float(payload.get("positive_window_ratio", 0.0)), 0.91)
+        self.assertEqual(float(payload.get("max_drawdown", 0.0)), 0.11)
+        self.assertEqual(int(payload.get("violations", 1)), 0)
+        self.assertEqual(str(payload.get("snapshot_end", "")), "2026-02-13")
+        self.assertFalse(bool(payload.get("snapshot_exact_match", True)))
+        self.assertTrue(bool(payload.get("snapshot_fresh_enough", False)))
+        self.assertEqual(int(payload.get("snapshot_age_days", -1)), 1)
+
+    def test_backtest_snapshot_rejects_stale_recent_artifact(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 14)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["ops_backtest_snapshot_max_age_days"] = 1
+        start = eng._review_backtest_start(as_of=d)
+        path = tmp_root / "output" / "artifacts" / f"backtest_{start.isoformat()}_2026-02-12.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "start": start.isoformat(),
+                    "end": "2026-02-12",
+                    "positive_window_ratio": 0.91,
+                    "max_drawdown": 0.11,
+                    "violations": 0,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        payload = eng._backtest_snapshot(d)
+        self.assertEqual(payload, {})
 
     def test_gate_report_clears_stale_alert_on_pass(self) -> None:
         eng, tmp_root = self._make_engine()
@@ -1132,6 +1772,36 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertIn("rollback_recommendation", report)
         self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_ops_report.json").exists())
         self.assertTrue((tmp_root / "output" / "review" / "2026-02-13_ops_report.md").exists())
+
+    def test_ops_report_uses_cached_stable_replay_gate_mode(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        eng.run_review(d)
+
+        def _raise_if_called(as_of, days=None):  # type: ignore[no-untyped-def]
+            raise AssertionError("execute stable replay should be skipped for ops report")
+
+        eng.stable_replay_check = _raise_if_called  # type: ignore[method-assign]
+
+        report = eng.ops_report(as_of=d, window_days=2)
+        gate_payload = json.loads((tmp_root / "output" / "review" / "2026-02-13_gate_report.json").read_text(encoding="utf-8"))
+
+        self.assertIn("status", report)
+        self.assertEqual(str(gate_payload.get("stable_replay_mode", "")), "cached")
+        self.assertEqual(str((gate_payload.get("stable_replay", {}) or {}).get("mode", "")), "cached_health_only")
+
+    def test_ops_report_exposes_live_gate_summary(self) -> None:
+        eng, _ = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.run_eod(d)
+        eng.run_review(d)
+        report = eng.ops_report(as_of=d, window_days=2)
+        live_gate = report.get("live_gate", {})
+        self.assertIn("ok", live_gate)
+        self.assertIn("blocking_reason_codes", live_gate)
+        self.assertIn("required_checks", live_gate)
+        self.assertIn("state_stability_live", report)
 
     def test_state_stability_flags_micro_capture_degraded_days(self) -> None:
         eng, tmp_root = self._make_engine()
@@ -1317,11 +1987,13 @@ class EngineIntegrationTests(unittest.TestCase):
                 gate_timeout_seconds=5,
                 ops_timeout_seconds=5,
                 health_timeout_seconds=5,
+                fast_tests_only=True,
                 skip_mutex=True,
                 fail_fast=True,
             )
 
         cmd = captured.get("cmd", [])
+        self.assertIn("--fast-tests-only", cmd)
         self.assertIn("--skip-mutex", cmd)
         self.assertIn("--fail-fast", cmd)
         self.assertEqual(Path(str(captured.get("cwd", ""))).resolve(), tmp_root.resolve())
@@ -1329,6 +2001,13 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(str(env.get("PYTHON", "")), sys.executable)
         self.assertTrue(bool(out.get("ok", False)))
         self.assertTrue(bool(out.get("skip_mutex", False)))
+
+    def test_engine_run_halfhour_mutex_skips_nested_flock_when_parent_marker_present(self) -> None:
+        eng, _ = self._make_engine()
+        with patch.dict(os.environ, {RUN_HALFHOUR_MUTEX_HELD_ENV: "scheduler:test"}, clear=False):
+            with patch("lie_engine.engine.fcntl.flock", side_effect=AssertionError("nested flock should not run")):
+                with eng._run_halfhour_mutex("run-review:2026-02-13"):
+                    self.assertEqual(os.environ.get(RUN_HALFHOUR_MUTEX_HELD_ENV), "scheduler:test")
 
     def test_filter_model_path_bars_removes_conflicts(self) -> None:
         eng, _ = self._make_engine()
@@ -1343,6 +2022,192 @@ class EngineIntegrationTests(unittest.TestCase):
         filtered = eng._filter_model_path_bars(df)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(int(filtered["data_conflict_flag"].iloc[0]), 0)
+
+    def test_run_ingestion_range_writes_pass_snapshots(self) -> None:
+        eng, tmp_root = self._make_engine()
+        review_dir = tmp_root / "output" / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        calls: list[list[str]] = []
+
+        def _normalized(symbols: list[str]) -> pd.DataFrame:
+            rows = []
+            for idx, sym in enumerate(symbols):
+                rows.append(
+                    {
+                        "symbol": sym,
+                        "ts": f"2026-02-13T00:00:00",
+                        "open": 100.0 + idx,
+                        "high": 101.0 + idx,
+                        "low": 99.0 + idx,
+                        "close": 100.5 + idx,
+                        "volume": 1000.0 + idx,
+                        "asset_class": "crypto",
+                        "data_conflict_flag": 0,
+                    }
+                )
+            return pd.DataFrame(rows)
+
+        def _fake_ingest(*, symbols, start, end, start_ts, end_ts, langs):  # type: ignore[no-untyped-def]
+            calls.append(list(symbols))
+            pass_no = len(calls)
+            payload = {
+                "date": end.isoformat(),
+                "status": "completed",
+                "stages": [{"name": "collect_bars", "summary": {"requested_symbol_count": len(symbols)}}],
+                "pass_no": pass_no,
+            }
+            (review_dir / "2026-02-13_data_ingest_timing.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return SimpleNamespace(normalized_bars=_normalized(list(symbols)))
+
+        def _fake_persist(*, as_of, result):  # type: ignore[no-untyped-def]
+            payload = {
+                "date": as_of.isoformat(),
+                "status": "completed",
+                "stages": [{"name": "write_artifacts"}],
+            }
+            (review_dir / "2026-02-13_data_persist_timing.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        eng.data_bus.ingest = _fake_ingest  # type: ignore[method-assign]
+        eng.data_bus.persist = _fake_persist  # type: ignore[method-assign]
+
+        with patch("lie_engine.engine.expand_universe", return_value=["BTCUSDT", "ETHUSDT", "SOLUSDT"]):
+            bars, _ = eng._run_ingestion_range(
+                start=date(2026, 1, 1),
+                end=date(2026, 2, 13),
+                symbols=["BTCUSDT", "ETHUSDT"],
+            )
+
+        self.assertEqual(calls, [["BTCUSDT", "ETHUSDT"], ["BTCUSDT", "ETHUSDT", "SOLUSDT"]])
+        self.assertEqual(int(len(bars)), 3)
+        self.assertTrue((review_dir / "2026-02-13_data_ingest_timing_pass1.json").exists())
+        self.assertTrue((review_dir / "2026-02-13_data_ingest_timing_pass2.json").exists())
+        self.assertTrue((review_dir / "2026-02-13_data_persist_timing_ingestion_range.json").exists())
+        timing_path = review_dir / "2026-02-13_ingestion_range_timing.json"
+        self.assertTrue(timing_path.exists())
+        timing = json.loads(timing_path.read_text(encoding="utf-8"))
+        self.assertEqual(str(timing.get("status", "")), "completed")
+        stage_names = [str(x.get("name", "")) for x in timing.get("stages", []) if isinstance(x, dict)]
+        self.assertIn("pass1_ingest", stage_names)
+        self.assertIn("pass2_ingest", stage_names)
+        self.assertIn("persist", stage_names)
+        self.assertIn("filter_model_bars", stage_names)
+
+    def test_run_ingestion_range_filters_noncrypto_inputs_for_public_crypto_providers(self) -> None:
+        eng, tmp_root = self._make_engine()
+        review_dir = tmp_root / "output" / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        calls: list[list[str]] = []
+
+        def _normalized(symbols: list[str]) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "symbol": sym,
+                        "ts": "2026-02-13T00:00:00",
+                        "open": 100.0 + idx,
+                        "high": 101.0 + idx,
+                        "low": 99.0 + idx,
+                        "close": 100.5 + idx,
+                        "volume": 1000.0 + idx,
+                        "asset_class": "crypto",
+                        "data_conflict_flag": 0,
+                    }
+                    for idx, sym in enumerate(symbols)
+                ]
+            )
+
+        def _fake_ingest(*, symbols, start, end, start_ts, end_ts, langs):  # type: ignore[no-untyped-def]
+            calls.append(list(symbols))
+            payload = {
+                "date": end.isoformat(),
+                "status": "completed",
+                "stages": [{"name": "collect_bars", "summary": {"requested_symbol_count": len(symbols)}}],
+            }
+            (review_dir / "2026-02-13_data_ingest_timing.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return SimpleNamespace(normalized_bars=_normalized(list(symbols)))
+
+        def _fake_persist(*, as_of, result):  # type: ignore[no-untyped-def]
+            payload = {
+                "date": as_of.isoformat(),
+                "status": "completed",
+                "stages": [{"name": "write_artifacts"}],
+            }
+            (review_dir / "2026-02-13_data_persist_timing.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        eng.data_bus.ingest = _fake_ingest  # type: ignore[method-assign]
+        eng.data_bus.persist = _fake_persist  # type: ignore[method-assign]
+
+        with patch.object(eng, "_provider_stack_is_public_crypto_only", return_value=True):
+            with patch(
+                "lie_engine.engine.expand_universe",
+                return_value=["BTCUSDT", "ETHUSDT", "510300", "600519", "AU2604"],
+            ):
+                bars, _ = eng._run_ingestion_range(
+                    start=date(2026, 1, 1),
+                    end=date(2026, 2, 13),
+                    symbols=["BTCUSDT", "ETHUSDT", "510300", "600519"],
+                )
+
+        self.assertEqual(calls, [["BTCUSDT", "ETHUSDT"]])
+        self.assertEqual(int(len(bars)), 2)
+        self.assertTrue((review_dir / "2026-02-13_data_ingest_timing_pass1.json").exists())
+        self.assertFalse((review_dir / "2026-02-13_data_ingest_timing_pass2.json").exists())
+
+        timing = json.loads((review_dir / "2026-02-13_ingestion_range_timing.json").read_text(encoding="utf-8"))
+        self.assertEqual(str(timing.get("status", "")), "completed")
+        stage_rows = [x for x in timing.get("stages", []) if isinstance(x, dict)]
+        stage_names = [str(x.get("name", "")) for x in stage_rows]
+        self.assertIn("pass1_ingest", stage_names)
+        self.assertNotIn("pass2_ingest", stage_names)
+        pass1_row = next(x for x in stage_rows if str(x.get("name", "")) == "pass1_ingest")
+        summary = pass1_row.get("summary", {})
+        self.assertEqual(int(summary.get("original_input_symbol_count", 0)), 4)
+        self.assertEqual(int(summary.get("requested_symbol_count", 0)), 2)
+        self.assertEqual(summary.get("filtered_out_input_symbols", []), ["510300", "600519"])
+
+    def test_run_ingestion_range_removes_stale_pass2_snapshot_before_current_run(self) -> None:
+        eng, tmp_root = self._make_engine()
+        review_dir = tmp_root / "output" / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        stale_pass2 = review_dir / "2026-02-13_data_ingest_timing_pass2.json"
+        stale_pass2.write_text(json.dumps({"status": "stale"}), encoding="utf-8")
+
+        def _fake_ingest(*, symbols, start, end, start_ts, end_ts, langs):  # type: ignore[no-untyped-def]
+            (review_dir / "2026-02-13_data_ingest_timing.json").write_text(
+                json.dumps({"date": end.isoformat(), "status": "completed", "stages": []}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return SimpleNamespace(normalized_bars=pd.DataFrame([{"symbol": "BTCUSDT", "ts": "2026-02-13T00:00:00", "close": 1.0, "data_conflict_flag": 0}]))
+
+        def _fake_persist(*, as_of, result):  # type: ignore[no-untyped-def]
+            (review_dir / "2026-02-13_data_persist_timing.json").write_text(
+                json.dumps({"date": as_of.isoformat(), "status": "completed", "stages": []}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        eng.data_bus.ingest = _fake_ingest  # type: ignore[method-assign]
+        eng.data_bus.persist = _fake_persist  # type: ignore[method-assign]
+
+        with patch("lie_engine.engine.expand_universe", return_value=["BTCUSDT"]):
+            eng._run_ingestion_range(
+                start=date(2026, 1, 1),
+                end=date(2026, 2, 13),
+                symbols=["BTCUSDT"],
+            )
+
+        self.assertFalse(stale_pass2.exists())
 
     def test_review_until_pass_failure_writes_defect_plan(self) -> None:
         d = date(2026, 2, 13)
@@ -2621,6 +3486,140 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(getattr(cfg, "execution_confirm_loss_mult", 0.0)), 0.60, places=6)
         self.assertTrue(bool(getattr(cfg, "execution_anti_martingale_enabled", False)))
         self.assertAlmostEqual(float(getattr(cfg, "execution_anti_martingale_step", 0.0)), 0.20, places=6)
+        timing_path = tmp_root / "output" / "review" / "2026-02-13_backtest_timing.json"
+        self.assertTrue(timing_path.exists())
+        timing = json.loads(timing_path.read_text(encoding="utf-8"))
+        self.assertEqual(str(timing.get("status", "")), "completed")
+        stage_names = [str(x.get("name", "")) for x in timing.get("stages", []) if isinstance(x, dict)]
+        self.assertIn("ingestion_range", stage_names)
+
+    def test_run_backtest_review_fast_mode_adjusts_cadence_and_windows(self) -> None:
+        import lie_engine.engine as eng_mod
+
+        eng, tmp_root = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["review_backtest_fast_signal_eval_interval"] = 6
+        eng.settings.raw["validation"]["review_backtest_fast_regime_recalc_interval"] = 11
+        eng.settings.raw["validation"]["review_backtest_fast_train_years"] = 2
+        eng.settings.raw["validation"]["review_backtest_fast_valid_years"] = 1
+        eng.settings.raw["validation"]["review_backtest_fast_step_months"] = 12
+
+        eng._run_ingestion_range = lambda start, end, symbols: (pd.DataFrame(), None)  # type: ignore[method-assign]
+        captured: dict[str, object] = {}
+        original = eng_mod.run_walk_forward_backtest
+
+        def _fake_run_walk_forward_backtest(**kwargs):
+            captured["cfg"] = kwargs.get("cfg_template")
+            captured["train_years"] = kwargs.get("train_years")
+            captured["valid_years"] = kwargs.get("valid_years")
+            captured["step_months"] = kwargs.get("step_months")
+            return BacktestResult(
+                start=kwargs["start"],
+                end=kwargs["end"],
+                total_return=0.0,
+                annual_return=0.0,
+                max_drawdown=0.0,
+                win_rate=0.0,
+                profit_factor=0.0,
+                expectancy=0.0,
+                trades=0,
+                violations=0,
+                positive_window_ratio=1.0,
+                equity_curve=[],
+                by_asset={},
+            )
+
+        eng_mod.run_walk_forward_backtest = _fake_run_walk_forward_backtest  # type: ignore[assignment]
+        eng._review_backtest_fast_mode_active = True  # type: ignore[attr-defined]
+        try:
+            eng.run_backtest(start=date(2026, 1, 1), end=date(2026, 2, 13))
+        finally:
+            eng_mod.run_walk_forward_backtest = original  # type: ignore[assignment]
+            eng._review_backtest_fast_mode_active = False  # type: ignore[attr-defined]
+
+        cfg = captured["cfg"]
+        self.assertEqual(int(getattr(cfg, "signal_eval_interval", 0)), 6)
+        self.assertEqual(int(getattr(cfg, "regime_recalc_interval", 0)), 11)
+        self.assertEqual(int(captured["train_years"]), 2)
+        self.assertEqual(int(captured["valid_years"]), 1)
+        self.assertEqual(int(captured["step_months"]), 12)
+        timing_path = tmp_root / "output" / "review" / "2026-02-13_backtest_timing.json"
+        timing = json.loads(timing_path.read_text(encoding="utf-8"))
+        self.assertTrue(bool(timing.get("review_fast_mode", False)))
+        wf_stage = next(
+            x for x in timing.get("stages", []) if isinstance(x, dict) and str(x.get("name", "")) == "walk_forward_backtest"
+        )
+        summary = wf_stage.get("summary", {})
+        self.assertEqual(int(summary.get("signal_eval_interval", 0)), 6)
+        self.assertEqual(int(summary.get("regime_recalc_interval", 0)), 11)
+        self.assertEqual(int(summary.get("step_months", 0)), 12)
+
+    def test_run_review_uses_fast_backtest_start_and_marks_timing(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"].pop("review_backtest_lookback_days", None)
+        eng.settings.raw["validation"]["review_backtest_fast_mode_enabled"] = True
+        eng.settings.raw["validation"]["mode_health_min_samples"] = 1
+        eng.settings.raw["validation"]["mode_health_min_profit_factor"] = 1.0
+        eng.settings.raw["validation"]["mode_health_min_win_rate"] = 0.40
+        eng.settings.raw["validation"]["mode_health_max_drawdown_max"] = 0.18
+        eng.settings.raw["validation"]["mode_health_max_violations"] = 0
+
+        captured: dict[str, object] = {}
+
+        def _fake_run_backtest(start, end):  # type: ignore[no-untyped-def]
+            captured["start"] = start
+            captured["end"] = end
+            captured["fast_mode_active"] = bool(getattr(eng, "_review_backtest_fast_mode_active", False))
+            return BacktestResult(
+                start=start,
+                end=end,
+                total_return=0.12,
+                annual_return=0.06,
+                max_drawdown=0.12,
+                win_rate=0.52,
+                profit_factor=1.3,
+                expectancy=0.01,
+                trades=120,
+                violations=0,
+                positive_window_ratio=0.85,
+                equity_curve=[],
+                by_asset={},
+            )
+
+        eng.run_backtest = _fake_run_backtest  # type: ignore[method-assign]
+        eng._estimate_factor_contrib_120d = lambda as_of: {  # type: ignore[method-assign]
+            "macro": 0.2,
+            "industry": 0.2,
+            "news": 0.2,
+            "sentiment": 0.2,
+            "fundamental": 0.1,
+            "technical": 0.1,
+        }
+        eng._resolve_review_runtime_mode = lambda start, as_of: "swing"  # type: ignore[method-assign]
+        eng._mode_history_stats = lambda as_of: {  # type: ignore[method-assign]
+            "as_of": as_of.isoformat(),
+            "lookback_days": 365,
+            "modes": {
+                "swing": {
+                    "samples": 3,
+                    "avg_profit_factor": 1.4,
+                    "avg_win_rate": 0.55,
+                    "worst_drawdown": 0.10,
+                    "total_violations": 0,
+                }
+            },
+        }
+
+        eng.run_review(d)
+        self.assertEqual(captured["start"], date(2024, 8, 22))
+        self.assertEqual(captured["end"], d)
+        self.assertTrue(bool(captured["fast_mode_active"]))
+        timing_path = tmp_root / "output" / "review" / "2026-02-13_review_timing.json"
+        timing = json.loads(timing_path.read_text(encoding="utf-8"))
+        self.assertTrue(bool(timing.get("review_backtest_fast_mode", False)))
+        self.assertEqual(str(timing.get("review_backtest_start", "")), "2024-08-22")
 
     def test_run_mode_stress_matrix_outputs_artifacts(self) -> None:
         eng, tmp_root = self._make_engine()
@@ -2907,6 +3906,83 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue(bool(seen_end_ts))
         now_utc = datetime.now(tz=timezone.utc).replace(tzinfo=None)
         self.assertLessEqual(seen_end_ts[0], now_utc + timedelta(seconds=2))
+
+    def test_collect_micro_factor_map_reuses_provider_time_sync_sample_per_run(self) -> None:
+        eng, _ = self._make_engine()
+        eng.settings.raw.setdefault("validation", {})
+        eng.settings.raw["validation"]["microstructure_signal_enabled"] = True
+        eng.settings.raw["validation"]["microstructure_symbols"] = ["BTCUSDT", "ETHUSDT"]
+        eng.settings.raw["validation"]["micro_min_trade_count"] = 1
+        eng.settings.raw["validation"]["micro_time_sync_hard_fuse_enabled"] = True
+        eng.settings.raw["validation"]["micro_time_sync_max_offset_ms"] = 5
+        eng.settings.raw["validation"]["micro_time_sync_max_rtt_ms"] = 120
+
+        class _CachedTimeSyncProvider:
+            name = "cached_time_sync"
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def fetch_l2(self, symbol, start_ts, end_ts, depth=20):  # type: ignore[no-untyped-def]
+                return pd.DataFrame(
+                    [
+                        {
+                            "exchange": "probe",
+                            "symbol": str(symbol),
+                            "event_ts_ms": 1700000000000,
+                            "recv_ts_ms": 1700000000001,
+                            "seq": 10,
+                            "prev_seq": 9,
+                            "bids": [[100.0, 1.0]],
+                            "asks": [[100.1, 1.0]],
+                            "source": "cached_time_sync",
+                        }
+                    ]
+                )
+
+            def fetch_trades(self, symbol, start_ts, end_ts, limit=2000):  # type: ignore[no-untyped-def]
+                return pd.DataFrame(
+                    [
+                        {
+                            "exchange": "probe",
+                            "symbol": str(symbol),
+                            "trade_id": f"{symbol}-0",
+                            "event_ts_ms": 1700000000000,
+                            "recv_ts_ms": 1700000000001,
+                            "price": 100.0,
+                            "qty": 1.0,
+                            "side": "BUY",
+                            "source": "cached_time_sync",
+                        }
+                    ]
+                )
+
+            def fetch_time_sync_sample(self):  # type: ignore[no-untyped-def]
+                self.calls += 1
+                return {
+                    "source": "cached_time_sync",
+                    "server_ts_ms": 1700000000000,
+                    "local_send_ts_ms": 1699999999998,
+                    "local_recv_ts_ms": 1700000000002,
+                    "local_mid_ts_ms": 1700000000000,
+                    "rtt_ms": 4,
+                    "offset_ms": 0,
+                    "offset_abs_ms": 0,
+                }
+
+        provider = _CachedTimeSyncProvider()
+        eng.providers = [provider]  # type: ignore[assignment]
+        out, rows = eng._collect_micro_factor_map_with_rows(
+            as_of=date(2026, 2, 13),
+            symbols=["BTCUSDT", "ETHUSDT"],
+            override_symbols=["BTCUSDT", "ETHUSDT"],
+        )
+
+        self.assertEqual(provider.calls, 1)
+        self.assertIn("BTCUSDT", out)
+        self.assertIn("ETHUSDT", out)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(bool(row.get("time_sync_ok", False)) for row in rows))
 
     def test_collect_cross_source_audit_builds_missing_providers_from_profile(self) -> None:
         import lie_engine.engine as eng_mod

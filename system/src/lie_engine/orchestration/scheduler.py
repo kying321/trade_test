@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from lie_engine.config import SystemSettings
 
+RUN_HALFHOUR_MUTEX_HELD_ENV = "LIE_RUN_HALFHOUR_MUTEX_HELD"
+
 
 @dataclass(slots=True)
 class SchedulerOrchestrator:
@@ -94,6 +96,7 @@ class SchedulerOrchestrator:
         timeout_seconds = self._mutex_timeout_seconds()
         deadline = time_module.monotonic() + timeout_seconds
         acquired = False
+        prev_env = os.environ.get(RUN_HALFHOUR_MUTEX_HELD_ENV)
         try:
             while True:
                 try:
@@ -115,10 +118,15 @@ class SchedulerOrchestrator:
             fd.flush()
             os.fsync(fd.fileno())
             self._mutex_fd = fd
+            os.environ[RUN_HALFHOUR_MUTEX_HELD_ENV] = str(owner)
             yield
         finally:
             try:
                 if acquired:
+                    if prev_env is None:
+                        os.environ.pop(RUN_HALFHOUR_MUTEX_HELD_ENV, None)
+                    else:
+                        os.environ[RUN_HALFHOUR_MUTEX_HELD_ENV] = prev_env
                     fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
             finally:
                 try:

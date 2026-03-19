@@ -80,6 +80,9 @@ class MicrostructureSignalTests(unittest.TestCase):
         self.assertGreater(float(out.get("ofi_norm", 0.0)), 0.0)
         self.assertTrue(bool(out.get("sync_ok", False)))
         self.assertTrue(bool(out.get("gap_ok", False)))
+        self.assertEqual(out.get("cvd_context_mode"), "continuation")
+        self.assertEqual(out.get("cvd_trust_tier_hint"), "single_exchange_ok")
+        self.assertGreater(float(out.get("cvd_delta_ratio", 0.0)), 0.0)
 
     def test_summarize_microstructure_snapshot_schema_guard(self) -> None:
         l2 = pd.DataFrame([{"event_ts_ms": 1000, "recv_ts_ms": 1001}])
@@ -89,6 +92,7 @@ class MicrostructureSignalTests(unittest.TestCase):
         self.assertFalse(bool(out.get("has_data", True)))
         self.assertTrue(bool(out.get("l2_missing_fields", [])))
         self.assertTrue(bool(out.get("trade_missing_fields", [])))
+        self.assertEqual(out.get("cvd_trust_tier_hint"), "unavailable")
 
     def test_microstructure_adjusts_signal_confidence_directionally(self) -> None:
         bars = make_bars("BTCUSDT", n=280, trend=0.12, seed=121)
@@ -143,6 +147,7 @@ class MicrostructureSignalTests(unittest.TestCase):
         assert minus is not None
         self.assertGreaterEqual(float(plus.confidence), float(base.confidence))
         self.assertLessEqual(float(minus.confidence), float(base.confidence))
+        self.assertIn("cvd_context_continuation", list(plus.factor_flags))
 
     def test_microstructure_schema_risk_penalizes_without_trade_data(self) -> None:
         bars = make_bars("BTCUSDT", n=280, trend=0.12, seed=122)
@@ -171,6 +176,75 @@ class MicrostructureSignalTests(unittest.TestCase):
         assert risky is not None
         self.assertLessEqual(float(risky.confidence), float(base.confidence))
         self.assertIn("micro_schema_risk", list(risky.factor_flags))
+
+    def test_microstructure_reversal_and_absorption_flags(self) -> None:
+        bars = make_bars("BTCUSDT", n=280, trend=0.12, seed=123)
+        cfg = SignalEngineConfig(
+            confidence_min=0.0,
+            convexity_min=0.0,
+            factor_filter_enabled=False,
+            microstructure_enabled=True,
+            micro_confidence_boost_max=10.0,
+            micro_penalty_max=10.0,
+            micro_min_trade_count=10,
+        )
+        base = generate_signal_for_symbol(bars, regime=RegimeLabel.STRONG_TREND, cfg=cfg)
+        assert base is not None
+        aligned = 1.0 if base.side == Side.LONG else -1.0
+
+        reversal = generate_signal_for_symbol(
+            bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            market_factor_state={
+                "cross_source_quality_score_7d": 0.9,
+                "cross_source_fail_ratio_7d": 0.1,
+                "cross_source_stress": 0.1,
+            },
+            micro_factor_state={
+                "has_data": True,
+                "schema_ok": True,
+                "sync_ok": True,
+                "gap_ok": True,
+                "time_sync_ok": True,
+                "trade_count": 300,
+                "evidence_score": 1.0,
+                "micro_alignment": aligned,
+                "queue_imbalance": aligned,
+                "ofi_norm": aligned,
+                "cvd_context_mode": "reversal",
+                "cvd_trust_tier_hint": "single_exchange_ok",
+                "cvd_context_note": "delta_and_price_move_disagree",
+            },
+        )
+        absorption = generate_signal_for_symbol(
+            bars,
+            regime=RegimeLabel.STRONG_TREND,
+            cfg=cfg,
+            micro_factor_state={
+                "has_data": True,
+                "schema_ok": True,
+                "sync_ok": True,
+                "gap_ok": True,
+                "time_sync_ok": True,
+                "trade_count": 300,
+                "evidence_score": 1.0,
+                "micro_alignment": aligned,
+                "queue_imbalance": aligned,
+                "ofi_norm": aligned,
+                "cvd_context_mode": "absorption",
+                "cvd_trust_tier_hint": "single_exchange_ok",
+                "cvd_context_note": "aggressive_flow_without_clean_price_result",
+            },
+        )
+
+        self.assertIsNotNone(reversal)
+        self.assertIsNotNone(absorption)
+        assert reversal is not None
+        assert absorption is not None
+        self.assertIn("cvd_context_reversal", list(reversal.factor_flags))
+        self.assertIn("cvd_trust_cross_exchange_confirmed", list(reversal.factor_flags))
+        self.assertIn("cvd_absorption_risk", list(absorption.factor_flags))
 
 
 if __name__ == "__main__":

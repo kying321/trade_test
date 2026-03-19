@@ -165,6 +165,8 @@ class BacktestResult:
     positive_window_ratio: float
     equity_curve: list[dict[str, Any]] = field(default_factory=list)
     by_asset: dict[str, float] = field(default_factory=dict)
+    by_symbol: dict[str, dict[str, float | int]] = field(default_factory=dict)
+    by_symbol_regime: dict[str, dict[str, dict[str, float | int]]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

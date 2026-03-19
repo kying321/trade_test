@@ -1,4 +1,29 @@
 {
-  "as_of": "2026-02-28",
-  "positions": []
+  "as_of": "2026-03-11T08:40:01+00:00",
+  "positions": [
+    {
+      "open_date": "2026-03-11",
+      "symbol": "XAUUSD",
+      "side": "LONG",
+      "size_pct": 1.5425170540530218,
+      "risk_pct": 0.10395032142372562,
+      "entry_price": 5198.10009765625,
+      "stop_price": 4847.7998046875,
+      "target_price": 5758.58056640625,
+      "runtime_mode": "commodity_queue_bridge",
+      "status": "OPEN",
+      "source_execution_id": "commodity-paper-execution:metals_all:XAUUSD",
+      "source_ticket_id": "commodity-paper-ticket:metals_all:XAUUSD",
+      "bridge_idempotency_key": "54e3d372f57ce41fbeaee6136dc3e94aea527ad42fe17d672fe1e9f798a6ce5e",
+      "quote_usdt": 0.15896067200583952,
+      "signal_date": "2026-03-11",
+      "regime_gate": "paper_only",
+      "execution_price_normalization_mode": "paper_proxy_reference",
+      "paper_proxy_price_normalized": true,
+      "signal_price_reference_kind": "commodity_proxy_market",
+      "signal_price_reference_source": "yfinance:GC=F",
+      "signal_price_reference_provider": "yfinance",
+      "signal_price_reference_symbol": "GC=F"
+    }
+  ]
 }

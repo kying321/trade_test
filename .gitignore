@@ -30,3 +30,15 @@ system/output/research/
 system/output/review/*.tmp
 system/output/review/*.bak
 system/output/review/*.cache
+
+# ===== Frontend / local preview =====
+system/dashboard/web/node_modules/
+system/dashboard/web/dist/
+system/dashboard/web/preview.log
+system/dashboard/web/preview.pid
+system/dashboard/web/public/data/fenlie_dashboard_snapshot.json
+system/dashboard/web/public/operator_task_visual_panel.html
+system/dashboard/web/public/operator_task_visual_panel_data.json
+
+# ===== Local runtime mirrors / transient logs =====
+system/runtime/pi/fenlie-system/output/logs/

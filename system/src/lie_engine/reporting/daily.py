@@ -60,6 +60,7 @@ def render_daily_briefing(
             lines.append(
                 "- 模式健康："
                 + f"passed={bool(mode_health.get('passed', True))}, "
+                + f"degraded={bool(mode_health.get('degraded', False))}, "
                 + f"active={bool(mode_health.get('active', False))}, "
                 + f"reason={str(mode_health.get('reason', 'ok'))}"
             )

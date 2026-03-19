@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+ALWAYS_OPEN_ASSET_CLASSES = frozenset({"crypto", "spot", "perp", "perpetual"})
+
 
 @dataclass(slots=True)
 class SourceConfidenceItem:
@@ -100,7 +102,13 @@ def evaluate_quality(
         if conflicts.empty:
             unresolved_conflict_ratio = 0.0
         else:
-            unique_conflicts = conflicts[[c for c in ["ts", "symbol"] if c in conflicts.columns]].drop_duplicates()
+            quality_conflicts = conflicts
+            if "field" in quality_conflicts.columns:
+                # Exchange volume mismatches are expected for crypto and should not poison bar-quality gates.
+                quality_conflicts = quality_conflicts[
+                    quality_conflicts["field"].fillna("").astype(str).str.lower() != "volume"
+                ]
+            unique_conflicts = quality_conflicts[[c for c in ["ts", "symbol"] if c in quality_conflicts.columns]].drop_duplicates()
             unresolved_conflict_ratio = len(unique_conflicts) / len(normalized_bars)
 
     flags: list[str] = []
@@ -132,7 +140,9 @@ def evaluate_quality(
             flags.append("TIMESTAMP_DRIFT_NEGATIVE")
 
         weekend_rows = ts.dt.dayofweek >= 5
-        if weekend_rows.any():
+        asset_classes = normalized_bars["asset_class"].fillna("").astype(str).str.lower()
+        weekend_mismatch_rows = weekend_rows & ~asset_classes.isin(ALWAYS_OPEN_ASSET_CLASSES)
+        if weekend_mismatch_rows.any():
             flags.append("TRADING_DAY_MISMATCH_WEEKEND")
 
         etf_rows = normalized_bars[normalized_bars["asset_class"] == "etf"]

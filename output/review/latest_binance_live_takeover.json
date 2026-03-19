@@ -1,0 +1,91 @@
+{
+  "as_of": "2026-03-06",
+  "started_at_utc": "2026-03-05T16:38:18Z",
+  "ok": true,
+  "mode": "live_ready",
+  "market": "spot",
+  "config": "/Users/jokenrobot/Downloads/Folders/fenlie/config.yaml",
+  "output_root": "/Users/jokenrobot/Downloads/Folders/fenlie/output",
+  "rate_limit_per_minute": 10,
+  "timeout_ms": 5000,
+  "steps": {
+    "evomap": {
+      "path": "/Users/jokenrobot/Downloads/Folders/fenlie/output/artifacts/evomap/2026-03-06_strategy.json",
+      "strategy_id": "evomap_binance_canary_v1",
+      "selected": {
+        "symbol": "BTCUSDT",
+        "side": "SELL",
+        "signal_confidence": 0.0,
+        "signal_source": "fallback_no_signals"
+      }
+    },
+    "credentials": {
+      "source": "process_env",
+      "has_api_key": true,
+      "has_api_secret": true
+    },
+    "binance_ping": {
+      "ok": true,
+      "recv_ts_ms": 1772728698732,
+      "payload": {}
+    },
+    "canary_plan": {
+      "symbol": "BTCUSDT",
+      "side": "SELL",
+      "market": "spot",
+      "mark_price": 71309.6,
+      "quantity": 8e-05,
+      "quote_usdt": 5.0,
+      "effective_quote_usdt": 5.7047680000000005,
+      "constraints": {
+        "step_size": 1e-05,
+        "min_qty": 1e-05,
+        "min_notional": 5.0
+      }
+    },
+    "account_overview": {
+      "market": "spot",
+      "quote_asset": "USDT",
+      "quote_available": 16.41670914,
+      "base_asset": "BTC",
+      "base_available": 4.987e-05,
+      "nonzero_asset_count": 2,
+      "top_assets": [
+        {
+          "asset": "USDT",
+          "qty": 16.41670914
+        },
+        {
+          "asset": "BTC",
+          "qty": 4.987e-05
+        }
+      ]
+    },
+    "live_snapshot": {
+      "path": "/Users/jokenrobot/Downloads/Folders/fenlie/output/artifacts/broker_live_inbox/2026-03-06.json",
+      "open_positions": 1,
+      "closed_count": 0,
+      "closed_pnl": 0.0
+    },
+    "trade_telemetry": {
+      "trades_path": "/Users/jokenrobot/Downloads/Folders/fenlie/output/artifacts/binance_live_trades/2026-03-06.json",
+      "income_path": "/Users/jokenrobot/Downloads/Folders/fenlie/output/artifacts/binance_live_income/2026-03-06.json",
+      "symbols": [
+        "BTCUSDT"
+      ],
+      "trades": 3,
+      "income_rows": 0
+    },
+    "backtest_feedback": {
+      "sqlite": "/Users/jokenrobot/Downloads/Folders/fenlie/output/artifacts/lie_engine.db",
+      "inserted_rows": 0,
+      "runtime_mode": "live_binance"
+    },
+    "canary_order": {
+      "executed": false,
+      "reason": "allow_live_order_false"
+    }
+  },
+  "finished_at_utc": "2026-03-05T16:38:22Z",
+  "artifact": "/Users/jokenrobot/Downloads/Folders/fenlie/output/review/20260305T163822Z_binance_live_takeover.json"
+}

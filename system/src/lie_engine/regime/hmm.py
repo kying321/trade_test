@@ -23,10 +23,15 @@ def _build_features(df: pd.DataFrame) -> np.ndarray:
     dvol20 = vol.pct_change(20)
     feat = pd.concat([r5, sigma20, dvol20], axis=1)
     feat.columns = ["r5", "sigma20", "dvol20"]
-    feat = feat.dropna()
+    feat = feat.replace([np.inf, -np.inf], np.nan).dropna()
     if feat.empty:
         return np.empty((0, 3), dtype=float)
     x = feat.to_numpy(dtype=float)
+    if x.size == 0:
+        return np.empty((0, 3), dtype=float)
+    x = x[np.all(np.isfinite(x), axis=1)]
+    if x.size == 0:
+        return np.empty((0, 3), dtype=float)
     mu = x.mean(axis=0)
     sd = x.std(axis=0)
     sd = np.where(sd < 1e-6, 1.0, sd)
@@ -146,13 +151,21 @@ class GaussianHMM3:
         gamma, _, _ = self._forward_backward(self._log_emission(x))
         return gamma
 
-
-def infer_hmm_state(df: pd.DataFrame) -> dict[str, float]:
+def _infer_hmm_state(
+    df: pd.DataFrame,
+    *,
+    n_iter: int = 30,
+    max_points: int | None = None,
+) -> dict[str, float]:
     x = _build_features(df)
     if x.shape[0] < 10:
         return {"bull": 0.33, "range": 0.34, "bear": 0.33}
 
-    model = GaussianHMM3()
+    if max_points is not None and int(max_points) > 0 and x.shape[0] > int(max_points):
+        idx = np.linspace(0, x.shape[0] - 1, num=int(max_points), dtype=int)
+        x = x[idx]
+
+    model = GaussianHMM3(n_iter=max(4, int(n_iter)))
     model.fit(x)
     probs = model.predict_proba(x)[-1]
 
@@ -168,3 +181,12 @@ def infer_hmm_state(df: pd.DataFrame) -> dict[str, float]:
         "range": float(probs[range_idx]),
         "bear": float(probs[bear_idx]),
     }
+
+
+def infer_hmm_state(
+    df: pd.DataFrame,
+    *,
+    n_iter: int = 30,
+    max_points: int | None = None,
+) -> dict[str, float]:
+    return _infer_hmm_state(df, n_iter=n_iter, max_points=max_points)

@@ -27,6 +27,14 @@ class _FakeHTTPResponse:
         return False
 
 
+class _FakeOpener:
+    def __init__(self, handler):
+        self._handler = handler
+
+    def open(self, req, timeout=0):
+        return self._handler(req, timeout=timeout)
+
+
 class BybitPublicProviderTests(unittest.TestCase):
     def test_fetch_l2_depth_schema(self) -> None:
         provider = BybitSpotPublicProvider(rate_limit_per_minute=120)
@@ -48,7 +56,7 @@ class BybitPublicProviderTests(unittest.TestCase):
                 )
             raise AssertionError(f"unexpected url: {url}")
 
-        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("urllib.request.build_opener", return_value=_FakeOpener(_fake_urlopen)):
             out = provider.fetch_l2("BTCUSDT", datetime(2026, 2, 28, 12, 0, 0), datetime(2026, 2, 28, 12, 1, 0), depth=20)
         self.assertEqual(len(out), 1)
         self.assertEqual(str(out.loc[0, "exchange"]), "bybit_spot")
@@ -76,7 +84,7 @@ class BybitPublicProviderTests(unittest.TestCase):
                 )
             raise AssertionError(f"unexpected url: {url}")
 
-        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("urllib.request.build_opener", return_value=_FakeOpener(_fake_urlopen)):
             out = provider.fetch_trades(
                 "BTCUSDT",
                 datetime.fromtimestamp(1700000001, tz=timezone.utc),
@@ -107,7 +115,7 @@ class BybitPublicProviderTests(unittest.TestCase):
                 )
             raise AssertionError(f"unexpected url: {url}")
 
-        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("urllib.request.build_opener", return_value=_FakeOpener(_fake_urlopen)):
             out = provider.fetch_trades(
                 "BTCUSDT",
                 datetime.fromtimestamp(1700000001, tz=timezone.utc),
@@ -138,7 +146,7 @@ class BybitPublicProviderTests(unittest.TestCase):
                 )
             raise AssertionError(f"unexpected url: {url}")
 
-        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("urllib.request.build_opener", return_value=_FakeOpener(_fake_urlopen)):
             out = provider.fetch_ohlcv("BTCUSDT", date(2026, 2, 28), date(2026, 2, 28), freq="1d")
         self.assertEqual(len(out), 1)
         self.assertEqual(str(out.loc[0, "asset_class"]), "crypto")
@@ -154,11 +162,30 @@ class BybitPublicProviderTests(unittest.TestCase):
                 return _FakeHTTPResponse({"retCode": 0, "result": {"timeNano": "1700000001234000000", "timeSecond": "1700000001"}})
             raise AssertionError(f"unexpected url: {url}")
 
-        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+        with patch("urllib.request.build_opener", return_value=_FakeOpener(_fake_urlopen)):
             out = provider.fetch_time_sync_sample()
         self.assertEqual(int(out["server_ts_ms"]), 1700000001234)
         self.assertIn("offset_abs_ms", out)
         self.assertIn("rtt_ms", out)
+
+    def test_public_provider_bypasses_env_proxy_by_default(self) -> None:
+        provider = BybitSpotPublicProvider(rate_limit_per_minute=120)
+        captured_handlers = []
+
+        def _fake_build_opener(*handlers):  # noqa: ANN001
+            captured_handlers.extend(list(handlers))
+            return _FakeOpener(
+                lambda req, timeout=0: _FakeHTTPResponse(
+                    {"retCode": 0, "result": {"timeNano": "1700000001234000000", "timeSecond": "1700000001"}}
+                )
+            )
+
+        with patch("urllib.request.build_opener", side_effect=_fake_build_opener):
+            provider.fetch_time_sync_sample()
+
+        proxy_handlers = [handler for handler in captured_handlers if handler.__class__.__name__ == "ProxyHandler"]
+        self.assertTrue(proxy_handlers)
+        self.assertEqual(getattr(proxy_handlers[0], "proxies", None), {})
 
 
 if __name__ == "__main__":

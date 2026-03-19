@@ -3,8 +3,18 @@ import os
 import yaml
 from pathlib import Path
 
+
+def resolve_system_root() -> Path:
+    env_root = str(os.getenv("LIE_SYSTEM_ROOT", "")).strip() or str(
+        os.getenv("FENLIE_SYSTEM_ROOT", "")
+    ).strip()
+    if env_root:
+        return Path(env_root).expanduser()
+    return Path(__file__).resolve().parents[1]
+
+
 def run_probe():
-    base_dir = Path("/Users/jokenrobot/Downloads/Folders/fenlie/system")
+    base_dir = resolve_system_root()
     config_path = base_dir / "config.yaml"
     
     if not config_path.exists():

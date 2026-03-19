@@ -1,0 +1,54 @@
+{
+  "as_of": "2026-03-06",
+  "rows": [
+    {
+      "symbol": "BTCUSDT",
+      "id": 6068176442,
+      "orderId": 58705560091,
+      "orderListId": -1,
+      "price": "71527.68000000",
+      "qty": "0.00006000",
+      "quoteQty": "4.29166080",
+      "commission": "0.00000006",
+      "commissionAsset": "BTC",
+      "time": 1772726476891,
+      "isBuyer": true,
+      "isMaker": false,
+      "isBestMatch": true,
+      "recv_ts_ms": 1772728702189
+    },
+    {
+      "symbol": "BTCUSDT",
+      "id": 6068375726,
+      "orderId": 58707469263,
+      "orderListId": -1,
+      "price": "71061.43000000",
+      "qty": "0.00007000",
+      "quoteQty": "4.97430010",
+      "commission": "0.00000007",
+      "commissionAsset": "BTC",
+      "time": 1772727740815,
+      "isBuyer": true,
+      "isMaker": false,
+      "isBestMatch": true,
+      "recv_ts_ms": 1772728702189
+    },
+    {
+      "symbol": "BTCUSDT",
+      "id": 6068401474,
+      "orderId": 58707750126,
+      "orderListId": -1,
+      "price": "71104.48000000",
+      "qty": "0.00008000",
+      "quoteQty": "5.68835840",
+      "commission": "0.00568836",
+      "commissionAsset": "USDT",
+      "time": 1772727935076,
+      "isBuyer": false,
+      "isMaker": false,
+      "isBestMatch": true,
+      "recv_ts_ms": 1772728702189
+    }
+  ],
+  "recv_ts_ms": 1772728702189
+}

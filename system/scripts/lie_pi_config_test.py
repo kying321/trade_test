@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
+import os
 import sys
 from pathlib import Path
+
+
+def resolve_system_root() -> Path:
+    env_root = str(os.getenv("LIE_SYSTEM_ROOT", "")).strip() or str(
+        os.getenv("FENLIE_SYSTEM_ROOT", "")
+    ).strip()
+    if env_root:
+        return Path(env_root).expanduser()
+    return Path(__file__).resolve().parents[1]
 
 def test_pi_integration():
     try:
@@ -10,7 +20,7 @@ def test_pi_integration():
         print("FAIL: lie_engine not installed or out of PYTHONPATH")
         sys.exit(1)
         
-    config = load_settings("/Users/jokenrobot/Downloads/Folders/fenlie/system/config.yaml")
+    config = load_settings(str(resolve_system_root() / "config.yaml"))
     val = config.validation if isinstance(config.validation, dict) else {}
     
     # 验证 Pi 数据总线是否生效

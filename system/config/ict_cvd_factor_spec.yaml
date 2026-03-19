@@ -1,0 +1,290 @@
+version: "1.0"
+registry: "fenlie_ict_cvd_factor_spec"
+scope: "ict_cvd_lite_for_public_crypto_spot"
+status: "design_ready"
+
+integration:
+  target_layer: "microstructure_adjustment"
+  authority: "confirm_and_veto_only"
+  strict_cvd_supported: false
+  rollout_mode: "boost_penalty_veto"
+  supported_profiles:
+    - "binance_spot_public"
+    - "bybit_spot_public"
+    - "dual_binance_bybit_public"
+    - "hybrid_opensource_binance"
+    - "hybrid_opensource_binance_bybit"
+  unsupported_profiles:
+    - "opensource_dual"
+    - "opensource_primary"
+    - "paid_placeholder"
+    - "hybrid_with_paid_placeholder"
+
+data_requirements:
+  trade_fields:
+    - "event_ts_ms"
+    - "price"
+    - "qty"
+    - "side"
+  l2_fields:
+    - "event_ts_ms"
+    - "bids"
+    - "asks"
+  gates:
+    schema_ok_required: true
+    sync_ok_required: true
+    gap_ok_required: true
+    time_sync_ok_required: true
+    trade_count_min_floor: 20
+    trade_count_min_recommended: 30
+    evidence_score_min_floor: 0.50
+    cross_source_audit_required_for_veto: true
+    cross_source_missing_bucket_pct_max: 0.25
+  limitations:
+    - "Current stack uses REST trade pulls and snapshot L2, not persistent websocket diff-depth replay."
+    - "Current stack can support CVD-lite confirmation, not strict institutional session-CVD."
+    - "Absorption and failed-auction logic must stay proxy-grade until local book reconstruction exists."
+
+semantic_layers:
+  cvd_context_mode:
+    objective: "Classify what the delta behavior means in structure context, not just whether delta is positive or negative."
+    values:
+      - id: "continuation"
+        meaning: "Structure break or displacement is being confirmed by directional aggressive flow."
+        default_integration: "boost"
+      - id: "reversal"
+        meaning: "Liquidity sweep or reclaim is being confirmed by non-confirming or reversing delta."
+        default_integration: "boost_or_veto"
+      - id: "absorption"
+        meaning: "Aggressive flow is present but price result is weak, suggesting passive absorption."
+        default_integration: "penalty_or_veto"
+      - id: "failed_auction"
+        meaning: "Extreme probe cannot sustain outside prior range; breakout quality is poor."
+        default_integration: "veto"
+      - id: "unclear"
+        meaning: "Signal quality is insufficient or conflicting."
+        default_integration: "neutral_or_penalty"
+  cvd_trust_tier:
+    objective: "Make data quality and venue coverage explicit before a factor is allowed to influence confidence."
+    values:
+      - id: "single_exchange_low"
+        meaning: "Only one venue is present and evidence quality is thin."
+        allowed_actions:
+          - "penalty"
+      - id: "single_exchange_ok"
+        meaning: "One venue is usable with acceptable evidence, but cross-exchange confirmation is absent."
+        allowed_actions:
+          - "boost_limited"
+          - "penalty"
+      - id: "cross_exchange_confirmed"
+        meaning: "Two public venues agree within audit tolerance."
+        allowed_actions:
+          - "boost"
+          - "penalty"
+          - "veto"
+      - id: "cross_exchange_conflicted"
+        meaning: "Venues materially disagree or audit quality is unstable."
+        allowed_actions:
+          - "penalty"
+          - "veto"
+      - id: "unavailable"
+        meaning: "Profile or data quality does not support CVD semantics."
+        allowed_actions:
+          - "neutral"
+  cvd_veto_reasons:
+    objective: "Standardize why a setup is being blocked so review artifacts and handoffs can stay deterministic."
+    values:
+      - id: "sweep_without_delta_confirmation"
+        meaning: "Liquidity sweep printed but delta continued to confirm the breakout, so reversal setup is not trusted."
+      - id: "displacement_without_flow"
+        meaning: "Price displacement exists without aligned aggressive flow."
+      - id: "effort_result_divergence"
+        meaning: "Large delta effort did not produce enough structure progress."
+      - id: "cross_exchange_conflict"
+        meaning: "Binance and Bybit flow disagree beyond trust threshold."
+      - id: "low_sample_or_gap_risk"
+        meaning: "Trade count, sync, or gap quality is too poor for reliable CVD interpretation."
+      - id: "stale_micro_context"
+        meaning: "The CVD confirmation half-life has expired."
+      - id: "structure_missing"
+        meaning: "No ICT or structure anchor exists, so CVD is not allowed to speak."
+
+factors:
+  - id: "CVD_SWEEP_DIVERGENCE"
+    family: "ict_cvd"
+    ict_anchor:
+      - "ICT_LIQ_SWEEP_PROXY"
+    objective: "Confirm liquidity sweep reversal when delta fails to extend with price."
+    definition: "Price sweeps prior liquidity and reclaims, while short-window cumulative delta does not confirm the new extreme."
+    long_condition: "low sweeps prior low, close reclaims, rolling/session delta does not print a new low."
+    short_condition: "high sweeps prior high, close rejects, rolling/session delta does not print a new high."
+    uses_existing_features:
+      - "bucket_trade_flow.net_qty"
+      - "bucket_trade_flow.notional"
+      - "micro_alignment"
+      - "queue_imbalance"
+      - "ofi_norm"
+    default_context_mode: "reversal"
+    trust_tier_required_min: "single_exchange_ok"
+    veto_reason_candidates:
+      - "sweep_without_delta_confirmation"
+      - "cross_exchange_conflict"
+      - "low_sample_or_gap_risk"
+    integration_mode: "boost_or_veto"
+    boost_when: "ICT sweep proxy and CVD divergence align with reclaim/rejection."
+    veto_when: "Sweep prints, but delta keeps expanding in breakout direction."
+    recommended_half_life_seconds: 180
+    status: "design_ready"
+
+  - id: "CVD_DISPLACEMENT_CONFIRMATION"
+    family: "ict_cvd"
+    ict_anchor:
+      - "ICT_BOS_PROXY"
+      - "ICT_FVG_PROXY"
+    objective: "Confirm BOS/displacement with aligned aggressive trade flow."
+    definition: "After structure break or displacement, bucketed delta expands in the same direction with enough evidence and clean sync."
+    long_condition: "Bullish BOS/displacement with positive delta expansion and aligned micro flow."
+    short_condition: "Bearish BOS/displacement with negative delta expansion and aligned micro flow."
+    uses_existing_features:
+      - "bucket_trade_flow.net_qty"
+      - "bucket_trade_flow.trade_count"
+      - "micro_alignment"
+      - "evidence_score"
+    default_context_mode: "continuation"
+    trust_tier_required_min: "single_exchange_ok"
+    veto_reason_candidates:
+      - "displacement_without_flow"
+      - "cross_exchange_conflict"
+      - "low_sample_or_gap_risk"
+    integration_mode: "boost_only"
+    boost_when: "BOS/FVG proxy exists and delta expansion confirms direction."
+    veto_when: "none"
+    recommended_half_life_seconds: 120
+    status: "design_ready"
+
+  - id: "CVD_ABSORPTION_REVERSAL"
+    family: "ict_cvd"
+    ict_anchor:
+      - "ICT_LIQ_SWEEP_PROXY"
+      - "BROOKS_FAILED_BREAKOUT"
+    objective: "Detect failed continuation when aggressive flow is absorbed near liquidity."
+    definition: "Price probes liquidity with visible delta effort, but price result stalls and re-enters prior structure."
+    long_condition: "Sell delta extends into a downside sweep, then price reclaims while delta stalls or reverses."
+    short_condition: "Buy delta extends into an upside sweep, then price rejects while delta stalls or reverses."
+    uses_existing_features:
+      - "bucket_trade_flow.net_qty"
+      - "bucket_trade_flow.notional"
+      - "flow_effort_gap"
+      - "flow_absorption_skew"
+    default_context_mode: "absorption"
+    trust_tier_required_min: "single_exchange_ok"
+    veto_reason_candidates:
+      - "effort_result_divergence"
+      - "cross_exchange_conflict"
+      - "low_sample_or_gap_risk"
+    integration_mode: "penalty_or_veto"
+    boost_when: "none"
+    veto_when: "Breakout chase setup conflicts with absorption evidence."
+    recommended_half_life_seconds: 180
+    status: "design_ready"
+
+  - id: "CVD_FAILED_AUCTION_PROXY"
+    family: "ict_cvd"
+    ict_anchor:
+      - "ICT_PD_ARRAY_PROXY"
+      - "BROOKS_FAILED_BREAKOUT"
+    objective: "Prevent breakout chasing when extreme probe cannot hold outside prior range."
+    definition: "Price makes a marginal new extreme, delta extends briefly, then both price and delta lose follow-through."
+    long_condition: "Downside extreme fails to auction lower and re-enters prior range."
+    short_condition: "Upside extreme fails to auction higher and re-enters prior range."
+    uses_existing_features:
+      - "bucket_trade_flow.net_qty"
+      - "bucket_trade_flow.trade_count"
+      - "max_trade_gap_ms"
+      - "micro_alignment"
+    default_context_mode: "failed_auction"
+    trust_tier_required_min: "single_exchange_ok"
+    veto_reason_candidates:
+      - "effort_result_divergence"
+      - "cross_exchange_conflict"
+      - "low_sample_or_gap_risk"
+    integration_mode: "veto_only"
+    boost_when: "none"
+    veto_when: "Failed-auction proxy conflicts with breakout continuation."
+    recommended_half_life_seconds: 90
+    status: "design_ready"
+
+  - id: "CVD_EFFORT_RESULT_DIVERGENCE"
+    family: "ict_cvd"
+    ict_anchor:
+      - "ICT_BOS_PROXY"
+      - "BROOKS_TREND_BAR_QUALITY"
+    objective: "Penalize signals where aggressive flow effort produces weak price result."
+    definition: "Large notional/trade-count delta appears without proportional structure progress."
+    long_condition: "Positive delta effort, weak upside result."
+    short_condition: "Negative delta effort, weak downside result."
+    uses_existing_features:
+      - "bucket_trade_flow.net_qty"
+      - "bucket_trade_flow.notional"
+      - "bucket_trade_flow.trade_count"
+      - "flow_effort_gap"
+      - "flow_absorption_skew"
+    default_context_mode: "absorption"
+    trust_tier_required_min: "single_exchange_low"
+    veto_reason_candidates:
+      - "effort_result_divergence"
+      - "low_sample_or_gap_risk"
+    integration_mode: "penalty_only"
+    boost_when: "none"
+    veto_when: "none"
+    recommended_half_life_seconds: 120
+    status: "design_ready"
+
+risk_rules:
+  - id: "CVD_R1_PROFILE_FLOOR"
+    rule: "Disable all ICT+CVD factors when provider_profile is outside the supported public-spot set."
+    action: "emit cvd_unavailable and skip factor evaluation"
+
+  - id: "CVD_R2_MICRO_EVIDENCE_FUSE"
+    rule: "Disable boost/veto semantics when schema_ok, sync_ok, gap_ok, or time_sync_ok is false."
+    action: "force penalty-only or neutral outcome"
+
+  - id: "CVD_R3_LOW_SAMPLE_FUSE"
+    rule: "When trade_count is below floor or evidence_score is below floor, do not trust divergence."
+    action: "mark factor as low_confidence and remove veto authority"
+
+  - id: "CVD_R4_CROSS_SOURCE_DEGRADE"
+    rule: "When cross-source audit missing bucket ratio breaches max or skew is unstable, downgrade all CVD factors."
+    action: "cap boost at 50 percent and disable veto"
+
+  - id: "CVD_R5_SHORT_HALF_LIFE"
+    rule: "CVD confirmations are intraday microstructure evidence, not regime evidence."
+    action: "expire factor after the configured half-life and never leak into daily regime state"
+
+  - id: "CVD_R6_STRUCTURE_FIRST"
+    rule: "ICT structure or price-action trigger must exist before CVD is allowed to confirm."
+    action: "CVD cannot create direction by itself"
+
+rollout:
+  phase_1:
+    name: "readiness_and_spec"
+    scope:
+      - "factor specification"
+      - "provider/profile readiness assessment"
+      - "no runtime behavior change"
+  phase_2:
+    name: "micro_factor_state_extension"
+    scope:
+      - "add rolling/session delta metrics to microstructure state"
+      - "persist audit-friendly artifacts"
+  phase_3:
+    name: "signal_integration"
+    scope:
+      - "feed ICT+CVD factors into boost/penalty/veto path"
+      - "no primary alpha authority"
+  phase_4:
+    name: "strict_cvd_upgrade"
+    scope:
+      - "websocket diff-depth local book reconstruction"
+      - "persistent replayable microstructure store"
+      - "re-evaluate absorption/auction factors as non-proxy"

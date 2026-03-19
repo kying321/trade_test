@@ -1474,6 +1474,37 @@ def validate_settings(settings: SystemSettings) -> dict[str, Any]:
         issues.append(ValidationIssue("error", "validation.binance_live_takeover_allow_live_order", "必须是布尔值"))
     if "binance_live_takeover_allow_daemon_env_fallback" in val and not isinstance(val.get("binance_live_takeover_allow_daemon_env_fallback"), bool):
         issues.append(ValidationIssue("error", "validation.binance_live_takeover_allow_daemon_env_fallback", "必须是布尔值"))
+    if "backup_web_intel_enabled" in val and not isinstance(val.get("backup_web_intel_enabled"), bool):
+        issues.append(ValidationIssue("error", "validation.backup_web_intel_enabled", "必须是布尔值"))
+    if "backup_web_intel_artifact_path" in val and not isinstance(val.get("backup_web_intel_artifact_path"), str):
+        issues.append(ValidationIssue("error", "validation.backup_web_intel_artifact_path", "必须是字符串"))
+    if "backup_web_intel_max_age_seconds" in val:
+        x = _as_int(val.get("backup_web_intel_max_age_seconds", 0))
+        if not (60 <= x <= 604800):
+            issues.append(ValidationIssue("error", "validation.backup_web_intel_max_age_seconds", "必须在 [60, 604800]"))
+    if "backup_web_intel_block_on_no_trade" in val and not isinstance(val.get("backup_web_intel_block_on_no_trade"), bool):
+        issues.append(ValidationIssue("error", "validation.backup_web_intel_block_on_no_trade", "必须是布尔值"))
+    if "backup_web_intel_block_on_bias_conflict" in val and not isinstance(val.get("backup_web_intel_block_on_bias_conflict"), bool):
+        issues.append(ValidationIssue("error", "validation.backup_web_intel_block_on_bias_conflict", "必须是布尔值"))
+    if "backup_web_intel_block_severities" in val:
+        raw = val.get("backup_web_intel_block_severities")
+        allowed = {"low", "medium", "high", "critical"}
+        parsed: list[str] = []
+        if isinstance(raw, str):
+            parsed = [x.strip().lower() for x in raw.split(",") if x.strip()]
+        elif isinstance(raw, list):
+            parsed = [str(x).strip().lower() for x in raw if str(x).strip()]
+        else:
+            issues.append(ValidationIssue("error", "validation.backup_web_intel_block_severities", "必须是字符串或列表"))
+        if not parsed:
+            issues.append(ValidationIssue("error", "validation.backup_web_intel_block_severities", "不能为空"))
+        for i, item in enumerate(parsed):
+            if item not in allowed:
+                issues.append(ValidationIssue("error", f"validation.backup_web_intel_block_severities[{i}]", "必须是 low/medium/high/critical"))
+    if "backup_web_intel_required_authority" in val:
+        authority = str(val.get("backup_web_intel_required_authority", "")).strip().lower()
+        if authority not in {"risk_only"}:
+            issues.append(ValidationIssue("error", "validation.backup_web_intel_required_authority", "目前仅支持 risk_only"))
     if "binance_live_takeover_market" in val:
         market = str(val.get("binance_live_takeover_market", "")).strip().lower()
         if market not in {"futures_usdm", "spot"}:
