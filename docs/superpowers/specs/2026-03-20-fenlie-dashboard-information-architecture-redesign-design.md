@@ -291,11 +291,14 @@ UI 不得重新裁定这些语义。
 
 从当前二分路由过渡为：
 - `/overview`
-- `/ops/:section?`
-- `/research/:section?`
-- `/contracts/:section?`
-- `/raw/:section?`
-- `/system/:section?`
+- `/ops/:subpage?`
+- `/research/:subpage?`
+- `/contracts/:subpage?`
+- `/raw/:subpage?`
+- `/system/:subpage?`
+
+> 约束：path 参数统一使用 `subpage`，避免与 drill-down 的 `section` query 冲突。  
+> `panel/section/row` 仅保留给 L3 穿透层，不承载 L2 域页面语义。
 
 配合 query：
 - `panel`
@@ -309,6 +312,22 @@ UI 不得重新裁定这些语义。
 - `symbol`
 - `view`
 - `window`
+
+#### URL 契约表
+
+| 层级 | 载体 | 字段 | 作用 | 备注 |
+|---|---|---|---|---|
+| L1 业务域 | path | `/overview` `/ops` `/research` `/contracts` `/raw` `/system` | 决定当前业务域 | 一级域切换必须产生独立 history 节点 |
+| L2 域内页 | path | `:subpage?` | 决定当前域下的页面 | 例如 `/ops/signal-risk`、`/research/artifacts` |
+| L3 面板焦点 | query | `panel` `section` `row` | 决定当前 panel / section / row | 保持与现有 focus-links 共享契约一致 |
+| L3/L4 对象焦点 | query | `artifact` `domain` `tone` `search` `group` `symbol` `view` `window` | 聚焦对象与筛选状态 | 刷新、分享、Back/Forward 可恢复 |
+
+#### 兼容与跳转规则
+
+1. 现有 `#/terminal/*`、`#/workspace/*` 先保留为 legacy alias。
+2. legacy alias 必须生成 canonical 新路由，但在过渡期不打断旧 deep-link。
+3. redirect 规则只改 path，不丢失既有 shared query。
+4. canonical route 生成逻辑必须集中实现，不允许页面内各自拼接。
 
 ### 7.5 `App.tsx` 责任收缩
 
@@ -349,6 +368,28 @@ UI 不得重新裁定这些语义。
 - `research-adapter.ts`
 - `inspector-adapter.ts`
 
+### 7.7 Inspector / Detail Stage / RawSnapshotPage 边界
+
+三者必须显式分层，避免重复承载“来源、字段、追源”。
+
+#### 展示层矩阵
+
+| 对象类型 | InspectorRail | 独立 Detail Stage | RawSnapshotPage |
+|---|---|---|---|
+| lane | 允许 | 允许 | 禁止 |
+| artifact | 允许 | 允许 | 仅允许跳转追源，不在 Inspector 直接暴露 raw payload |
+| review / acceptance run | 允许 | 允许 | 仅证据链追源 |
+| regime row / signal candidate | 允许 | 可选 | 禁止 |
+| snapshot node / raw payload / schema node | 仅显示摘要与入口 | 禁止作为业务 detail stage 主体 | 允许，且为唯一原始字段承载面 |
+
+#### 边界规则
+
+1. InspectorRail 只展示摘要字段、来源摘要、关联关系和只读动作。
+2. 独立 Detail Stage 只承载“对象级业务详情”，不展示原始 payload 树。
+3. `RawSnapshotPage` 是 raw payload、schema、fallback/source trace 的唯一完整承载面。
+4. public surface 下的 Inspector 明确禁止显示 raw payload、未脱敏字段、内部-only schema 细节。
+5. 任何对象若需要深层追源，只能从 Inspector/Detail Stage 跳转到 `RawSnapshotPage`，不得在原页面内再展开完整 raw 区块。
+
 ## 8. 视觉与控件基线
 
 推荐采用组合基线：
@@ -372,6 +413,13 @@ UI 不得重新裁定这些语义。
 ### Phase 0 基线冻结
 - 固定当前 acceptance / smoke / route 对照基线
 
+### Phase 0.5 兼容层阶段
+- 先建立 legacy route alias
+- 建立 canonical route 生成器
+- 明确 redirect 规则与 query 保留规则
+- 在不改变既有 deep-link 的前提下切入新一级导航
+- 将 legacy hash deep-link、Back/Forward 一致性、跨域保焦纳入强制验证
+
 ### Phase 1 壳层与一级路由
 - 新建 `GlobalTopbar` / `ContextSidebar` / `ContextHeader` / `InspectorRail`
 - 先保留旧内容挂载入新壳层
@@ -394,6 +442,15 @@ UI 不得重新裁定这些语义。
 
 ### Phase 7 下线旧结构
 - 清理旧导航、旧 details、旧大页面壳
+
+## 9.1 实施边界禁令
+
+为防止实现阶段越界，增加以下禁令：
+
+1. `source slices` 只缓存 source/read-model，不重判 lane、gate、fallback、redaction、research decision。
+2. 全局搜索与域内搜索只索引已有只读字段，不生成新的业务结论、优先级打分或仲裁状态。
+3. Inspector 的“动作卡”只允许导航、复制路径、打开证据、加入比较、切换视图；禁止任何状态写入、执行、ack、retry、clear、open-run 等变更型动作。
+4. 本次实现默认 change class 维持 `RESEARCH_ONLY`；若后续需求触碰 live path，必须另起设计与实现链路。
 
 ## 10. 验证矩阵
 
@@ -430,14 +487,36 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_operator_p
 python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_public_topology_smoke.py --workspace /Users/jokenrobot/Downloads/Folders/fenlie
 ```
 
+兼容层附加验证：
+
+```bash
+# legacy hash deep-link / 新 canonical route / Back-Forward / shared query 保持
+npm run smoke:workspace-routes
+```
+
+## 10.1 阶段 Gate 表
+
+| Phase | 必过条件 | 必保留能力 | 回滚触发条件 | 回滚点 |
+|---|---|---|---|---|
+| Phase 0 | build / tsc / vitest / public surface 验收基线齐备 | 现有公开入口可访问 | 基线工件不完整、现状不可复现实 | `baseline-before-shell-refactor` |
+| Phase 0.5 | legacy alias 与 canonical route 同时可用 | 旧 deep-link、shared query、Back/Forward 不失效 | 旧链接失效、query 丢失、fallback 提示消失 | `baseline-before-shell-refactor` |
+| Phase 1 | 新壳层加载成功、旧内容可挂载 | public/internal 切换、surface notice、页面可达 | 新壳层遮蔽关键状态、页面空白、surface 语义弱化 | `shell-only-routing-introduced` |
+| Phase 2 | 一级/二级导航可用、breadcrumb 正确 | 跨域切换、域内回退、URL 可分享 | panel/section/row 语义冲突、history 断裂 | `domain-navigation-cutover` |
+| Phase 3 | 操作终端拆页后关键 section 可见 | alert、lane、gate、focus trace 仍可追踪 | 操作终端信息丢失或 drill-down 失效 | `ops-pages-split` |
+| Phase 4 | 研究工作区拆页后 artifact/backtest/comparison 正常 | artifact 聚焦、canonical/archive 分层、比较视图可达 | 主线研究路径被打断、artifact 焦点错乱 | `research-pages-split` |
+| Phase 5 | Inspector 与 detail stage 职责清楚 | inspector parity、无 raw 泄露、回退路径完整 | Inspector 与旧 details 不一致、public 泄露深字段 | `inspector-unified` |
+| Phase 6 | 契约 / raw / system 三域独立可用 | acceptance、raw trace、system status 仍可访问 | 工程控制平面入口丢失或 source trace 断裂 | `control-pages-isolated` |
+| Phase 7 | 旧结构下线后全部 smoke 通过 | 旧入口 redirect、公开面能力不退化 | legacy 用户路径断裂、fallback/聚焦解释丢失 | `legacy-shell-removed` |
+
 ## 11. 风险与回滚
 
 ### 11.1 主要风险
 
 1. 只换壳不换交互，导致视觉上更清楚但操作逻辑仍混乱。
 2. UI adapter 过度派生，误伤 source-owned state。
-3. 路由切换时丢失现有 focus query 与分享链接。
-4. 先拆研究页而不拆壳层，导致新旧逻辑交织更严重。
+3. 路由切换时丢失现有 focus query、legacy hash deep-link 与分享链接。
+4. Inspector / Detail Stage / RawSnapshotPage 边界不清，导致字段重复展示或 public 面泄露过深信息。
+5. 先拆研究页而不拆壳层，导致新旧逻辑交织更严重。
 
 ### 11.2 回滚原则
 
