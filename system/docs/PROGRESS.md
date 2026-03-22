@@ -1,6 +1,226 @@
 # Progress Handoff
 
-## Current State (2026-02-15)
+## Current State (2026-03-21)
+- Priority execution plan (`/Users/jokenrobot/Downloads/Folders/fenlie/docs/superpowers/plans/2026-03-21-fenlie-priority-execution-plan.md`) 已完成当前 5 个主任务，范围保持在 `DOC_ONLY / RESEARCH_ONLY / SIM_ONLY`，未触碰 live capital、order routing、execution queue、fund scheduling。
+- Dashboard / public surface 当前可依赖的发布与验收链：
+  - Cloudflare 包装脚本已内置清代理：`npm run cf:whoami`、`npm run cf:deploy`
+  - 最新公开拓扑 smoke：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_smoke.json`
+  - 最新 workspace routes smoke：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113336Z_dashboard_workspace_routes_browser_smoke.json`
+  - 最新公开验收：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113341Z_dashboard_public_acceptance.json`
+  - 当前 root/pages 双公开入口都已覆盖 `#/overview` 与 `#/workspace/contracts` 真实浏览器断言：`root_overview_browser`、`pages_overview_browser`、`root_contracts_browser`、`pages_contracts_browser`
+  - 当前 topology smoke 还会落持久化截图：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_root_overview_browser.png`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_pages_overview_browser.png`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_root_contracts_browser.png`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_pages_contracts_browser.png`
+  - 当前公开验收事实应优先读取 `*_dashboard_public_topology_smoke.json` 与 `*_dashboard_public_acceptance.json`，不再把旧的 `latest_dashboard_public_deploy_readiness.*` 当成当前事实
+- Strategy research mainline 已收敛为：
+  - 单币：`ETHUSDT`
+  - 周期：`15m`
+  - setup：`breakout-pullback`
+  - 当前重点：`exit/risk`
+  - 暂不继续扩 entry filter；`VPVR proxy / reclaim structure filter / daily_stop_r` 仍视为已证伪或暂无增益方向
+- 2026-03-21 `10:30Z` 已完成 hold-selection gate blocker 的 source-owned 修正：
+  - 脚本：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_price_action_breakout_pullback_hold_selection_gate_blocker_report_sim_only.py`
+  - 新增保留字段：`return_candidate / return_watch`
+  - `gate_state` 不再把所有情形都静态硬写为 `blocked_transfer_demoted / blocked_transfer_failed / blocked_transfer_revived_watch_only`
+  - 当前 latest gate blocker：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_price_action_breakout_pullback_hold_selection_gate_blocker_report_sim_only.json`
+  - 当前 source-owned gate state：
+    - `hold24_promotion=blocked_return_candidate_until_longer_forward_oos`
+    - `hold12_global_drop=blocked_transfer_watch_only`
+    - `dynamic_router_promotion=blocked_future_tail_insufficient_after_positive_historical_transfer`
+- 2026-03-21 `10:30Z` canonical hold-selection handoff 已刷新：
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_price_action_breakout_pullback_hold_selection_handoff_sim_only.json`
+  - 当前 handoff 头：
+    - `active_baseline=hold16_zero`
+    - `local_candidate=hold8_zero`
+    - `transfer_watch=[hold12_zero]`
+    - `return_candidate=[hold24_zero]`
+    - `demoted_candidate=[hold24_zero, pullback_depth_atr_router]`
+- 2026-03-21 `10:31Z` operator panel / public+dist snapshot 已刷新：
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T103100Z_operator_task_visual_panel.json`
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T103100Z_operator_task_visual_panel.html`
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/public/data/fenlie_dashboard_snapshot.json`
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/public/data/fenlie_dashboard_internal_snapshot.json`
+- 2026-03-21 新增 dashboard source-head / contracts drilldown 的 `return_candidate` 透传：
+  - snapshot builder：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_dashboard_frontend_snapshot.py`
+  - 前端消费：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/adapters/read-model.ts`
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/WorkspacePanels.tsx`
+  - 公开用语：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/contracts/dashboard-term-contract.json`
+  - 当前目标：让 `hold_selection_handoff` 的 `return_candidate=[hold24_zero]` 在 source-head 摘要与 contracts 钻取层中直接可见，不再只埋在 raw artifact
+- 2026-03-21 `10:48Z` 已刷新 intraday orderflow research-only 链，清除 2026-03-18 旧 latest 漂移：
+  - blueprint：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_intraday_orderflow_blueprint.json`
+  - sidecar：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_intraday_orderflow_sidecar.json`
+  - context veto pack：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_intraday_orderflow_context_veto_research_pack.json`
+  - veto study：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_intraday_orderflow_veto_event_study.json`
+  - coverage gap casebook：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_intraday_orderflow_coverage_gap_casebook.json`
+  - majors capture priority：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_intraday_orderflow_majors_capture_priority_notes.json`
+  - execution checklist：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_intraday_orderflow_majors_capture_execution_checklist.json`
+  - research gate blocker：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/latest_intraday_orderflow_research_gate_blocker_report.json`
+  - 当前 blueprint 已引用最新 exit hold compare：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T091000Z_price_action_breakout_pullback_exit_hold_forward_compare_sim_only.json`
+  - 当前 source-owned orderflow 结论仍是：
+    - `continue_price_state_primary_build_orderflow_sidecar_before_backtest`
+    - `block_orderflow_replay_and_fitting_keep_eth_price_state_only_until_evidence_upgrade`
+- 2026-03-21 已把 orderflow 主证据接入 dashboard research workspace 的 `research_cross_section` 组：
+  - 配置：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/config/dashboard_snapshot_artifact_selection.json`
+  - 公开文案：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/contracts/dashboard-term-contract.json`
+  - 当前 public snapshot 已包含：
+    - `intraday_orderflow_blueprint`
+    - `intraday_orderflow_research_gate_blocker`
+  - 当前公开页 `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow` 已可见这两条 canonical 工件
+- 2026-03-21 新增 active overview 顶层的 source-owned 研究主线摘要卡：
+  - 页面：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/pages/OverviewPage.tsx`
+  - 测试：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/App.test.tsx`
+  - 当前行为：
+    - `/overview` 直接显示 `hold_selection_handoff`
+    - 摘要字段：`active_baseline / local_candidate / transfer_watch / return_candidate`
+    - 提供深链跳转：`/workspace/contracts?page_section=contracts-source-heads`
+  - 当前目标已从“仅 contracts drilldown 可见”推进为“overview 顶层也可见”
+- 2026-03-21 已重新构建并发布 Cloudflare Pages：
+  - 命令：`cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run cf:deploy`
+  - 最新 Pages deploy：
+    `https://6442acc0.fenlie-dashboard-web.pages.dev`
+  - 随后公开面验收：
+    `npm run verify:public-surface -- --skip-workspace-build`
+  - 当前结果：`ok = true`
+  - 最新验收工件：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111433Z_dashboard_public_acceptance.json`
+  - 最新 workspace routes smoke：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111428Z_dashboard_workspace_routes_browser_smoke.json`
+  - 最新公开拓扑工件：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111405Z_dashboard_public_topology_smoke.json`
+  - 当前 `workspace_routes_smoke` 已覆盖 `#/overview`，并对 `研究主线摘要 / hold24_zero` 做真实浏览器断言
+  - 当前 `workspace_routes_smoke` 已覆盖 contracts 页新增 marker：`公开面验收 / root overview 截图 / pages overview 截图 / root contracts 截图 / pages contracts 截图 / 公开快照拉取次数 / 内部快照拉取次数`
+  - 当前 `topology_smoke` 已覆盖 `https://fuuu.fun/#/overview`、`https://fenlie.fuuu.fun/#/overview`、`https://fuuu.fun/#/workspace/contracts`、`https://fenlie.fuuu.fun/#/workspace/contracts`
+  - 当前 `topology_smoke` 已分别通过 `root_overview_browser / pages_overview_browser / root_contracts_browser / pages_contracts_browser`
+  - 当前 `topology_smoke` 已为 `root/pages overview + contracts` 额外落地截图证据，便于后续审计与回归对比
+  - 当前 contracts 公开验收区已透传 `root/pages overview + contracts` 截图路径，以及 `公开/内部快照拉取次数`，并把文案从 `工作区四路由烟测` 收敛为 `工作区五页面烟测`
+  - 当前公开 artifacts 页已能通过 `group=research_cross_section&search=orderflow` 直接命中新接入的 orderflow canonical 工件
+  - 当前 `workspace_routes_smoke` 已把该 orderflow 过滤路由固化为真实浏览器回归断言，并在 smoke payload 中新增：
+    - `artifacts_filter_assertion.route=#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
+    - `artifacts_filter_assertion.active_artifact=intraday_orderflow_blueprint`
+    - `artifacts_filter_assertion.visible_artifacts=[intraday_orderflow_blueprint, intraday_orderflow_research_gate_blocker]`
+  - 当前 `run_dashboard_public_acceptance.py` 已把 `artifacts_filter_assertion` 升级为聚合验收硬门槛：
+    - 缺失该字段 => `failure_reason=missing_orderflow_artifacts_filter_assertion`
+    - 字段值偏离 => `failure_reason=invalid_orderflow_artifacts_filter_assertion`
+- 2026-03-21 `11:13Z~11:14Z` 已在 orderflow terminal handoff / contracts 验收字段接入后重新完成 build + 公开验收闭环：
+  - 本地 build：`cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run build`
+  - 最新 operator panel：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111342Z_operator_task_visual_panel.json`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111342Z_operator_task_visual_panel.html`
+  - 最新 dist/public snapshot：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/public/data/fenlie_dashboard_snapshot.json`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/public/data/fenlie_dashboard_internal_snapshot.json`
+  - 最新公开拓扑 smoke：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111405Z_dashboard_public_topology_smoke.json`
+  - 最新 workspace routes smoke：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111428Z_dashboard_workspace_routes_browser_smoke.json`
+  - 最新公开验收：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111433Z_dashboard_public_acceptance.json`
+  - 当前结果：
+    - `npm run build => exit 0`
+    - `npm run verify:public-surface -- --skip-workspace-build => ok = true`
+  - 当前 orderflow 工件链已形成：
+    - `workspace smoke -> public acceptance hard gate -> read-model handoff -> contracts acceptance fields -> App/Vitest regression`
+  - 当前 contracts 公开验收区额外可见：
+    - `orderflow 过滤路由`
+    - `orderflow 激活工件`
+    - `orderflow 可见工件`
+- 2026-03-21 `19:22~19:24 +0800` 已完成一轮本地 release-checklist 回归并刷新公开验收证据：
+  - 前端全量测试：
+    - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm test`
+    - 结果：`19 files / 97 tests passed`
+  - TypeScript：
+    - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx tsc --noEmit`
+    - 结果：`exit 0`
+  - dashboard 脚本回归：
+    - `cd /Users/jokenrobot/Downloads/Folders/fenlie && pytest -q system/tests/test_build_dashboard_frontend_snapshot_script.py system/tests/test_run_operator_panel_refresh_script.py system/tests/test_run_dashboard_public_topology_smoke_script.py system/tests/test_run_dashboard_workspace_artifacts_smoke_script.py system/tests/test_run_dashboard_public_acceptance_script.py`
+    - 结果：`22 passed`
+  - 最新 workspace routes smoke：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T112357Z_dashboard_workspace_routes_browser_smoke.json`
+  - 最新公开拓扑 smoke：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T112419Z_dashboard_public_topology_smoke.json`
+  - 最新公开验收：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T112445Z_dashboard_public_acceptance.json`
+  - 当前结果：
+    - `workspace smoke => ok = true`
+    - `verify:public-surface => ok = true`
+- 2026-03-21 `19:29~19:33 +0800` 已把 dashboard 上架前最小验证收口为单一 package script，并修复 topology smoke 对 Pages TLS EOF 抖动的可重试性：
+  - 新脚本：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/package.json`
+    - `verify:release-checklist = build -> test -> tsc -> workspace routes smoke -> public acceptance`
+  - 新契约测试：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/deploy-script-contract.test.js`
+  - TLS EOF 重试修复：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_public_topology_smoke.py`
+    - 将 `ssl.SSLEOFError` 视为 fallback 场景下的可重试传输抖动
+  - 新回归测试：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_dashboard_public_topology_smoke_script.py`
+    - 覆盖：`strict cert fail -> insecure fallback EOF once -> retry success`
+  - 实际验证：
+    - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/deploy-script-contract.test.js`
+    - 结果：`2 passed`
+    - `cd /Users/jokenrobot/Downloads/Folders/fenlie && pytest -q system/tests/test_run_dashboard_public_topology_smoke_script.py`
+    - 结果：`6 passed`
+    - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run verify:release-checklist`
+    - 结果：`exit 0`
+    - 其内嵌全量前端测试结果：`19 files / 98 tests passed`
+  - 最新 release-checklist 工件：
+    - workspace routes smoke：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113307Z_dashboard_workspace_routes_browser_smoke.json`
+    - public topology smoke：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_smoke.json`
+    - public acceptance：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113341Z_dashboard_public_acceptance.json`
+- 最新研究结论：
+  - 数据集：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T075512Z_public_intraday_crypto_bars_dataset.json`
+  - base sim：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T075700Z_price_action_breakout_pullback_sim_only.json`
+  - hold forward compare：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T080200Z_price_action_breakout_pullback_exit_hold_forward_compare_sim_only.json`
+  - 当前 source-owned 结论：`hold16` 继续作为 baseline anchor，`hold8` 提升为更强 forward candidate，但证据仍不足以直接替换 baseline
+- 新补的高价值测试缺口：
+  - `test_build_price_action_breakout_pullback_exit_hold_forward_compare_sim_only_script.py`
+  - `test_build_price_action_breakout_pullback_hold_selection_handoff_sim_only_script.py`
+  - `test_build_price_action_breakout_pullback_hold_selection_gate_blocker_report_sim_only_script.py`
+  - `test_run_operator_panel_refresh_script.py`
+- 当前最小高价值验证包：
+  - `pytest -q /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_exit_hold_forward_compare_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_selection_handoff_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_selection_gate_blocker_report_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_operator_panel_refresh_script.py`
+  - 当前结果：`7 passed`
+- 当前扩展验证包（含 frontier report / snapshot / panel refresh）：
+  - `pytest -q /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_exit_hold_forward_compare_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_frontier_report_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_selection_gate_blocker_report_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_selection_handoff_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_dashboard_frontend_snapshot_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_operator_panel_refresh_script.py`
+  - 当前结果：`16 passed`
+- 公开面验收：
+  - 命令：`python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_public_acceptance.py --workspace /Users/jokenrobot/Downloads/Folders/fenlie --skip-workspace-build`
+  - 当前结果：`ok = true`
+- 2026-03-21 新增本地 120d 研究推进（复用历史本地 15m 数据，不依赖公网新抓取）：
+  - 数据集：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260319T081154Z_public_intraday_crypto_bars_dataset.csv`
+  - base sim：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T085500Z_price_action_breakout_pullback_sim_only.json`
+  - hold compare：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T091000Z_price_action_breakout_pullback_exit_hold_forward_compare_sim_only.json`
+  - hold robustness：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T091200Z_price_action_breakout_pullback_exit_hold_robustness_sim_only.json`
+  - hold family triage：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T091400Z_price_action_breakout_pullback_hold_family_triage_sim_only.json`
+  - rider triage：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T091600Z_price_action_breakout_pullback_exit_rider_triage_sim_only.json`
+  - frontier report：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T092900Z_price_action_breakout_pullback_hold_frontier_report_sim_only.json`
+- 120d 本地结论已从旧 30d mixed profile 收敛为更强 baseline 结论：
+  - `hold8 vs hold16` 默认 forward compare（9 slices）=> `hold_16_forward_leader_keep_baseline`
+  - 4 组 robustness => `hold_16_consistency_reinforced_keep_baseline`
+  - frontier 当前不再允许把 `hold8/hold24` 硬写为双 leader candidate；修正后当前 head 表达为：`hold16_baseline_reinforced_transfer_watch_only`
+- 新增 frontier report 契约测试并修正脚本，避免 source-owned artifact 夸大弱证据：
+  - 测试：`/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_frontier_report_sim_only_script.py`
+  - 脚本：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_price_action_breakout_pullback_hold_frontier_report_sim_only.py`
+  - 当前最小扩展回归包：
+    `pytest -q /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_exit_hold_forward_compare_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_selection_handoff_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_selection_gate_blocker_report_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_price_action_breakout_pullback_hold_frontier_report_sim_only_script.py /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_operator_panel_refresh_script.py`
+  - 当前结果：`9 passed`
+- 结构债只落设计，不在当前执行链直接大改：
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/superpowers/plans/2026-03-21-engine-snapshot-boundary-note.md`
+  - `engine.py` 建议拆成 runtime primitives / mode params / paper execution / micro capture / review runtime / thin facade
+  - `build_dashboard_frontend_snapshot.py` 建议拆成 contracts / surface policy / read-model builders / ui-contract builders / thin writer
+
+## Legacy State (2026-02-15)
 - Architecture loop is active: data -> regime -> signal -> risk -> backtest -> review -> gate.
 - Continuous micro truth capture is online:
   - CLI: `lie micro-capture --date YYYY-MM-DD [--symbols BTCUSDT,ETHUSDT]`.
