@@ -529,14 +529,16 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert payload["continuous_optimization_backlog"][0]["stage"] == "execution"
     assert payload["lane_cards"][4]["state"] == "repair"
     html_text = review_html.read_text(encoding="utf-8")
-    assert "Task Visual Management Panel" in html_text
-    assert "OpenClaw Evolution" in html_text
-    assert "Transmission Control Chain" in html_text
-    assert "Continuous Optimization Backlog" in html_text
-    assert "Chain Transmission" in html_text
-    assert "Priority Repair Plan" in html_text
-    assert "Time Sync Repair Verification" in html_text
-    assert "研究 | research" in html_text
+    assert "任务可视化管理面板" in html_text
+    assert "OpenClaw 重构蓝图" in html_text
+    assert "传导控制链" in html_text
+    assert "持续优化积压" in html_text
+    assert "传导链图" in html_text
+    assert "优先修复计划" in html_text
+    assert "系统时间同步修复验证" in html_text
+    assert "等待纸面执行平仓证据" in html_text
+    assert "需要清障 / 运维实盘门禁 + 风控守护" in html_text
+    assert "wait_for_paper_execution_close_evidence" in html_text
     assert "持续优化执行传导链" in html_text
     assert "SC2603" in html_text
     assert "ROLLBACK_HARD" in html_text

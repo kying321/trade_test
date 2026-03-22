@@ -1,0 +1,12 @@
+{
+  "$schema": "../../dashboard/web/node_modules/wrangler/config-schema.json",
+  "name": "fenlie-root-nav-proxy",
+  "main": "src/index.js",
+  "compatibility_date": "2026-03-20",
+  "routes": [
+    {
+      "pattern": "fuuu.fun/*",
+      "zone_id": "0402f0f6090a77c9277163bc958fd7c3"
+    }
+  ]
+}

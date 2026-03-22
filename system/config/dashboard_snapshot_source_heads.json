@@ -1,0 +1,36 @@
+{
+  "source_heads": [
+    {
+      "id": "system_scheduler_state",
+      "label": "调度与心跳"
+    },
+    {
+      "id": "architecture_audit",
+      "label": "架构审计"
+    },
+    {
+      "id": "mode_stress_matrix",
+      "label": "体制压力矩阵"
+    },
+    {
+      "id": "hold_selection_handoff",
+      "label": "持有选择主头"
+    },
+    {
+      "id": "hold_selection_gate",
+      "label": "持有选择 Gate"
+    },
+    {
+      "id": "price_action_breakout_pullback",
+      "label": "ETH 主线"
+    },
+    {
+      "id": "recent_strategy_backtests",
+      "label": "近期回测"
+    },
+    {
+      "id": "operator_panel",
+      "label": "运维面板"
+    }
+  ]
+}

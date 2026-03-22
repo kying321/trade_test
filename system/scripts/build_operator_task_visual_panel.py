@@ -16,6 +16,20 @@ FUTURE_STAMP_GRACE_MINUTES = 5
 SYSTEM_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REVIEW_DIR = SYSTEM_ROOT / "output" / "review"
 DEFAULT_DASHBOARD_DIST = SYSTEM_ROOT / "dashboard" / "web" / "dist"
+SHARED_DASHBOARD_TERM_CONTRACT_PATH = SYSTEM_ROOT / "dashboard" / "web" / "src" / "contracts" / "dashboard-term-contract.json"
+
+
+def load_dashboard_term_contract(path: Path = SHARED_DASHBOARD_TERM_CONTRACT_PATH) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"labels": {}, "tokenLabels": {}, "sentenceReplacements": []}
+    if not isinstance(payload, dict):
+        return {"labels": {}, "tokenLabels": {}, "sentenceReplacements": []}
+    return payload
+
+
+SHARED_DASHBOARD_TERM_CONTRACT = load_dashboard_term_contract()
 
 
 def now_utc() -> dt.datetime:
@@ -169,6 +183,271 @@ def safe_list(value: Any) -> list[Any]:
     if value is None:
         return []
     return list(value) if isinstance(value, tuple) else []
+
+
+def python_regex_flags(raw: str) -> int:
+    flags = 0
+    for token in str(raw or ""):
+        if token == "i":
+            flags |= re.IGNORECASE
+        elif token == "m":
+            flags |= re.MULTILINE
+        elif token == "s":
+            flags |= re.DOTALL
+        elif token == "g":
+            continue
+    return flags
+
+
+LABELS: dict[str, str] = dict(SHARED_DASHBOARD_TERM_CONTRACT.get("labels") or {})
+
+
+TOKEN_LABELS: dict[str, str] = dict(SHARED_DASHBOARD_TERM_CONTRACT.get("tokenLabels") or {})
+
+
+SENTENCE_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(str(row.get("pattern") or ""), python_regex_flags(str(row.get("flags") or ""))),
+        str(row.get("replacement") or ""),
+    )
+    for row in list(SHARED_DASHBOARD_TERM_CONTRACT.get("sentenceReplacements") or [])
+    if str(row.get("pattern") or "").strip()
+]
+
+
+def exact_label(value: str) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    return LABELS.get(raw) or LABELS.get(raw.lower())
+
+
+def translate_token(token: str) -> str:
+    raw = str(token or "").strip()
+    if not raw:
+        return raw
+    exact = exact_label(raw)
+    if exact:
+        return exact
+    lower = raw.lower()
+    if lower in TOKEN_LABELS:
+        return TOKEN_LABELS[lower]
+    if re.fullmatch(r"[A-Z0-9.]+", raw):
+        return raw
+    return raw
+
+
+def is_url_like(raw: str) -> bool:
+    return bool(re.match(r"^https?://", raw))
+
+
+def is_path_like(raw: str) -> bool:
+    return ("/" in raw or "\\" in raw) and ("." in raw or raw.startswith("/"))
+
+
+def is_timestamp_like(raw: str) -> bool:
+    return bool(
+        re.match(r"^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$", raw)
+        or re.match(r"^\d{4}/\d{2}/\d{2}", raw)
+        or re.search(r"T\d{2}:\d{2}:\d{2}", raw)
+        or re.match(r"^\d{2}:\d{2}(?::\d{2})?$", raw)
+    )
+
+
+def is_natural_sentence(raw: str) -> bool:
+    return " " in raw and len(raw.split()) >= 4 and bool(re.search(r"[A-Za-z]{3,}", raw)) and not bool(
+        re.fullmatch(r"[A-Z0-9_:\-=|.+/ ]+", raw)
+    )
+
+
+def looks_code_like(raw: str) -> bool:
+    return "_" in raw or "-" in raw or (":" in raw and "://" not in raw) or "=" in raw
+
+
+def humanize_simple_code(raw: str) -> str | None:
+    if "_" not in raw and "-" not in raw:
+        return None
+    exact = exact_label(raw)
+    if exact:
+        return exact
+    tokens = [token for token in re.split(r"[_-]+", raw) if token]
+    if not tokens:
+        return None
+    translated = [translate_token(token) for token in tokens]
+    translated_count = sum(1 for idx, token in enumerate(translated) if token != tokens[idx])
+    untranslated_alpha = sum(
+        1
+        for idx, token in enumerate(tokens)
+        if translated[idx] == token and re.fullmatch(r"[A-Za-z]+", token)
+    )
+    if translated_count == 0:
+        return None
+    if len(tokens) > 8 and translated_count < len(tokens) - 1:
+        return None
+    if len(raw) > 56 and untranslated_alpha > 0:
+        return None
+    if untranslated_alpha > 1 and len(tokens) > 3:
+        return None
+    return "".join(translated)
+
+
+def render_fragment(raw: str) -> str:
+    exact = exact_label(raw)
+    if exact:
+        return exact
+    token = translate_token(raw)
+    if token != raw:
+        return token
+    simple = humanize_simple_code(raw)
+    if simple:
+        return simple
+    return raw
+
+
+def humanize_joined_phrase(raw: str, delimiter: str, display_delimiter: str | None = None) -> str | None:
+    if delimiter not in raw:
+        return None
+    parts = [part.strip() for part in raw.split(delimiter) if part.strip()]
+    if len(parts) < 2 or len(parts) > 6:
+        return None
+    rendered = [render_fragment(part) for part in parts]
+    changed = any(rendered[idx] != parts[idx] for idx in range(len(parts)))
+    if not changed:
+        return None
+    return (display_delimiter or f" {delimiter} ").join(rendered)
+
+
+def humanize_colon_phrase(raw: str) -> str | None:
+    if ":" not in raw or "://" in raw or is_timestamp_like(raw):
+        return None
+    parts = [part for part in raw.split(":") if part]
+    if len(parts) < 2 or len(parts) > 6 or any(len(part) > 120 for part in parts):
+        return None
+    rendered = [render_fragment(part) for part in parts]
+    changed = any(rendered[idx] != parts[idx] for idx in range(len(parts)))
+    return " / ".join(rendered) if changed else None
+
+
+def split_once(raw: str, marker: str) -> tuple[str, str] | None:
+    index = raw.find(marker)
+    if index < 0:
+        return None
+    return raw[:index], raw[index + len(marker) :]
+
+
+def display_text(value: Any) -> str:
+    return explain_label(value)["primary"]
+
+
+def humanize_assignment_segment(segment: str) -> str:
+    trimmed = segment.strip()
+    if not trimmed:
+        return trimmed
+    assignment = split_once(trimmed, "=")
+    if assignment is None:
+        return humanize_colon_phrase(trimmed) or render_fragment(trimmed)
+    left, right = assignment
+    left_parts = [part for part in left.split(":") if part]
+    field = left_parts.pop() if left_parts else left
+    prefix = " / ".join(render_fragment(part) for part in left_parts if part)
+    field_label = render_fragment(field)
+    value_label = display_text(right.strip())
+    suffix = f"{field_label}：{value_label}"
+    return f"{prefix} / {suffix}" if prefix else suffix
+
+
+def humanize_structured_summary(raw: str) -> str | None:
+    if all(marker not in raw for marker in ("=", "|", "｜", ",")) or len(raw) > 420:
+        return None
+    separator = "｜" if "｜" in raw else "|" if "|" in raw else ","
+    segments = [part.strip() for part in raw.split(separator) if part.strip()]
+    if len(segments) < 2:
+        return None
+    rendered = [humanize_assignment_segment(segment) for segment in segments]
+    changed = any(rendered[idx] != segments[idx] for idx in range(len(segments)))
+    return " ｜ ".join(rendered) if changed else None
+
+
+def humanize_priority_order(raw: str) -> str | None:
+    if ">" not in raw or "@" not in raw:
+        return None
+    segments = [part.strip() for part in raw.split(">") if part.strip()]
+    if not segments or len(segments) > 8:
+        return None
+    rendered: list[str] = []
+    for segment in segments:
+        match = re.match(r"^([A-Za-z_]+)@(\d+(?:\.\d+)?):(\d+)$", segment)
+        if not match:
+            return None
+        state, priority, count = match.groups()
+        rendered.append(f"{render_fragment(state)} {priority} 分 / {count} 条")
+    return " ＞ ".join(rendered)
+
+
+def replace_known_codes_in_sentence(raw: str) -> str:
+    output = raw
+    for pattern, replacement in SENTENCE_REPLACEMENTS:
+        output = pattern.sub(replacement, output)
+    for key in sorted([item for item in LABELS if len(item) >= 6 and ("_" in item or "-" in item)], key=len, reverse=True):
+        if key in output:
+            output = output.replace(key, LABELS[key])
+    return output
+
+
+def humanize_text(raw: str) -> str:
+    exact = exact_label(raw)
+    if exact:
+        return exact
+    if not raw:
+        return "-"
+    if is_url_like(raw) or is_path_like(raw) or is_timestamp_like(raw):
+        return raw
+    if "=" in raw and "|" not in raw and "｜" not in raw and "," not in raw:
+        return humanize_assignment_segment(raw)
+    structured = humanize_structured_summary(raw)
+    if structured:
+        return structured
+    slash = humanize_joined_phrase(raw, " / ")
+    if slash:
+        return slash
+    plus = humanize_joined_phrase(raw, "+", " + ")
+    if plus:
+        return plus
+    priority = humanize_priority_order(raw)
+    if priority:
+        return priority
+    colon = humanize_colon_phrase(raw)
+    if colon:
+        return colon
+    if is_natural_sentence(raw):
+        return replace_known_codes_in_sentence(raw)
+    simple = humanize_simple_code(raw)
+    return simple or raw
+
+
+def explain_label(value: Any) -> dict[str, Any]:
+    raw = str(value or "").strip()
+    if not raw:
+        return {"primary": "-", "secondary": None, "translated": False}
+    primary = humanize_text(raw)
+    translated = primary != raw
+    secondary = raw if translated and looks_code_like(raw) and not is_path_like(raw) and not is_url_like(raw) and len(raw) <= 220 else None
+    return {"primary": primary, "secondary": secondary, "translated": translated}
+
+
+def html_value(value: Any, *, show_raw: bool = True, compact: bool = False) -> str:
+    explained = explain_label(value)
+    primary = html.escape(str(explained["primary"]))
+    secondary = html.escape(str(explained["secondary"])) if explained.get("secondary") else ""
+    if show_raw and secondary:
+        raw_class = "value-raw value-raw-compact" if compact else "value-raw"
+        return (
+            f'<span class="value-stack" title="{html.escape(str(value or ""))}">'
+            f'<span class="value-primary">{primary}</span>'
+            f'<code class="{raw_class}">{secondary}</code>'
+            f"</span>"
+        )
+    return f'<span class="value-primary" title="{html.escape(str(value or ""))}">{primary}</span>'
 
 
 def path_brief(path_text: str) -> str:
@@ -956,11 +1235,11 @@ def control_chain_state(row: dict[str, Any]) -> str:
 
 
 def card_html(title: str, brief: str, meta: list[str], state: str = "neutral") -> str:
-    meta_html = "".join([f"<li>{html.escape(item)}</li>" for item in meta if item])
+    meta_html = "".join([f"<li>{html_value(item, compact=True)}</li>" for item in meta if item])
     return (
         f'<section class="panel-card {pill_class(state)}">'
-        f"<div class=\"card-title\">{html.escape(title)}</div>"
-        f"<div class=\"card-brief\">{html.escape(brief or '-') }</div>"
+        f"<div class=\"card-title\">{html.escape(display_text(title))}</div>"
+        f"<div class=\"card-brief\">{html_value(brief or '-', compact=True)}</div>"
         f"<ul class=\"card-meta\">{meta_html}</ul>"
         f"</section>"
     )
@@ -975,7 +1254,7 @@ def table_rows(rows: list[dict[str, Any]], columns: list[tuple[str, str]]) -> st
             + "".join(
                 [
                     "<td>"
-                    + html.escape(str(row.get(key, "") if row.get(key, "") is not None else ""))
+                    + html_value(row.get(key, "") if row.get(key, "") is not None else "", compact=True)
                     + "</td>"
                     for key, _ in columns
                 ]
@@ -994,7 +1273,7 @@ def table_rows(rows: list[dict[str, Any]], columns: list[tuple[str, str]]) -> st
 def render_chain_svg(chain: dict[str, Any]) -> str:
     node_lookup = {str(node.get("id")): node for node in chain.get("nodes", [])}
     svg_parts = [
-        '<svg class="chain-svg" viewBox="0 0 1280 560" role="img" aria-label="Operator chain transmission graph">'
+        '<svg class="chain-svg" viewBox="0 0 1280 560" role="img" aria-label="运维链路传导图">'
     ]
     for edge in chain.get("edges", []):
         start = node_lookup.get(str(edge.get("from")))
@@ -1011,7 +1290,7 @@ def render_chain_svg(chain: dict[str, Any]) -> str:
             f'<path d="M{x1},{y1} C{mid_x},{y1} {mid_x},{y2} {x2},{y2}" class="chain-edge" />'
         )
         svg_parts.append(
-            f'<text x="{mid_x}" y="{mid_y - 6}" class="chain-edge-label">{html.escape(str(edge.get("label") or ""))}</text>'
+            f'<text x="{mid_x}" y="{mid_y - 6}" class="chain-edge-label">{html.escape(display_text(edge.get("label") or ""))}</text>'
         )
     for node in chain.get("nodes", []):
         x = int(node.get("x") or 0)
@@ -1021,8 +1300,8 @@ def render_chain_svg(chain: dict[str, Any]) -> str:
         brief = safe_text(node.get("brief")) or "-"
         svg_parts.append(f'<g transform="translate({x},{y})" class="node-group node-{html.escape(kind)}">')
         svg_parts.append('<rect width="220" height="72" rx="18" class="chain-node" />')
-        svg_parts.append(f'<text x="16" y="24" class="chain-node-title">{html.escape(label)}</text>')
-        svg_parts.append(f'<text x="16" y="46" class="chain-node-brief">{html.escape(brief[:56])}</text>')
+        svg_parts.append(f'<text x="16" y="24" class="chain-node-title">{html.escape(display_text(label))}</text>')
+        svg_parts.append(f'<text x="16" y="46" class="chain-node-brief">{html.escape(display_text(brief)[:56])}</text>')
         svg_parts.append("</g>")
     svg_parts.append("</svg>")
     return "".join(svg_parts)
@@ -1045,7 +1324,7 @@ def render_html(payload: dict[str, Any]) -> str:
     priority_repair_plan = dict(payload.get("priority_repair_plan") or {})
     priority_repair_verification = dict(payload.get("priority_repair_verification") or {})
     priority_repair_plan_html = card_html(
-        title="Time Sync Repair Plan",
+        title="系统时间同步修复计划",
         brief=safe_text(summary.get("priority_repair_plan_brief")) or "-",
         meta=[
             f"admin_required={bool(summary.get('priority_repair_plan_admin_required'))}",
@@ -1055,10 +1334,10 @@ def render_html(payload: dict[str, Any]) -> str:
         state="repair" if safe_text(summary.get("priority_repair_plan_brief")) else "neutral",
     )
     priority_repair_verification_html = card_html(
-        title="Time Sync Repair Verification",
+        title="系统时间同步修复验证",
         brief=safe_text(summary.get("priority_repair_verification_brief")) or "-",
         meta=[
-            f"cleared={bool(summary.get('priority_repair_verification_cleared'))}",
+            f"cleared_state={bool(summary.get('priority_repair_verification_cleared'))}",
             f"artifact={path_brief(safe_text(summary.get('priority_repair_verification_artifact')))}",
             f"status={safe_text(priority_repair_verification.get('status')) or '-'}",
         ],
@@ -1067,7 +1346,7 @@ def render_html(payload: dict[str, Any]) -> str:
         else ("repair" if safe_text(summary.get("priority_repair_verification_brief")) else "neutral"),
     )
     openclaw_blueprint_html = card_html(
-        title="OpenClaw Evolution",
+        title="OpenClaw 演进态",
         brief=safe_text(summary.get("openclaw_blueprint_brief")) or "-",
         meta=[
             f"life_stage={safe_text(summary.get('openclaw_current_life_stage')) or '-'} -> {safe_text(summary.get('openclaw_target_life_stage')) or '-'}",
@@ -1085,7 +1364,7 @@ def render_html(payload: dict[str, Any]) -> str:
     lane_cards_html = "".join(
         [
             card_html(
-                title=str(card.get("state") or "-").upper(),
+                title=safe_text(card.get("state")) or "-",
                 brief=f"count={safe_int(card.get('count'))} | total={safe_int(card.get('priority_total'))}",
                 meta=[
                     f"head={safe_text(card.get('head_symbol')) or '-'}:{safe_text(card.get('head_action')) or '-'}",
@@ -1099,7 +1378,7 @@ def render_html(payload: dict[str, Any]) -> str:
     focus_slots_html = "".join(
         [
             card_html(
-                title=f"{safe_text(slot.get('slot')).upper()} | {safe_text(slot.get('symbol')) or '-'}",
+                title=f"{safe_text(slot.get('slot'))} | {safe_text(slot.get('symbol')) or '-'}",
                 brief=f"{safe_text(slot.get('action')) or '-'} | {safe_text(slot.get('priority_tier')) or '-'}:{safe_int(slot.get('priority_score'))}",
                 meta=[
                     f"reason={safe_text(slot.get('reason')) or '-'}",
@@ -1114,9 +1393,10 @@ def render_html(payload: dict[str, Any]) -> str:
     control_chain_html = "".join(
         [
             card_html(
-                title=f"{safe_text(row.get('label')) or '-'} | {safe_text(row.get('stage')) or '-'}",
+                title=safe_text(row.get("label")) or safe_text(row.get("stage")) or "-",
                 brief=safe_text(row.get("source_brief")) or "-",
                 meta=[
+                    f"stage={safe_text(row.get('stage')) or '-'}",
                     f"status={safe_text(row.get('source_status')) or '-'}",
                     f"decision={safe_text(row.get('source_decision')) or '-'}",
                     f"target={safe_text(row.get('next_target_artifact')) or '-'}",
@@ -1143,65 +1423,65 @@ def render_html(payload: dict[str, Any]) -> str:
         action_checklist,
         [
             ("rank", "#"),
-            ("state", "State"),
-            ("symbol", "Symbol"),
-            ("action", "Action"),
-            ("priority_score", "Priority"),
-            ("reason", "Reason"),
-            ("done_when", "Done When"),
+            ("state", "状态"),
+            ("symbol", "标的"),
+            ("action", "动作"),
+            ("priority_score", "优先级"),
+            ("reason", "原因"),
+            ("done_when", "完成条件"),
         ],
     )
     repair_table = table_rows(
         repair_queue,
         [
             ("rank", "#"),
-            ("area", "Area"),
-            ("symbol", "Symbol"),
-            ("action", "Action"),
-            ("priority_score", "Priority"),
-            ("command", "Command"),
-            ("clear_when", "Clear When"),
+            ("area", "区域"),
+            ("symbol", "标的"),
+            ("action", "动作"),
+            ("priority_score", "优先级"),
+            ("command", "命令"),
+            ("clear_when", "清除条件"),
         ],
     )
     impact_table = table_rows(
         impact_rows,
         [
-            ("lane", "Lane"),
-            ("symbol", "Symbol"),
-            ("action", "Action"),
-            ("impact_scope", "Impact Range"),
-            ("blocker_detail", "Blocker"),
-            ("done_when", "Done When"),
+            ("lane", "泳道"),
+            ("symbol", "标的"),
+            ("action", "动作"),
+            ("impact_scope", "影响范围"),
+            ("blocker_detail", "阻断详情"),
+            ("done_when", "完成条件"),
         ],
     )
     source_table = table_rows(
         source_rows,
         [
-            ("label", "Source"),
-            ("status", "Status"),
-            ("as_of", "As Of"),
-            ("brief", "Brief"),
-            ("artifact_brief", "Artifact"),
+            ("label", "源头"),
+            ("status", "状态"),
+            ("as_of", "时间点"),
+            ("brief", "摘要"),
+            ("artifact_brief", "工件"),
         ],
     )
     continuous_optimization_table = table_rows(
         continuous_optimization_rows,
         [
-            ("priority", "Priority"),
-            ("label", "Layer"),
-            ("title", "Title"),
-            ("target_artifact", "Target Artifact"),
-            ("source_status", "Current Status"),
-            ("interface_fields_brief", "Interface Fields"),
+            ("priority", "优先级"),
+            ("label", "层级"),
+            ("title", "标题"),
+            ("target_artifact", "目标工件"),
+            ("source_status", "当前状态"),
+            ("interface_fields_brief", "接口字段"),
         ],
     )
 
     return f"""<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fenlie Operator Task Visual Panel</title>
+    <title>Fenlie 运维任务可视化面板</title>
     <style>
       :root {{
         --bg: #0f1722;
@@ -1347,6 +1627,25 @@ def render_html(payload: dict[str, Any]) -> str:
         font-size: 13px;
         line-height: 1.4;
       }}
+      .value-stack {{
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }}
+      .value-primary {{
+        word-break: break-word;
+      }}
+      .value-raw {{
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+        word-break: break-word;
+      }}
+      .value-raw-compact {{
+        padding: 0;
+        background: transparent;
+      }}
       .state-waiting {{ box-shadow: inset 0 0 0 1px rgba(247,198,107,0.28); }}
       .state-review {{ box-shadow: inset 0 0 0 1px rgba(116,184,255,0.28); }}
       .state-watch {{ box-shadow: inset 0 0 0 1px rgba(182,185,195,0.22); }}
@@ -1447,52 +1746,53 @@ def render_html(payload: dict[str, Any]) -> str:
     <div class="page">
       <section class="hero">
         <div class="hero-main">
-          <div class="eyebrow">Fenlie Operator Window</div>
-          <h1>Task Visual Management Panel</h1>
+          <div class="eyebrow">Fenlie 运维窗口</div>
+          <h1>任务可视化管理面板</h1>
           <p class="hero-copy">
-            这块面板直接读当前交易系统的 source artifacts，重点展示三件事：
-            现在谁是全局 operator head，链路是怎样从 source 传到 action queue 的，以及当前动作会影响哪些 lane、gate 和下游判断。
+            这块面板直接读取当前交易系统的源头工件，重点展示三件事：
+            现在谁是全局运维主头，链路如何从源头传到动作队列，以及当前动作会影响哪些泳道、门禁与下游判断。
           </p>
           <div class="signal-strip">
-            <div class="chip">generated={html.escape(str(payload.get("generated_at_utc") or "-"))}</div>
-            <div class="chip">lane_order={html.escape(str(summary.get("lane_priority_order_brief") or "-"))}</div>
-            <div class="chip">crypto_refresh={html.escape(str(summary.get("crypto_refresh_reuse_brief") or "-"))}</div>
-            <div class="chip">remote_live={html.escape(str(summary.get("remote_live_diagnosis_brief") or "-"))}</div>
-            <div class="chip">brooks={html.escape(str(summary.get("brooks_refresh_brief") or "-"))}</div>
+            <div class="chip">{html_value(f"generated={safe_text(payload.get('generated_at_utc')) or '-'}", compact=True)}</div>
+            <div class="chip">{html_value(f"lane_order={safe_text(summary.get('lane_priority_order_brief')) or '-'}", compact=True)}</div>
+            <div class="chip">{html_value(f"crypto_refresh={safe_text(summary.get('crypto_refresh_reuse_brief')) or '-'}", compact=True)}</div>
+            <div class="chip">{html_value(f"remote_live={safe_text(summary.get('remote_live_diagnosis_brief')) or '-'}", compact=True)}</div>
+            <div class="chip">{html_value(f"clearing_required={safe_text(summary.get('remote_live_clearing_brief')) or '-'}", compact=True)}</div>
+            <div class="chip">{html_value(f"brooks={safe_text(summary.get('brooks_refresh_brief')) or '-'}", compact=True)}</div>
           </div>
         </div>
         <aside class="hero-side">
           <div class="hero-grid">
             <div class="hero-stat">
-              <div class="hero-stat-label">Operator Head</div>
-              <div class="hero-stat-value">{html.escape(str(summary.get("operator_head_brief") or "-"))}</div>
+              <div class="hero-stat-label">运维主头</div>
+              <div class="hero-stat-value">{html_value(summary.get("operator_head_brief") or "-", compact=True)}</div>
             </div>
             <div class="hero-stat">
-              <div class="hero-stat-label">Review Head</div>
-              <div class="hero-stat-value">{html.escape(str(summary.get("review_head_brief") or "-"))}</div>
+              <div class="hero-stat-label">评审主头</div>
+              <div class="hero-stat-value">{html_value(summary.get("review_head_brief") or "-", compact=True)}</div>
             </div>
             <div class="hero-stat">
-              <div class="hero-stat-label">Repair Head</div>
-              <div class="hero-stat-value">{html.escape(str(summary.get("repair_head_brief") or "-"))}</div>
+              <div class="hero-stat-label">修复主头</div>
+              <div class="hero-stat-value">{html_value(summary.get("repair_head_brief") or "-", compact=True)}</div>
             </div>
             <div class="hero-stat">
-              <div class="hero-stat-label">Remote Gate</div>
-              <div class="hero-stat-value">{html.escape(str(summary.get("remote_live_gate_brief") or "-"))}</div>
+              <div class="hero-stat-label">远端门禁</div>
+              <div class="hero-stat-value">{html_value(summary.get("remote_live_gate_brief") or "-", compact=True)}</div>
             </div>
           </div>
         </aside>
       </section>
 
       <section class="section">
-        <h2>Lane Pressure Board</h2>
+        <h2>泳道压强板</h2>
         <p class="section-lead">
-          这里不是虚构进度条，而是系统当前真实的任务负载分层。你能直接看到各 lane 的数量、总优先级和当前 head。
+          这里不是虚构进度条，而是系统当前真实的任务负载分层。你能直接看到各泳道的数量、总优先级与当前主头。
         </p>
         <div class="card-grid">{lane_cards_html}</div>
       </section>
 
       <section class="section">
-        <h2>Focus Slots</h2>
+        <h2>焦点槽位</h2>
         <p class="section-lead">
           顶层 `primary / followup / secondary` 槽位已经由 cross-market source 驱动。当前第三槽位是 Brooks 结构头，不再是旧的 crypto fallback。
         </p>
@@ -1500,7 +1800,7 @@ def render_html(payload: dict[str, Any]) -> str:
       </section>
 
       <section class="section">
-        <h2>OpenClaw Refactor Blueprint</h2>
+        <h2>OpenClaw 重构蓝图</h2>
         <p class="section-lead">
           这里显示云端 OpenClaw 当前生命阶段、目标阶段，以及最先要补的执行器官，避免云端执行重构继续停在孤立文档里。
         </p>
@@ -1508,15 +1808,15 @@ def render_html(payload: dict[str, Any]) -> str:
       </section>
 
       <section class="section">
-        <h2>Transmission Control Chain</h2>
+        <h2>传导控制链</h2>
         <p class="section-lead">
-          这组卡片直接来自 blueprint 的 source-owned control chain，按研究、信号、风控、执行、对账、复盘六层展示当前状态、下一目标和前端应消费的接口字段。
+          这组卡片直接来自蓝图的源头所有控制链，按研究、信号、风控、执行、对账、复盘六层展示当前状态、下一目标和前端应消费的接口字段。
         </p>
         <div class="card-grid">{control_chain_html}</div>
       </section>
 
       <section class="section">
-        <h2>Continuous Optimization Backlog</h2>
+        <h2>持续优化积压</h2>
         <p class="section-lead">
           持续优化不是口号，这里把传导控制链的长期优化任务落成待办节点，便于后续继续迭代而不丢接口契约。
         </p>
@@ -1524,7 +1824,7 @@ def render_html(payload: dict[str, Any]) -> str:
       </section>
 
       <section class="section">
-        <h2>Priority Repair Plan</h2>
+        <h2>优先修复计划</h2>
         <p class="section-lead">
           当前最高优先级环境修复已经有独立计划件。这里直接显示 plan brief、是否需要管理员权限，以及对应 artifact。
         </p>
@@ -1533,45 +1833,45 @@ def render_html(payload: dict[str, Any]) -> str:
 
       <section class="section split">
         <div>
-          <h2>Action Checklist</h2>
+          <h2>动作清单</h2>
           <p class="section-lead">这就是当前系统真正按顺序要看的动作队列。</p>
           {action_table}
         </div>
         <div>
-          <h2>Repair Queue</h2>
+          <h2>修复队列</h2>
           <p class="section-lead">远端 live 接管相关的修复项已经独立成 repair lane，并且能看到具体 command / clear_when。</p>
           {repair_table}
         </div>
       </section>
 
       <section class="section">
-        <h2>Chain Transmission</h2>
+        <h2>传导链图</h2>
         <p class="section-lead">
-          这张图不是理论架构图，而是当前 source 到 head 的真实传导。左边是 source layers，中间是 cross-market 聚合和 hot brief，右边是最终 heads 和 remote takeover gate。
+          这张图不是理论架构图，而是当前 source 到 head 的真实传导。左边是源头层，中间是跨市场聚合与热点摘要，右边是最终主头和远端接管门禁。
         </p>
         <div class="chain-shell">{render_chain_svg(chain)}</div>
       </section>
 
       <section class="section split">
         <div>
-          <h2>Impact Range</h2>
+          <h2>影响范围</h2>
           <p class="section-lead">
-            当前 head 不只是一个 symbol/action，它会继续影响 focus slots、action queue 排序、remote live clearing 和 review lane。
+            当前主头不只是一个 symbol/action，它会继续影响焦点槽位、动作队列排序、远端清障与评审泳道。
           </p>
           {impact_table}
         </div>
         <div>
-          <h2>Source Freshness</h2>
+          <h2>源头新鲜度</h2>
           <p class="section-lead">
-            所有可视化都直接指向 source artifact。你可以用这一栏快速判断当前页面是不是在读错版本、读旧版本，或者 source 本身是不是 stale。
+            所有可视化都直接指向源头工件。你可以用这一栏快速判断当前页面是否在读错版本、旧版本，或源头本身是否过期。
           </p>
           {source_table}
         </div>
       </section>
 
       <p class="footer-note">
-        Stable dashboard files are written to <code>{html.escape(str(payload.get("dashboard_dist") or "-"))}</code>.
-        Source audit files are stamped into <code>{html.escape(str(payload.get("review_dir") or "-"))}</code>.
+        稳定面板文件写入 <code>{html.escape(str(payload.get("dashboard_dist") or "-"))}</code>。
+        源头审计工件落在 <code>{html.escape(str(payload.get("review_dir") or "-"))}</code>。
       </p>
     </div>
   </body>
