@@ -6293,10 +6293,22 @@ class ReleaseOrchestrator:
                 > micro_capture_cross_source_fail_ratio_max
             )
 
+        def _micro_capture_degraded_countable(row: dict[str, Any]) -> bool:
+            if str(row.get("micro_capture_reason", "")) != "degraded":
+                return False
+            if int(self._safe_float(row.get("micro_capture_run_count", 0), 0)) <= 0:
+                return False
+            if not micro_capture_time_sync_enforced:
+                return True
+            if not bool(row.get("system_time_sync_active", False)):
+                return True
+            available_sources = int(self._safe_float(row.get("system_time_sync_available_sources", 0), 0))
+            return available_sources > 0
+
         micro_capture_degraded_days = sum(
             1
             for x in rows
-            if str(x.get("micro_capture_reason", "")) == "degraded" and _micro_capture_quality_failed(x)
+            if _micro_capture_degraded_countable(x)
         )
         micro_capture_insufficient_days = sum(
             1
