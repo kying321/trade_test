@@ -1,0 +1,152 @@
+{
+  "ui_routes": {
+    "frontend_dev": "http://127.0.0.1:5173",
+    "frontend_public": "https://fuuu.fun",
+    "frontend_pages": "https://fenlie.fuuu.fun",
+    "terminal_public": "#/terminal/public",
+    "terminal_internal": "#/terminal/internal",
+    "workspace_artifacts": "#/workspace/artifacts",
+    "workspace_backtests": "#/workspace/backtests",
+    "workspace_contracts": "#/workspace/contracts",
+    "workspace_raw": "#/workspace/raw",
+    "operator_panel": "/operator_task_visual_panel.html",
+    "snapshot_json": "/data/fenlie_dashboard_snapshot.json",
+    "snapshot_json_internal": "/data/fenlie_dashboard_internal_snapshot.json"
+  },
+  "interface_catalog": [
+    {
+      "id": "terminal_public",
+      "label": "公开终端",
+      "kind": "public",
+      "url_key": "terminal_public",
+      "description": "机构终端主入口（公开数据面）"
+    },
+    {
+      "id": "terminal_internal",
+      "label": "内部终端",
+      "kind": "local",
+      "url_key": "terminal_internal",
+      "description": "机构终端内部数据面（同前端双路由）"
+    },
+    {
+      "id": "workspace_artifacts",
+      "label": "工件工作区",
+      "kind": "local",
+      "url_key": "workspace_artifacts",
+      "description": "多层穿透工件浏览入口"
+    },
+    {
+      "id": "frontend_dev",
+      "label": "本地预览",
+      "kind": "local",
+      "url_key": "frontend_dev",
+      "description": "本地 Vite 预览入口"
+    },
+    {
+      "id": "frontend_public",
+      "label": "公开看板",
+      "kind": "public",
+      "url_key": "frontend_public",
+      "description": "Cloudflare 根域公开入口"
+    },
+    {
+      "id": "frontend_pages",
+      "label": "Pages 主入口",
+      "kind": "public",
+      "url_key": "frontend_pages",
+      "description": "Cloudflare Pages 部署地址"
+    },
+    {
+      "id": "operator_panel",
+      "label": "运维面板",
+      "kind": "local-static",
+      "url_key": "operator_panel",
+      "description": "只读 operator 监控面板"
+    },
+    {
+      "id": "snapshot_json",
+      "label": "快照 JSON",
+      "kind": "local-static",
+      "url_key": "snapshot_json",
+      "description": "前端快照源文件"
+    },
+    {
+      "id": "snapshot_json_internal",
+      "label": "内部快照 JSON",
+      "kind": "local-private",
+      "url_key": "snapshot_json_internal",
+      "description": "仅本地/私有环境保留的内部只读快照"
+    }
+  ],
+  "experience_contract": {
+    "mode": "read_only_snapshot",
+    "non_sensitive_only": true,
+    "live_path_touched": false,
+    "fallback_chain": [
+      "#/workspace/raw",
+      "/data/fenlie_dashboard_snapshot.json",
+      "/operator_task_visual_panel.html"
+    ]
+  },
+  "public_topology": [
+    {
+      "id": "fenlie_root",
+      "label": "Fenlie 主入口",
+      "role": "主公开入口",
+      "url_key": "frontend_public",
+      "expected_status": "200 / root-nav-proxy",
+      "source": "Cloudflare Worker route",
+      "fallback": "Pages 回退入口",
+      "notes": "根域现行入口，优先给外部使用。"
+    },
+    {
+      "id": "fenlie_pages",
+      "label": "Pages 回退入口",
+      "role": "公开回退入口",
+      "url_key": "frontend_pages",
+      "expected_status": "200 / pages origin",
+      "source": "Cloudflare Pages",
+      "fallback": "Fenlie 主入口",
+      "notes": "根域异常时可直接回退到 Pages。"
+    },
+    {
+      "id": "openclaw_legacy",
+      "label": "旧 OpenClaw",
+      "role": "旧控制页回退",
+      "url": "http://43.153.148.242:3001",
+      "expected_status": "200 / OpenClaw Control",
+      "source": "远端静态服务",
+      "fallback": "无",
+      "notes": "旧控制页已从根域迁出，目前保留端口入口。"
+    },
+    {
+      "id": "gateway_api",
+      "label": "gateway/API",
+      "role": "执行网关探针",
+      "url": "http://43.153.148.242:8787",
+      "expected_status": "404 / API root",
+      "source": "pi-openclaw.service",
+      "fallback": "无",
+      "notes": "当前是 API / gateway，不是前端页面。"
+    }
+  ],
+  "surface_contracts": {
+    "public": {
+      "label": "公开终端",
+      "route_key": "terminal_public",
+      "snapshot_path": "/data/fenlie_dashboard_snapshot.json",
+      "availability": "active",
+      "redaction_level": "public_summary"
+    },
+    "internal": {
+      "label": "内部终端",
+      "route_key": "terminal_internal",
+      "snapshot_path": "/data/fenlie_dashboard_internal_snapshot.json",
+      "availability": "local_only",
+      "redaction_level": "internal_local_only",
+      "fallback_snapshot_path": "/data/fenlie_dashboard_snapshot.json",
+      "deploy_policy": "strip_from_public_dist",
+      "notes": "内部快照只在本地/私有预览环境保留，公开发布前必须剥离。"
+    }
+  }
+}
