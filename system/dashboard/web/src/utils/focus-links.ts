@@ -8,13 +8,14 @@ export type TerminalFocusState = {
   row?: string;
 };
 
-export type WorkspaceSection = 'artifacts' | 'contracts' | 'raw' | 'backtests';
+export type WorkspaceSection = 'artifacts' | 'alignment' | 'contracts' | 'raw' | 'backtests';
 
 export type WorkspaceFocusState = {
   artifact?: string;
   domain?: string;
   tone?: string;
   search?: string;
+  search_scope?: string;
   group?: string;
   view?: string;
   symbol?: string;
@@ -37,6 +38,7 @@ export function buildTerminalLink(surface: SurfaceKey, focus: SharedFocusState =
     domain: focus.domain,
     tone: focus.tone,
     search: focus.search,
+    search_scope: focus.search_scope,
     panel: focus.panel,
     section: focus.section,
     row: focus.row,
@@ -54,6 +56,7 @@ export function buildWorkspaceLink(section: WorkspaceSection, focus: SharedFocus
     domain: focus.domain,
     tone: focus.tone,
     search: focus.search,
+    search_scope: focus.search_scope,
     panel: focus.panel,
     section: focus.section,
     row: focus.row,
@@ -63,6 +66,20 @@ export function buildWorkspaceLink(section: WorkspaceSection, focus: SharedFocus
     window: focus.window,
   });
   return `/workspace/${section}${qs ? `?${qs}` : ''}`;
+}
+
+export function buildWorkspacePageLink(
+  section: WorkspaceSection,
+  focus: SharedFocusState = {},
+  pageSection?: string,
+): string {
+  const href = buildWorkspaceLink(section, focus);
+  if (!pageSection) return href;
+  const [pathname, query = ''] = href.split('?');
+  const params = new URLSearchParams(query);
+  params.set('page_section', pageSection);
+  const nextQuery = params.toString();
+  return `${pathname}${nextQuery ? `?${nextQuery}` : ''}`;
 }
 
 const DEFAULT_ROW_IDENTITY_KEYS = ['id', 'slot', 'stage', 'label', 'symbol', 'action', 'target'];

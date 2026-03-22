@@ -5,6 +5,7 @@ export const SHARED_QUERY_KEYS = [
   'domain',
   'tone',
   'search',
+  'search_scope',
   'panel',
   'section',
   'row',
@@ -40,7 +41,7 @@ export function buildOpsLegacyLink(surface: 'public' | 'internal', focus: Shared
 }
 
 export function buildResearchLegacyLink(
-  section: 'artifacts' | 'backtests' | 'contracts' | 'raw',
+  section: 'artifacts' | 'alignment' | 'backtests' | 'contracts' | 'raw',
   focus: SharedQueryState = {},
 ): string {
   return buildPreservedLink(`/workspace/${section}`, focus);
