@@ -5550,7 +5550,47 @@ class ReleaseOrchestrator:
             system_time_sync_inactive_days = sum(
                 1 for x in rows if not bool(x.get("system_time_sync_active", False))
             )
-        micro_capture_degraded_days = sum(1 for x in rows if str(x.get("micro_capture_reason", "")) == "degraded")
+        def _micro_capture_time_sync_quality_failed(row: dict[str, Any]) -> bool:
+            if not micro_capture_time_sync_enforced:
+                return False
+            if not bool(row.get("system_time_sync_active", False)):
+                return False
+            available_sources = int(self._safe_float(row.get("system_time_sync_available_sources", 0), 0))
+            if available_sources <= 0:
+                return False
+            return (
+                self._safe_float(row.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0)
+                < micro_capture_time_sync_ok_ratio_min
+            )
+
+        def _micro_capture_quality_failed(row: dict[str, Any]) -> bool:
+            if int(self._safe_float(row.get("micro_capture_run_count", 0), 0)) <= 0:
+                return False
+            return bool(
+                self._safe_float(row.get("micro_capture_pass_ratio", 0.0), 0.0) < micro_capture_pass_ratio_min
+                or self._safe_float(row.get("micro_capture_schema_ok_ratio", 0.0), 0.0) < micro_capture_schema_ok_ratio_min
+                or _micro_capture_time_sync_quality_failed(row)
+                or self._safe_float(row.get("micro_capture_cross_source_fail_ratio", 0.0), 0.0)
+                > micro_capture_cross_source_fail_ratio_max
+            )
+
+        def _micro_capture_degraded_countable(row: dict[str, Any]) -> bool:
+            if str(row.get("micro_capture_reason", "")) != "degraded":
+                return False
+            if int(self._safe_float(row.get("micro_capture_run_count", 0), 0)) <= 0:
+                return False
+            if not micro_capture_time_sync_enforced:
+                return True
+            if not bool(row.get("system_time_sync_active", False)):
+                return True
+            available_sources = int(self._safe_float(row.get("system_time_sync_available_sources", 0), 0))
+            return available_sources > 0
+
+        micro_capture_degraded_days = sum(
+            1
+            for x in rows
+            if _micro_capture_degraded_countable(x)
+        )
         micro_capture_insufficient_days = sum(
             1
             for x in rows
@@ -5559,17 +5599,7 @@ class ReleaseOrchestrator:
         micro_capture_quality_fail_days = sum(
             1
             for x in rows
-            if int(self._safe_float(x.get("micro_capture_run_count", 0), 0)) > 0
-            and (
-                self._safe_float(x.get("micro_capture_pass_ratio", 0.0), 0.0) < micro_capture_pass_ratio_min
-                or self._safe_float(x.get("micro_capture_schema_ok_ratio", 0.0), 0.0) < micro_capture_schema_ok_ratio_min
-                or (
-                    micro_capture_time_sync_enforced
-                    and self._safe_float(x.get("micro_capture_time_sync_ok_ratio", 0.0), 0.0) < micro_capture_time_sync_ok_ratio_min
-                )
-                or self._safe_float(x.get("micro_capture_cross_source_fail_ratio", 0.0), 0.0)
-                > micro_capture_cross_source_fail_ratio_max
-            )
+            if _micro_capture_quality_failed(x)
         )
 
         switch_count = 0
