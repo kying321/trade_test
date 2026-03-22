@@ -1,0 +1,164 @@
+{
+  "artifact_selection": [
+    {
+      "id": "operator_panel",
+      "artifact_group": "system_anchor",
+      "category": "operator-panel",
+      "path_mode": "operator_panel_auto"
+    },
+    {
+      "id": "system_scheduler_state",
+      "artifact_group": "system_anchor",
+      "category": "orchestration",
+      "path_mode": "workspace_path",
+      "value": "system/output/logs/scheduler_state.json"
+    },
+    {
+      "id": "architecture_audit",
+      "artifact_group": "system_anchor",
+      "category": "orchestration",
+      "path_mode": "review_path",
+      "value": "2026-02-22_architecture_audit.json"
+    },
+    {
+      "id": "dependency_audit",
+      "artifact_group": "system_anchor",
+      "category": "orchestration",
+      "path_mode": "review_path",
+      "value": "2026-02-22_dependency_audit.json"
+    },
+    {
+      "id": "mode_stress_matrix",
+      "artifact_group": "system_anchor",
+      "category": "data-regime",
+      "path_mode": "review_path",
+      "value": "2026-02-28_mode_stress_matrix.json"
+    },
+    {
+      "id": "recent_strategy_backtests",
+      "artifact_group": "system_anchor",
+      "category": "backtest",
+      "path_mode": "latest_review_suffix",
+      "value": "recent_strategy_backtest_comparison_report.json"
+    },
+    {
+      "id": "backtest_snapshot",
+      "artifact_group": "system_anchor",
+      "category": "backtest",
+      "path_mode": "latest_review_suffix",
+      "value": "backtest_snapshot_breakdown.json"
+    },
+    {
+      "id": "dashboard_public_acceptance",
+      "artifact_group": "system_anchor",
+      "category": "orchestration",
+      "path_mode": "latest_review_suffix",
+      "value": "dashboard_public_acceptance.json"
+    },
+    {
+      "id": "price_action_breakout_pullback",
+      "artifact_group": "research_mainline",
+      "category": "sim-only",
+      "path_mode": "latest_review_suffix",
+      "value": "price_action_breakout_pullback_sim_only.json"
+    },
+    {
+      "id": "price_action_exit_risk",
+      "artifact_group": "research_mainline",
+      "category": "sim-only",
+      "path_mode": "latest_review_suffix",
+      "value": "price_action_breakout_pullback_exit_risk_sim_only.json"
+    },
+    {
+      "id": "price_action_exit_hold_robustness",
+      "artifact_group": "research_exit_risk",
+      "category": "sim-only",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_exit_hold_robustness_sim_only.json"
+    },
+    {
+      "id": "price_action_exit_rider_triage",
+      "artifact_group": "research_exit_risk",
+      "category": "sim-only",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_exit_rider_triage_sim_only.json"
+    },
+    {
+      "id": "hold_selection_handoff",
+      "artifact_group": "research_hold_transfer",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_hold_selection_handoff_sim_only.json"
+    },
+    {
+      "id": "hold_selection_gate",
+      "artifact_group": "research_hold_transfer",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_hold_selection_gate_blocker_report_sim_only.json"
+    },
+    {
+      "id": "hold_family_transfer",
+      "artifact_group": "research_hold_transfer",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_hold_family_transfer_challenge_sim_only.json"
+    },
+    {
+      "id": "hold_router_transfer",
+      "artifact_group": "research_hold_transfer",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_hold_router_transfer_challenge_sim_only.json"
+    },
+    {
+      "id": "hold_frontier_report",
+      "artifact_group": "research_hold_transfer",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_hold_frontier_report_sim_only.json"
+    },
+    {
+      "id": "hold_frontier_cost_sensitivity",
+      "artifact_group": "research_hold_transfer",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_hold_frontier_cost_sensitivity_sim_only.json"
+    },
+    {
+      "id": "hold_candidate_divergence",
+      "artifact_group": "research_hold_transfer",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_price_action_breakout_pullback_hold_candidate_divergence_casebook_sim_only.json"
+    },
+    {
+      "id": "geometry_delta_breakout",
+      "artifact_group": "research_cross_section",
+      "category": "sim-only",
+      "path_mode": "latest_review_suffix",
+      "value": "geometry_delta_breakout_sim_only.json"
+    },
+    {
+      "id": "cross_section_backtest",
+      "artifact_group": "research_cross_section",
+      "category": "backtest",
+      "path_mode": "latest_review_suffix",
+      "value": "crypto_shortline_cross_section_backtest.json"
+    },
+    {
+      "id": "intraday_orderflow_blueprint",
+      "artifact_group": "research_cross_section",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_intraday_orderflow_blueprint.json"
+    },
+    {
+      "id": "intraday_orderflow_research_gate_blocker",
+      "artifact_group": "research_cross_section",
+      "category": "research",
+      "path_mode": "review_path",
+      "value": "latest_intraday_orderflow_research_gate_blocker_report.json"
+    }
+  ]
+}

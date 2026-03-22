@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+
+SCRIPT_PATH = Path(
+    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_operator_panel_refresh.py"
+)
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("run_operator_panel_refresh_script", SCRIPT_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_run_json_rejects_non_mapping_payload(monkeypatch) -> None:
+    mod = load_module()
+
+    class DummyProc:
+        returncode = 0
+        stdout = '["not-a-mapping"]\n'
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: DummyProc())
+
+    with pytest.raises(RuntimeError, match="demo_invalid_payload"):
+        mod.run_json(name="demo", cmd=["python3", "fake.py"])
+
+
+def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp_path: Path, capsys) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    system_root = workspace / "system"
+    dashboard_root = system_root / "dashboard" / "web"
+    public_dir = dashboard_root / "public"
+    dist_dir = dashboard_root / "dist"
+    review_dir = system_root / "output" / "review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+
+    seen_cmds: dict[str, list[str]] = {}
+
+    def fake_run_json(*, name: str, cmd: list[str]) -> dict:
+        seen_cmds[name] = list(cmd)
+        public_dir.mkdir(parents=True, exist_ok=True)
+        (public_dir / "data").mkdir(parents=True, exist_ok=True)
+
+        if name == "build_operator_task_visual_panel":
+            (public_dir / "operator_task_visual_panel.html").write_text(
+                "<html><body>panel</body></html>\n",
+                encoding="utf-8",
+            )
+            (public_dir / "operator_task_visual_panel_data.json").write_text(
+                json.dumps({"summary": {"operator_head_brief": "ETH"}}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "artifact": str(review_dir / "20260321T084000Z_operator_task_visual_panel.json"),
+                "html": str(review_dir / "20260321T084000Z_operator_task_visual_panel.html"),
+                "summary": {
+                    "operator_head_brief": "ETHUSDT:wait_for_pullback",
+                    "review_head_brief": "review:hold16_anchor",
+                    "repair_head_brief": "repair:none",
+                    "remote_live_gate_brief": "remote_live:not_applicable",
+                    "lane_state_brief": "lanes:stable",
+                    "lane_priority_order_brief": "ETHUSDT>BNBUSDT",
+                    "action_queue_brief": "queue:empty",
+                    "crypto_refresh_reuse_brief": "crypto_refresh:reuse_ok",
+                    "remote_live_history_brief": "remote_history:n/a",
+                    "brooks_refresh_brief": "brooks:ok",
+                },
+            }
+        if name == "build_conversation_feedback_projection_internal":
+            return {
+                "artifact": str(review_dir / "20260321T084000Z_conversation_feedback_projection_internal.json"),
+                "latest_artifact": str(review_dir / "latest_conversation_feedback_projection_internal.json"),
+                "status": "ok",
+            }
+        if name == "build_dashboard_frontend_snapshot":
+            (public_dir / "data" / "fenlie_dashboard_snapshot.json").write_text(
+                json.dumps({"surface": "public"}) + "\n",
+                encoding="utf-8",
+            )
+            (public_dir / "data" / "fenlie_dashboard_internal_snapshot.json").write_text(
+                json.dumps({"surface": "internal"}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "outputs": [
+                    str(public_dir / "data" / "fenlie_dashboard_snapshot.json"),
+                    str(public_dir / "data" / "fenlie_dashboard_internal_snapshot.json"),
+                ]
+            }
+        raise AssertionError(name)
+
+    monkeypatch.setattr(mod, "run_json", fake_run_json)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_operator_panel_refresh.py",
+            "--workspace",
+            str(workspace),
+            "--now",
+            "2026-03-21T08:40:00Z",
+        ],
+    )
+
+    mod.main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["ok"] is True
+    assert payload["mode"] == "operator_panel_refresh"
+    assert payload["operator_head_brief"] == "ETHUSDT:wait_for_pullback"
+    assert payload["review_head_brief"] == "review:hold16_anchor"
+    assert payload["lane_priority_order_brief"] == "ETHUSDT>BNBUSDT"
+    assert payload["snapshot_outputs"] == [
+        str(public_dir / "data" / "fenlie_dashboard_snapshot.json"),
+        str(public_dir / "data" / "fenlie_dashboard_internal_snapshot.json"),
+    ]
+    assert Path(payload["panel_dist_html"]).read_text(encoding="utf-8") == "<html><body>panel</body></html>\n"
+    assert json.loads(Path(payload["panel_dist_json"]).read_text(encoding="utf-8")) == {
+        "summary": {"operator_head_brief": "ETH"}
+    }
+    assert json.loads(Path(payload["snapshot_dist"]).read_text(encoding="utf-8")) == {"surface": "public"}
+    assert json.loads(Path(payload["snapshot_internal_dist"]).read_text(encoding="utf-8")) == {
+        "surface": "internal"
+    }
+    assert all(row["copied"] is True for row in payload["sync_results"])
+    assert seen_cmds["build_operator_task_visual_panel"] == [
+        "python3",
+        str(system_root / "scripts" / "build_operator_task_visual_panel.py"),
+        "--review-dir",
+        str(review_dir),
+        "--dashboard-dist",
+        str(public_dir),
+        "--now",
+        "2026-03-21T08:40:00Z",
+    ]
+    assert seen_cmds["build_dashboard_frontend_snapshot"] == [
+        "python3",
+        str(system_root / "scripts" / "build_dashboard_frontend_snapshot.py"),
+        "--workspace",
+        str(workspace),
+        "--public-dir",
+        str(public_dir),
+    ]
+    assert seen_cmds["build_conversation_feedback_projection_internal"] == [
+        "python3",
+        str(system_root / "scripts" / "build_conversation_feedback_projection_internal.py"),
+        "--review-dir",
+        str(review_dir),
+        "--now",
+        "2026-03-21T08:40:00Z",
+    ]
