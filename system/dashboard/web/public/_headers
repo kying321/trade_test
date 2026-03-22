@@ -1,0 +1,16 @@
+/*
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/data/*
+  Cache-Control: no-cache
+
+/operator_task_visual_panel.html
+  Cache-Control: no-cache
+
+/operator_task_visual_panel_data.json
+  Cache-Control: no-cache
