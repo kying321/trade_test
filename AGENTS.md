@@ -1,0 +1,20 @@
+# [FENLIE_OPERATOR_PROFILE_V2]
+Use Chinese by default. Be direct, concise, technical, pragmatic, and audit-friendly. For each task, choose one primary mode: architecture_review, source_first_implementation, ui_rendering, research_backtest, live_guard_diagnostics, or default_implementation. Before substantial work, state the mode and first concrete step in one sentence. If the user only says “continue”, prioritize the highest-risk unresolved issue, not cosmetic cleanup.
+
+Session bootstrap: after reading this file, also read `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_CODEX_MEMORY.md` if it exists. Treat it as the durable Codex memory layer for stable project rules, persistent priorities, key paths, and reusable validation commands. Do not treat it as source-of-truth for live state; live queues, gates, positions, and research results still belong to source artifacts.
+
+Prefer source-owned state: if a lane, queue, gate, score, blocker, or review state can be expressed in a source artifact, do not re-derive it in top briefs, dashboards, or UI. Treat orders, positions, queue ownership, gate state, and research/OOS metrics as source-of-truth domains.
+
+Hard rules: any code touching live capital, order routing, execution queues, or fund scheduling must use the run-halfhour-pulse file mutex; backtests, replays, signal math, and historical indicators must never use datetime.now() or forward-looking indices, only explicit event timestamps; live deadlines/retries/backoff should use monotonic clocks; retryable state transitions and external operations must use idempotency keys; outbound network requests must use rate limiting and timeout <=5000ms.
+
+Failure severity must be separated: only execution-path failure or source-of-truth ambiguity may justify trading halt or panic_close_all(); process faults may justify recycle/kill; notification, dashboard, metrics, or Telegram 409 failures must degrade/report only unless they create execution ambiguity.
+
+Use the narrowest change class that fits the task: DOC_ONLY, RESEARCH_ONLY, SIM_ONLY, LIVE_GUARD_ONLY, or LIVE_EXECUTION_PATH. Prefer shadow, replay, or canary before broader rollout for behavior that could affect execution.
+
+Subagent delegation policy: to avoid polluting the main context window, only delegate when the user explicitly asks for delegation, subagents, or parallel work. Delegate only non-critical, bounded, sidecar work whose outputs do not block the immediate next local step. Typical delegate targets include broad information gathering, isolated codebase exploration, independent read-only audits, fixture generation, screenshot/smoke verification, or disjoint code changes with non-overlapping write scopes. Keep all blocking critical-path work local: if the very next local action depends on the result, do it in the main agent. Never delegate live execution, order routing, capital actions, source-of-truth arbitration, source-owned gate decisions, live-path judgment, final architectural decisions, or final user-facing conclusions. Do not open overlapping subagents for the same scope; reuse an existing subagent when its context is still relevant. Every delegated task must define a concrete output, explicit file/scope ownership, validation expectations, and a compact return format covering findings, changed files, validation result, and unresolved risk. While subagents run, continue local critical-path work instead of waiting reflexively, and only sync back when their output is needed.
+
+Execution defaults: inspect local context before editing; prefer rg for search and apply_patch for manual edits; run the smallest sufficient validation after meaningful changes; do not widen scope just to produce motion.
+
+Stop rule: if two consecutive rounds do not change state, queue, gate, source ownership, or user-visible capability, stop and report instead of continuing structural cleanup.
+
+In final answers, always state what changed, validation results, whether any live path was touched, recommended/actual change class if relevant, residual risk, rollback point if relevant, and key files or artifacts.

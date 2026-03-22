@@ -61,6 +61,39 @@ scripts/openclaw_cloud_bridge.sh ensure-whitelist-gate
 - `127.0.0.1:18000` -> cloud `127.0.0.1:8000` (api)
 - `127.0.0.1:15173` -> cloud `127.0.0.1:5173` (dashboard)
 
+## Cloud 9999 adaptor runtime source-of-truth (2026-03-19)
+- 云端运行模型：
+  - `~/.openclaw/openclaw.json`
+  - `agents.defaults.model.primary = openai/gpt-5.4`
+  - `models.providers.openai.baseUrl = http://127.0.0.1:9999/v1`
+- 云端 9999 实际监听服务：
+  - systemd: `pi-adaptor.service`
+  - process: `/usr/bin/node /home/ubuntu/adaptor.js`
+- 当前上游 key 路由 source-of-truth：
+  - `/home/ubuntu/adaptor.js`
+  - `/home/ubuntu/.openclaw/.env`
+- 当前 policy：
+  - `GET /v1/models` 固定使用 key pool 第 1 把
+  - `POST` 请求按 `NEWAPI_API_KEYS` 做 request-level round-robin
+  - 若 `NEWAPI_API_KEYS` 缺失，才 fallback 到 `NEWAPI_API_KEY` / `X666_API_KEY` / `OPENAI_API_KEY`
+- 当前已验证的 key pool 目标：
+  - `sk-MOc...Z7rf`
+  - `sk-VOB...AgSX`
+- 当前 smoke-check 证据：
+  - `journalctl -u pi-adaptor.service`
+    - `KeyPool loaded 2 upstream key(s) from env chain`
+  - `/tmp/proxy_debug.log`
+    - 最近请求应出现 `key_slot=1/2 -> 2/2 -> 1/2 -> 2/2`
+- 当前直接回滚：
+```bash
+cp /home/ubuntu/adaptor.js.bak_20260319T063533Z /home/ubuntu/adaptor.js
+cp /home/ubuntu/.openclaw/.env.bak_20260319T063800Z /home/ubuntu/.openclaw/.env
+sudo systemctl restart pi-adaptor.service
+```
+- 说明：
+  - `openclaw.json` 中 legacy provider `apiKey` 字段仍可能存在，但不再是 9999 上游轮询的 source-of-truth
+  - 9999 上游轮询以 `adaptor.js + ~/.openclaw/.env` 为准
+
 ## Live takeover (Binance + evoMap)
 - 远端执行（不下单，仅激活配置/策略/成交回流探测）：
 ```bash
