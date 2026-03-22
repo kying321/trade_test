@@ -128,15 +128,14 @@ def build_frontier_rows(
     agg_ret = dict(overall.get("aggregate_return_scheme_wins") or {})
     agg_obj = dict(overall.get("aggregate_objective_scheme_wins") or {})
     robust_summary = dict(hold_robustness_payload.get("overall_summary") or {})
-    return [
+    rows = [
         {
             "config_id": "hold16_zero",
             "role": "baseline_anchor",
             "why": (
                 "旧 source artifact 仍以 hold16 为 baseline；"
-                f"unique_slice_return_wins={to_int(unique_ret.get('hold16_zero'), 0)},"
-                f"unique_slice_objective_wins={to_int(unique_obj.get('hold16_zero'), 0)}，"
-                "说明它仍保留局部一致性锚点。"
+                f"aggregate_wins(return/objective)=({to_int(agg_ret.get('hold16_zero'), 0)}/{to_int(agg_obj.get('hold16_zero'), 0)})，"
+                f"unique_slice_wins(return/objective)=({to_int(unique_ret.get('hold16_zero'), 0)}/{to_int(unique_obj.get('hold16_zero'), 0)})。"
             ),
             "evidence": {
                 "aggregate_return_scheme_wins": to_int(agg_ret.get("hold16_zero"), 0),
@@ -146,41 +145,121 @@ def build_frontier_rows(
                 "legacy_hold_robustness_decision": text(hold_robustness_payload.get("research_decision")),
             },
             "average_objective_terms": dict(average_terms.get("hold16_zero") or {}),
-        },
-        {
-            "config_id": "hold8_zero",
-            "role": "objective_leader_candidate",
-            "why": (
-                f"aggregate_objective_scheme_wins={to_int(agg_obj.get('hold8_zero'), 0)} / {to_int(overall.get('grid_count'), 0)}，"
-                f"且 unique_slice_wins(return/objective)=({to_int(unique_ret.get('hold8_zero'), 0)}/{to_int(unique_obj.get('hold8_zero'), 0)})；"
-                "它是当前最强的 objective 候选。"
-            ),
-            "evidence": {
-                "aggregate_return_scheme_wins": to_int(agg_ret.get("hold8_zero"), 0),
-                "aggregate_objective_scheme_wins": to_int(agg_obj.get("hold8_zero"), 0),
-                "unique_slice_return_wins_total": to_int(unique_ret.get("hold8_zero"), 0),
-                "unique_slice_objective_wins_total": to_int(unique_obj.get("hold8_zero"), 0),
-                "legacy_hold_robustness_agg8": to_int((robust_summary.get("aggregate_return_scheme_wins") or {}).get("hold_8_zero_risk"), 0),
-            },
-            "average_objective_terms": dict(average_terms.get("hold8_zero") or {}),
-        },
-        {
-            "config_id": "hold24_zero",
-            "role": "return_leader_candidate",
-            "why": (
-                f"aggregate_return_scheme_wins={to_int(agg_ret.get('hold24_zero'), 0)} / {to_int(overall.get('grid_count'), 0)}，"
-                f"且 unique_slice_wins(return/objective)=({to_int(unique_ret.get('hold24_zero'), 0)}/{to_int(unique_obj.get('hold24_zero'), 0)})；"
-                "它是当前最强的收益聚合候选。"
-            ),
-            "evidence": {
-                "aggregate_return_scheme_wins": to_int(agg_ret.get("hold24_zero"), 0),
-                "aggregate_objective_scheme_wins": to_int(agg_obj.get("hold24_zero"), 0),
-                "unique_slice_return_wins_total": to_int(unique_ret.get("hold24_zero"), 0),
-                "unique_slice_objective_wins_total": to_int(unique_obj.get("hold24_zero"), 0),
-            },
-            "average_objective_terms": dict(average_terms.get("hold24_zero") or {}),
-        },
+        }
     ]
+
+    hold8_agg_obj = to_int(agg_obj.get("hold8_zero"), 0)
+    hold8_unique_signal = max(to_int(unique_ret.get("hold8_zero"), 0), to_int(unique_obj.get("hold8_zero"), 0))
+    if hold8_agg_obj > 0:
+        rows.append(
+            {
+                "config_id": "hold8_zero",
+                "role": "objective_leader_candidate",
+                "why": (
+                    f"aggregate_objective_scheme_wins={hold8_agg_obj} / {to_int(overall.get('grid_count'), 0)}，"
+                    f"且 unique_slice_wins(return/objective)=({to_int(unique_ret.get('hold8_zero'), 0)}/{to_int(unique_obj.get('hold8_zero'), 0)})；"
+                    "它在当前窗口里仍是 objective 候选。"
+                ),
+                "evidence": {
+                    "aggregate_return_scheme_wins": to_int(agg_ret.get("hold8_zero"), 0),
+                    "aggregate_objective_scheme_wins": hold8_agg_obj,
+                    "unique_slice_return_wins_total": to_int(unique_ret.get("hold8_zero"), 0),
+                    "unique_slice_objective_wins_total": to_int(unique_obj.get("hold8_zero"), 0),
+                    "legacy_hold_robustness_agg8": to_int((robust_summary.get("aggregate_return_scheme_wins") or {}).get("hold_8_zero_risk"), 0),
+                },
+                "average_objective_terms": dict(average_terms.get("hold8_zero") or {}),
+            }
+        )
+    elif hold8_unique_signal > 0:
+        rows.append(
+            {
+                "config_id": "hold8_zero",
+                "role": "objective_watch_candidate",
+                "why": (
+                    f"aggregate_objective_scheme_wins=0，但 unique_slice_wins(return/objective)="
+                    f"({to_int(unique_ret.get('hold8_zero'), 0)}/{to_int(unique_obj.get('hold8_zero'), 0)})；"
+                    "它只能保留为 slice-level watch，不应直接升格为 leader candidate。"
+                ),
+                "evidence": {
+                    "aggregate_return_scheme_wins": to_int(agg_ret.get("hold8_zero"), 0),
+                    "aggregate_objective_scheme_wins": 0,
+                    "unique_slice_return_wins_total": to_int(unique_ret.get("hold8_zero"), 0),
+                    "unique_slice_objective_wins_total": to_int(unique_obj.get("hold8_zero"), 0),
+                    "legacy_hold_robustness_agg8": to_int((robust_summary.get("aggregate_return_scheme_wins") or {}).get("hold_8_zero_risk"), 0),
+                },
+                "average_objective_terms": dict(average_terms.get("hold8_zero") or {}),
+            }
+        )
+
+    hold24_agg_ret = to_int(agg_ret.get("hold24_zero"), 0)
+    hold24_unique_signal = max(to_int(unique_ret.get("hold24_zero"), 0), to_int(unique_obj.get("hold24_zero"), 0))
+    if hold24_agg_ret > 0:
+        rows.append(
+            {
+                "config_id": "hold24_zero",
+                "role": "return_leader_candidate",
+                "why": (
+                    f"aggregate_return_scheme_wins={hold24_agg_ret} / {to_int(overall.get('grid_count'), 0)}，"
+                    f"且 unique_slice_wins(return/objective)=({to_int(unique_ret.get('hold24_zero'), 0)}/{to_int(unique_obj.get('hold24_zero'), 0)})；"
+                    "它在当前窗口里仍是收益聚合候选。"
+                ),
+                "evidence": {
+                    "aggregate_return_scheme_wins": hold24_agg_ret,
+                    "aggregate_objective_scheme_wins": to_int(agg_obj.get("hold24_zero"), 0),
+                    "unique_slice_return_wins_total": to_int(unique_ret.get("hold24_zero"), 0),
+                    "unique_slice_objective_wins_total": to_int(unique_obj.get("hold24_zero"), 0),
+                },
+                "average_objective_terms": dict(average_terms.get("hold24_zero") or {}),
+            }
+        )
+    elif hold24_unique_signal > 0:
+        rows.append(
+            {
+                "config_id": "hold24_zero",
+                "role": "return_watch_candidate",
+                "why": (
+                    f"aggregate_return_scheme_wins=0，但 unique_slice_wins(return/objective)="
+                    f"({to_int(unique_ret.get('hold24_zero'), 0)}/{to_int(unique_obj.get('hold24_zero'), 0)})；"
+                    "它只能保留为收益观察项，不应直接升格为 return leader。"
+                ),
+                "evidence": {
+                    "aggregate_return_scheme_wins": 0,
+                    "aggregate_objective_scheme_wins": to_int(agg_obj.get("hold24_zero"), 0),
+                    "unique_slice_return_wins_total": to_int(unique_ret.get("hold24_zero"), 0),
+                    "unique_slice_objective_wins_total": to_int(unique_obj.get("hold24_zero"), 0),
+                },
+                "average_objective_terms": dict(average_terms.get("hold24_zero") or {}),
+            }
+        )
+
+    hold12_signal = max(
+        to_int(agg_ret.get("hold12_zero"), 0),
+        to_int(agg_obj.get("hold12_zero"), 0),
+        to_int(unique_ret.get("hold12_zero"), 0),
+        to_int(unique_obj.get("hold12_zero"), 0),
+    )
+    if hold12_signal > 0:
+        rows.append(
+            {
+                "config_id": "hold12_zero",
+                "role": "transfer_watch_candidate",
+                "why": (
+                    f"hold12 仍保留 evidence：aggregate_wins(return/objective)="
+                    f"({to_int(agg_ret.get('hold12_zero'), 0)}/{to_int(agg_obj.get('hold12_zero'), 0)})，"
+                    f"unique_slice_wins(return/objective)=({to_int(unique_ret.get('hold12_zero'), 0)}/{to_int(unique_obj.get('hold12_zero'), 0)})；"
+                    "因此只能降级为 transfer-watch，不能直接全局删除。"
+                ),
+                "evidence": {
+                    "aggregate_return_scheme_wins": to_int(agg_ret.get("hold12_zero"), 0),
+                    "aggregate_objective_scheme_wins": to_int(agg_obj.get("hold12_zero"), 0),
+                    "unique_slice_return_wins_total": to_int(unique_ret.get("hold12_zero"), 0),
+                    "unique_slice_objective_wins_total": to_int(unique_obj.get("hold12_zero"), 0),
+                },
+                "average_objective_terms": dict(average_terms.get("hold12_zero") or {}),
+            }
+        )
+
+    return rows
 
 
 def build_dropped_rows(
@@ -192,14 +271,24 @@ def build_dropped_rows(
     unique_ret = dict(overall.get("unique_slice_return_wins_total") or {})
     unique_obj = dict(overall.get("unique_slice_objective_wins_total") or {})
     rider_rows = {text(row.get("candidate_id")): row for row in (rider_triage_payload.get("triage_summary") or {}).get("candidate_vs_baseline", [])}
-    return [
-        {
-            "config_id": "hold12_zero",
-            "reason": (
-                f"hold12 在纯 hold 家族里 unique_slice_return_wins={to_int(unique_ret.get('hold12_zero'), 0)}，"
-                f"unique_slice_objective_wins={to_int(unique_obj.get('hold12_zero'), 0)}；当前没有保留价值。"
-            ),
-        },
+    rows: list[dict[str, Any]] = []
+    hold12_signal = max(
+        to_int((overall.get("aggregate_return_scheme_wins") or {}).get("hold12_zero"), 0),
+        to_int((overall.get("aggregate_objective_scheme_wins") or {}).get("hold12_zero"), 0),
+        to_int(unique_ret.get("hold12_zero"), 0),
+        to_int(unique_obj.get("hold12_zero"), 0),
+    )
+    if hold12_signal == 0:
+        rows.append(
+            {
+                "config_id": "hold12_zero",
+                "reason": (
+                    f"hold12 在纯 hold 家族里 unique_slice_return_wins={to_int(unique_ret.get('hold12_zero'), 0)}，"
+                    f"unique_slice_objective_wins={to_int(unique_obj.get('hold12_zero'), 0)}；当前没有保留价值。"
+                ),
+            }
+        )
+    rows.extend([
         {
             "config_id": "hold16_be075",
             "reason": (
@@ -221,7 +310,50 @@ def build_dropped_rows(
                 f"{bool((rider_rows.get('hold16_cd2x16') or {}).get('exact_metric_match_to_baseline_all_grids'))}。"
             ),
         },
-    ]
+    ])
+    return rows
+
+
+def classify_frontier_research_decision(frontier_rows: list[dict[str, Any]]) -> str:
+    row_map = {text(row.get("config_id")): row for row in frontier_rows}
+    hold8_role = text((row_map.get("hold8_zero") or {}).get("role"))
+    hold24_role = text((row_map.get("hold24_zero") or {}).get("role"))
+    hold12_role = text((row_map.get("hold12_zero") or {}).get("role"))
+    if hold8_role == "objective_leader_candidate" and hold24_role == "return_leader_candidate":
+        return "freeze_hold16_baseline_with_dual_candidates_hold8_objective_hold24_return"
+    if hold12_role == "transfer_watch_candidate" and not hold24_role:
+        return "hold16_baseline_reinforced_transfer_watch_only"
+    if hold8_role or hold24_role or hold12_role:
+        return "hold16_baseline_reinforced_candidates_mixed"
+    return "hold16_baseline_only_no_active_candidates"
+
+
+def build_recommended_brief(
+    *,
+    symbol: str,
+    selection_scenario_id: str,
+    source_head_status: str,
+    research_decision: str,
+    frontier_rows: list[dict[str, Any]],
+) -> str:
+    row_map = {text(row.get("config_id")): row for row in frontier_rows}
+    objective_candidate = "hold8_zero" if text((row_map.get("hold8_zero") or {}).get("role")) == "objective_leader_candidate" else "none"
+    objective_watch = "hold8_zero" if text((row_map.get("hold8_zero") or {}).get("role")) == "objective_watch_candidate" else "none"
+    return_candidate = "hold24_zero" if text((row_map.get("hold24_zero") or {}).get("role")) == "return_leader_candidate" else "none"
+    return_watch = "hold24_zero" if text((row_map.get("hold24_zero") or {}).get("role")) == "return_watch_candidate" else "none"
+    transfer_watch = "hold12_zero" if text((row_map.get("hold12_zero") or {}).get("role")) == "transfer_watch_candidate" else "none"
+    return (
+        f"{symbol}:hold_frontier:{selection_scenario_id}:"
+        "baseline=hold16_zero,"
+        f"objective_candidate={objective_candidate},"
+        f"objective_watch={objective_watch},"
+        f"return_candidate={return_candidate},"
+        f"return_watch={return_watch},"
+        f"transfer_watch={transfer_watch},"
+        "drop=hold16_be075,hold16_trail15,hold16_cd2x16,"
+        f"head_status={source_head_status},"
+        f"decision={research_decision}"
+    )
 
 
 def build_frontier_explanation(frontier_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -341,7 +473,7 @@ def main() -> int:
     handoff_path = optional_artifact(review_dir, "latest_price_action_breakout_pullback_hold_selection_handoff_sim_only.json")
     handoff_payload = load_json_mapping(handoff_path) if handoff_path else {}
 
-    config_ids = ["hold8_zero", "hold16_zero", "hold24_zero"]
+    config_ids = ["hold8_zero", "hold12_zero", "hold16_zero", "hold24_zero"]
     average_terms = build_average_term_rows(hold_family_payload, config_ids=config_ids)
     frontier_rows = build_frontier_rows(
         hold_family_payload=hold_family_payload,
@@ -353,7 +485,7 @@ def main() -> int:
         rider_triage_payload=rider_triage_payload,
     )
     frontier_explanation = build_frontier_explanation(frontier_rows)
-    research_decision = "freeze_hold16_baseline_with_dual_candidates_hold8_objective_hold24_return"
+    research_decision = classify_frontier_research_decision(frontier_rows)
     source_head_status = "frontier_head_active"
     canonical_source_head = str(review_dir / "latest_price_action_breakout_pullback_hold_frontier_report_sim_only.json")
     consumer_rule = "可直接读取 frontier report 作为当前 hold frontier head。"
@@ -361,14 +493,12 @@ def main() -> int:
         source_head_status = "superseded_by_hold_selection_handoff"
         canonical_source_head = text(handoff_payload.get("canonical_source_head")) or str(handoff_path)
         consumer_rule = text(handoff_payload.get("consumer_rule")) or consumer_rule
-    recommended_brief = (
-        f"{text(base_artifact.get('focus_symbol'))}:hold_frontier:{BASE_MODULE.SELECTION_SCENARIO_ID}:"
-        "baseline=hold16_zero,"
-        "objective_candidate=hold8_zero,"
-        "return_candidate=hold24_zero,"
-        "drop=hold12_zero,hold16_be075,hold16_trail15,hold16_cd2x16,"
-        f"head_status={source_head_status},"
-        f"decision={research_decision}"
+    recommended_brief = build_recommended_brief(
+        symbol=text(base_artifact.get("focus_symbol")),
+        selection_scenario_id=BASE_MODULE.SELECTION_SCENARIO_ID,
+        source_head_status=source_head_status,
+        research_decision=research_decision,
+        frontier_rows=frontier_rows,
     )
 
     payload = {
@@ -397,7 +527,7 @@ def main() -> int:
         "frontier_explanation": frontier_explanation,
         "next_steps": [
             "继续保留 hold16 作为 baseline source-of-truth，不直接替换。",
-            "后续 price-state-only 研究只围绕 hold8 与 hold24 做候选对比，不再回到 hold12 或 simple riders。",
+            "后续 price-state-only 研究只围绕当前仍有证据的 hold 候选继续前推；若 hold12 仍有 wins，只保留 transfer-watch，不直接回收为主候选。",
             "如需再前推，只做 baseline vs hold8 vs hold24 的 source-owned frontier compare。",
         ],
         "research_decision": research_decision,

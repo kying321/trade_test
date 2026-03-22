@@ -242,6 +242,29 @@ def evaluate_window(
     }
 
 
+def blocked_window_result(*, frame: pd.DataFrame, blocked_reason: str) -> dict[str, Any]:
+    return {
+        "window_summary": frame_window_summary(frame),
+        "eligible_grid_count": 0,
+        "grid_rows": [
+            {
+                "grid_id": "router_transfer_challenge",
+                "status": "blocked",
+                "blocked_reason": text(blocked_reason),
+            }
+        ],
+        "aggregate_metrics_by_strategy": {},
+        "aggregate_objective_by_strategy": {},
+        "aggregate_winner_by_return": "",
+        "aggregate_winner_by_objective": "",
+        "objective_win_counts": {},
+        "return_win_counts": {},
+        "router_vs_hold8_objective": {},
+        "router_vs_hold8_return": {},
+        "router_chosen_hold_counts_total": {},
+    }
+
+
 def render_markdown(payload: dict[str, Any]) -> str:
     hist = dict(payload.get("historical_transfer_challenge") or {})
     fut = dict(payload.get("future_tail_probe") or {})
@@ -298,8 +321,6 @@ def main() -> int:
     base_entry_params, base_payload = EXIT_MODULE.load_base_entry_params(base_artifact_path, symbol)
     router_payload = json.loads(router_artifact_path.read_text(encoding="utf-8"))
     frozen_router = dict(router_payload.get("best_router") or {})
-    if not frozen_router:
-        raise ValueError("router_artifact_missing_best_router")
 
     long_frame = ROUTER_MODULE.load_signal_frame(long_dataset_path, symbol, int(base_entry_params["breakout_lookback"]))
     derivation_frame = ROUTER_MODULE.load_signal_frame(derivation_dataset_path, symbol, int(base_entry_params["breakout_lookback"]))
@@ -308,28 +329,43 @@ def main() -> int:
 
     historical_transfer_frame = long_frame[long_frame["ts"] < derivation_start].copy().reset_index(drop=True)
     future_tail_frame = long_frame[long_frame["ts"] > derivation_end].copy().reset_index(drop=True)
+    router_hypothesis_decision = text(router_payload.get("research_decision"))
+    missing_router = not frozen_router
 
-    historical_transfer = evaluate_window(
-        frame=historical_transfer_frame,
-        base_entry_params=base_entry_params,
-        frozen_router=frozen_router,
-    )
-    future_tail_probe = evaluate_window(
-        frame=future_tail_frame,
-        base_entry_params=base_entry_params,
-        frozen_router=frozen_router,
-    )
+    if missing_router:
+        missing_router_reason = router_hypothesis_decision or "router_artifact_missing_best_router"
+        historical_transfer = blocked_window_result(
+            frame=historical_transfer_frame,
+            blocked_reason=missing_router_reason,
+        )
+        future_tail_probe = blocked_window_result(
+            frame=future_tail_frame,
+            blocked_reason=missing_router_reason,
+        )
+        future_eligible = 0
+        research_decision = "router_transfer_failed_keep_pure_hold_selection"
+    else:
+        historical_transfer = evaluate_window(
+            frame=historical_transfer_frame,
+            base_entry_params=base_entry_params,
+            frozen_router=frozen_router,
+        )
+        future_tail_probe = evaluate_window(
+            frame=future_tail_frame,
+            base_entry_params=base_entry_params,
+            frozen_router=frozen_router,
+        )
 
-    hist_router_obj = float((historical_transfer.get("aggregate_objective_by_strategy") or {}).get("router", 0.0) or 0.0)
-    hist_hold8_obj = float((historical_transfer.get("aggregate_objective_by_strategy") or {}).get("hold8_zero", 0.0) or 0.0)
-    future_eligible = int(future_tail_probe.get("eligible_grid_count", 0) or 0)
-    research_decision = "router_transfer_mixed_keep_router_unpromoted"
-    if int(historical_transfer.get("eligible_grid_count", 0) or 0) <= 0:
-        research_decision = "historical_transfer_unavailable_keep_router_unpromoted"
-    elif hist_router_obj < hist_hold8_obj:
-        research_decision = "frozen_router_transfer_does_not_beat_hold8_future_tail_insufficient" if future_eligible == 0 else "frozen_router_transfer_does_not_beat_hold8"
-    elif future_eligible == 0:
-        research_decision = "frozen_router_positive_on_historical_transfer_but_future_tail_insufficient"
+        hist_router_obj = float((historical_transfer.get("aggregate_objective_by_strategy") or {}).get("router", 0.0) or 0.0)
+        hist_hold8_obj = float((historical_transfer.get("aggregate_objective_by_strategy") or {}).get("hold8_zero", 0.0) or 0.0)
+        future_eligible = int(future_tail_probe.get("eligible_grid_count", 0) or 0)
+        research_decision = "router_transfer_mixed_keep_router_unpromoted"
+        if int(historical_transfer.get("eligible_grid_count", 0) or 0) <= 0:
+            research_decision = "historical_transfer_unavailable_keep_router_unpromoted"
+        elif hist_router_obj < hist_hold8_obj:
+            research_decision = "frozen_router_transfer_does_not_beat_hold8_future_tail_insufficient" if future_eligible == 0 else "frozen_router_transfer_does_not_beat_hold8"
+        elif future_eligible == 0:
+            research_decision = "frozen_router_positive_on_historical_transfer_but_future_tail_insufficient"
 
     payload = {
         "action": "build_price_action_breakout_pullback_hold_router_transfer_challenge_sim_only",
@@ -347,6 +383,7 @@ def main() -> int:
         "selection_scenario_id": BASE_MODULE.SELECTION_SCENARIO_ID,
         "long_dataset_window": frame_window_summary(long_frame),
         "derivation_window": frame_window_summary(derivation_frame),
+        "router_hypothesis_research_decision": router_hypothesis_decision,
         "frozen_router": frozen_router,
         "historical_transfer_challenge": historical_transfer,
         "future_tail_probe": future_tail_probe,
@@ -361,11 +398,11 @@ def main() -> int:
         ),
         "research_note": (
             "这份工件冻结 router hypothesis 的 feature/threshold，不再重学；"
-            "先看它在与 derivation window 完全不重叠的 transfer window 上是否还能胜出。"
+            "若 hypothesis 没有产出可冻结的 best_router，则 transfer challenge 只落 blocked artifact，保持纯 hold 选择链不被 stale router 结论污染。"
         ),
         "limitation_note": (
-            "当前 long dataset 的 derivation 之后只多出 2026-03-18T18:30:00Z 到 2026-03-19T03:15:00Z 的 36 根 15m bars，"
-            "不足以做真正 forward challenge；因此当前结论主要来自 historical transfer，而不是新的未来 OOS。"
+            "当前 long dataset 的 derivation 之后只多出有限未来 bars，不足以做真正 forward challenge；"
+            "若 router hypothesis 自身没有 clean winner，则这里不会生成伪 transfer 优势。"
         ),
     }
 

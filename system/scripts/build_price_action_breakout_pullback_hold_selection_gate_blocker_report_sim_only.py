@@ -49,6 +49,73 @@ def load_json_mapping(path: Path) -> dict[str, Any]:
     return payload
 
 
+def build_frontier_role_map(frontier_report: dict[str, Any]) -> dict[str, str]:
+    rows = frontier_report.get("frontier_rows")
+    result: dict[str, str] = {}
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            config_id = text(row.get("config_id"))
+            role = text(row.get("role"))
+            if config_id and role:
+                result[config_id] = role
+    if result:
+        return result
+
+    brief = text(frontier_report.get("recommended_brief"))
+    brief_map: dict[str, str] = {}
+    for token in brief.split(","):
+        key, _, value = token.partition("=")
+        if key and value:
+            brief_map[key.rsplit(":", 1)[-1].strip()] = value.strip()
+    if brief_map.get("objective_candidate") == "hold8_zero":
+        result["hold8_zero"] = "objective_leader_candidate"
+    elif brief_map.get("objective_watch") == "hold8_zero":
+        result["hold8_zero"] = "objective_watch_candidate"
+    if brief_map.get("return_candidate") == "hold24_zero":
+        result["hold24_zero"] = "return_leader_candidate"
+    elif brief_map.get("return_watch") == "hold24_zero":
+        result["hold24_zero"] = "return_watch_candidate"
+    if brief_map.get("transfer_watch") == "hold12_zero":
+        result["hold12_zero"] = "transfer_watch_candidate"
+    return result
+
+
+def singleton_list(enabled: bool, value: str) -> list[str]:
+    return [value] if enabled and value else []
+
+
+def classify_hold24_promotion(*, hold24_role: str, family_transfer_decision: str) -> str:
+    if hold24_role not in {"return_leader_candidate", "return_watch_candidate"}:
+        return "blocked_frontier_no_active_return_candidate"
+    if "demotes_hold24" in family_transfer_decision:
+        return "blocked_transfer_demoted"
+    if hold24_role == "return_leader_candidate":
+        return "blocked_return_candidate_until_longer_forward_oos"
+    return "blocked_return_watch_only"
+
+
+def classify_hold12_drop(*, hold12_active: bool, family_transfer_decision: str) -> str:
+    if "revives_hold12" in family_transfer_decision or "revived_in_transfer_watch_only" in family_transfer_decision:
+        return "blocked_transfer_revived_watch_only"
+    if hold12_active:
+        return "blocked_transfer_watch_only"
+    return "allowed_no_transfer_watch_remaining"
+
+
+def classify_router_promotion(*, router_transfer_decision: str, router_hypothesis_decision: str) -> str:
+    if "positive_on_historical_transfer_but_future_tail_insufficient" in router_transfer_decision:
+        return "blocked_future_tail_insufficient_after_positive_historical_transfer"
+    if "does_not_beat_hold8" in router_transfer_decision:
+        return "blocked_transfer_does_not_beat_hold8"
+    if "historical_transfer_unavailable" in router_transfer_decision:
+        return "blocked_transfer_unavailable"
+    if "same_sample_only" in router_hypothesis_decision or "requires_new_forward_challenge" in router_hypothesis_decision:
+        return "blocked_same_sample_only_until_transfer_challenge"
+    return "blocked_transfer_failed"
+
+
 def render_markdown(payload: dict[str, Any]) -> str:
     gates = dict(payload.get("gate_state") or {})
     lines = [
@@ -71,6 +138,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
             f"- active_baseline: `{text(payload.get('active_baseline'))}`",
             f"- local_candidate: `{text(payload.get('local_candidate'))}`",
             f"- transfer_watch: `{json.dumps(payload.get('transfer_watch') or [], ensure_ascii=False)}`",
+            f"- return_candidate: `{json.dumps(payload.get('return_candidate') or [], ensure_ascii=False)}`",
+            f"- return_watch: `{json.dumps(payload.get('return_watch') or [], ensure_ascii=False)}`",
             f"- demoted_candidate: `{json.dumps(payload.get('demoted_candidate') or [], ensure_ascii=False)}`",
             "",
             "## Release Conditions",
@@ -109,12 +178,39 @@ def main() -> int:
     router_transfer = load_json_mapping(router_transfer_path)
     family_transfer = load_json_mapping(family_transfer_path)
 
+    frontier_roles = build_frontier_role_map(frontier_report)
+    hold8_role = text(frontier_roles.get("hold8_zero"))
+    hold12_role = text(frontier_roles.get("hold12_zero"))
+    hold24_role = text(frontier_roles.get("hold24_zero"))
+    router_hypothesis_decision = text(router_hypothesis.get("research_decision"))
+    router_transfer_decision = text(router_transfer.get("research_decision"))
+    family_transfer_decision = text(family_transfer.get("research_decision"))
+
+    transfer_watch = singleton_list(
+        hold12_role == "transfer_watch_candidate" or "hold12" in family_transfer_decision,
+        "hold12_zero",
+    )
+    return_candidate = singleton_list(hold24_role == "return_leader_candidate", "hold24_zero")
+    return_watch = singleton_list(hold24_role == "return_watch_candidate", "hold24_zero")
+    hold24_promotion = classify_hold24_promotion(
+        hold24_role=hold24_role,
+        family_transfer_decision=family_transfer_decision,
+    )
+    hold12_drop = classify_hold12_drop(
+        hold12_active=bool(transfer_watch),
+        family_transfer_decision=family_transfer_decision,
+    )
+    router_promotion = classify_router_promotion(
+        router_transfer_decision=router_transfer_decision,
+        router_hypothesis_decision=router_hypothesis_decision,
+    )
+
     gate_state = {
         "hold16_baseline_anchor": "allowed",
-        "hold8_promotion": "blocked_until_longer_forward_oos",
-        "hold24_promotion": "blocked_transfer_demoted",
-        "hold12_global_drop": "blocked_transfer_revived_watch_only",
-        "dynamic_router_promotion": "blocked_transfer_failed",
+        "hold8_promotion": "blocked_until_longer_forward_oos" if hold8_role else "blocked_frontier_no_local_candidate",
+        "hold24_promotion": hold24_promotion,
+        "hold12_global_drop": hold12_drop,
+        "dynamic_router_promotion": router_promotion,
         "new_hold_param_fitting": "blocked_until_frontier_reconverges",
         "source_head_override_required": "yes_transfer_evidence_overrides_old_frontier_head",
     }
@@ -137,15 +233,20 @@ def main() -> int:
         "source_evidence": {
             "frontier_report_research_decision": text(frontier_report.get("research_decision")),
             "frontier_cost_research_decision": text(frontier_cost.get("research_decision")),
-            "router_hypothesis_research_decision": text(router_hypothesis.get("research_decision")),
-            "router_transfer_research_decision": text(router_transfer.get("research_decision")),
-            "family_transfer_research_decision": text(family_transfer.get("research_decision")),
+            "router_hypothesis_research_decision": router_hypothesis_decision,
+            "router_transfer_research_decision": router_transfer_decision,
+            "family_transfer_research_decision": family_transfer_decision,
         },
         "gate_state": gate_state,
         "active_baseline": "hold16_zero",
-        "local_candidate": "hold8_zero",
-        "transfer_watch": ["hold12_zero"],
-        "demoted_candidate": ["hold24_zero", "pullback_depth_atr_router"],
+        "local_candidate": "hold8_zero" if hold8_role else "",
+        "transfer_watch": transfer_watch,
+        "return_candidate": return_candidate,
+        "return_watch": return_watch,
+        "demoted_candidate": [
+            *singleton_list(hold24_promotion.startswith("blocked_"), "hold24_zero"),
+            *singleton_list(router_promotion.startswith("blocked_"), "pullback_depth_atr_router"),
+        ],
         "blocked_now": [
             "promote_hold8_as_new_baseline",
             "promote_hold24_as_return_candidate_beyond_local_window",
@@ -155,8 +256,8 @@ def main() -> int:
         ],
         "allowed_now": [
             "keep_hold16_as_current_baseline_anchor",
-            "keep_hold8_as_local_window_candidate_only",
-            "treat_hold12_as_transfer_watch_only",
+            *singleton_list(bool(hold8_role), "keep_hold8_as_local_window_candidate_only"),
+            *singleton_list(bool(transfer_watch), "treat_hold12_as_transfer_watch_only"),
             "treat_hold24_as_demoted_until_new_forward_evidence",
             "collect_longer_forward_tail_and_re-run_transfer_or_forward_challenge",
         ],
@@ -170,8 +271,8 @@ def main() -> int:
         "recommended_brief": (
             "ETHUSDT:hold_selection_gate:"
             f"frontier={text(frontier_report.get('research_decision'))},"
-            f"router_transfer={text(router_transfer.get('research_decision'))},"
-            f"family_transfer={text(family_transfer.get('research_decision'))},"
+            f"router_transfer={router_transfer_decision},"
+            f"family_transfer={family_transfer_decision},"
             f"decision={research_decision}"
         ),
         "research_note": (

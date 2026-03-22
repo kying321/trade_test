@@ -144,6 +144,7 @@ def test_build_price_action_breakout_pullback_exit_risk_sim_only_runs_with_fixtu
     assert "cooldown_after_losses" in payload["selected_exit_params"]
     assert "cooldown_bars" in payload["selected_exit_params"]
     assert payload["selection_policy"] == "train_first_validation_tiebreak"
+    assert payload["research_decision"] == "no_exit_risk_improvement_keep_baseline"
     assert "validation_leader_exit_params" in payload
     assert "validation_leader_metrics" in payload
     assert payload["candidate_count"] > 0

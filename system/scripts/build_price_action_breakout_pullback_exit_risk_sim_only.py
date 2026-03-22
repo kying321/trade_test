@@ -241,6 +241,21 @@ def rank_key(row: dict[str, Any]) -> tuple[float, int, float]:
     )
 
 
+def classify_research_decision(
+    *,
+    selected_improves: bool,
+    validation_leader_improves: bool,
+    selection_diverged_from_validation_leader: bool,
+) -> str:
+    if not validation_leader_improves:
+        return "no_exit_risk_improvement_keep_baseline"
+    if not selected_improves:
+        return "validation_leader_improves_train_first_selected_not_promoted"
+    if selection_diverged_from_validation_leader:
+        return "selected_exit_risk_improves_but_train_first_validation_diverges"
+    return "selected_exit_risk_improves_over_baseline"
+
+
 def render_markdown(payload: dict[str, Any]) -> str:
     baseline = dict(payload.get("baseline_validation_metrics") or {})
     selected = dict(payload.get("selected_validation_metrics") or {})
@@ -254,6 +269,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- coverage_start_utc: `{text(payload.get('coverage_start_utc'))}`",
         f"- coverage_end_utc: `{text(payload.get('coverage_end_utc'))}`",
         f"- selection_policy: `{text(payload.get('selection_policy'))}`",
+        f"- research_decision: `{text(payload.get('research_decision'))}`",
         f"- baseline_status: `{text(payload.get('baseline_validation_status'))}`",
         f"- selected_status: `{text(payload.get('selected_validation_status'))}`",
         f"- validation_leader_status: `{text(payload.get('validation_leader_status'))}`",
@@ -359,6 +375,12 @@ def main() -> int:
     validation_leader_metrics = dict(validation_leader.get("validation_metrics") or {})
     selected_improves = float(selected_metrics.get("cumulative_return", 0.0) or 0.0) > float(baseline_metrics.get("cumulative_return", 0.0) or 0.0) + 1e-9
     validation_leader_improves = float(validation_leader_metrics.get("cumulative_return", 0.0) or 0.0) > float(baseline_metrics.get("cumulative_return", 0.0) or 0.0) + 1e-9
+    selection_diverged_from_validation_leader = dict(selected.get("exit_params") or {}) != dict(validation_leader.get("exit_params") or {})
+    research_decision = classify_research_decision(
+        selected_improves=bool(selected_improves),
+        validation_leader_improves=bool(validation_leader_improves),
+        selection_diverged_from_validation_leader=bool(selection_diverged_from_validation_leader),
+    )
 
     payload = {
         "action": "build_price_action_breakout_pullback_exit_risk_sim_only",
@@ -376,6 +398,7 @@ def main() -> int:
         "source_catalog": list(BASE_MODULE.SOURCE_CATALOG),
         "base_focus_symbol": text(base_payload.get("focus_symbol")),
         "selection_policy": "train_first_validation_tiebreak",
+        "research_decision": research_decision,
         "base_entry_params": base_entry_params,
         "baseline_exit_params": baseline_exit_params,
         "baseline_validation_status": text(baseline.get("validation_status")),
@@ -393,7 +416,7 @@ def main() -> int:
         "validation_leader_gross_metrics": dict(validation_leader.get("validation_gross_metrics") or {}),
         "validation_leader_trade_sample": list(validation_leader.get("validation_trade_sample") or []),
         "validation_leader_improves_over_baseline": bool(validation_leader_improves),
-        "selection_diverged_from_validation_leader": dict(selected.get("exit_params") or {}) != dict(validation_leader.get("exit_params") or {}),
+        "selection_diverged_from_validation_leader": bool(selection_diverged_from_validation_leader),
         "ranking": ranking,
         "candidate_count": len(candidates),
         "selection_scenario_id": BASE_MODULE.SELECTION_SCENARIO_ID,
@@ -403,7 +426,8 @@ def main() -> int:
             f"{symbol}:exit_risk:{BASE_MODULE.SELECTION_SCENARIO_ID}:selected_return={float(selected_metrics.get('cumulative_return', 0.0)):.2%},"
             f"baseline_return={float(baseline_metrics.get('cumulative_return', 0.0)):.2%},"
             f"status={text(selected.get('validation_status'))},"
-            f"improves={str(bool(selected_improves)).lower()}"
+            f"improves={str(bool(selected_improves)).lower()},"
+            f"decision={research_decision}"
         ),
     }
 
