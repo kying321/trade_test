@@ -163,9 +163,8 @@ graph LR
 
 ```bash
 cd /Users/jokenrobot/Downloads/离厄—技术分析原理/system
-python3 -m pip install -e .
-lie validate-config
-lie test-all --fast --fast-ratio 0.10
+./scripts/lie-local validate-config
+./scripts/lie-local test-all --fast --fast-ratio 0.10
 
 cd /Users/jokenrobot/Downloads/离厄—技术分析原理
 ./system/scripts/auto_git_sync.sh --dry-run

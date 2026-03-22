@@ -160,7 +160,10 @@ if [[ $run_tests -eq 1 ]]; then
   echo "[auto-git-sync] Running validation tests..."
   (
     cd "$repo_root/system"
-    if command -v lie >/dev/null 2>&1; then
+    if [[ -x "./scripts/lie-local" ]]; then
+      PYTHONDONTWRITEBYTECODE=1 ./scripts/lie-local validate-config
+      PYTHONDONTWRITEBYTECODE=1 ./scripts/lie-local test-all
+    elif command -v lie >/dev/null 2>&1; then
       PYTHONDONTWRITEBYTECODE=1 lie validate-config
       PYTHONDONTWRITEBYTECODE=1 lie test-all
     else
