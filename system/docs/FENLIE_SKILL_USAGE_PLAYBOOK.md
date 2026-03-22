@@ -2,6 +2,16 @@
 
 This playbook defines the default order for the Fenlie skills that now cover the highest-frequency audit and monitoring loops.
 
+Related architecture and MCP routing doc:
+
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_SKILL_MCP_ARCHITECTURE.md`
+
+Contract note:
+
+- 下文命令默认指向 **已安装 skill 的 runner 入口**（`~/.codex/skills/.../scripts/*.py`）
+- repo 内的 `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/*.py` 主要是 source-owned builder / report / smoke 脚本
+- 不要把 “skill runner” 和 “repo 内 builder” 混为一谈；若某条链当前只有 skill runner，没有 repo-local 镜像，按 skill runner 作为 canonical 入口执行
+
 ## Skill Set
 
 - `fenlie-daily-ops-checklist`
@@ -28,6 +38,10 @@ This playbook defines the default order for the Fenlie skills that now cover the
   Path: `/Users/jokenrobot/.codex/skills/fenlie-time-sync-repair-verify`
   Purpose: rerun the full post-repair system time-sync verification chain after manual/admin macOS clock or network-time fixes.
 
+- `fenlie-skill-mcp-governance`
+  Path: `/Users/jokenrobot/.codex/skills/fenlie-skill-mcp-governance`
+  Purpose: inventory configured MCPs, record in-session health, and keep the Fenlie skill/MCP routing layers aligned.
+
 ## Default Order
 
 ### 0. Daily Ops Checklist
@@ -46,6 +60,12 @@ Expected focus:
 - `remote_live_gate_brief`
 - `checklist_brief`
 
+Repo-local source builder (仅产出工件，不替代 skill runner 编排语义)：
+
+```bash
+python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_daily_ops_skill_checklist.py
+```
+
 ### 1. Source Ownership First
 
 Run this when a change touched source artifacts, top briefs, cross-market routing, or review/repair semantics.
@@ -56,6 +76,10 @@ python3 /Users/jokenrobot/.codex/skills/fenlie-source-ownership-review/scripts/r
 ```
 
 Use the result to decide whether the next step should be source-side cleanup before any more consumer/UI edits.
+
+说明：当前 source ownership review 没有 repo-local mirror runner；canonical 入口就是已安装 skill 下的：
+
+- `/Users/jokenrobot/.codex/skills/fenlie-source-ownership-review/scripts/run_source_ownership_review.py`
 
 ### 2. Cross-Market Refresh Audit
 
@@ -121,6 +145,21 @@ Expected focus:
 - `repair_plan_brief`
 - `priority_repair_verification_brief`
 
+### 6. Skill / MCP Governance
+
+Run this after installing new MCPs, when auth/connectivity drifts, or when it is unclear which MCP belongs to which Fenlie lane.
+
+```bash
+python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_skill_mcp_architecture_report.py \
+  --workspace /Users/jokenrobot/Downloads/Folders/fenlie
+```
+
+Expected focus:
+- configured MCP inventory
+- in-session MCP health
+- layer routing
+- blocked-vs-healthy distinction
+
 ## Task-to-Skill Routing
 
 ### Source or ranking drift
@@ -151,6 +190,7 @@ Use:
 3. `fenlie-cross-market-refresh-audit`
 4. `fenlie-remote-live-guard-diagnostics`
 5. `fenlie-operator-panel-refresh`
+6. `fenlie-skill-mcp-governance` if MCP routing/auth changed
 
 ### Opening-of-day state snapshot
 
@@ -159,6 +199,13 @@ Use:
 2. `fenlie-daily-ops-checklist`
 3. `fenlie-cross-market-refresh-audit`
 4. `fenlie-operator-panel-refresh`
+
+### New MCP installed or MCP auth drift
+
+Use:
+1. `fenlie-skill-mcp-governance`
+2. `fenlie-source-ownership-review` if the new MCP could affect review/dashboard lanes
+3. `fenlie-operator-panel-refresh` only after routing is stable
 
 ### After macOS time repair
 

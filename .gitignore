@@ -45,3 +45,4 @@ system/dashboard/root_proxy/.wrangler/
 
 # ===== Local runtime mirrors / transient logs =====
 system/runtime/pi/fenlie-system/output/logs/
+.superpowers/

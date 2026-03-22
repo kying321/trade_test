@@ -8,6 +8,12 @@
 
 **Tech Stack:** Vite 7、React 19、TypeScript、React Router、Zustand、Vitest、Python smoke/acceptance 脚本
 
+> 2026-03-21 注：本计划里原先占位的 `run_dashboard_shell_navigation_smoke.py` / `test_run_dashboard_shell_navigation_smoke_script.py` 并未落成独立文件；当前已由
+> `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_workspace_artifacts_smoke.py`
+> 与
+> `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_dashboard_workspace_artifacts_smoke_script.py`
+> 承担对应公开 workspace 路由/导航烟测职责。后续阅读本计划时，应以这组现行 runner 作为真实入口。
+
 ---
 
 ## 0. 范围切分与实现约束
@@ -48,8 +54,8 @@
 - `system/dashboard/web/src/pages/page-types.ts` — 一级域/子页类型定义
 - `system/dashboard/web/src/navigation/route-contract.test.ts` — legacy alias 与 canonical route 测试
 - `system/dashboard/web/src/app-shell/AppShell.test.tsx` — 新壳层导航/回退/notice 测试
-- `system/scripts/run_dashboard_shell_navigation_smoke.py` — 新壳层浏览器烟测
-- `system/tests/test_run_dashboard_shell_navigation_smoke_script.py` — 新壳层烟测脚本单测
+- `system/scripts/run_dashboard_workspace_artifacts_smoke.py` — 当前公开 workspace 路由/导航浏览器烟测
+- `system/tests/test_run_dashboard_workspace_artifacts_smoke_script.py` — 当前 workspace 路由烟测脚本单测
 
 ### Modify
 

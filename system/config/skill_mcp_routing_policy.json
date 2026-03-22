@@ -1,0 +1,135 @@
+{
+  "layer_model": {
+    "source_owned_runtime": {
+      "purpose": "Execution, queues, gates, positions, fund scheduling, live guards.",
+      "mcp_policy": "No MCP in final live execution path.",
+      "preferred_skills": [
+        "trade-live-exec-guard",
+        "fenlie-remote-live-guard-diagnostics",
+        "fenlie-order-risk-exec"
+      ]
+    },
+    "source_review_and_audit": {
+      "purpose": "Source ownership, cross-market refresh, operator panel, daily checklist.",
+      "mcp_policy": "Prefer local source artifacts; MCP only for read-only diagnostics or documentation.",
+      "preferred_skills": [
+        "fenlie-source-ownership-review",
+        "fenlie-cross-market-refresh-audit",
+        "fenlie-operator-panel-refresh",
+        "fenlie-daily-ops-checklist"
+      ]
+    },
+    "research_enrichment": {
+      "purpose": "Research-only sidecars, external context, non-live market enrichment.",
+      "mcp_policy": "Allowed: CoinGecko. Do not promote MCP-derived fields into live routing.",
+      "preferred_skills": [
+        "fenlie-intraday-strategy-research",
+        "codex-autoresearch"
+      ]
+    },
+    "ui_and_browser_surface": {
+      "purpose": "Read-only dashboard validation, browser flow inspection, design implementation.",
+      "mcp_policy": "Allowed: Playwright, JSHook, Figma; never mutate live queues or capital.",
+      "preferred_skills": [
+        "fenlie-operator-panel-refresh",
+        "fenlie-skill-mcp-governance"
+      ]
+    },
+    "knowledge_and_planning": {
+      "purpose": "Documentation, specs, PM sync, external knowledge capture.",
+      "mcp_policy": "Allowed after auth health clears: Notion, Linear.",
+      "preferred_skills": [
+        "notion-knowledge-capture",
+        "notion-spec-to-implementation",
+        "gh-address-comments"
+      ]
+    }
+  },
+  "mode_to_skill_mcp_routing": {
+    "architecture_review": {
+      "primary_skills": [
+        "fenlie-source-ownership-review",
+        "fenlie-skill-mcp-governance"
+      ],
+      "mcp_allow": [
+        "figma",
+        "jshook",
+        "playwright",
+        "coingecko",
+        "notion",
+        "linear"
+      ],
+      "mcp_require_health_gate": [
+        "notion",
+        "linear"
+      ]
+    },
+    "source_first_implementation": {
+      "primary_skills": [
+        "fenlie-cross-market-refresh-audit",
+        "fenlie-remote-live-guard-diagnostics"
+      ],
+      "mcp_allow": [
+        "playwright",
+        "figma"
+      ],
+      "mcp_forbid": [
+        "coingecko_in_live_logic",
+        "jshook_in_live_logic"
+      ]
+    },
+    "ui_rendering": {
+      "primary_skills": [
+        "fenlie-operator-panel-refresh",
+        "fenlie-skill-mcp-governance"
+      ],
+      "mcp_allow": [
+        "playwright",
+        "figma",
+        "jshook"
+      ]
+    },
+    "research_backtest": {
+      "primary_skills": [
+        "fenlie-intraday-strategy-research",
+        "codex-autoresearch"
+      ],
+      "mcp_allow": [
+        "coingecko",
+        "notion"
+      ],
+      "mcp_forbid": [
+        "live_execution_mcp_paths"
+      ]
+    },
+    "live_guard_diagnostics": {
+      "primary_skills": [
+        "fenlie-remote-live-guard-diagnostics",
+        "fenlie-source-ownership-review"
+      ],
+      "mcp_allow": [
+        "playwright",
+        "jshook"
+      ],
+      "mcp_forbid": [
+        "order_routing_via_browser"
+      ]
+    }
+  },
+  "hard_rules": [
+    "No MCP-derived data may become final source-of-truth for live routing, live capital, queue mutation, or fund scheduling.",
+    "Browser MCPs are read-only diagnostics/reverse-engineering tools, not live trading clients.",
+    "Research MCPs are sidecars only; they may enrich briefs and review artifacts but must not silently override source-owned strategy metrics.",
+    "Auth-blocked MCPs must be marked blocked instead of assumed healthy."
+  ],
+  "status_actions": {
+    "verified_tools_available": "Can enter its approved non-live lane immediately.",
+    "verified_resources_available": "Can be used now for docs/design/resource-backed workflows.",
+    "verified_auth_and_resources_available": "Can be used now and treated as auth-healthy for its approved lane.",
+    "verified_environment_and_search_available": "Can be used now for diagnostics/discovery workflows.",
+    "configured_not_resource_driven": "Treat as configured; verify with a live smoke check before broad workflow use.",
+    "configured_not_yet_session_validated": "Do one session-level validation before promoting into the default playbook.",
+    "blocked_auth_refresh_failed": "Repair OAuth/auth locally before routing any workflow through this MCP.",
+    "blocked_initialize_failed": "Fix connectivity/server initialization before routing any workflow through this MCP."
+  }
+}
