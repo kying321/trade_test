@@ -1,0 +1,56 @@
+{
+  "version": "1.0",
+  "scope": "fenlie_dashboard_field_display_policy",
+  "surfaces": {
+    "public": {
+      "metricStrips": [],
+      "tables": {},
+      "drilldownFields": {},
+      "keyValueFields": {},
+      "valueTextFields": {}
+    },
+    "internal": {
+      "metricStrips": [
+        "terminal.orchestration.topMetrics",
+        "terminal.orchestration.guards",
+        "terminal.dataRegime.sourceConfidence",
+        "terminal.dataRegime.microCapture",
+        "terminal.signalRisk.gateScores",
+        "terminal.signalRisk.repairPlan",
+        "terminal.labReview.researchHeads",
+        "terminal.labReview.manifests"
+      ],
+      "tables": {
+        "terminal.orchestration.actionLog": ["detail"],
+        "terminal.orchestration.checklist": ["label", "detail"],
+        "terminal.signalRisk.focusSlots": ["action", "done_when"],
+        "terminal.signalRisk.controlChain": ["source_decision", "next_target_artifact"],
+        "terminal.signalRisk.actionQueue": ["action", "reason"],
+        "terminal.signalRisk.optimizationBacklog": ["title", "why"],
+        "terminal.labReview.candidateRows": ["decision", "takeaway"],
+        "workspace.backtests.comparison": ["strategy_id_canonical", "market_scope"],
+        "workspace.contracts.interfaces": ["description"]
+      },
+      "drilldownFields": {
+        "terminal.signalRisk.focusSlots": ["action", "target", "reason", "blocker_detail", "done_when", "source_artifact", "source_refresh_action"],
+        "terminal.signalRisk.controlChain": ["mission", "source_brief", "source_decision", "source_artifact", "next_target_artifact", "blocking_reason", "optimization_brief"],
+        "terminal.signalRisk.actionQueue": ["action", "reason", "target", "done_when", "source_artifact"]
+      },
+      "keyValueFields": {
+        "workspace.artifacts.meta": ["category", "status", "change_class", "generated_at_utc", "payload_key"],
+        "workspace.artifacts.payload": ["*"],
+        "workspace.contracts.sourceHeads": ["status", "research_decision", "summary", "path"]
+      },
+      "compactPathFields": {
+        "workspace.artifacts.list": ["path"],
+        "workspace.artifacts.inspector": ["path"]
+      },
+      "valueTextFields": {
+        "workspace.artifacts.list": ["title"],
+        "workspace.artifacts.inspector": ["title"],
+        "workspace.artifacts.topLevelKeys": ["*"],
+        "workspace.contracts.sourceHeads.summary": ["label", "summary"]
+      }
+    }
+  }
+}
