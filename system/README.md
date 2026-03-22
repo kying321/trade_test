@@ -14,19 +14,19 @@ docs/THEORY_PROCESS.md
 运行：
 
 ```bash
-python3 -m pip install -e .
-lie run-eod --date 2026-02-13
-lie micro-capture --date 2026-02-13 --symbols BTCUSDT,ETHUSDT
-lie test-all
+./scripts/lie-local run-eod --date 2026-02-13
+./scripts/lie-local micro-capture --date 2026-02-13 --symbols BTCUSDT,ETHUSDT
+./scripts/lie-local test-all
 # 快速子样本测试（确定性）
-lie test-all --fast --fast-ratio 0.10
+./scripts/lie-local test-all --fast --fast-ratio 0.10
 # 单次运行超时覆盖（避免 full 模式长时间挂起）
-lie test-all --timeout-seconds 600
+./scripts/lie-local test-all --timeout-seconds 600
 # 并行分片（多智能体协作时可覆盖全量）
-lie test-all --fast --fast-ratio 1.0 --fast-shard-index 0 --fast-shard-total 4
-lie validate-config
-lie architecture-audit --date 2026-02-13
-lie dependency-audit --date 2026-02-13
+./scripts/lie-local test-all --fast --fast-ratio 1.0 --fast-shard-index 0 --fast-shard-total 4
+./scripts/lie-local validate-config
+./scripts/lie-local architecture-audit --date 2026-02-13
+./scripts/lie-local dependency-audit --date 2026-02-13
+# 如需全局 CLI，可选执行：python3 -m pip install -e .
 # 数据源 profile（config.yaml: data.provider_profile）
 # 可选: opensource_dual | opensource_primary | binance_spot_public | bybit_spot_public | dual_binance_bybit_public | hybrid_opensource_binance | hybrid_opensource_binance_bybit | hybrid_with_paid_placeholder | paid_placeholder
 # 微观信号调制（run-eod；L2/逐笔）
@@ -373,7 +373,7 @@ python3 system/scripts/validate_term_atoms.py
 # 通过测试后自动提交并推送到 GitHub（需先配置 origin 远程）
 # 干跑（仅预览将提交的文件）
 ./system/scripts/auto_git_sync.sh --dry-run
-# 正式执行（默认会先跑 validate-config + test-all）
+# 正式执行（默认会优先跑 repo-owned scripts/lie-local validate-config + test-all）
 ./system/scripts/auto_git_sync.sh --branch lie --message "chore(system): periodic sync"
 # 若是 Pi 侧改动，使用：
 ./system/scripts/auto_git_sync.sh --branch pi --message "chore(system): periodic sync (pi)"
