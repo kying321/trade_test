@@ -17,6 +17,7 @@
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-deck-production-and-export-checklist.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-preread-copy.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-followup-copy.md`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-read-only-share-directory-manifest.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pitch-deck-full-copy.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-market-and-competitive-landscape.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-tam-sam-som-and-3y-financial-model.md`
@@ -243,6 +244,14 @@
 - 为首次会议后提供更完整的 follow-up 版 deck 文稿
 - 承接商业模式、execution 边界、融资与 pilot 路径追问
 - 作为会后补发版 PDF 的直接文本底稿
+
+### `2026-03-24-fenlie-read-only-share-directory-manifest.md`
+
+用途：
+
+- 固定外部共享盘 / data room 的建议目录结构
+- 避免把工作草稿或错误层级材料直接暴露给外部
+- 作为对外只读分享目录的操作层清单
 
 ### `2026-03-24-fenlie-diligence-readiness-checklist.md`
 

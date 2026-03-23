@@ -34,6 +34,7 @@
    - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-unified-outreach-pack-and-notion-index.md`
    - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-minimal-send-pack-manifest.md`
    - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-deck-production-and-export-checklist.md`
+   - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-read-only-share-directory-manifest.md`
 3. **尽调入口**
    - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-data-room-index-and-request-list.md`
 4. **尽调完备度**
