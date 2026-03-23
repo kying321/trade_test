@@ -52,6 +52,7 @@
 ### Pack B｜会前预读
 
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pitch-deck-full-copy.md`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-preread-copy.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pitch-deck-visual-brief.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-product-architecture-visual-brief.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-12-18-month-milestone-roadmap.md`
@@ -61,6 +62,7 @@
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-business-plan.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-tam-sam-som-and-3y-financial-model.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-fundraise-scenarios-and-runway.md`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-followup-copy.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-execution-maturity-note.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-deployment-enablement-package-one-pager.md`
 

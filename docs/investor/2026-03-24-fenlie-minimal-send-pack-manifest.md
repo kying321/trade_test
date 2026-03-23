@@ -55,7 +55,7 @@
 **建议附件：**
 
 1. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-executive-summary.md`
-2. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pitch-deck-full-copy.md`
+2. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-preread-copy.md`
 3. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-product-architecture-visual-brief.md`
 4. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-12-18-month-milestone-roadmap.md`
 
@@ -83,8 +83,9 @@
 1. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-business-plan.md`
 2. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-tam-sam-som-and-3y-financial-model.md`
 3. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-fundraise-scenarios-and-runway.md`
-4. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-execution-maturity-note.md`
-5. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-deployment-enablement-package-one-pager.md`
+4. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-followup-copy.md`
+5. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-execution-maturity-note.md`
+6. `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-deployment-enablement-package-one-pager.md`
 
 **目标：**
 
@@ -139,7 +140,7 @@
 
 - 首次触达：**2–3 份**
 - 会前预读：**3–4 份**
-- 会后推进：**4–5 份**
+- 会后推进：**5–6 份**
 - 尽调入口：**不超过 7 份**，并优先给 index 而不是全量正文
 
 ---
@@ -214,4 +215,3 @@
 
 - 正式版 deck / PDF 成品
 - 可直接共享的外部 data room 成品链接
-

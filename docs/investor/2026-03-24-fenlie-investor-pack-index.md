@@ -15,6 +15,8 @@
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-roadshow-outline.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-minimal-send-pack-manifest.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-deck-production-and-export-checklist.md`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-preread-copy.md`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-followup-copy.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pitch-deck-full-copy.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-market-and-competitive-landscape.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-tam-sam-som-and-3y-financial-model.md`
@@ -73,6 +75,8 @@
 2. `2026-03-24-fenlie-pitch-deck-visual-brief.md`
 3. `2026-03-24-fenlie-roadshow-outline.md`
 4. `2026-03-24-fenlie-deck-production-and-export-checklist.md`
+5. `2026-03-24-fenlie-investor-deck-preread-copy.md`
+6. `2026-03-24-fenlie-investor-deck-followup-copy.md`
 
 适用：
 
@@ -223,6 +227,22 @@
 - 把 deck full copy + visual brief 推进为正式版 PPT / PDF 成品
 - 固定路演版、会前预读版、会后补发版的生产顺序
 - 作为“正式成品仍待制作”阶段的制作操作清单
+
+### `2026-03-24-fenlie-investor-deck-preread-copy.md`
+
+用途：
+
+- 为会前 24 小时预读提供独立轻量版 deck 文稿
+- 降低首次正式会面前的阅读负担
+- 作为预读版 PDF 的直接文本底稿
+
+### `2026-03-24-fenlie-investor-deck-followup-copy.md`
+
+用途：
+
+- 为首次会议后提供更完整的 follow-up 版 deck 文稿
+- 承接商业模式、execution 边界、融资与 pilot 路径追问
+- 作为会后补发版 PDF 的直接文本底稿
 
 ### `2026-03-24-fenlie-diligence-readiness-checklist.md`
 

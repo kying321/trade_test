@@ -13,6 +13,8 @@
 - `2026-03-24-fenlie-pitch-deck-full-copy.md`
 - `2026-03-24-fenlie-pitch-deck-visual-brief.md`
 - `2026-03-24-fenlie-roadshow-outline.md`
+- `2026-03-24-fenlie-investor-deck-preread-copy.md`
+- `2026-03-24-fenlie-investor-deck-followup-copy.md`
 
 但还没有正式版：
 
@@ -67,9 +69,10 @@
 
 固定顺序建议为：
 
-1. 先做路演正式版
+1. 先锁定路演正式版
 2. 再从正式版裁剪出会前预读版
-3. 最后补 appendix，形成会后补发版
+3. 再补会后 follow-up 版
+4. 最后导出主 deck / preread / followup 三类成品
 
 不要反过来先做会前版再硬扩成正式版，这样最容易让主叙事失真。
 
@@ -153,4 +156,3 @@
 - visual brief：已具备
 - production checklist：已具备
 - PPT / PDF export asset：**仍待制作**
-
