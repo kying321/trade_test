@@ -14,7 +14,7 @@ Fenlie 是以 ETHUSDT / 15m / single-symbol breakout-pullback 为主线的策略
 - Exit/risk chain 以 challenge_pair 为中心，输出 allowed_now/blocked_now/next_research_priority，不在 consumer 侧硬编码特定 hold_bars 组合。
 - Hold-forward arbitration 继续围绕 forward_capacity、overlap_sidecar、hold_selection_handoff、window_consensus 的 source-owned gate，确保 baseline-anchor 与 forward tail 信息一致。
 
-## Low-Value Paths
+## Low-Value
 - geometry_delta 截面推理（跨 symbol / cross-section 的 breakout 变体）
 - VPVR proxy 之类的密度推导
 
