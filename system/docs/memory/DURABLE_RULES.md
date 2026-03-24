@@ -21,7 +21,7 @@
 
 ## Validation Rule
 - 任何变更前先验证 source artifacts。
-- 推荐命令集包含：`cd /Users/jokenrobot/Downloads/Folders/fenlie/system && pytest -q system/tests/test_build_dashboard_frontend_snapshot_script.py`、`cd /Users/jokenrobot/Downloads/Folders/fenlie/system && ./scripts/lie-local validate-config`、`cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run verify:public-surface` 等。
+- 推荐命令集包含：`cd /Users/jokenrobot/Downloads/Folders/fenlie/system && pytest -q tests/test_build_dashboard_frontend_snapshot_script.py`、`cd /Users/jokenrobot/Downloads/Folders/fenlie/system && ./scripts/lie-local validate-config`、`cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run verify:public-surface` 等。
 - 记录验证结果在最终回复里，确保 no-touch live path。
 
 ## Stop Rule
@@ -49,4 +49,4 @@
 ## Memory Update Rule
 - 仅当 durable rule、delegation、key path、validation command 等长期结构改变时更新本文件。
 - 临时 blocker、ready-check、某次回测结果、live queue/position 状态不得写入本章；这类内容属于 source artifacts 或 handoff brief。
-- 旧的大文件（如 `FENLIE_CODEX_MEMORY.md`）只保留兼容启动与指向新 tree 的 summary，不再承担 deep contract 内容。
+- Task 3 的收敛目标是让旧的大文件（如 `FENLIE_CODEX_MEMORY.md`）仅保留兼容启动与指向新 tree 的 summary，不再承担 deep contract 内容。
