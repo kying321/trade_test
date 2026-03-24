@@ -1,0 +1,822 @@
+# Fenlie Codex Memory
+
+Last updated: 2026-03-24
+Purpose: durable Codex memory for stable project rules, persistent priorities, key paths, and reusable commands. This file is for cross-session recovery, not for real-time source-of-truth state.
+
+---
+
+## 0. High-Value Merge Shortlist
+
+If future sessions can only recover a small amount of context, preserve these first:
+
+1. **Authority order is strict**
+   - `source-of-truth artifacts > compact handoff/context > UI/operator summaries`
+   - Do not let top briefs, dashboards, or markdown become a shadow authority for queues, gates, positions, review state, or research conclusions.
+
+2. **Live-path separation is a core architecture rule**
+   - Durable chain stays:
+     `intel/research -> ticketization -> risk_guard -> execution_contract -> broker`
+   - Research, browser intel, backup feeds, or agent-written analysis may lower confidence / veto / add no-trade flags, but must not directly authorize live execution unless an explicit stronger contract is added.
+
+3. **Operator and research both favor source-owned control fields**
+   - If a gate, blocker, allowed action, blocked action, source head, anchor, or queue owner can be written once in a source artifact, consumers should read it rather than re-derive it.
+   - Most recurring bugs in this project came from consumer-side re-derivation, stale summaries, or pair/anchor labels drifting away from the builder output.
+
+4. **Cold-start recovery order matters**
+   - Always read:
+     `AGENTS.md -> this memory file -> NEXT_WINDOW_CONTEXT_LATEST.md (when operator/live-related) -> latest directly relevant source artifacts`
+   - Reconstruct from disk, not from assumed chat memory.
+
+5. **Research mainline is intentionally narrow**
+   - Keep the retained intraday strategy line on:
+     `ETHUSDT / 15m / single-symbol / price_action_breakout_pullback`
+   - Current frontier is **exit/risk + hold-forward arbitration**, not widening family count or stacking more entry filters.
+   - Already low-value / deprioritized:
+     - `geometry_delta_breakout` as cross-section mainline
+     - `VPVR proxy`
+     - `reclaim structure filter`
+     - `daily_stop_r`
+
+6. **Do not hardcode research pair labels**
+   - The active exit/risk or hold comparison pair must derive from the current source-owned `challenge_pair` / blocker / handoff chain.
+   - Pair slug order is intentionally `challenger_vs_baseline` (example: `hold16_vs_hold24` can be correct even when `24` is baseline).
+
+7. **Baseline retained can still be the canonical head**
+   - In the exit/risk chain, once current forward OOS confirms the baseline pair, the handoff should become the canonical source head with a baseline-retained status rather than staying “inconclusive”.
+   - Positive break-even evidence is sidecar/review material until fresh primary-forward evidence clears promotion; do not let sidecar strength silently promote the anchor.
+
+8. **Root-cause repair beats wrapper repair**
+   - For remote/live diagnostics, fix layers in order:
+     `ops_live_gate -> risk_guard -> remote_execution_contract -> account_scope_alignment`
+   - Clear root causes such as `slot_anomaly / mode_drift / backtest_snapshot` before spending rounds on wrappers like `rollback_hard` or `ops_status_red`.
+
+9. **Public vs internal surfaces must stay explicitly separated**
+   - Internal alignment / feedback projection belongs to internal views, not the public snapshot.
+   - Public research/workspace views should expose source-owned control fields needed by contracts/detail consumers instead of flattening everything into prose briefs.
+
+10. **Execution discipline is non-negotiable**
+    - Live capital / order routing / execution queues / fund scheduling: must use `run-halfhour-pulse` mutex.
+    - Historical research/backtests: no `datetime.now()`, no forward-looking indices; use explicit timestamps only.
+    - Live deadlines/backoff: monotonic clocks.
+    - Retryable external actions: idempotency keys.
+    - Outbound requests: timeout `<= 5000ms`.
+
+11. **“Continue / 下一步” has a project-specific meaning**
+    - Do not polish surfaces for motion.
+    - Prioritize the highest-risk unresolved issue that changes state, queue, gate, source ownership, or user-visible capability.
+    - If two rounds in a row do not change any of those, stop and report.
+
+12. **Single-entry refreshers are preferred over ad hoc partial reruns**
+    - For dashboard/operator/live-guard/research chains, prefer the repo’s top-level refresh runners so upstream dependencies stay aligned and downstream consumers read a consistent source head.
+
+---
+
+## 1. Bootstrap Order
+
+Every new Codex session for this repo should bootstrap in this order:
+
+1. Read `/Users/jokenrobot/Downloads/Folders/fenlie/AGENTS.md`
+2. Read this file
+3. Resolve current task mode
+4. Read only the minimal relevant skill(s)
+5. Validate source artifacts before changing dashboards, briefs, or UI
+
+Do not assume chat history is available. Reconstruct context from disk.
+
+---
+
+## 2. Durable Operating Rules
+
+- Default language: Chinese
+- Response style: direct, concise, technical, pragmatic, audit-friendly
+- Before substantial work: state `mode + first concrete step` in one sentence
+- If the user only says “continue” or “下一步”: prioritize the highest-risk unresolved issue, not cosmetic cleanup
+- Prefer source-owned state: lanes, queues, gates, scores, blockers, review state, positions, and research/OOS metrics belong in source artifacts, not UI-only derivations
+- Use the narrowest change class:
+  - `DOC_ONLY`
+  - `RESEARCH_ONLY`
+  - `SIM_ONLY`
+  - `LIVE_GUARD_ONLY`
+  - `LIVE_EXECUTION_PATH`
+- Stop rule: if two consecutive rounds do not change state, queue, gate, source ownership, or user-visible capability, stop and report
+
+---
+
+## 3. Live Boundary Rules
+
+Never treat this memory file as authority for live state.
+
+Live-sensitive work still requires direct source validation from artifacts/scripts.
+
+Hard constraints:
+
+- Any code touching live capital, order routing, execution queues, or fund scheduling must use the `run-halfhour-pulse` file mutex
+- Backtests, replays, signal math, and historical indicators must not use `datetime.now()` or forward-looking indices
+- Live deadlines/retries/backoff should use monotonic clocks
+- Retryable state transitions and external operations need idempotency keys
+- Outbound network requests must use timeout `<= 5000ms`
+- Notification/dashboard/metrics failures degrade only unless they create execution ambiguity
+
+---
+
+## 4. Delegation Memory
+
+Subagents are optional helpers, not a replacement for main-agent judgment.
+
+Use delegation only when the user explicitly allows delegation/subagents/parallel work.
+
+Current durable user preference (added 2026-03-21):
+
+- Subagents are allowed when the task is unlikely to become critical prior context for later steps, or when the task chain is simple/bounded and context reuse can materially improve efficiency
+- Good delegate targets:
+  - bounded codebase exploration
+  - isolated read-only audits
+  - fixture/mock generation
+  - screenshot/smoke verification
+  - simple non-overlapping code changes
+- Keep critical-path judgment local:
+  - source-of-truth arbitration
+  - live-path decisions
+  - final architectural decisions
+  - final user-facing conclusions
+- If the delegated output is likely to become required prior context for the immediate next local step, prefer doing it in the main agent instead of delegating
+
+Delegate only:
+
+- non-critical sidecar research
+- isolated read-only audits
+- disjoint code exploration
+- screenshot/smoke verification
+- non-overlapping write scopes
+
+Keep local:
+
+- blocking critical-path work
+- live-path judgment
+- source-of-truth arbitration
+- source-owned gate decisions
+- final architectural decisions
+- final user-facing conclusions
+
+Avoid context pollution:
+
+- do not open overlapping subagents for the same scope
+- reuse an existing subagent when relevant
+- require compact return format:
+  - findings
+  - changed files
+  - validation result
+  - unresolved risk
+
+---
+
+## 5. Persistent Project Priorities
+
+### Strategy research mainline
+
+Current durable research mainline:
+
+- `ETHUSDT` `15m` single-symbol breakout-pullback base setup is the main retained strategy line
+- Entry-filter direction is not the current priority
+- Exit/risk is the current priority
+- do not treat `max_hold_bars=8 vs 16` as a fixed default exit/risk follow-up pair anymore
+- the active exit/risk follow-up pair must derive from the current source-owned `challenge_pair`
+  / blocker / handoff chain (for example the current blocked pair may be `hold16_vs_hold24`)
+- Exit/risk full-chain default dataset contract is source-owned:
+  1. CLI `--dataset-path`
+  2. `*_price_action_breakout_pullback_exit_risk_sim_only.json` → `dataset_path`
+  3. `*_price_action_breakout_pullback_sim_only.json` → `dataset_path`
+  4. latest dataset fallback only if the source-owned paths are absent
+- Hold-side upstream default non-overlap forward windows now extend through `60d`:
+  `20,25,30,35,40,45,50,55,60`
+- Latest durable hold-side takeaway on the ETH-only 90d dataset:
+  `hold16_consensus_bias_keep_baseline_watch_long_window_regime_split`
+  - baseline stays `hold16_zero`
+  - local candidate stays `hold8_zero`
+  - next hold-side action is review of long-window regime split, not blindly collecting more tail
+- Hold forward stop-condition is now source-owned by four inputs together:
+  - `forward_capacity`
+  - `overlap_sidecar`
+  - `hold_selection_handoff`
+  - `window_consensus`
+- Durable stop-condition target state when the current hold-side chain shows
+  - `non_overlapping_forward_capacity_limited_but_usable`
+  - `overlapping_long_window_hold16_bias_keep_non_overlapping_baseline`
+  - `use_hold_selection_gate_as_canonical_head`
+  - `hold16_consensus_bias_keep_baseline_watch_long_window_regime_split`
+  is:
+  `stop_capacity_limited_hold_forward_mainline_keep_overlap_watch_review_long_window_regime_split`
+  with
+  `next_research_priority=review_long_window_regime_split_before_baseline_promotion`
+  rather than the old generic `hold_forward_compare_review_pending`
+- Exit/risk forward blocker pair labels are source-owned by the current `challenge_pair`
+  and must not be hardcoded as `hold8_vs_hold16`.
+  The blocker payload should derive:
+  - `research_decision`
+  - `allowed_now`
+  - `next_research_priority`
+  - `recommended_brief`
+  from the actual blocked pair such as `hold16_vs_hold24`.
+- Exit/risk `challenge_pair` slug order is intentionally
+  **`challenger_vs_baseline`**, not `baseline_vs_challenger`:
+  - if `challenge_pair.baseline_hold_bars=24`
+  - and `challenge_pair.challenger_hold_bars=16`
+  - then blocker / handoff pair slug should be `hold16_vs_hold24`
+  - this is not a pair-reversal bug; it is the canonical naming contract currently
+    implemented by `format_challenge_pair_slug()`
+- Latest durable exit/risk takeaway after the refreshed chain on the dataset
+  `20260323T194500Z_public_intraday_crypto_bars_dataset.csv`:
+  - canonical handoff remains `use_exit_risk_handoff_as_canonical_anchor`
+  - `source_head_status=baseline_anchor_active`
+  - current exit/risk anchor is `hold16_trail15_no_be`
+  - current blocked promotion pair is `hold16_vs_hold24`
+  - next priority remains
+    `watch_break_even_candidate_keep_baseline_anchor_defer_more_tail`
+- Exit/risk handoff `superseded_anchor` is only for **actual anchor replacement**:
+  - if handoff promotes a new canonical anchor, `superseded_anchor` should carry the prior anchor slug
+  - if handoff is baseline-retained or still inconclusive, `superseded_anchor` must stay empty
+  - consumer-friendly brief / markdown may render that empty state as `superseded=none`, but source JSON must not mirror the current active anchor into `superseded_anchor`
+- Exit/risk forward blocker must also distinguish
+  **pre-OOS** vs **post-current-OOS baseline retained**:
+  - before OOS completes for the blocked pair, blocker may emit
+    `block_exit_risk_promotion_require_forward_oos_pair_<pair>`
+  - once `forward_consensus` says `baseline_pair_keeps_anchor_across_current_forward_oos`,
+    blocker must stop saying `require_forward_oos` for that same pair and instead emit
+    `block_exit_risk_promotion_keep_baseline_anchor_pair_<pair>`
+    with a baseline-keep action path such as
+    `keep_baseline_pair_as_current_exit_risk_anchor`
+- Exit/risk handoff should not remain generic `exit_risk_handoff_inconclusive`
+  when the current forward OOS has already confirmed the baseline pair.
+  When blocker says `block_exit_risk_promotion_keep_baseline_anchor_pair_<pair>`
+  and consensus says `baseline_pair_keeps_anchor_across_current_forward_oos`,
+  handoff should still become the canonical source head:
+  - `research_decision=use_exit_risk_handoff_as_canonical_anchor`
+  - `source_head_status=baseline_anchor_active`
+  - keep the current baseline anchor instead of implying unresolved ambiguity
+- Tail-capacity source-owned rule for the current ETH exit/risk grid:
+  - if `max_credible_train_days=max_robust_train_days=max(candidate_train_days)`
+  - and `first_insufficient_train_days=0`
+  - and `zero_slice_train_days=[]`
+  - then tail capacity should not remain `exit_risk_forward_tail_capacity_limited_watch_only`;
+    it should emit `exit_risk_forward_tail_capacity_supports_current_grid_no_tail_extension_required`
+    with a note that the current 30d~60d grid is covered and more-tail extension is not the default next step
+- Break-even sidecar source-owned rule:
+  - when `research_decision=break_even_sidecar_positive_watch_only`, its limitation note must not force
+    “先补更多 non-overlapping forward 尾部窗口”
+  - the safe invariant wording is: keep it as watch-only sidecar evidence, merge-review it with the primary forward evidence, and do not promote anchor directly from sidecar
+- Break-even sidecar strong-tier rule:
+  - keep `research_decision=break_even_sidecar_positive_watch_only` as the compatibility envelope for positive sidecar evidence
+  - if the sidecar is built from `overlapping_forward_compare_windows_only`
+    and at least 3 windows all show
+    - aggregate return winner = `anchor_with_be`
+    - aggregate objective winner = `anchor_with_be`
+    - slice-majority return winner = `anchor_with_be`
+    - slice-majority objective winner = `anchor_with_be`
+    then upgrade only the sidecar strength layer, not the anchor:
+    - `confidence_tier=guarded_review_ready`
+    - `promotion_review_ready=true`
+    - `next_research_priority=guarded_review_break_even_candidate_keep_baseline_anchor_defer_more_tail`
+  - blocker / handoff may consume this stronger tier to upgrade the follow-up priority from generic watch to guarded review, but must still keep the baseline anchor unless fresh primary forward evidence explicitly clears promotion
+- Exit/risk research-chain default break-even sidecar refresh:
+  - `run_price_action_breakout_pullback_exit_risk_research_chain_sim_only.py`
+    should default to:
+    - `break_even_train_days=30,40,45,50,55,60`
+    - `break_even_step_days=5`
+  - keep the primary forward chain on its own default `step_days=10`
+    so the sidecar can use overlapping windows without silently changing the main forward OOS grid
+- Break-even guarded-review source-owned rule:
+  - after canonical handoff is built, the exit/risk chain should emit a dedicated
+    `build_price_action_breakout_pullback_exit_risk_break_even_guarded_review_sim_only.py`
+    artifact before source-gap audit
+  - when all of the following are true:
+    - `handoff.research_decision=use_exit_risk_handoff_as_canonical_anchor`
+    - `handoff.source_head_status=baseline_anchor_active`
+    - `forward_blocker.research_decision` starts with
+      `block_exit_risk_promotion_keep_baseline_anchor_pair_`
+    - `break_even_sidecar.research_decision=break_even_sidecar_positive_watch_only`
+    - `break_even_sidecar.confidence_tier=guarded_review_ready`
+    - `break_even_sidecar.promotion_review_ready=true`
+    - handoff / sidecar agree on both `active_baseline` and `watch_candidate`
+    - the candidate is a same-hold same-trailing break-even-only delta
+  - then the guarded-review artifact should become:
+    - `research_decision=break_even_guarded_review_ready_keep_baseline_anchor`
+    - `review_state=ready`
+    - `next_research_priority=run_break_even_candidate_guarded_review_against_primary_forward_anchor`
+  - this artifact is a review gate only; it must not directly promote the candidate into the canonical anchor
+- Break-even review-conclusion source-owned rule:
+  - after `guarded_review` and `review_packet` are built, the exit/risk chain should emit a dedicated
+    `build_price_action_breakout_pullback_exit_risk_break_even_review_conclusion_sim_only.py`
+    artifact before source-gap audit
+  - minimum inputs:
+    - `review_packet`
+    - `guarded_review`
+    - `handoff`
+  - when all of the following are true:
+    - `handoff.research_decision=use_exit_risk_handoff_as_canonical_anchor`
+    - `handoff.source_head_status=baseline_anchor_active`
+    - `guarded_review.research_decision=break_even_guarded_review_ready_keep_baseline_anchor`
+    - `guarded_review.review_state=ready`
+    - `review_packet.research_decision=break_even_review_packet_ready_for_primary_anchor_review`
+    - `review_packet.packet_state=ready`
+    - `review_packet.primary_anchor` / `guarded_review.active_baseline` / `handoff.active_baseline` align
+    - `review_packet.review_candidate` / `guarded_review.watch_candidate` / `handoff.watch_candidate` align
+  - then the review-conclusion artifact should become:
+    - `research_decision=break_even_review_conclusion_ready_keep_baseline_anchor_review_only`
+    - `review_decision=keep_baseline_anchor_review_break_even_candidate_next`
+    - `arbitration_state=review_only`
+    - `next_research_priority=review_break_even_candidate_against_primary_forward_anchor`
+  - this artifact is the canonical review-only arbitration layer:
+    - keep baseline anchor active
+    - keep candidate review-only
+    - block promotion without fresh primary-forward anchor evidence
+- Break-even primary-anchor-review source-owned rule:
+  - after `review_conclusion` is built, the exit/risk chain should emit a dedicated
+    `build_price_action_breakout_pullback_exit_risk_break_even_primary_anchor_review_sim_only.py`
+    artifact before source-gap audit
+  - minimum inputs:
+    - `review_conclusion`
+    - `review_packet`
+    - `handoff`
+    - `forward_consensus`
+  - when all of the following are true:
+    - `handoff.research_decision=use_exit_risk_handoff_as_canonical_anchor`
+    - `handoff.source_head_status=baseline_anchor_active`
+    - `forward_consensus.research_decision=baseline_pair_keeps_anchor_across_current_forward_oos`
+    - `review_conclusion.research_decision=break_even_review_conclusion_ready_keep_baseline_anchor_review_only`
+    - `review_conclusion.arbitration_state=review_only`
+    - `review_packet.research_decision=break_even_review_packet_ready_for_primary_anchor_review`
+    - `review_packet.packet_state=ready`
+    - primary anchor / candidate align across the four inputs
+  - then the primary-anchor-review artifact should become:
+    - `research_decision=break_even_primary_anchor_review_complete_keep_baseline_anchor`
+    - `review_state=completed`
+    - `review_outcome=baseline_anchor_retained_candidate_remains_review_only`
+    - `next_research_priority=wait_fresh_primary_forward_anchor_evidence_before_break_even_candidate_reopen`
+  - this artifact closes the current review task itself:
+    - it does not promote the candidate
+    - it does not re-run compare windows
+    - it advances the chain from “需要 review” to “review 已完成，等待 fresh evidence”
+- Forward-blocker source-owned rule:
+  - the refreshed blocker in `run_price_action_breakout_pullback_exit_risk_research_chain_sim_only.py`
+    should be built after break-even sidecar and tail-capacity artifacts are available
+  - when consensus says `baseline_pair_keeps_anchor_across_current_forward_oos`,
+    break-even sidecar says `break_even_sidecar_positive_watch_only`,
+    and tail capacity says `exit_risk_forward_tail_capacity_supports_current_grid_no_tail_extension_required`
+    or `exit_risk_forward_tail_capacity_limited_watch_only`,
+    blocker `next_research_priority` should also collapse to
+    `watch_break_even_candidate_keep_baseline_anchor_defer_more_tail`
+    instead of staying generic `forward_oos_follow_up_pending`
+- Forward-consensus boundary rule:
+  - `build_price_action_breakout_pullback_exit_risk_forward_consensus_sim_only.py`
+    is a window-consensus layer, not the final post-OOS action arbiter
+  - when it emits `baseline_pair_keeps_anchor_across_current_forward_oos`,
+    it should explicitly expose:
+    - `allowed_now=['keep_baseline_pair_as_current_exit_risk_anchor']`
+    - `blocked_now=['promote_challenger_pair_as_new_exit_risk_anchor']`
+    - `next_research_priority=defer_to_canonical_exit_risk_blocker_or_handoff`
+  - this keeps the consensus artifact source-owned and audit-friendly
+    without over-deriving sidecar/tail follow-up that belongs to blocker/handoff
+- when the current canonical handoff is baseline-retained, break-even sidecar is `break_even_sidecar_positive_watch_only`, and tail capacity is either `exit_risk_forward_tail_capacity_limited_watch_only` or `exit_risk_forward_tail_capacity_supports_current_grid_no_tail_extension_required`, prefer the more specific next priority `watch_break_even_candidate_keep_baseline_anchor_defer_more_tail` over generic `forward_oos_follow_up_pending`
+- Exit/risk source-gap audit severity rule:
+  - when `handoff.research_decision=use_exit_risk_handoff_as_canonical_anchor`
+  - and `handoff.source_head_status=baseline_anchor_active`
+  - and `consumer_rule_ok=true`
+  - then upstream divergence in
+    - `exit_risk.selected_exit_params`
+    - `forward_blocker.challenge_pair.baseline_exit_params`
+    should not automatically be escalated as `consumer_drift_risk`
+  - if those upstream rows are merely superseded by the canonical handoff / watch-candidate merge,
+    downgrade them to watch-only source-gap findings such as
+    `selected_exit_params_superseded_by_canonical_handoff_anchor` and
+    `challenge_pair_baseline_superseded_by_canonical_handoff_anchor`
+    with research decision
+    `exit_risk_source_gap_detected_superseded_upstream_divergence_watch_only`
+  - keep true drift severity for canonical-consumer-rule breakage or sidecar/canonical active-baseline mismatch
+
+Already observed as low-value / not currently worth extending:
+
+- VPVR proxy
+- reclaim structure filter
+- daily_stop_r
+
+### Dashboard / frontend mainline
+
+Current durable frontend priority:
+
+- keep the workspace/artifacts view source-owned
+- preserve canonical artifact aliasing
+- preserve default focus on `price_action_breakout_pullback`
+- preserve multi-layer drilldown separation
+- keep public/internal surfaces explicitly separated
+- for canonical research source-heads (especially `price_action_exit_risk_handoff`), public snapshot/source-head rows should not stop at `recommended_brief`;
+  they should also carry the source-owned control fields needed by contracts/detail consumers, including:
+  - `source_head_status`
+  - `next_research_priority`
+  - `allowed_now`
+  - `blocked_now`
+- public workspace smoke / public acceptance should also keep an explicit browser assertion for the contracts source-head deep link
+  `#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff`
+  and require the visible control labels:
+  - `source head 状态`
+  - `下一研究优先级`
+  - `当前允许动作`
+  - `当前阻止动作`
+- public topology smoke should also cover the same contracts source-head deep link on both
+  `https://fuuu.fun` and `https://fenlie.fuuu.fun`
+  with dedicated screenshots / result rows, instead of only checking the generic contracts summary route
+- for public browser smoke, do not trust `page.getByText(...).first()` as a visibility oracle on long drill-down pages;
+  the contracts/source-head page can contain hidden duplicate text nodes in collapsed structures
+  while the visible expanded card already renders correctly.
+  Prefer a visible-element scan (`document.querySelectorAll('*')` + computed style + bounding rect) once body text confirms the marker exists.
+
+Current durable frontend architecture:
+
+- `#/overview` is now dual-mode:
+  - default `guide`
+  - optional `expert`
+  - state priority: `overview_mode` query > local preference > default guide
+- shared shell is now main-area-first instead of fixed three-column:
+  - desktop: collapsible left rail + main area
+  - half-screen / mid-width: left rail should prefer collapsed or overlay behavior
+  - right-side object details should stay on-demand drawer, not permanent third column
+- workspace long pages should preserve page-level TOC / `page_section` deep link behavior
+- internal alignment projection is a dedicated workspace page:
+  - `#/workspace/alignment?view=internal`
+  - do not mirror this internal-only feedback projection into the public snapshot
+
+Current durable raw-layer invariant:
+
+- workspace raw JSON blocks must keep width containment via `JsonBlock`, not raw unbounded `<pre>`
+- `JsonBlock` should preserve:
+  - outer shell: `.json-block-shell`
+  - inner block: `pre.json-block`
+- the shell must remain responsible for:
+  - `max-width: 100%`
+  - `min-width: 0`
+  - horizontal containment / local scroll ownership
+- the inner JSON block must remain responsible for:
+  - `white-space: pre-wrap`
+  - `overflow-wrap: anywhere`
+  - `word-break: break-word`
+- if raw/workspace starts showing page-level horizontal overflow again, inspect `JsonBlock` first before changing source artifacts or workspace routing
+- preserve the dedicated regression test:
+  - `JsonBlock 用壳层约束长 JSON，避免原始层直接把布局撑宽`
+
+---
+
+## 6. Key Paths
+
+### Repo roots
+
+- Workspace root: `/Users/jokenrobot/Downloads/Folders/fenlie`
+- System root: `/Users/jokenrobot/Downloads/Folders/fenlie/system`
+
+### Governance / memory
+
+- Operator rules: `/Users/jokenrobot/Downloads/Folders/fenlie/AGENTS.md`
+- This memory file: `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_CODEX_MEMORY.md`
+- Stable next-window handoff:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/NEXT_WINDOW_CONTEXT_LATEST.md`
+
+### Operator / handoff recovery
+
+- For cross-market / operator / review / live-guard tasks, the preferred cold-start read order is:
+  1. `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/NEXT_WINDOW_CONTEXT_LATEST.md`
+  2. latest `*_hot_universe_operator_brief.json`
+  3. the source-owned artifacts referenced by the current focus slots
+- Treat `NEXT_WINDOW_CONTEXT_LATEST.md` as the compact cross-session handoff layer:
+  - it is allowed to summarize current focus, gates, and recommended next steps
+  - it is **not** the source-of-truth for live positions, queue ownership, or execution permission
+- Current operator architecture now supports a stable three-slot contract:
+  - `primary`
+  - `followup`
+  - `secondary`
+  and each slot should stay source-linked with:
+  - source kind
+  - source artifact
+  - source status
+  - source recency
+  - source health
+  - source refresh action
+- Operator-level promotion / actionability / readiness gates are now durable control surfaces.
+  When debugging top briefs or panels, prefer checking whether those gates are source-backed
+  before editing any summary/UI consumer.
+
+### Skills / toolchains
+
+- Fenlie skills: `/Users/jokenrobot/.codex/skills/`
+- Superpowers skills: `/Users/jokenrobot/.agents/skills/superpowers/`
+- Codex config / MCPs: `/Users/jokenrobot/.codex/config.toml`
+
+### Dashboard
+
+- Frontend root: `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web`
+- Public snapshot:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/public/data/fenlie_dashboard_snapshot.json`
+- Internal snapshot:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/public/data/fenlie_dashboard_internal_snapshot.json`
+
+### Core scripts
+
+- Snapshot builder:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_dashboard_frontend_snapshot.py`
+- Operator panel refresh:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_operator_panel_refresh.py`
+- Hold forward stop refresh:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_price_action_breakout_pullback_exit_hold_forward_stop_refresh_sim_only.py`
+- Hold upstream refresh:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_price_action_breakout_pullback_hold_upstream_refresh_sim_only.py`
+- Hold upstream source-gap audit:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_price_action_breakout_pullback_hold_upstream_source_gap_audit_sim_only.py`
+- Exit/risk full research chain refresh:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_price_action_breakout_pullback_exit_risk_research_chain_sim_only.py`
+- Real-browser smoke:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_workspace_artifacts_smoke.py`
+
+---
+
+## 7. Reusable Validation Commands
+
+### Dashboard source contract
+
+```bash
+pytest -q /Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_build_dashboard_frontend_snapshot_script.py
+```
+
+### Local CLI wrapper
+
+Use the repo-owned wrapper first when global `lie` is unavailable or may point at the wrong environment:
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system
+./scripts/lie-local validate-config
+./scripts/lie-local test-all --fast --fast-ratio 0.10 --timeout-seconds 600
+```
+
+### Frontend TS / unit tests
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+npx tsc --noEmit
+npx vitest run src/App.test.tsx src/adapters/read-model.test.ts src/components/ui-kit.test.tsx
+```
+
+### Raw workspace regression
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+npx vitest run src/components/ui-kit.test.tsx -t "JsonBlock 用壳层约束长 JSON，避免原始层直接把布局撑宽"
+npx vitest run src/App.test.tsx -t "raw|原始层|原始快照"
+```
+
+### Refresh snapshot / panel
+
+```bash
+python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_operator_panel_refresh.py --workspace /Users/jokenrobot/Downloads/Folders/fenlie
+```
+
+### Operator / handoff quick audit
+
+```bash
+cat /Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/NEXT_WINDOW_CONTEXT_LATEST.md
+ls -1t /Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/*hot_universe_operator_brief.json | head -n 1
+```
+
+### Remote live ready-check quick audit
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system
+scripts/openclaw_cloud_bridge.sh live-takeover-ready-check
+```
+
+### Exit/risk full research chain refresh
+
+```bash
+python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_price_action_breakout_pullback_exit_risk_research_chain_sim_only.py \
+  --workspace /Users/jokenrobot/Downloads/Folders/fenlie \
+  --now 2026-03-23T22:30:00Z \
+  --refresh-panel
+```
+
+### Hold forward stop refresh
+
+```bash
+python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_price_action_breakout_pullback_exit_hold_forward_stop_refresh_sim_only.py \
+  --workspace /Users/jokenrobot/Downloads/Folders/fenlie \
+  --now 2026-03-23T22:55:00Z
+```
+
+### Hold upstream refresh
+
+```bash
+python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_price_action_breakout_pullback_hold_upstream_refresh_sim_only.py \
+  --workspace /Users/jokenrobot/Downloads/Folders/fenlie \
+  --now 2026-03-24T00:20:00Z
+```
+
+### Hold upstream source-gap audit
+
+```bash
+python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_price_action_breakout_pullback_hold_upstream_source_gap_audit_sim_only.py \
+  --workspace /Users/jokenrobot/Downloads/Folders/fenlie \
+  --stamp 20260323T232500Z
+```
+
+### Internal feedback publish + refresh
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+echo '{"feedback_id":"alignment_projection_rollout","headline":"将高价值对话反馈投射到内部对齐页","summary":"用单条命令发布 autopublish 并刷新 internal projection。","recommended_action":"打开 /workspace/alignment?view=internal 检查 headline、events、actions。"}' | npm run feedback:publish-refresh -- --now 2026-03-22T04:15:00Z
+```
+
+### Internal manual feedback publish + refresh
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+echo '{"feedback_id":"manual_alignment_fix","headline":"人工结构化反馈：补齐 manual 轨","summary":"manual 轨需要标准写入口，避免直接手改 jsonl。","recommended_action":"提供 publish-manual 与 publish-manual-refresh。"}' | npm run feedback:publish-manual-refresh -- --now 2026-03-22T06:41:00Z
+```
+
+### Real-browser smoke
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+npm run verify:public-surface -- --skip-workspace-build
+npm run smoke:workspace-routes
+npm run smoke:alignment-internal -- --skip-build
+```
+
+### Single release-checklist gate
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+npm run verify:release-checklist
+```
+
+### Internal manual probe browser smoke
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+npm run smoke:alignment-internal-manual-probe
+```
+
+### Compatibility alias kept
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+npm run smoke:workspace-artifacts
+```
+
+### Public topology smoke
+
+```bash
+python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_public_topology_smoke.py \
+  --workspace /Users/jokenrobot/Downloads/Folders/fenlie
+```
+
+### Cloudflare Pages production deploy
+
+On this machine, Wrangler may time out when `HTTP_PROXY` / `HTTPS_PROXY` are inherited. The package scripts now clear those variables internally, and the deploy chain now fails fast before build in non-interactive sessions that do not provide `CLOUDFLARE_API_TOKEN`, so prefer the wrapped npm entrypoints:
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+npm run cf:preflight
+npm run cf:deploy
+```
+
+Fast auth check:
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+npm run cf:whoami
+```
+
+Non-interactive note:
+
+- if `CLOUDFLARE_API_TOKEN` is missing, `cf:preflight` / `cf:whoami` / `cf:deploy` now stop immediately with an actionable token reminder instead of spending time on `build` and failing at Wrangler auth later
+- if a local Wrangler OAuth cache exists but is expired, the preflight now reports that precise cause and still requires `CLOUDFLARE_API_TOKEN` for non-interactive deploys
+- local dashboard deploys may provide `CLOUDFLARE_API_TOKEN` either via environment variable or via `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/.env.cloudflare.local`
+
+---
+
+## 8. Memory Update Rules
+
+Update this file only when one of these changes durably:
+
+- operating rules
+- delegation rules
+- key paths
+- stable mainline strategy priorities
+- reusable validation commands
+- durable architecture boundaries
+
+Do not write ephemeral content here:
+
+- temporary blockers
+- transient failing tests
+- one-off timestamps as “current truth”
+- live queue/head state
+- short-lived operator status
+
+Those belong in source artifacts or handoff reports, not in memory.
+
+---
+
+## 9. Current Durable Capability Notes
+
+- CoinGecko MCP is part of the Codex tool configuration and should be checked from tool visibility in each fresh session when needed
+- Superpowers is installed locally under:
+  - `/Users/jokenrobot/.codex/superpowers`
+  - `/Users/jokenrobot/.agents/skills/superpowers`
+- `run_price_action_breakout_pullback_exit_risk_research_chain_sim_only.py` now defaults to:
+  - refresh the full hold-side upstream chain first through `run_price_action_breakout_pullback_hold_upstream_refresh_sim_only.py`
+  - consume the emitted hold handoff + stop-condition from that single entrypoint
+  - when invoking the hold runner, keep the derivation dataset source-owned by the base artifact; do not override it with the latest exit-risk dataset, or hold stop-condition can drift to an inconclusive state
+  - build a fresh seed blocker from current `exit_risk + stop_condition`
+  - then run forward compare / consensus / refreshed blocker / sidecar / tail / handoff
+  - so the full chain no longer depends on a pre-existing `latest_price_action_breakout_pullback_exit_risk_forward_blocker_sim_only.json` as the default seed
+- hold upstream source-gap audit can now return:
+  - `hold_upstream_builder_sources_present_for_current_latest_artifacts`
+  - after restoring `hold_frontier_cost_sensitivity` / `hold_family_transfer_challenge` builders and adding the single-entry hold refresh runner
+- Real browser smoke for workspace artifacts is now scriptable and produces review artifacts plus screenshots
+- `verify:release-checklist` is the single pre-release gate for the dashboard frontend:
+  - `build -> test -> tsc -> dashboard python contracts -> workspace routes smoke -> internal alignment smoke -> public acceptance`
+  - current `npm run test:dashboard-python-contracts` bundle includes:
+    - `test_build_dashboard_frontend_snapshot_script.py`
+    - `test_run_operator_panel_refresh_script.py`
+    - `test_run_dashboard_workspace_artifacts_smoke_script.py`
+    - `test_run_dashboard_public_topology_smoke_script.py`
+    - `test_run_dashboard_public_acceptance_script.py`
+    - `test_publish_conversation_feedback_autopublish_internal_script.py`
+    - `test_publish_conversation_feedback_manual_internal_script.py`
+    - `test_build_conversation_feedback_projection_internal_script.py`
+    - `test_dashboard_feedback_publish_refresh_contract.py`
+    - `test_dashboard_feedback_publish_manual_contract.py`
+    - `test_dashboard_release_checklist_contract.py`
+- `verify:public-surface` 已可作为单一公开面验收入口；聚合报告会在子命令失败时保留 stdout/stderr 与 payload presence 审计字段
+- public topology smoke now uses a lighter browser navigation readiness target plus bounded retry for transient public-route browser jitter, while keeping the single-request timeout budget unchanged
+- Cloudflare Pages production deploy for the Fenlie dashboard uses wrapped npm entrypoints that self-clear inherited proxy variables before calling Wrangler, and now fail fast in non-interactive sessions that do not provide `CLOUDFLARE_API_TOKEN`
+- Cross-session operator recovery now has a stable compact handoff file:
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/NEXT_WINDOW_CONTEXT_LATEST.md`
+  - use it as the first read for operator / review / live-guard work, then resolve the latest timestamped source artifacts from there
+- The hot-universe operator layer now has a durable three-slot focus contract:
+  - `primary / followup / secondary`
+  - each slot carries source linkage and slot-level gating fields, so consumers should read those fields instead of re-deriving queue/head state in dashboards or briefs
+- Remote live diagnostics should be interpreted in layers, not as a flat blocker list:
+  1. `ops_live_gate` root causes
+  2. `risk_guard` actionable-ticket clearance
+  3. `remote_execution_contract` executable-contract clearance
+  4. `account_scope_alignment` scope interpretation
+- For `ops_live_gate` diagnostics, distinguish root causes from wrappers:
+  - root causes: `slot_anomaly`, `mode_drift`, `backtest_snapshot`
+  - derived wrappers: `rollback_hard`, `ops_status_red`
+  - do not spend a repair round on wrapper labels before the root causes are cleared
+- `backtest_snapshot` should now be diagnosed against the exact gate-date snapshot contract,
+  not mistaken for the old synthetic max-drawdown path.
+  The durable repair pattern is:
+  - rebuild the exact local gate-date snapshot
+  - rebuild the same snapshot remotely
+  - then refresh ops/live handoff consumers
+- When remote profitability history and ready-check market scope differ
+  (for example `spot` ready-check vs `portfolio_margin_um` history),
+  treat them as split-scope evidence instead of a single go-live verdict.
+  Profitability confirmation does not by itself clear the target market's live gate.
+- Final-stage architecture takeaways to preserve across sessions:
+  - keep a strict separation between:
+    - `source-of-truth artifacts`
+    - `compact handoff/context`
+    - `UI/operator summaries`
+    so that handoff files can accelerate recovery without becoming a shadow authority
+  - do not let research/analysis outputs directly mutate execution authority:
+    the durable chain should stay
+    `intel/research -> ticketization -> risk_guard -> execution_contract -> broker`
+  - backup or web-intel style inputs may participate only as `risk_only` fallback unless an explicit stronger authority contract is added;
+    they may reduce confidence, add no-trade flags, or veto, but should not unilaterally authorize a new live order
+  - for market reports / agent-written analysis, enforce a durable output split:
+    - `Fact`
+    - `Inference`
+    - `Tradeability`
+    so explanation quality does not masquerade as execution readiness
+  - profitable historical trading is evidence for strategy viability, not proof that the current live lane is executable;
+    execution readiness still depends on:
+    - actionable ticket presence
+    - current risk_guard clearance
+    - non-shadow execution contract
+    - market-scope alignment
+  - when alpha and venue differ, prefer explicit lane separation over forcing one venue to impersonate another:
+    for this project, commodity alpha should remain paper/manual-first until a real in-system bridge exists
+  - final-stage cleanup should prefer removing duplicate derivations and consumer-side inference,
+    not adding more top-level summaries; if a gate or queue can be read from a source artifact, consumer code should reference that source directly
+
+---
+
+## 10. Default Recovery Pattern for New Sessions
+
+If a new session starts cold:
+
+1. Read `AGENTS.md`
+2. Read this memory file
+3. If the task is operator / review / live-guard related, read `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/NEXT_WINDOW_CONTEXT_LATEST.md`
+4. Check current tool/MCP visibility if the task depends on MCPs
+5. Read only the artifacts directly relevant to the current task
+6. Run the smallest validation needed before editing
+7. Keep live path untouched unless the task explicitly requires it
