@@ -32,10 +32,19 @@
 - 选择最窄变更类别：DOC_ONLY、RESEARCH_ONLY、SIM_ONLY、LIVE_GUARD_ONLY、LIVE_EXECUTION_PATH。
 - 如果任务可能影响面向 execution 的路径，应在票据/手册中明确说明，并根据 change class 选择对应的 review。
 
-## Time / Retry / Idempotency / Timeout Constraints
+## Time Constraints
 - 研究/backtest 不得使用 `datetime.now()` 或 forward-looking index；只能用固定 event timestamp。
-- 请求与外部系统需限时（≤5000ms）、附带 retry/backoff、使用 idempotency key。
 - 所有 live deadline/backoff 都依赖 monotonic clock，不能拿 wall-clock 直接判断。
+
+## Retry Constraints
+- 请求与外部系统需限时（≤5000ms）、附带 retry/backoff。
+- retryable 操作必须附带明确的 idempotency key，保证幂等。
+
+## Idempotency Constraints
+- 任何 retryable 外部请求均需携带 idempotency key，避免重复状态变更。
+
+## Timeout Constraints
+- 对外请求 timeout 需保持在 ≤5000ms，超过即视为失败并记录。
 
 ## Memory Update Rule
 - 仅当 durable rule、delegation、key path、validation command 等长期结构改变时更新本文件。
