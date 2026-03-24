@@ -21,7 +21,7 @@
 
 ## Validation Rule
 - 任何变更前先验证 source artifacts。
-- 推荐命令集包含：`pytest -q system/tests/test_build_dashboard_frontend_snapshot_script.py`、`./scripts/lie-local validate-config`、`npm run verify:public-surface` 等。
+- 推荐命令集包含：`cd /Users/jokenrobot/Downloads/Folders/fenlie/system && pytest -q system/tests/test_build_dashboard_frontend_snapshot_script.py`、`cd /Users/jokenrobot/Downloads/Folders/fenlie/system && ./scripts/lie-local validate-config`、`cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run verify:public-surface` 等。
 - 记录验证结果在最终回复里，确保 no-touch live path。
 
 ## Stop Rule
