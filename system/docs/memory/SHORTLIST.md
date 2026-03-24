@@ -5,13 +5,13 @@ Fenlie 是以 ETHUSDT / 15m / single-symbol breakout-pullback 为主线的策略
 
 ## Authority Order
 1. source artifacts（dataset、builder outputs、handoff JSON）
-2. compact handoff/context（NEXT_WINDOW_CONTEXT_LATEST、handoff 中的 control fields；Task 2 落地后再补 contracts control fields）
+2. compact handoff/context（NEXT_WINDOW_CONTEXT_LATEST、handoff 中的 control fields、contracts 中定义的长期 authority/boundary 规则）
 3. UI/operator summaries
 4. 本地记忆与 chat 口述说明
 
 ## Current Main Priorities
 - 保持 `ETHUSDT / 15m / single-symbol / breakout-pullback` 研究主线，强调 price-action breakout-pullback 的 exit/risk 以及 hold-forward arbitration。
-- 当前主要由 source artifacts 提供 exit/risk、hold-forward arbitration 的 guard/control fields，memory_shortlist 仅作为摘要/导航，具体 challenge_pair 细节请参考后续 Task 2 contract deliverables。
+- 当前主要由 source artifacts 提供 exit/risk、hold-forward arbitration 的 guard/control fields，memory_shortlist 仅作为摘要/导航；具体 `challenge_pair` 命名与解释请参考 `memory/contracts/RESEARCH_CONTRACTS.md`。
 
 ## Low-Value
 - geometry_delta 截面推理（跨 symbol / cross-section 的 breakout 变体）
@@ -23,11 +23,14 @@ Fenlie 是以 ETHUSDT / 15m / single-symbol breakout-pullback 为主线的策略
 这些方向目前不再作为主线研究。
 
 ## Cold Start
+Main-agent bootstrap path：
 1. `AGENTS.md`
 2. `FENLIE_CODEX_MEMORY.md`
 3. `memory/MEMORY_INDEX.md`
 4. `memory/SHORTLIST.md`
-5. （Task 2 落地后）具体任务相关的 contract 文件
+5. 具体任务相关的 contract/source artifact
+
+子代理与人工不要把上面当成统一序列；请按 `memory/MEMORY_INDEX.md` 中的角色化读序选择最小必要读取范围。
 
 ## “继续 / 下一步” Semantics
 “继续”只在先决条件（state/queue/gate/source ownership）发生变化后才触发；优先处理能改变任何 source-owned gate、状态、手工 queue 或 user-visible 能力的未解决高危问题。连续两轮都没改变这些内容就需要停止并总结。

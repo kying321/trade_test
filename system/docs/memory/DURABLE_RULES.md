@@ -10,9 +10,10 @@
 - control fields（allowed_now、blocked_now、next_research_priority、source_head_status）是权威，其他文档引用前必须回源验证。
 
 ## Live Boundary Rule
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/memory/contracts/LIVE_BOUNDARY.md` 是 live-boundary 的 canonical contract；本章只保留 cold-start 所需的 durable 摘要，不重复维护执行细节长清单。
 - live capital、order routing、execution queue、fund scheduling 相关代码必须使用 `run-halfhour-pulse` mutex。
-- 所有 live deadlines/backoff 需用单调时钟；外部请求 timeout ≤ 5000ms；retryable 操作附带 idempotency key。
-- guardian 仅 veto，executor 只管 transport/execution；feedback、review、browser intel 只能降权或触发 review，不能直接提升 live 权限。
+- live-path request / retry / deadline 语义遵循 canonical contract：使用 monotonic clock、timeout ≤ 5000ms、retryable 外部操作附带 idempotency key，并保持 rate limiting。
+- guardian / executor 的 authority split 必须保持：feedback、review、browser intel 只能 veto / degrade / trigger review，不能直接提升 live 权限。
 
 ## Delegation Rule
 - 仅当用户明确允许 subagent/parallel work 且任务不是 critical path 时才委派。
@@ -34,19 +35,18 @@
 
 ## Time
 - 研究/backtest 不得使用 `datetime.now()` 或 forward-looking index；只能用固定 event timestamp。
-- 所有 live deadline/backoff 都依赖 monotonic clock，不能拿 wall-clock 直接判断。
+- 所有 live deadline/backoff 都依赖 monotonic clock，具体执行语义以 `memory/contracts/LIVE_BOUNDARY.md` 为准。
 
 ## Retry
-- 请求与外部系统需限时（≤5000ms）、附带 retry/backoff。
-- retryable 操作必须附带明确的 idempotency key，保证幂等。
+- live/outbound retry 只保留一条 durable 要求：必须带 backoff，且具体重试语义以 `memory/contracts/LIVE_BOUNDARY.md` 为准。
 
 ## Idempotency
-- 任何 retryable 外部请求均需携带 idempotency key，避免重复状态变更。
+- 任何 retryable 外部请求均需携带 idempotency key；更细的执行侧幂等语义仅在 canonical contract 维护。
 
 ## Timeout Constraints
-- 对外请求 timeout 需保持在 ≤5000ms，超过即视为失败并记录。
+- 对外请求 timeout 需保持在 ≤5000ms；rate limit / timeout 失败处理以 `memory/contracts/LIVE_BOUNDARY.md` 为准。
 
 ## Memory Update Rule
 - 仅当 durable rule、delegation、key path、validation command 等长期结构改变时更新本文件。
 - 临时 blocker、ready-check、某次回测结果、live queue/position 状态不得写入本章；这类内容属于 source artifacts 或 handoff brief。
-- Task 3 的收敛目标是让旧的大文件（如 `FENLIE_CODEX_MEMORY.md`）仅保留兼容启动与指向新 tree 的 summary，不再承担 deep contract 内容。
+- 旧的大文件（如 `FENLIE_CODEX_MEMORY.md`）现仅保留兼容启动与指向新 tree 的 summary，不再承担 deep contract 内容。
