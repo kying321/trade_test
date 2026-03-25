@@ -661,7 +661,7 @@ action_infra_canary_run() {
 }
 
 action_infra_canary_autopilot() {
-  local check_json rc_check tmp_json check_ok
+  local check_json rc_check tmp_json gate_json rc_gate
   set +e
   check_json="$(run_infra_canary_mode "autopilot-check" 2>/dev/null)"
   rc_check=$?
@@ -677,7 +677,8 @@ action_infra_canary_autopilot() {
 
   tmp_json="$(mktemp)"
   printf '%s\n' "${check_json}" > "${tmp_json}"
-  check_ok="$(
+  set +e
+  gate_json="$(
     python3 - "${tmp_json}" <<'PY'
 import json
 import sys
@@ -687,40 +688,54 @@ payload_path = Path(sys.argv[1])
 try:
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
 except Exception as exc:
-    print(f"invalid_json:{exc}", file=sys.stderr)
+    out = {
+        "executed": False,
+        "status": "skipped_invalid_check_payload",
+        "action": "infra-canary-autopilot",
+        "check_mode": "autopilot-check",
+        "check_ok": False,
+        "autopilot_allowed": False,
+        "reason": "invalid_autopilot_check_json",
+        "parse_error": str(exc),
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
     raise SystemExit(4)
-print("true" if bool(payload.get("ok", False)) else "false")
-PY
-  )"
-  if [[ "${check_ok}" == "true" ]]; then
-    rm -f "${tmp_json}" >/dev/null 2>&1 || true
-    action_infra_canary_run
-    return $?
-  fi
 
-  python3 - "${tmp_json}" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-payload_path = Path(sys.argv[1])
-payload = json.loads(payload_path.read_text(encoding="utf-8"))
+autopilot_allowed = bool(payload.get("autopilot_allowed", False))
 out = {
     "executed": False,
-    "status": "skipped_not_ready",
+    "status": "ready_to_run" if autopilot_allowed else "skipped_not_ready",
     "action": "infra-canary-autopilot",
     "check_mode": "autopilot-check",
     "check_ok": bool(payload.get("ok", False)),
-    "reason": str(payload.get("reason", "autopilot_check_blocked")),
-    "autopilot_allowed": bool(payload.get("autopilot_allowed", False)),
+    "autopilot_allowed": autopilot_allowed,
+    "reason": str(payload.get("reason", "ready" if autopilot_allowed else "autopilot_check_blocked")),
 }
 steps = payload.get("steps", {})
 if isinstance(steps, dict):
     out["steps"] = steps
 print(json.dumps(out, ensure_ascii=False, indent=2))
+raise SystemExit(0 if autopilot_allowed else 3)
 PY
+  )"
+  rc_gate=$?
+  set -e
+  if (( rc_gate == 0 )); then
+    rm -f "${tmp_json}" >/dev/null 2>&1 || true
+    action_infra_canary_run
+    return $?
+  fi
+  if (( rc_gate == 3 || rc_gate == 4 )); then
+    printf '%s\n' "${gate_json}"
+    rm -f "${tmp_json}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  echo "FUSE: infra-canary-autopilot gate parse failed unexpectedly (rc=${rc_gate})." >&2
+  if [[ -n "${gate_json}" ]]; then
+    echo "${gate_json}" >&2
+  fi
   rm -f "${tmp_json}" >/dev/null 2>&1 || true
-  return 0
+  return 2
 }
 
 append_sample_record() {

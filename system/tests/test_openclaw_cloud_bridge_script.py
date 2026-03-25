@@ -37,12 +37,15 @@ if "--mode autopilot-check" in remote_cmd:
     mode = os.environ.get("FAKE_SSH_AUTOPILOT_MODE", "blocked")
     if mode == "blocked":
         payload = {
-            "ok": False,
+            "ok": True,
             "mode": "autopilot_check",
             "autopilot_allowed": False,
             "reason": "daily_budget_cap_reached",
             "steps": {"budget": {"within_cap": False}},
         }
+    elif mode == "invalid-json":
+        print("{not-json")
+        raise SystemExit(0)
     else:
         payload = {"ok": True, "mode": "autopilot_check", "autopilot_allowed": True}
     print(json.dumps(payload))
@@ -140,7 +143,37 @@ print(json.dumps({"ok": True, "remote_cmd": remote_cmd}))
         assert payload["executed"] is False
         assert payload["status"] == "skipped_not_ready"
         assert payload["reason"] == "daily_budget_cap_reached"
+        assert payload["autopilot_allowed"] is False
         remote_cmds = self._read_remote_cmds(proc)
         assert len(remote_cmds) == 1
         assert "--mode autopilot-check" in remote_cmds[0]
         assert all("--mode run" not in cmd for cmd in remote_cmds)
+
+    def test_infra_canary_autopilot_skips_safely_when_check_json_invalid(self) -> None:
+        proc = self._run_bridge(
+            "infra-canary-autopilot",
+            extra_env={"FAKE_SSH_AUTOPILOT_MODE": "invalid-json"},
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        payload = json.loads(proc.stdout)
+        assert payload["executed"] is False
+        assert payload["status"] == "skipped_invalid_check_payload"
+        assert payload["reason"] == "invalid_autopilot_check_json"
+        assert payload["autopilot_allowed"] is False
+        remote_cmds = self._read_remote_cmds(proc)
+        assert len(remote_cmds) == 1
+        assert "--mode autopilot-check" in remote_cmds[0]
+        assert all("--mode run" not in cmd for cmd in remote_cmds)
+
+    def test_infra_canary_autopilot_runs_only_when_gate_allows(self) -> None:
+        proc = self._run_bridge(
+            "infra-canary-autopilot",
+            extra_env={"FAKE_SSH_AUTOPILOT_MODE": "allowed"},
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        remote_cmds = self._read_remote_cmds(proc)
+        assert len(remote_cmds) == 2
+        assert "--mode autopilot-check" in remote_cmds[0]
+        assert "--mode run" in remote_cmds[1]
