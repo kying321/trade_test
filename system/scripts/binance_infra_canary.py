@@ -92,30 +92,127 @@ def build_idempotency_key(*, day_key: str, market: str, symbol: str, quote_usdt:
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:28]
 
 
+def load_idempotency_state(path: Path) -> dict[str, Any]:
+    payload = read_json(path, {})
+    if not isinstance(payload, dict):
+        payload = {}
+    attempts = payload.get("attempts", {}) if isinstance(payload.get("attempts", {}), dict) else {}
+    legacy_keys = payload.get("keys", []) if isinstance(payload.get("keys", []), list) else []
+    normalized_attempts: dict[str, Any] = {}
+    for key, row in attempts.items():
+        if not isinstance(row, dict):
+            continue
+        normalized_attempts[str(key)] = dict(row)
+    for raw_key in legacy_keys:
+        key = str(raw_key).strip()
+        if not key or key in normalized_attempts:
+            continue
+        normalized_attempts[key] = {
+            "attempt_key": key,
+            "status": "completed",
+            "phase": "legacy_completed",
+            "updated_at_utc": now_utc_iso(),
+            "legacy": True,
+        }
+    return {
+        "updated_at_utc": str(payload.get("updated_at_utc", "")),
+        "attempts": normalized_attempts,
+    }
+
+
+def save_idempotency_state(path: Path, payload: dict[str, Any]) -> None:
+    attempts = payload.get("attempts", {}) if isinstance(payload.get("attempts", {}), dict) else {}
+    write_json(
+        path,
+        {
+            "updated_at_utc": now_utc_iso(),
+            "keys": sorted([key for key, row in attempts.items() if isinstance(row, dict) and str(row.get("status", "")) == "completed"]),
+            "attempts": attempts,
+        },
+    )
+
+
+def upsert_attempt_state(path: Path, *, attempt_key: str, patch: dict[str, Any]) -> dict[str, Any]:
+    payload = load_idempotency_state(path)
+    attempts = payload.get("attempts", {})
+    current = attempts.get(attempt_key, {}) if isinstance(attempts.get(attempt_key, {}), dict) else {}
+    updated = dict(current)
+    updated.update(patch)
+    updated["attempt_key"] = attempt_key
+    updated["updated_at_utc"] = now_utc_iso()
+    if "created_at_utc" not in updated:
+        updated["created_at_utc"] = updated["updated_at_utc"]
+    attempts[attempt_key] = updated
+    payload["attempts"] = attempts
+    save_idempotency_state(path, payload)
+    return updated
+
+
+def get_attempt_state(path: Path, attempt_key: str) -> dict[str, Any]:
+    payload = load_idempotency_state(path)
+    attempts = payload.get("attempts", {})
+    row = attempts.get(attempt_key, {}) if isinstance(attempts.get(attempt_key, {}), dict) else {}
+    return dict(row)
+
+
+def classify_attempt_gate(attempt: dict[str, Any]) -> tuple[bool, str]:
+    status = str(attempt.get("status", "")).strip().lower()
+    if not status:
+        return False, ""
+    if status == "completed":
+        return True, "idempotent_skip"
+    if status in {"buy_submitting", "buy_transport_ambiguous", "buy_filled_sell_pending", "sell_submitting", "needs_recovery"}:
+        return True, "recovery_required"
+    return False, ""
+
+
 def load_budget_state(path: Path) -> dict[str, Any]:
     payload = read_json(path, {})
     return payload if isinstance(payload, dict) else {}
 
 
-def load_day_budget(path: Path, day_key: str) -> tuple[dict[str, Any], float]:
+def load_day_budget(path: Path, day_key: str) -> tuple[dict[str, Any], dict[str, Any], float]:
     payload = load_budget_state(path)
     days = payload.get("days", {}) if isinstance(payload.get("days", {}), dict) else {}
     day_payload = days.get(day_key, {}) if isinstance(days.get(day_key, {}), dict) else {}
     spent = to_float(day_payload.get("spent_quote_usdt", 0.0), 0.0)
-    return payload, max(0.0, spent)
+    return payload, day_payload, max(0.0, spent)
 
 
-def record_budget_event(path: Path, *, day_key: str, quote_usdt: float, event: dict[str, Any]) -> dict[str, Any]:
+def record_budget_event(
+    path: Path,
+    *,
+    day_key: str,
+    attempt_key: str,
+    quote_usdt: float,
+    status: str,
+    consume_budget: bool,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = load_budget_state(path)
     days = payload.get("days", {}) if isinstance(payload.get("days", {}), dict) else {}
     day_payload = days.get(day_key, {}) if isinstance(days.get(day_key, {}), dict) else {}
     events = day_payload.get("events", []) if isinstance(day_payload.get("events", []), list) else []
+    consumed_attempt_keys = day_payload.get("consumed_attempt_keys", []) if isinstance(day_payload.get("consumed_attempt_keys", []), list) else []
     new_events = list(events)
+    event = {
+        "ts_utc": now_utc_iso(),
+        "attempt_key": attempt_key,
+        "quote_usdt": float(quote_usdt),
+        "status": str(status),
+    }
+    if isinstance(extra, dict):
+        event.update(extra)
     new_events.append(event)
-    spent = to_float(day_payload.get("spent_quote_usdt", 0.0), 0.0) + max(0.0, float(quote_usdt))
+    consumed_keys = [str(x) for x in consumed_attempt_keys if str(x).strip()]
+    spent = to_float(day_payload.get("spent_quote_usdt", 0.0), 0.0)
+    if consume_budget and attempt_key not in consumed_keys:
+        spent += max(0.0, float(quote_usdt))
+        consumed_keys.append(attempt_key)
     days[day_key] = {
         "spent_quote_usdt": float(spent),
         "events": new_events[-100:],
+        "consumed_attempt_keys": consumed_keys[-100:],
         "updated_at_utc": now_utc_iso(),
     }
     payload["days"] = days
@@ -150,6 +247,33 @@ def summarize_account_ready(account: dict[str, Any], *, symbol: str, quote_usdt:
 
 def write_summary(output_root: Path, summary: dict[str, Any]) -> None:
     write_json(output_root / "review" / "latest_binance_infra_canary.json", summary)
+
+
+def mark_attempt_and_budget(
+    *,
+    idempotency_path: Path,
+    budget_path: Path,
+    day_key: str,
+    attempt_key: str,
+    quote_usdt: float,
+    attempt_patch: dict[str, Any],
+    budget_status: str | None = None,
+    consume_budget: bool = False,
+    budget_extra: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    attempt = upsert_attempt_state(idempotency_path, attempt_key=attempt_key, patch=attempt_patch)
+    day_budget = None
+    if budget_status:
+        day_budget = record_budget_event(
+            budget_path,
+            day_key=day_key,
+            attempt_key=attempt_key,
+            quote_usdt=quote_usdt,
+            status=budget_status,
+            consume_budget=consume_budget,
+            extra=budget_extra,
+        )
+    return attempt, day_budget
 
 
 def main() -> int:
@@ -246,7 +370,7 @@ def main() -> int:
             account_ready = summarize_account_ready(account, symbol=symbol, quote_usdt=max(quote_usdt, float(lot["min_notional"])))
             summary["steps"]["account_ready"] = account_ready
 
-            _, spent_today = load_day_budget(budget_path, day_key)
+            _, _, spent_today = load_day_budget(budget_path, day_key)
             within_cap = spent_today + quote_usdt <= budget_cap + 1e-12
             summary["steps"]["budget"] = {
                 "day_key": day_key,
@@ -257,13 +381,16 @@ def main() -> int:
             }
 
             idem_key = build_idempotency_key(day_key=day_key, market=market, symbol=symbol, quote_usdt=quote_usdt)
-            recorded_keys = load_list_ledger(idempotency_path, "keys")
+            current_attempt = get_attempt_state(idempotency_path, idem_key)
+            should_skip, skip_reason = classify_attempt_gate(current_attempt)
             summary["steps"]["idempotency"] = {
                 "key": idem_key,
-                "skipped": False,
+                "skipped": bool(should_skip),
+                "current_status": str(current_attempt.get("status", "")),
+                "current_phase": str(current_attempt.get("phase", "")),
             }
 
-            summary["autopilot_allowed"] = bool(account_ready["ready"] and within_cap and mode in {"probe", "autopilot-check", "run"})
+            summary["autopilot_allowed"] = bool(account_ready["ready"] and within_cap and not should_skip and mode in {"probe", "autopilot-check", "run"})
             if mode == "autopilot-check":
                 write_summary(output_root, summary)
                 return 0
@@ -289,21 +416,39 @@ def main() -> int:
                 write_summary(output_root, summary)
                 return 2
 
-            if idem_key in set(recorded_keys):
+            if should_skip:
                 summary["steps"]["idempotency"] = {
-                    "key": idem_key,
+                    **summary["steps"]["idempotency"],
                     "skipped": True,
-                    "reason": "idempotent_skip",
+                    "reason": skip_reason,
                 }
                 summary["steps"]["round_trip"] = {
                     "executed": False,
-                    "reason": "idempotent_skip",
+                    "reason": skip_reason,
                 }
+                summary["ok"] = bool(skip_reason == "idempotent_skip")
+                summary["autopilot_allowed"] = False
                 write_summary(output_root, summary)
-                return 0
+                return 0 if skip_reason == "idempotent_skip" else 2
 
             base_asset = str(account_ready["base_asset"])
             buy_client_order_id = f"infra-buy-{idem_key[:16]}"
+            mark_attempt_and_budget(
+                idempotency_path=idempotency_path,
+                budget_path=budget_path,
+                day_key=day_key,
+                attempt_key=idem_key,
+                quote_usdt=quote_usdt,
+                attempt_patch={
+                    "status": "buy_submitting",
+                    "phase": "buy_submitting",
+                    "market": market,
+                    "symbol": symbol,
+                    "quote_usdt": float(quote_usdt),
+                    "mode": mode,
+                    "buy_client_order_id": buy_client_order_id,
+                },
+            )
             try:
                 buy_rsp = client.place_market_order(
                     symbol=symbol,
@@ -319,9 +464,28 @@ def main() -> int:
                     "reason": "exchange_reject",
                     "error": str(exc),
                 }
+                upsert_attempt_state(
+                    idempotency_path,
+                    attempt_key=idem_key,
+                    patch={
+                        "status": "completed",
+                        "phase": "buy_exchange_reject",
+                        "error": str(exc),
+                        "finished_at_utc": now_utc_iso(),
+                    },
+                )
                 write_summary(output_root, summary)
                 return 2
             except (ConnectionError, TimeoutError, OSError) as exc:
+                upsert_attempt_state(
+                    idempotency_path,
+                    attempt_key=idem_key,
+                    patch={
+                        "status": "needs_recovery",
+                        "phase": "buy_transport_ambiguous",
+                        "error": str(exc),
+                    },
+                )
                 panic_close_all(output_root, reason="infra_canary_order_transport_ambiguity", detail=str(exc))
 
             buy_qty = max(to_float(buy_rsp.get("executedQty", planned_qty), planned_qty), 0.0)
@@ -329,7 +493,42 @@ def main() -> int:
             if sell_qty <= 0.0:
                 panic_close_all(output_root, reason="infra_canary_invalid_sell_qty", detail=f"buy_qty={buy_qty}")
 
+            _, day_budget = mark_attempt_and_budget(
+                idempotency_path=idempotency_path,
+                budget_path=budget_path,
+                day_key=day_key,
+                attempt_key=idem_key,
+                quote_usdt=quote_usdt,
+                attempt_patch={
+                    "status": "needs_recovery",
+                    "phase": "buy_filled_sell_pending",
+                    "buy": buy_rsp,
+                    "buy_quantity": float(buy_qty),
+                },
+                budget_status="buy_filled_sell_pending",
+                consume_budget=True,
+                budget_extra={
+                    "market": market,
+                    "symbol": symbol,
+                },
+            )
+            if day_budget is not None:
+                summary["steps"]["budget"] = {
+                    **summary["steps"]["budget"],
+                    "spent_quote_usdt": float(day_budget.get("spent_quote_usdt", quote_usdt)),
+                    "within_cap": bool(to_float(day_budget.get("spent_quote_usdt", quote_usdt), quote_usdt) <= budget_cap + 1e-12),
+                }
+
             sell_client_order_id = f"infra-sell-{idem_key[:15]}"
+            upsert_attempt_state(
+                idempotency_path,
+                attempt_key=idem_key,
+                patch={
+                    "status": "sell_submitting",
+                    "phase": "sell_submitting",
+                    "sell_client_order_id": sell_client_order_id,
+                },
+            )
             try:
                 sell_rsp = client.place_market_order(
                     symbol=symbol,
@@ -345,9 +544,39 @@ def main() -> int:
                     "error": str(exc),
                     "phase": "sell",
                 }
+                mark_attempt_and_budget(
+                    idempotency_path=idempotency_path,
+                    budget_path=budget_path,
+                    day_key=day_key,
+                    attempt_key=idem_key,
+                    quote_usdt=quote_usdt,
+                    attempt_patch={
+                        "status": "needs_recovery",
+                        "phase": "sell_exchange_reject",
+                        "error": str(exc),
+                    },
+                    budget_status="needs_recovery",
+                    consume_budget=False,
+                    budget_extra={"phase": "sell_exchange_reject"},
+                )
                 write_summary(output_root, summary)
                 return 2
             except (ConnectionError, TimeoutError, OSError) as exc:
+                mark_attempt_and_budget(
+                    idempotency_path=idempotency_path,
+                    budget_path=budget_path,
+                    day_key=day_key,
+                    attempt_key=idem_key,
+                    quote_usdt=quote_usdt,
+                    attempt_patch={
+                        "status": "needs_recovery",
+                        "phase": "sell_transport_ambiguous",
+                        "error": str(exc),
+                    },
+                    budget_status="needs_recovery",
+                    consume_budget=False,
+                    budget_extra={"phase": "sell_transport_ambiguous"},
+                )
                 panic_close_all(output_root, reason="infra_canary_order_transport_ambiguity", detail=str(exc))
 
             dust_qty = max(0.0, buy_qty - sell_qty)
@@ -358,33 +587,52 @@ def main() -> int:
                     "reason": "dust_not_allowed",
                     "dust": {"base_asset": base_asset, "base_asset_qty": float(dust_qty)},
                 }
+                mark_attempt_and_budget(
+                    idempotency_path=idempotency_path,
+                    budget_path=budget_path,
+                    day_key=day_key,
+                    attempt_key=idem_key,
+                    quote_usdt=quote_usdt,
+                    attempt_patch={
+                        "status": "needs_recovery",
+                        "phase": "dust_not_allowed",
+                        "sell": sell_rsp,
+                    },
+                    budget_status="needs_recovery",
+                    consume_budget=False,
+                    budget_extra={"phase": "dust_not_allowed"},
+                )
                 write_summary(output_root, summary)
                 return 2
 
-            recorded_keys.append(idem_key)
-            save_list_ledger(idempotency_path, key="keys", values=recorded_keys, max_items=10000)
-            day_budget = record_budget_event(
-                budget_path,
+            _, day_budget = mark_attempt_and_budget(
+                idempotency_path=idempotency_path,
+                budget_path=budget_path,
                 day_key=day_key,
+                attempt_key=idem_key,
                 quote_usdt=quote_usdt,
-                event={
-                    "ts_utc": now_utc_iso(),
-                    "mode": mode,
-                    "market": market,
-                    "symbol": symbol,
-                    "quote_usdt": float(quote_usdt),
-                    "status": "filled",
+                attempt_patch={
+                    "status": "completed",
+                    "phase": "completed",
+                    "sell": sell_rsp,
+                    "finished_at_utc": now_utc_iso(),
                 },
+                budget_status="completed",
+                consume_budget=False,
+                budget_extra={"phase": "completed"},
             )
-            summary["steps"]["budget"] = {
-                **summary["steps"]["budget"],
-                "spent_quote_usdt": float(day_budget.get("spent_quote_usdt", quote_usdt)),
-                "within_cap": bool(to_float(day_budget.get("spent_quote_usdt", quote_usdt), quote_usdt) <= budget_cap + 1e-12),
-            }
+            if day_budget is not None:
+                summary["steps"]["budget"] = {
+                    **summary["steps"]["budget"],
+                    "spent_quote_usdt": float(day_budget.get("spent_quote_usdt", quote_usdt)),
+                    "within_cap": bool(to_float(day_budget.get("spent_quote_usdt", quote_usdt), quote_usdt) <= budget_cap + 1e-12),
+                }
             summary["steps"]["idempotency"] = {
                 "key": idem_key,
                 "skipped": False,
                 "recorded": True,
+                "current_status": "completed",
+                "current_phase": "completed",
             }
             summary["steps"]["round_trip"] = {
                 "executed": True,

@@ -367,3 +367,91 @@ def test_run_transport_ambiguity_triggers_panic_class_failure(tmp_path: Path, mo
 
     payload = _read_summary(out_root)
     assert str(payload.get("failure_class", "")) == "panic"
+
+
+def test_run_buy_fill_then_sell_ambiguity_records_recovery_state_and_blocks_rerun(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+
+    class _SellAmbiguousClient(_ReadySpotClient):
+        def place_market_order(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            quantity: float,
+            client_order_id: str,
+            quote_order_qty: float | None = None,
+        ) -> dict[str, object]:
+            if side == "BUY":
+                return super().place_market_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    client_order_id=client_order_id,
+                    quote_order_qty=quote_order_qty,
+                )
+            self.orders.append(
+                {
+                    "side": side,
+                    "quantity": quantity,
+                    "quote_order_qty": quote_order_qty,
+                    "client_order_id": client_order_id,
+                }
+            )
+            raise ConnectionError("sell socket hang up")
+
+    client = _SellAmbiguousClient()
+    monkeypatch.setattr(mod, "BinanceSpotClient", lambda **kwargs: client)
+    monkeypatch.setattr(mod, "resolve_binance_credentials", lambda allow_daemon_env_fallback: ("k", "s", "process_env"))
+
+    cfg_path = tmp_path / "config.yaml"
+    _write_config(cfg_path)
+    out_root = tmp_path / "output"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "binance_infra_canary.py",
+            "--config",
+            str(cfg_path),
+            "--output-root",
+            str(out_root),
+            "--mode",
+            "run",
+        ],
+    )
+    rc1 = mod.main()
+    assert rc1 == 3
+
+    idem_key = mod.build_idempotency_key(
+        day_key=mod.current_utc_date().isoformat(),
+        market="spot",
+        symbol="BTCUSDT",
+        quote_usdt=5.0,
+    )
+    idem_state = json.loads((out_root / "state" / "infra_canary_idempotency.json").read_text(encoding="utf-8"))
+    attempt = idem_state["attempts"][idem_key]
+    assert str(attempt["status"]) == "needs_recovery"
+    assert str(attempt["phase"]) == "sell_transport_ambiguous"
+    assert str(attempt["buy"]["status"]) == "FILLED"
+
+    budget_state = json.loads((out_root / "state" / "infra_canary_budget.json").read_text(encoding="utf-8"))
+    day_state = budget_state["days"][mod.current_utc_date().isoformat()]
+    assert float(day_state["spent_quote_usdt"]) >= 5.0
+    assert any(str(row.get("status")) == "buy_filled_sell_pending" for row in day_state["events"])
+
+    first_buy_count = len([row for row in client.orders if str(row["side"]) == "BUY"])
+    assert first_buy_count == 1
+
+    rc2 = mod.main()
+    assert rc2 == 2
+    second_buy_count = len([row for row in client.orders if str(row["side"]) == "BUY"])
+    assert second_buy_count == 1
+
+    payload = _read_summary(out_root)
+    idem = payload.get("steps", {}).get("idempotency", {})
+    assert isinstance(idem, dict)
+    assert bool(idem.get("skipped")) is True
+    assert str(idem.get("reason", "")) == "recovery_required"
