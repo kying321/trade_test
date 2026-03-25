@@ -49,6 +49,15 @@ def quantize_floor(value: float, step: float) -> float:
     return math.floor(float(value) / s) * s
 
 
+def quantize_ceil(value: float, step: float) -> float:
+    s = max(1e-12, float(step))
+    return math.ceil((float(value) - 1e-12) / s) * s
+
+
+def normalize_quote(value: float) -> float:
+    return round(max(0.0, float(value)), 8)
+
+
 def infer_lot_constraints(exchange_info: dict[str, Any], symbol: str) -> dict[str, float]:
     out = {
         "step_size": 0.000001,
@@ -85,6 +94,14 @@ def calc_buy_quantity(*, quote_usdt: float, price: float, step_size: float, min_
     if qty * px < min_notional:
         qty = quantize_floor((min_notional / px) + step_size, step_size)
     return max(0.0, qty)
+
+
+def calc_required_round_trip_quote(*, price: float, step_size: float, min_qty: float, min_notional: float) -> float:
+    px = max(1e-12, float(price))
+    step = max(1e-12, float(step_size))
+    min_base_qty = max(float(min_qty), step)
+    required_qty = max(min_base_qty, quantize_ceil(float(min_notional) / px, step))
+    return normalize_quote(required_qty * px)
 
 
 def build_idempotency_key(*, day_key: str, market: str, symbol: str, quote_usdt: float) -> str:
@@ -280,7 +297,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Independent Binance infra canary actor.")
     parser.add_argument("--market", default="spot")
     parser.add_argument("--symbol", default="BTCUSDT")
-    parser.add_argument("--quote-usdt", type=float, default=5.0)
+    parser.add_argument("--quote-usdt", type=float, default=10.0)
+    parser.add_argument("--single-run-cap-usdt", type=float, default=12.0)
     parser.add_argument("--daily-budget-cap-usdt", type=float, default=20.0)
     parser.add_argument("--allow-dust", action="store_true")
     parser.add_argument("--mode", choices=["probe", "run", "autopilot-check"], default="probe")
@@ -306,7 +324,8 @@ def main() -> int:
     mode = str(args.mode)
     symbol = str(args.symbol).strip().upper()
     market = str(args.market).strip().lower()
-    quote_usdt = max(0.0, float(args.quote_usdt))
+    requested_quote_usdt = normalize_quote(args.quote_usdt)
+    single_run_cap_usdt = normalize_quote(args.single_run_cap_usdt)
     budget_cap = max(0.0, float(args.daily_budget_cap_usdt))
 
     summary: dict[str, Any] = {
@@ -314,7 +333,9 @@ def main() -> int:
         "mode": mode,
         "market": market,
         "symbol": symbol,
-        "quote_usdt": quote_usdt,
+        "quote_usdt": requested_quote_usdt,
+        "requested_quote_usdt": requested_quote_usdt,
+        "single_run_cap_usdt": single_run_cap_usdt,
         "daily_budget_cap_usdt": budget_cap,
         "started_at_utc": now_utc_iso(),
         "config": str(cfg_path),
@@ -354,33 +375,54 @@ def main() -> int:
                 panic_close_all(output_root, reason="infra_canary_transport_ambiguity", detail=str(exc))
 
             lot = infer_lot_constraints(exchange_info, symbol)
-            planned_qty = calc_buy_quantity(
-                quote_usdt=quote_usdt,
+            required_round_trip_quote_usdt = calc_required_round_trip_quote(
                 price=price,
                 step_size=float(lot["step_size"]),
                 min_qty=float(lot["min_qty"]),
                 min_notional=float(lot["min_notional"]),
             )
+            effective_quote_usdt = normalize_quote(max(requested_quote_usdt, required_round_trip_quote_usdt))
+            skip_reasons: list[str] = []
+            if effective_quote_usdt > single_run_cap_usdt + 1e-12:
+                skip_reasons.append("single_run_cap_exceeded")
+            planned_qty = calc_buy_quantity(
+                quote_usdt=effective_quote_usdt,
+                price=price,
+                step_size=float(lot["step_size"]),
+                min_qty=float(lot["min_qty"]),
+                min_notional=float(lot["min_notional"]),
+            )
+            quote_context = {
+                "requested_quote_usdt": float(requested_quote_usdt),
+                "required_round_trip_quote_usdt": float(required_round_trip_quote_usdt),
+                "effective_quote_usdt": float(effective_quote_usdt),
+                "single_run_cap_usdt": float(single_run_cap_usdt),
+            }
             summary["steps"]["plan"] = {
                 "price": float(price),
                 "planned_buy_quantity": float(planned_qty),
                 "constraints": lot,
+                **quote_context,
+                "skip_reasons": skip_reasons,
             }
+            summary["required_round_trip_quote_usdt"] = float(required_round_trip_quote_usdt)
+            summary["effective_quote_usdt"] = float(effective_quote_usdt)
 
-            account_ready = summarize_account_ready(account, symbol=symbol, quote_usdt=max(quote_usdt, float(lot["min_notional"])))
+            account_ready = summarize_account_ready(account, symbol=symbol, quote_usdt=effective_quote_usdt)
             summary["steps"]["account_ready"] = account_ready
 
             _, _, spent_today = load_day_budget(budget_path, day_key)
-            within_cap = spent_today + quote_usdt <= budget_cap + 1e-12
+            within_cap = spent_today + effective_quote_usdt <= budget_cap + 1e-12
             summary["steps"]["budget"] = {
                 "day_key": day_key,
                 "spent_quote_usdt": float(spent_today),
-                "pending_quote_usdt": float(quote_usdt),
+                "pending_quote_usdt": float(effective_quote_usdt),
                 "daily_budget_cap_usdt": float(budget_cap),
                 "within_cap": bool(within_cap),
+                **quote_context,
             }
 
-            idem_key = build_idempotency_key(day_key=day_key, market=market, symbol=symbol, quote_usdt=quote_usdt)
+            idem_key = build_idempotency_key(day_key=day_key, market=market, symbol=symbol, quote_usdt=effective_quote_usdt)
             current_attempt = get_attempt_state(idempotency_path, idem_key)
             should_skip, skip_reason = classify_attempt_gate(current_attempt)
             summary["steps"]["idempotency"] = {
@@ -388,9 +430,10 @@ def main() -> int:
                 "skipped": bool(should_skip),
                 "current_status": str(current_attempt.get("status", "")),
                 "current_phase": str(current_attempt.get("phase", "")),
+                **quote_context,
             }
 
-            summary["autopilot_allowed"] = bool(account_ready["ready"] and within_cap and not should_skip and mode in {"probe", "autopilot-check", "run"})
+            summary["autopilot_allowed"] = bool(account_ready["ready"] and within_cap and not should_skip and not skip_reasons and mode in {"probe", "autopilot-check", "run"})
             if mode == "autopilot-check":
                 write_summary(output_root, summary)
                 return 0
@@ -402,19 +445,20 @@ def main() -> int:
                 return 2
 
             if mode == "probe":
-                summary["autopilot_allowed"] = bool(within_cap)
+                summary["autopilot_allowed"] = bool(within_cap and not skip_reasons)
                 write_summary(output_root, summary)
                 return 0
 
-            if not within_cap:
-                summary["ok"] = False
-                summary["autopilot_allowed"] = False
+            if skip_reasons:
                 summary["steps"]["round_trip"] = {
                     "executed": False,
-                    "reason": "daily_budget_exceeded",
+                    "reason": skip_reasons[0],
+                    "skip_reasons": skip_reasons,
+                    **quote_context,
                 }
+                summary["autopilot_allowed"] = False
                 write_summary(output_root, summary)
-                return 2
+                return 0
 
             if should_skip:
                 summary["steps"]["idempotency"] = {
@@ -425,11 +469,23 @@ def main() -> int:
                 summary["steps"]["round_trip"] = {
                     "executed": False,
                     "reason": skip_reason,
+                    **quote_context,
                 }
                 summary["ok"] = bool(skip_reason == "idempotent_skip")
                 summary["autopilot_allowed"] = False
                 write_summary(output_root, summary)
                 return 0 if skip_reason == "idempotent_skip" else 2
+
+            if not within_cap:
+                summary["ok"] = False
+                summary["autopilot_allowed"] = False
+                summary["steps"]["round_trip"] = {
+                    "executed": False,
+                    "reason": "daily_budget_exceeded",
+                    **quote_context,
+                }
+                write_summary(output_root, summary)
+                return 2
 
             base_asset = str(account_ready["base_asset"])
             buy_client_order_id = f"infra-buy-{idem_key[:16]}"
@@ -438,15 +494,16 @@ def main() -> int:
                 budget_path=budget_path,
                 day_key=day_key,
                 attempt_key=idem_key,
-                quote_usdt=quote_usdt,
+                quote_usdt=effective_quote_usdt,
                 attempt_patch={
                     "status": "buy_submitting",
                     "phase": "buy_submitting",
                     "market": market,
                     "symbol": symbol,
-                    "quote_usdt": float(quote_usdt),
+                    "quote_usdt": float(effective_quote_usdt),
                     "mode": mode,
                     "buy_client_order_id": buy_client_order_id,
+                    **quote_context,
                 },
             )
             try:
@@ -455,7 +512,7 @@ def main() -> int:
                     side="BUY",
                     quantity=float(planned_qty),
                     client_order_id=buy_client_order_id,
-                    quote_order_qty=float(quote_usdt),
+                    quote_order_qty=float(effective_quote_usdt),
                 )
             except RuntimeError as exc:
                 summary["ok"] = False
@@ -463,6 +520,7 @@ def main() -> int:
                     "executed": False,
                     "reason": "exchange_reject",
                     "error": str(exc),
+                    **quote_context,
                 }
                 upsert_attempt_state(
                     idempotency_path,
@@ -472,6 +530,7 @@ def main() -> int:
                         "phase": "buy_exchange_reject",
                         "error": str(exc),
                         "finished_at_utc": now_utc_iso(),
+                        **quote_context,
                     },
                 )
                 write_summary(output_root, summary)
@@ -484,6 +543,7 @@ def main() -> int:
                         "status": "needs_recovery",
                         "phase": "buy_transport_ambiguous",
                         "error": str(exc),
+                        **quote_context,
                     },
                 )
                 panic_close_all(output_root, reason="infra_canary_order_transport_ambiguity", detail=str(exc))
@@ -498,25 +558,27 @@ def main() -> int:
                 budget_path=budget_path,
                 day_key=day_key,
                 attempt_key=idem_key,
-                quote_usdt=quote_usdt,
+                quote_usdt=effective_quote_usdt,
                 attempt_patch={
                     "status": "needs_recovery",
                     "phase": "buy_filled_sell_pending",
                     "buy": buy_rsp,
                     "buy_quantity": float(buy_qty),
+                    **quote_context,
                 },
                 budget_status="buy_filled_sell_pending",
                 consume_budget=True,
                 budget_extra={
                     "market": market,
                     "symbol": symbol,
+                    **quote_context,
                 },
             )
             if day_budget is not None:
                 summary["steps"]["budget"] = {
                     **summary["steps"]["budget"],
-                    "spent_quote_usdt": float(day_budget.get("spent_quote_usdt", quote_usdt)),
-                    "within_cap": bool(to_float(day_budget.get("spent_quote_usdt", quote_usdt), quote_usdt) <= budget_cap + 1e-12),
+                    "spent_quote_usdt": float(day_budget.get("spent_quote_usdt", effective_quote_usdt)),
+                    "within_cap": bool(to_float(day_budget.get("spent_quote_usdt", effective_quote_usdt), effective_quote_usdt) <= budget_cap + 1e-12),
                 }
 
             sell_client_order_id = f"infra-sell-{idem_key[:15]}"
@@ -543,21 +605,23 @@ def main() -> int:
                     "reason": "exchange_reject",
                     "error": str(exc),
                     "phase": "sell",
+                    **quote_context,
                 }
                 mark_attempt_and_budget(
                     idempotency_path=idempotency_path,
                     budget_path=budget_path,
                     day_key=day_key,
                     attempt_key=idem_key,
-                    quote_usdt=quote_usdt,
+                    quote_usdt=effective_quote_usdt,
                     attempt_patch={
                         "status": "needs_recovery",
                         "phase": "sell_exchange_reject",
                         "error": str(exc),
+                        **quote_context,
                     },
                     budget_status="needs_recovery",
                     consume_budget=False,
-                    budget_extra={"phase": "sell_exchange_reject"},
+                    budget_extra={"phase": "sell_exchange_reject", **quote_context},
                 )
                 write_summary(output_root, summary)
                 return 2
@@ -567,15 +631,16 @@ def main() -> int:
                     budget_path=budget_path,
                     day_key=day_key,
                     attempt_key=idem_key,
-                    quote_usdt=quote_usdt,
+                    quote_usdt=effective_quote_usdt,
                     attempt_patch={
                         "status": "needs_recovery",
                         "phase": "sell_transport_ambiguous",
                         "error": str(exc),
+                        **quote_context,
                     },
                     budget_status="needs_recovery",
                     consume_budget=False,
-                    budget_extra={"phase": "sell_transport_ambiguous"},
+                    budget_extra={"phase": "sell_transport_ambiguous", **quote_context},
                 )
                 panic_close_all(output_root, reason="infra_canary_order_transport_ambiguity", detail=str(exc))
 
@@ -586,21 +651,23 @@ def main() -> int:
                     "executed": False,
                     "reason": "dust_not_allowed",
                     "dust": {"base_asset": base_asset, "base_asset_qty": float(dust_qty)},
+                    **quote_context,
                 }
                 mark_attempt_and_budget(
                     idempotency_path=idempotency_path,
                     budget_path=budget_path,
                     day_key=day_key,
                     attempt_key=idem_key,
-                    quote_usdt=quote_usdt,
+                    quote_usdt=effective_quote_usdt,
                     attempt_patch={
                         "status": "needs_recovery",
                         "phase": "dust_not_allowed",
                         "sell": sell_rsp,
+                        **quote_context,
                     },
                     budget_status="needs_recovery",
                     consume_budget=False,
-                    budget_extra={"phase": "dust_not_allowed"},
+                    budget_extra={"phase": "dust_not_allowed", **quote_context},
                 )
                 write_summary(output_root, summary)
                 return 2
@@ -610,22 +677,23 @@ def main() -> int:
                 budget_path=budget_path,
                 day_key=day_key,
                 attempt_key=idem_key,
-                quote_usdt=quote_usdt,
+                quote_usdt=effective_quote_usdt,
                 attempt_patch={
                     "status": "completed",
                     "phase": "completed",
                     "sell": sell_rsp,
                     "finished_at_utc": now_utc_iso(),
+                    **quote_context,
                 },
                 budget_status="completed",
                 consume_budget=False,
-                budget_extra={"phase": "completed"},
+                budget_extra={"phase": "completed", **quote_context},
             )
             if day_budget is not None:
                 summary["steps"]["budget"] = {
                     **summary["steps"]["budget"],
-                    "spent_quote_usdt": float(day_budget.get("spent_quote_usdt", quote_usdt)),
-                    "within_cap": bool(to_float(day_budget.get("spent_quote_usdt", quote_usdt), quote_usdt) <= budget_cap + 1e-12),
+                    "spent_quote_usdt": float(day_budget.get("spent_quote_usdt", effective_quote_usdt)),
+                    "within_cap": bool(to_float(day_budget.get("spent_quote_usdt", effective_quote_usdt), effective_quote_usdt) <= budget_cap + 1e-12),
                 }
             summary["steps"]["idempotency"] = {
                 "key": idem_key,
@@ -633,6 +701,7 @@ def main() -> int:
                 "recorded": True,
                 "current_status": "completed",
                 "current_phase": "completed",
+                **quote_context,
             }
             summary["steps"]["round_trip"] = {
                 "executed": True,
@@ -643,6 +712,7 @@ def main() -> int:
                     "base_asset": base_asset,
                     "base_asset_qty": float(dust_qty),
                 },
+                **quote_context,
             }
             summary["autopilot_allowed"] = False
             write_summary(output_root, summary)

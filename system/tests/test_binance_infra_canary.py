@@ -109,6 +109,83 @@ class _ReadySpotClient:
         }
 
 
+class _DynamicQuoteClient(_ReadySpotClient):
+    def __init__(
+        self,
+        *,
+        price: float = 100_000.0,
+        step_size: float = 0.000003,
+        min_notional: float = 5.0,
+        sell_transport_error: bool = False,
+    ) -> None:
+        super().__init__()
+        self.price = float(price)
+        self.step_size = float(step_size)
+        self.min_notional = float(min_notional)
+        self.sell_transport_error = bool(sell_transport_error)
+
+    def exchange_info(self, symbol: str) -> dict[str, object]:
+        return {
+            "symbols": [
+                {
+                    "symbol": symbol,
+                    "filters": [
+                        {"filterType": "LOT_SIZE", "stepSize": str(self.step_size), "minQty": str(self.step_size)},
+                        {"filterType": "MIN_NOTIONAL", "minNotional": str(self.min_notional)},
+                    ],
+                }
+            ]
+        }
+
+    def place_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        client_order_id: str,
+        quote_order_qty: float | None = None,
+    ) -> dict[str, object]:
+        _ = symbol
+        self.orders.append(
+            {
+                "side": side,
+                "quantity": quantity,
+                "quote_order_qty": quote_order_qty,
+                "client_order_id": client_order_id,
+            }
+        )
+        if side == "BUY":
+            spent = float(quote_order_qty or 0.0)
+            bought_qty = spent / self.price if self.price > 0.0 else 0.0
+            self.usdt_free -= spent
+            self.btc_free += bought_qty
+            return {
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "status": "FILLED",
+                "executedQty": f"{bought_qty:.8f}",
+                "cummulativeQuoteQty": f"{spent:.8f}",
+                "clientOrderId": client_order_id,
+            }
+        if self.sell_transport_error:
+            raise ConnectionError("sell socket hang up")
+        sell_qty = float(quantity)
+        notional = sell_qty * self.price
+        if notional + 1e-12 < self.min_notional:
+            raise RuntimeError("Filter failure: NOTIONAL")
+        self.btc_free -= sell_qty
+        self.usdt_free += notional
+        return {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "status": "FILLED",
+            "executedQty": f"{sell_qty:.8f}",
+            "cummulativeQuoteQty": f"{notional:.8f}",
+            "clientOrderId": client_order_id,
+        }
+
+
 def test_probe_ignores_strategy_ticket_authority(tmp_path: Path, monkeypatch) -> None:
     mod = _load_module()
     client = _ReadySpotClient()
@@ -239,6 +316,155 @@ def test_run_round_trip_succeeds_with_dust_allowed(tmp_path: Path, monkeypatch) 
     assert budget_state["days"]
 
 
+def test_run_raises_effective_quote_to_required_floor_when_requested_quote_is_too_low(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    client = _DynamicQuoteClient(price=100_000.0, step_size=0.000003, min_notional=5.0)
+    monkeypatch.setattr(mod, "BinanceSpotClient", lambda **kwargs: client)
+    monkeypatch.setattr(mod, "resolve_binance_credentials", lambda allow_daemon_env_fallback: ("k", "s", "process_env"))
+
+    cfg_path = tmp_path / "config.yaml"
+    _write_config(cfg_path)
+    out_root = tmp_path / "output"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "binance_infra_canary.py",
+            "--config",
+            str(cfg_path),
+            "--output-root",
+            str(out_root),
+            "--mode",
+            "run",
+            "--quote-usdt",
+            "5",
+            "--allow-dust",
+        ],
+    )
+    rc = mod.main()
+    assert rc == 0
+
+    payload = _read_summary(out_root)
+    plan = payload.get("steps", {}).get("plan", {})
+    assert isinstance(plan, dict)
+    assert float(plan.get("requested_quote_usdt", 0.0)) == 5.0
+    assert float(plan.get("required_round_trip_quote_usdt", 0.0)) == 5.1
+    assert float(plan.get("effective_quote_usdt", 0.0)) == 5.1
+    assert float(plan.get("single_run_cap_usdt", 0.0)) == 12.0
+    assert [row["quote_order_qty"] for row in client.orders if str(row["side"]) == "BUY"] == [5.1]
+
+    budget = payload.get("steps", {}).get("budget", {})
+    assert isinstance(budget, dict)
+    assert float(budget.get("pending_quote_usdt", 0.0)) == 5.1
+    assert float(budget.get("spent_quote_usdt", 0.0)) == 5.1
+
+
+def test_run_skips_gracefully_when_required_quote_exceeds_single_run_cap(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    client = _DynamicQuoteClient(price=100_000.0, step_size=0.000003, min_notional=12.1)
+    monkeypatch.setattr(mod, "BinanceSpotClient", lambda **kwargs: client)
+    monkeypatch.setattr(mod, "resolve_binance_credentials", lambda allow_daemon_env_fallback: ("k", "s", "process_env"))
+
+    cfg_path = tmp_path / "config.yaml"
+    _write_config(cfg_path)
+    out_root = tmp_path / "output"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "binance_infra_canary.py",
+            "--config",
+            str(cfg_path),
+            "--output-root",
+            str(out_root),
+            "--mode",
+            "run",
+        ],
+    )
+    rc = mod.main()
+    assert rc == 0
+    assert client.orders == []
+
+    payload = _read_summary(out_root)
+    round_trip = payload.get("steps", {}).get("round_trip", {})
+    assert isinstance(round_trip, dict)
+    assert bool(round_trip.get("executed")) is False
+    assert str(round_trip.get("reason", "")) == "single_run_cap_exceeded"
+
+    plan = payload.get("steps", {}).get("plan", {})
+    assert isinstance(plan, dict)
+    assert float(plan.get("requested_quote_usdt", 0.0)) == 10.0
+    assert float(plan.get("required_round_trip_quote_usdt", 0.0)) == 12.3
+    assert float(plan.get("effective_quote_usdt", 0.0)) == 12.3
+    assert str(plan.get("skip_reasons", [""])[0]) == "single_run_cap_exceeded"
+
+
+def test_sell_ambiguity_recovery_uses_effective_quote_for_budget_and_idempotency(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    client = _DynamicQuoteClient(price=100_000.0, step_size=0.000003, min_notional=11.0, sell_transport_error=True)
+    monkeypatch.setattr(mod, "BinanceSpotClient", lambda **kwargs: client)
+    monkeypatch.setattr(mod, "resolve_binance_credentials", lambda allow_daemon_env_fallback: ("k", "s", "process_env"))
+
+    cfg_path = tmp_path / "config.yaml"
+    _write_config(cfg_path)
+    out_root = tmp_path / "output"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "binance_infra_canary.py",
+            "--config",
+            str(cfg_path),
+            "--output-root",
+            str(out_root),
+            "--mode",
+            "run",
+            "--allow-dust",
+        ],
+    )
+    rc1 = mod.main()
+    assert rc1 == 3
+
+    idem_key = mod.build_idempotency_key(
+        day_key=mod.current_utc_date().isoformat(),
+        market="spot",
+        symbol="BTCUSDT",
+        quote_usdt=11.1,
+    )
+    idem_state = json.loads((out_root / "state" / "infra_canary_idempotency.json").read_text(encoding="utf-8"))
+    attempt = idem_state["attempts"][idem_key]
+    assert str(attempt["status"]) == "needs_recovery"
+    assert str(attempt["phase"]) == "sell_transport_ambiguous"
+    assert float(attempt["effective_quote_usdt"]) == 11.1
+    assert float(attempt["requested_quote_usdt"]) == 10.0
+    assert float(attempt["required_round_trip_quote_usdt"]) == 11.1
+
+    budget_state = json.loads((out_root / "state" / "infra_canary_budget.json").read_text(encoding="utf-8"))
+    day_state = budget_state["days"][mod.current_utc_date().isoformat()]
+    assert float(day_state["spent_quote_usdt"]) == 11.1
+    assert any(float(row.get("quote_usdt", 0.0)) == 11.1 for row in day_state["events"])
+
+    first_buy_count = len([row for row in client.orders if str(row["side"]) == "BUY"])
+    assert first_buy_count == 1
+
+    rc2 = mod.main()
+    assert rc2 == 2
+    second_buy_count = len([row for row in client.orders if str(row["side"]) == "BUY"])
+    assert second_buy_count == 1
+
+    payload = _read_summary(out_root)
+    idem = payload.get("steps", {}).get("idempotency", {})
+    assert isinstance(idem, dict)
+    assert bool(idem.get("skipped")) is True
+    assert str(idem.get("reason", "")) == "recovery_required"
+
+
 def test_run_skips_when_idempotency_key_already_recorded(tmp_path: Path, monkeypatch) -> None:
     mod = _load_module()
     client = _ReadySpotClient()
@@ -254,7 +480,7 @@ def test_run_skips_when_idempotency_key_already_recorded(tmp_path: Path, monkeyp
         day_key=mod.current_utc_date().isoformat(),
         market="spot",
         symbol="BTCUSDT",
-        quote_usdt=5.0,
+        quote_usdt=10.0,
     )
     state_path.write_text(json.dumps({"keys": [idem_key]}, indent=2), encoding="utf-8")
 
@@ -429,7 +655,7 @@ def test_run_buy_fill_then_sell_ambiguity_records_recovery_state_and_blocks_reru
         day_key=mod.current_utc_date().isoformat(),
         market="spot",
         symbol="BTCUSDT",
-        quote_usdt=5.0,
+        quote_usdt=10.0,
     )
     idem_state = json.loads((out_root / "state" / "infra_canary_idempotency.json").read_text(encoding="utf-8"))
     attempt = idem_state["attempts"][idem_key]
@@ -439,7 +665,7 @@ def test_run_buy_fill_then_sell_ambiguity_records_recovery_state_and_blocks_reru
 
     budget_state = json.loads((out_root / "state" / "infra_canary_budget.json").read_text(encoding="utf-8"))
     day_state = budget_state["days"][mod.current_utc_date().isoformat()]
-    assert float(day_state["spent_quote_usdt"]) >= 5.0
+    assert float(day_state["spent_quote_usdt"]) >= 10.0
     assert any(str(row.get("status")) == "buy_filled_sell_pending" for row in day_state["events"])
 
     first_buy_count = len([row for row in client.orders if str(row["side"]) == "BUY"])
