@@ -133,9 +133,11 @@ EOF
 
 当前最新公开验收工件：
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113336Z_dashboard_workspace_routes_browser_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113341Z_dashboard_public_acceptance.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060234Z_dashboard_public_topology_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060310Z_dashboard_workspace_routes_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060224Z_dashboard_internal_alignment_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060228Z_dashboard_internal_terminal_focus_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060318Z_dashboard_public_acceptance.json`
 
 
 ## 当前入口拓扑
@@ -177,18 +179,33 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 - `http://43.153.148.242:8787` 返回 `404 Not Found`
 - `https://fuuu.fun/#/overview` 与 `https://fenlie.fuuu.fun/#/overview` 都能看到 `研究主线摘要 / hold24_zero`
 - `https://fuuu.fun/#/workspace/contracts` 与 `https://fenlie.fuuu.fun/#/workspace/contracts` 都能看到 `公开面验收 / root overview 截图 / pages overview 截图 / root contracts 截图 / pages contracts 截图 / 公开快照拉取次数 / 内部快照拉取次数`
+- `https://fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff`
+  与
+  `https://fenlie.fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff`
+  都能看到：
+  - `source head 状态`
+  - `下一研究优先级`
+  - `当前允许动作`
+  - `当前阻止动作`
 - 会落 root/pages 双路由截图证据：
   - `*_dashboard_public_topology_root_overview_browser.png`
   - `*_dashboard_public_topology_pages_overview_browser.png`
   - `*_dashboard_public_topology_root_contracts_browser.png`
   - `*_dashboard_public_topology_pages_contracts_browser.png`
+  - `*_dashboard_public_topology_root_contracts_source_head_browser.png`
+  - `*_dashboard_public_topology_pages_contracts_source_head_browser.png`
 
 当前最新截图证据前缀：
 
-- `20260321T113313Z_dashboard_public_topology_root_overview_browser.png`
-- `20260321T113313Z_dashboard_public_topology_pages_overview_browser.png`
-- `20260321T113313Z_dashboard_public_topology_root_contracts_browser.png`
-- `20260321T113313Z_dashboard_public_topology_pages_contracts_browser.png`
+- `20260325T060234Z_dashboard_public_topology_root_overview_browser.png`
+- `20260325T060234Z_dashboard_public_topology_pages_overview_browser.png`
+- `20260325T060234Z_dashboard_public_topology_root_contracts_browser.png`
+- `20260325T060234Z_dashboard_public_topology_pages_contracts_browser.png`
+
+当前最新 source-head 深链截图证据前缀：
+
+- `20260325T060234Z_dashboard_public_topology_root_contracts_source_head_browser.png`
+- `20260325T060234Z_dashboard_public_topology_pages_contracts_source_head_browser.png`
 
 本轮额外确认：
 
@@ -243,6 +260,21 @@ cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
 npm run verify:public-surface -- --skip-workspace-build
 ```
 
+等价的 npm Python 启动链为：
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+node ./scripts/run-python.mjs ../../scripts/run_dashboard_public_acceptance.py --workspace ../../.. --strict-topology-tls --skip-workspace-build
+```
+
+解释器约束：
+
+- `verify:public-surface` 不再直接假设裸 `python3`
+- dashboard npm 下的 Python 入口统一走 `node ./scripts/run-python.mjs`
+- 启动器优先选择 `CONDA_PREFIX/bin/python3`
+- 若 `CONDA_PREFIX` 不可用，才 fallback 到 PATH 里的 `python3`
+- 如果你要在 `system/dashboard/web` 目录手工复现 npm 子进程行为，优先使用这条 launcher 命令，避免本机 shell 与 npm PATH/证书链不一致
+
 输出会聚合两条只读验收链：
 
 1. `run_dashboard_public_topology_smoke.py`
@@ -254,7 +286,7 @@ npm run verify:public-surface -- --skip-workspace-build
 
 最新已验证通过的聚合工件：
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113341Z_dashboard_public_acceptance.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060318Z_dashboard_public_acceptance.json`
 
 当前本地还新增了单一上架前验证入口：
 
@@ -269,7 +301,18 @@ npm run verify:release-checklist
 - `npm test`
 - `npx tsc --noEmit`
 - `npm run smoke:workspace-routes -- --skip-build`
+- `npm run smoke:alignment-internal -- --skip-build`
+- `npm run smoke:terminal-internal-focus -- --skip-build`
 - `npm run verify:public-surface -- --skip-workspace-build`
+
+当前本地已验证结果（`terminal/internal focus browser smoke` 已纳入 `verify:release-checklist` 并随整链通过）：
+
+- `25 files / 146 tests passed`
+- `dashboard python contracts => 79 passed`
+- `workspace routes smoke => ok = true`
+- `internal alignment smoke => ok = true`
+- `terminal/internal focus browser smoke => ok = true`
+- `public acceptance => ok = true`
 
 用途：减少上架前人工串命令导致的漏跑/顺序漂移。
 

@@ -201,8 +201,15 @@ npm run verify:public-surface
 等价脚本：
 
 ```bash
-python3 ../../scripts/run_dashboard_public_acceptance.py --workspace ../../..
+node ./scripts/run-python.mjs ../../scripts/run_dashboard_public_acceptance.py --workspace ../../.. --strict-topology-tls
 ```
+
+解释器约束：
+
+- dashboard npm 下的 Python 入口统一走 `node ./scripts/run-python.mjs`
+- 启动器会优先选择 `CONDA_PREFIX/bin/python3`
+- 若 `CONDA_PREFIX` 不可用，再 fallback 到 `python3` 的 PATH 解析结果
+- 如果你要在 `system/dashboard/web` 目录复现 npm 行为，优先用这个启动器，不要再假设裸 `python3` 一定与 npm 子进程一致
 
 ### 5.5 单一 release-checklist 验证
 
@@ -212,9 +219,33 @@ npm run verify:release-checklist
 
 用途：
 
-- 一次性执行 `build -> test -> tsc -> workspace routes smoke -> public acceptance`
+- 一次性执行 `build -> test -> tsc -> public topology Python 合同回归 -> workspace routes smoke -> internal alignment smoke -> terminal/internal focus browser smoke -> public acceptance`
 - 作为当前 dashboard 上架前最小充分验证的单一入口
 - 默认对 smoke / public acceptance 走 `--skip-build`，避免在同一条链里重复 build
+- 其中会先跑 `npm run test:dashboard-python-contracts`
+- 这组 Python 合同回归当前覆盖：
+  - `test_build_dashboard_frontend_snapshot_script.py`
+  - `test_run_operator_panel_refresh_script.py`
+  - `test_run_dashboard_workspace_artifacts_smoke_script.py`
+  - `test_run_dashboard_public_topology_smoke_script.py`
+  - `test_run_dashboard_public_acceptance_script.py`
+  - `test_publish_conversation_feedback_autopublish_internal_script.py`
+  - `test_publish_conversation_feedback_manual_internal_script.py`
+  - `test_build_conversation_feedback_projection_internal_script.py`
+  - `test_dashboard_feedback_publish_refresh_contract.py`
+  - `test_dashboard_feedback_publish_manual_contract.py`
+  - `test_dashboard_release_checklist_contract.py`
+- 目的：先拦住 snapshot / panel / workspace smoke / topology / public acceptance / internal feedback publish runtime + entrypoints + projection builder / release-checklist 本身的合同漂移，再进入真实浏览器 smoke
+
+最近一次本地通过证据：
+
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060214Z_dashboard_workspace_routes_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060224Z_dashboard_internal_alignment_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060228Z_dashboard_internal_terminal_focus_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060234Z_dashboard_public_topology_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060318Z_dashboard_public_acceptance.json`
+- `npm test` 当前结果：`25 files / 146 tests passed`
+- `npm run test:dashboard-python-contracts` 当前结果：`79 passed`
 
 ### 5.6 workspace 多路由 smoke
 
@@ -268,6 +299,26 @@ npm run smoke:alignment-internal-manual-probe
 ```bash
 /Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/*_dashboard_internal_alignment_manual_probe_browser_smoke.json
 /Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/*_dashboard_internal_alignment_manual_probe_browser_smoke.png
+```
+
+### 5.7.2 terminal/internal focus browser smoke
+
+```bash
+npm run smoke:terminal-internal-focus
+```
+
+用途：
+
+- 真实浏览器验证 `#/terminal/internal?panel=signal-risk&section=focus-slots`
+- 确认 `DrilldownList` 的 focus CTA 只出现在 `.drill-card-actions`，不会回退到 `summary.drill-card-summary` 内
+- 点击首条 focus CTA 后，URL 会收敛到 `row=<slot>`，且按钮文案切换为“当前焦点”
+- 同时确认该路径只拉取 internal snapshot，不意外触发 public snapshot
+
+最近会生成如下 review 工件：
+
+```bash
+/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/*_dashboard_internal_terminal_focus_browser_smoke.json
+/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/*_dashboard_internal_terminal_focus_browser_smoke.png
 ```
 
 ### 5.8 发布 internal autopublish 输入
@@ -602,12 +653,14 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
   --allow-insecure-tls-fallback
 ```
 
-当前 topology smoke 除了 JSON 报告，还会额外落四张公开路由截图，便于审计根域与 Pages 回退入口是否都真实渲染出 `#/overview` 与 `#/workspace/contracts` 的关键 marker：
+当前 topology smoke 除了 JSON 报告，还会额外落六张公开路由截图，便于审计根域与 Pages 回退入口是否都真实渲染出 `#/overview`、`#/workspace/contracts` 以及 contracts/source-head 深链的关键 marker：
 
 - `*_dashboard_public_topology_root_overview_browser.png`
 - `*_dashboard_public_topology_pages_overview_browser.png`
 - `*_dashboard_public_topology_root_contracts_browser.png`
 - `*_dashboard_public_topology_pages_contracts_browser.png`
+- `*_dashboard_public_topology_root_contracts_source_head_browser.png`
+- `*_dashboard_public_topology_pages_contracts_source_head_browser.png`
 
 其中 contracts 路由要求真实浏览器同时看到：
 
@@ -616,6 +669,17 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 - `pages overview 截图`
 - `root contracts 截图`
 - `pages contracts 截图`
+- `公开快照拉取次数`
+- `内部快照拉取次数`
+
+其中 contracts/source-head 深链
+`#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff`
+要求真实浏览器同时看到：
+
+- `source head 状态`
+- `下一研究优先级`
+- `当前允许动作`
+- `当前阻止动作`
 - `公开快照拉取次数`
 - `内部快照拉取次数`
 
@@ -640,7 +704,7 @@ npm run verify:public-surface
 如果要关闭 topology TLS fallback：
 
 ```bash
-python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_public_acceptance.py \
+node ./scripts/run-python.mjs ../../scripts/run_dashboard_public_acceptance.py \
   --workspace /Users/jokenrobot/Downloads/Folders/fenlie \
   --strict-topology-tls
 ```
@@ -901,7 +965,10 @@ npm install
 npm run build
 npx vitest run src/App.test.tsx src/adapters/read-model.test.ts src/utils/dictionary.test.ts --reporter=dot
 npx tsc --noEmit
+npm run test:dashboard-python-contracts
 npm run smoke:workspace-routes
+npm run smoke:alignment-internal
+npm run smoke:terminal-internal-focus
 python3 ../../scripts/run_dashboard_public_topology_smoke.py --workspace ../../..
 npm run verify:public-surface -- --skip-workspace-build
 ```
@@ -914,7 +981,10 @@ npm install
 npm run build
 npx vitest run src/App.test.tsx src/adapters/read-model.test.ts src/utils/dictionary.test.ts --reporter=dot
 npx tsc --noEmit
+npm run test:dashboard-python-contracts
 npm run smoke:workspace-routes
+npm run smoke:alignment-internal
+npm run smoke:terminal-internal-focus
 python3 ../../scripts/run_dashboard_public_topology_smoke.py --workspace ../../..
 npm run verify:public-surface -- --skip-workspace-build
 npm run cf:whoami
@@ -944,9 +1014,18 @@ npm run verify:public-surface -- --skip-workspace-build
 
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_DASHBOARD_PUBLIC_DEPLOY.md`
 
-持久记忆与常用命令：
+持久记忆/入口文案与 `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/memory/MEMORY_INDEX.md` 对齐如下：
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_CODEX_MEMORY.md`
+Fenlie 的记忆树旨在提供一个清晰、可分层读取的导航器，帮助主代理、子代理与人工在不侵入 source-of-truth 的前提下快速找到需要的规则与契约。
+
+- 主代理默认读取：`AGENTS.md` → `FENLIE_CODEX_MEMORY.md` → `memory/MEMORY_INDEX.md` → `memory/SHORTLIST.md` → 相关 contract/source artifacts。
+- 子代理默认读取：`memory/SHORTLIST.md` → 与任务直接相关的 contract，必要时再补 `memory/DURABLE_RULES.md`。
+- 人类默认序列：`memory/SHORTLIST.md` → `memory/DURABLE_RULES.md` → 争议时再退回到具体 contract。
+
+- 快速恢复及身份指引：`memory/SHORTLIST.md`
+- 关于长期规范与可变边界：`memory/DURABLE_RULES.md`
+- 深层 contract（source、live、research 等）：`memory/contracts/` 目录各章
+- 总体导航与文件布局：本文件
 
 ---
 

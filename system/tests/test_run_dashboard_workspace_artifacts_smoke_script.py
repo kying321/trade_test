@@ -25,6 +25,14 @@ def load_module():
 
 def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_path: Path) -> None:
     mod = load_module()
+    route_assertions = [
+        *mod.PUBLIC_WORKSPACE_ROUTE_ASSERTIONS[:1],
+        *mod.PUBLIC_WORKSPACE_ROUTE_ASSERTIONS[1:],
+    ]
+    route_assertions[0] = {
+        **route_assertions[0],
+        "markers": ["关键摘要", "系统运行", "调度心跳", "研究主线", "hold16_zero", "退出风控", "下一步去哪"],
+    }
     screenshot_path = tmp_path / "workspace-routes-smoke.png"
     result_path = tmp_path / "workspace-routes-smoke.json"
 
@@ -32,10 +40,17 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
         base_url="http://127.0.0.1:4173/",
         screenshot_path=screenshot_path,
         result_path=result_path,
+        route_assertions=route_assertions,
     )
 
     assert "#/overview" in spec
-    assert "研究主线摘要" in spec
+    assert "关键摘要" in spec
+    assert "系统运行" in spec
+    assert "调度心跳" in spec
+    assert "研究主线" in spec
+    assert "hold16_zero" in spec
+    assert "退出风控" in spec
+    assert "下一步去哪" in spec
     assert "#/workspace/artifacts" in spec
     assert "工件池" in spec
     assert "#/workspace/alignment" in spec
@@ -58,16 +73,77 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow" in spec
     assert "intraday_orderflow_blueprint" in spec
     assert "intraday_orderflow_research_gate_blocker" in spec
+    assert "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion" in spec
+    assert "await expectStableMarker(page, exitRiskReviewActiveArtifact);" in spec
+    assert "const exitRiskReviewSectionState = await page.evaluate((sectionHint) => {" in spec
+    assert "const normalizedSectionHint = String(sectionHint || '').replace(/\\s+/g, '').toLowerCase();" in spec
+    assert "const sections = Array.from(document.querySelectorAll('.artifact-layer-section'));" in spec
+    assert "const summaryText = String(node.querySelector('summary')?.textContent || '').replace(/\\s+/g, '').toLowerCase();" in spec
+    assert "target.open = true;" in spec
+    assert "if (target instanceof HTMLDetailsElement) {" in spec
+    assert "expect(exitRiskReviewSectionState.opened).toBeTruthy();" in spec
+    assert "const exitRiskReviewVisibleArtifacts = await page.evaluate(({ sectionHint, artifactIds }) => {" in spec
+    assert "const rawTitles = Array.from(target.querySelectorAll('.value-text[title]'))" in spec
+    assert "expect(exitRiskReviewVisibleArtifacts).toEqual(exitRiskReviewArtifacts);" in spec
+    assert "price_action_exit_risk_break_even_guarded_review" in spec
+    assert "price_action_exit_risk_break_even_review_packet" in spec
+    assert "price_action_exit_risk_break_even_review_conclusion" in spec
+    assert "price_action_exit_risk_break_even_primary_anchor_review" in spec
+    assert "price_action_exit_risk_hold_selection_aligned_break_even_review_lane" in spec
+    assert "支撑证据" in spec
     assert "expectStableMarker" in spec
     assert "toLowerCase().includes(text.toLowerCase())" in spec
     assert "new RegExp(escapeRegExp(marker), 'i')" in spec
     assert "context-nav" in spec
-    assert "getByText(route.nav_label, { exact: true }).click()" in spec
+    assert "async function clickContextNav(page, label)" in spec
+    assert "const expandToggle = page.getByRole('button', { name: '展开侧边导航' });" in spec
+    assert "await page.getByRole('button', { name: '收起侧边导航' }).waitFor();" in spec
+    assert "await clickContextNav(page, route.nav_label);" in spec
     assert "internalSnapshotRequests.length" in spec
     assert "document.documentElement.dataset.theme" in spec
     assert "contracts-subcommand-workspace_routes_smoke" in spec
     assert "data-accordion-id=\"contracts-subcommand-workspace_routes_smoke\"" in spec
+    assert "const pageSectionActiveLabel = ((await activePageSection.textContent()) || '').trim();" in spec
+    assert "const pageSectionAccordionState = await focusedAccordion.getAttribute('data-state');" in spec
+    assert "active_label: pageSectionActiveLabel" in spec
+    assert "accordion_state: pageSectionAccordionState" in spec
+    assert "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff" in spec
+    assert "data-accordion-id=\"contracts-source-head-price_action_exit_risk_handoff\"" in spec
+    assert "source head 状态" in spec
+    assert "下一研究优先级" in spec
+    assert "当前允许动作" in spec
+    assert "当前阻止动作" in spec
+    assert "#/workspace/contracts?page_section=contracts-source-gap-audit" in spec
+    assert "退出风控源差审计" in spec
+    assert "finding_count" in spec
+    assert "await expect(activeExitRiskReviewArtifact).toHaveAttribute('title', exitRiskReviewActiveArtifact);" in spec
     assert str(result_path) in spec
+
+
+def test_load_public_workspace_route_assertions_uses_source_owned_active_baseline(tmp_path: Path) -> None:
+    mod = load_module()
+    dist_dir = tmp_path / "dist"
+    data_dir = dist_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "fenlie_dashboard_snapshot.json").write_text(
+        json.dumps(
+            {
+                "artifact_payloads": {
+                    "hold_selection_handoff": {
+                        "payload": {
+                            "active_baseline": "hold16_zero",
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    route_assertions = mod.load_public_workspace_route_assertions(dist_dir=dist_dir)
+
+    assert route_assertions[0]["markers"] == ["关键摘要", "系统运行", "调度心跳", "研究主线", "hold16_zero", "退出风控", "下一步去哪"]
 
 
 def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -> None:
@@ -115,6 +191,27 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     "active_label": "工作区路由子命令",
                     "accordion_state": "open",
                 },
+                "contracts_source_head_assertion": {
+                    "route": "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff",
+                    "page_section": "contracts-source-head-price_action_exit_risk_handoff",
+                    "source_head_id": "price_action_exit_risk_handoff",
+                    "accordion_state": "open",
+                    "visible_markers": [
+                        "source head 状态",
+                        "下一研究优先级",
+                        "当前允许动作",
+                        "当前阻止动作",
+                    ],
+                },
+                "contracts_source_gap_assertion": {
+                    "route": "#/workspace/contracts?page_section=contracts-source-gap-audit",
+                    "page_section": "contracts-source-gap-audit",
+                    "visible_markers": [
+                        "退出风控源差审计",
+                        "发现数量",
+                        "标准锚点",
+                    ],
+                },
                 "artifacts_filter_assertion": {
                     "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
                     "group": "research_cross_section",
@@ -124,6 +221,28 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     "visible_artifacts": [
                         "intraday_orderflow_blueprint",
                         "intraday_orderflow_research_gate_blocker",
+                    ],
+                },
+                "artifacts_exit_risk_review_assertion": {
+                    "route": "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
+                    "group": "research_exit_risk",
+                    "search_scope": "title",
+                    "search": "",
+                    "section_label": "支撑证据",
+                    "active_artifact": "price_action_exit_risk_break_even_review_conclusion",
+                    "visible_artifacts": [
+                        "price_action_exit_risk_break_even_guarded_review",
+                        "price_action_exit_risk_break_even_review_packet",
+                        "price_action_exit_risk_break_even_review_conclusion",
+                        "price_action_exit_risk_break_even_primary_anchor_review",
+                        "price_action_exit_risk_hold_selection_aligned_break_even_review_lane",
+                    ],
+                    "visible_markers": [
+                        "price_action_exit_risk_break_even_guarded_review",
+                        "price_action_exit_risk_break_even_review_packet",
+                        "price_action_exit_risk_break_even_review_conclusion",
+                        "price_action_exit_risk_break_even_primary_anchor_review",
+                        "price_action_exit_risk_hold_selection_aligned_break_even_review_lane",
                     ],
                 },
             },
@@ -157,6 +276,27 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         "active_label": "工作区路由子命令",
         "accordion_state": "open",
     }
+    assert payload["contracts_source_head_assertion"] == {
+        "route": "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff",
+        "page_section": "contracts-source-head-price_action_exit_risk_handoff",
+        "source_head_id": "price_action_exit_risk_handoff",
+        "accordion_state": "open",
+        "visible_markers": [
+            "source head 状态",
+            "下一研究优先级",
+            "当前允许动作",
+            "当前阻止动作",
+        ],
+    }
+    assert payload["contracts_source_gap_assertion"] == {
+        "route": "#/workspace/contracts?page_section=contracts-source-gap-audit",
+        "page_section": "contracts-source-gap-audit",
+        "visible_markers": [
+            "退出风控源差审计",
+            "发现数量",
+            "标准锚点",
+        ],
+    }
     assert payload["artifacts_filter_assertion"] == {
         "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
         "group": "research_cross_section",
@@ -166,6 +306,28 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         "visible_artifacts": [
             "intraday_orderflow_blueprint",
             "intraday_orderflow_research_gate_blocker",
+        ],
+    }
+    assert payload["artifacts_exit_risk_review_assertion"] == {
+        "route": "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
+        "group": "research_exit_risk",
+        "search_scope": "title",
+        "search": "",
+        "section_label": "支撑证据",
+        "active_artifact": "price_action_exit_risk_break_even_review_conclusion",
+        "visible_artifacts": [
+            "price_action_exit_risk_break_even_guarded_review",
+            "price_action_exit_risk_break_even_review_packet",
+            "price_action_exit_risk_break_even_review_conclusion",
+            "price_action_exit_risk_break_even_primary_anchor_review",
+            "price_action_exit_risk_hold_selection_aligned_break_even_review_lane",
+        ],
+        "visible_markers": [
+            "price_action_exit_risk_break_even_guarded_review",
+            "price_action_exit_risk_break_even_review_packet",
+            "price_action_exit_risk_break_even_review_conclusion",
+            "price_action_exit_risk_break_even_primary_anchor_review",
+            "price_action_exit_risk_hold_selection_aligned_break_even_review_lane",
         ],
     }
 
@@ -194,6 +356,82 @@ def test_build_internal_alignment_smoke_spec_uses_internal_snapshot_projection_m
     assert "expect(publicSnapshotRequests.length).toBe(0)" in spec
     assert "requested_surface: 'internal'" in spec
     assert "effective_surface: 'internal'" in spec
+    assert str(result_path) in spec
+
+
+def test_load_internal_terminal_focus_expectations_reads_focus_slot_source_row(tmp_path: Path) -> None:
+    mod = load_module()
+    dist_dir = tmp_path / "dist"
+    data_dir = dist_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "fenlie_dashboard_internal_snapshot.json").write_text(
+        json.dumps(
+            {
+                "artifact_payloads": {
+                    "operator_panel": {
+                        "payload": {
+                            "focus_slots": [
+                                {
+                                    "slot": "primary",
+                                    "symbol": "XAUUSD",
+                                    "action": "wait_for_paper_execution_close_evidence",
+                                    "reason": "paper_execution_close_evidence_pending",
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    expectations = mod.load_internal_terminal_focus_expectations(dist_dir=dist_dir)
+
+    assert expectations["focus_row_id"] == "primary"
+    assert expectations["focus_row_label"] == "主槽位"
+    assert expectations["route_assertions"] == [
+        {
+            "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+            "nav_label": "信号发生器与风险节流阀",
+            "headline": "信号发生器与风险节流阀",
+            "markers": [
+                "信号发生器与风险节流阀",
+                "穿透层 3 / 焦点槽位",
+                "主槽位",
+            ],
+        }
+    ]
+
+
+def test_build_internal_terminal_focus_smoke_spec_asserts_drilldown_focus_link_outside_summary(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "internal-terminal-focus-smoke.png"
+    result_path = tmp_path / "internal-terminal-focus-smoke.json"
+
+    spec = mod.build_internal_terminal_focus_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        focus_row_id="primary",
+        focus_row_label="主槽位",
+    )
+
+    assert "#/terminal/internal?panel=signal-risk&section=focus-slots" in spec
+    assert "信号发生器与风险节流阀" in spec
+    assert "穿透层 3 / 焦点槽位" in spec
+    assert "主槽位" in spec
+    assert "summary.drill-card-summary .drill-card-link" in spec
+    assert ".drill-card-actions .drill-card-link" in spec
+    assert "expect(summaryLinkCount).toBe(0)" in spec
+    assert "expect(actionLinkCount).toBeGreaterThanOrEqual(1)" in spec
+    assert "定位此项" in spec
+    assert "当前焦点" in spec
+    assert "row=primary" in spec
+    assert "expect(publicSnapshotRequests.length).toBe(0)" in spec
+    assert "requested_surface: 'internal'" in spec
+    assert "terminal_drilldown_assertion" in spec
     assert str(result_path) in spec
 
 
@@ -267,6 +505,99 @@ def test_build_artifact_payload_reports_internal_alignment_surface(tmp_path: Pat
             "markers": [
                 "将高价值对话反馈投射到内部对齐页",
                 "拆分研究工作区左栏四控件",
+            ],
+        }
+    ]
+
+
+def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path: Path) -> None:
+    mod = load_module()
+    report_path = tmp_path / "report.json"
+    screenshot_path = tmp_path / "internal-terminal-focus-smoke.png"
+
+    payload = mod.build_artifact_payload(
+        workspace=tmp_path,
+        report_path=report_path,
+        screenshot_path=screenshot_path,
+        build_result={"returncode": 0},
+        server_ready_seconds=0.19,
+        smoke_result={
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "playwright_result": {
+                "requested_surface": "internal",
+                "effective_surface": "internal",
+                "visited_routes": [
+                    {
+                        "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+                        "headline": "信号发生器与风险节流阀",
+                    }
+                ],
+                "snapshot_requests": [],
+                "internal_snapshot_requests": [
+                    "http://127.0.0.1:4173/data/fenlie_dashboard_internal_snapshot.json?ts=1",
+                ],
+                "terminal_drilldown_assertion": {
+                    "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+                    "panel": "signal-risk",
+                    "section": "focus-slots",
+                    "focus_row_id": "primary",
+                    "focus_row_label": "主槽位",
+                    "summary_link_count": 0,
+                    "action_link_count": 1,
+                    "action_label_before_click": "定位此项",
+                    "action_label_after_click": "当前焦点",
+                    "action_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
+                },
+            },
+        },
+        base_url="http://127.0.0.1:4173/",
+        mode="internal_terminal_focus",
+        expected_route_markers=[
+            {
+                "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+                "nav_label": "信号发生器与风险节流阀",
+                "headline": "信号发生器与风险节流阀",
+                "markers": [
+                    "信号发生器与风险节流阀",
+                    "穿透层 3 / 焦点槽位",
+                    "主槽位",
+                ],
+            }
+        ],
+    )
+
+    assert payload["action"] == "dashboard_internal_terminal_focus_browser_smoke"
+    assert payload["ok"] is True
+    assert payload["surface_assertion"]["requested_surface"] == "internal"
+    assert payload["surface_assertion"]["effective_surface"] == "internal"
+    assert payload["surface_assertion"]["snapshot_endpoint_observed"] == "/data/fenlie_dashboard_internal_snapshot.json"
+    assert payload["network_observation"]["public_snapshot_fetch_count"] == 0
+    assert payload["network_observation"]["internal_snapshot_fetch_count"] == 1
+    assert payload["expected_focus_panel"] == "signal-risk"
+    assert payload["expected_focus_section"] == "focus-slots"
+    assert payload["terminal_drilldown_assertion"] == {
+        "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+        "panel": "signal-risk",
+        "section": "focus-slots",
+        "focus_row_id": "primary",
+        "focus_row_label": "主槽位",
+        "summary_link_count": 0,
+        "action_link_count": 1,
+        "action_label_before_click": "定位此项",
+        "action_label_after_click": "当前焦点",
+        "action_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
+    }
+    assert payload["expected_route_markers"] == [
+        {
+            "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+            "nav_label": "信号发生器与风险节流阀",
+            "headline": "信号发生器与风险节流阀",
+            "markers": [
+                "信号发生器与风险节流阀",
+                "穿透层 3 / 焦点槽位",
+                "主槽位",
             ],
         }
     ]
@@ -415,6 +746,7 @@ def test_temporary_manual_probe_restores_manual_jsonl_after_context(tmp_path: Pa
         return {"name": name, "returncode": 0}
 
     monkeypatch.setattr(mod, "ensure_success", fake_ensure_success)
+    monkeypatch.setattr(mod, "current_python_executable", lambda: "/tmp/fake-python")
 
     runtime_now = dt.datetime(2026, 3, 22, 7, 0, tzinfo=dt.timezone.utc)
     with mod.temporary_manual_probe(
@@ -434,6 +766,45 @@ def test_temporary_manual_probe_restores_manual_jsonl_after_context(tmp_path: Pa
         "refresh_after_manual_probe_seed",
         "refresh_after_manual_probe_restore",
     ]
+    assert calls[0][1][0] == "/tmp/fake-python"
+    assert calls[1][1][0] == "/tmp/fake-python"
+
+
+def test_http_server_uses_current_python_executable(tmp_path: Path, monkeypatch) -> None:
+    mod = load_module()
+    seen: dict[str, object] = {}
+
+    class DummyProc:
+        def terminate(self) -> None:
+            seen["terminated"] = True
+
+        def wait(self, timeout: float | None = None) -> None:
+            seen["wait_timeout"] = timeout
+
+    def fake_popen(cmd, **kwargs):
+        seen["cmd"] = list(cmd)
+        seen["cwd"] = str(kwargs.get("cwd"))
+        return DummyProc()
+
+    monkeypatch.setattr(mod, "current_python_executable", lambda: "/tmp/http-python")
+    monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
+
+    with mod.http_server(dist_dir=tmp_path, host="127.0.0.1", port=4317):
+        pass
+
+    assert seen["cmd"] == [
+        "/tmp/http-python",
+        "-m",
+        "http.server",
+        "4317",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        str(tmp_path),
+    ]
+    assert seen["cwd"] == str(tmp_path)
+    assert seen["terminated"] is True
+    assert seen["wait_timeout"] == 5
 
 
 def test_temporary_manual_probe_restores_manual_jsonl_when_seed_refresh_fails(tmp_path: Path, monkeypatch) -> None:

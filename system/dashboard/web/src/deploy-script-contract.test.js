@@ -21,12 +21,39 @@ describe('deploy script contract', () => {
     const scripts = loadScripts();
 
     expect(scripts['verify:release-checklist']).toBeTruthy();
+    expect(scripts['test:dashboard-python-contracts']).toBeTruthy();
     expect(scripts['verify:release-checklist']).toContain('npm run build');
     expect(scripts['verify:release-checklist']).toContain('npm test');
     expect(scripts['verify:release-checklist']).toContain('npx tsc --noEmit');
+    expect(scripts['test:dashboard-python-contracts']).toContain('pytest -q');
+    expect(scripts['test:dashboard-python-contracts']).toContain('test_build_dashboard_frontend_snapshot_script.py');
+    expect(scripts['test:dashboard-python-contracts']).toContain('test_run_operator_panel_refresh_script.py');
+    expect(scripts['test:dashboard-python-contracts']).toContain('test_run_dashboard_workspace_artifacts_smoke_script.py');
+    expect(scripts['test:dashboard-python-contracts']).toContain('test_run_dashboard_public_topology_smoke_script.py');
+    expect(scripts['test:dashboard-python-contracts']).toContain('test_run_dashboard_public_acceptance_script.py');
+    expect(scripts['test:dashboard-python-contracts']).toContain(
+      'test_publish_conversation_feedback_autopublish_internal_script.py',
+    );
+    expect(scripts['test:dashboard-python-contracts']).toContain(
+      'test_publish_conversation_feedback_manual_internal_script.py',
+    );
+    expect(scripts['test:dashboard-python-contracts']).toContain(
+      'test_build_conversation_feedback_projection_internal_script.py',
+    );
+    expect(scripts['test:dashboard-python-contracts']).toContain('test_dashboard_feedback_publish_refresh_contract.py');
+    expect(scripts['test:dashboard-python-contracts']).toContain('test_dashboard_feedback_publish_manual_contract.py');
+    expect(scripts['test:dashboard-python-contracts']).toContain('test_dashboard_release_checklist_contract.py');
+    expect(scripts['verify:release-checklist']).toContain('npm run test:dashboard-python-contracts');
     expect(scripts['verify:release-checklist']).toContain('npm run smoke:workspace-routes -- --skip-build');
     expect(scripts['verify:release-checklist']).toContain('npm run smoke:alignment-internal -- --skip-build');
+    expect(scripts['verify:release-checklist']).toContain('npm run smoke:terminal-internal-focus -- --skip-build');
     expect(scripts['verify:release-checklist']).toContain('npm run verify:public-surface -- --skip-workspace-build');
+    expect(
+      scripts['verify:release-checklist'].indexOf('npm run test:dashboard-python-contracts'),
+    ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run verify:public-surface -- --skip-workspace-build'));
+    expect(
+      scripts['verify:release-checklist'].indexOf('npm run smoke:alignment-internal -- --skip-build'),
+    ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:terminal-internal-focus -- --skip-build'));
   });
 
   it('keeps feedback publish entrypoints visible to npm test and release workflows', () => {
@@ -57,5 +84,37 @@ describe('deploy script contract', () => {
 
     expect(scripts['smoke:alignment-internal-manual-probe']).toContain('run_dashboard_workspace_artifacts_smoke.py');
     expect(scripts['smoke:alignment-internal-manual-probe']).toContain('--mode internal_alignment_manual_probe');
+  });
+
+  it('exposes a dedicated terminal/internal focus browser smoke entrypoint', () => {
+    const scripts = loadScripts();
+
+    expect(scripts['smoke:terminal-internal-focus']).toContain('run_dashboard_workspace_artifacts_smoke.py');
+    expect(scripts['smoke:terminal-internal-focus']).toContain('--mode internal_terminal_focus');
+  });
+
+  it('routes dashboard python entrypoints through the shared python launcher', () => {
+    const scripts = loadScripts();
+    const sharedLauncher = 'node ./scripts/run-python.mjs';
+    const expectedScripts = [
+      'refresh:panel',
+      'refresh:data',
+      'strip:internal',
+      'verify:public-surface',
+      'smoke:workspace-routes',
+      'smoke:workspace-artifacts',
+      'smoke:alignment-internal',
+      'smoke:alignment-internal-manual-probe',
+      'smoke:terminal-internal-focus',
+      'feedback:publish',
+      'feedback:publish-refresh',
+      'feedback:publish-manual',
+      'feedback:publish-manual-refresh',
+    ];
+
+    for (const name of expectedScripts) {
+      expect(scripts[name]).toContain(sharedLauncher);
+      expect(scripts[name]).not.toContain('python3 ');
+    }
   });
 });

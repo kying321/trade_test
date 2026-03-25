@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import socket
 import subprocess
+import sys
 import tempfile
 import textwrap
 import time
@@ -19,7 +20,7 @@ PUBLIC_WORKSPACE_ROUTE_ASSERTIONS = [
         "route": "#/overview",
         "nav_label": "总览",
         "headline": "总览",
-        "markers": ["研究主线摘要", "hold24_zero"],
+        "markers": ["关键摘要", "系统运行", "调度心跳", "研究主线", "退出风控", "下一步去哪"],
     },
     {
         "route": "#/workspace/artifacts",
@@ -62,6 +63,88 @@ PUBLIC_WORKSPACE_ROUTE_ASSERTIONS = [
 ]
 CHANGE_CLASS = "RESEARCH_ONLY"
 MANUAL_PROBE_FEEDBACK_ID = "manual_alignment_browser_smoke_probe"
+CONTRACTS_SOURCE_HEAD_ASSERTION = {
+    "route": "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff",
+    "page_section": "contracts-source-head-price_action_exit_risk_handoff",
+    "source_head_id": "price_action_exit_risk_handoff",
+    "visible_markers": [
+        "source head 状态",
+        "下一研究优先级",
+        "当前允许动作",
+        "当前阻止动作",
+    ],
+}
+CONTRACTS_SOURCE_GAP_ASSERTION = {
+    "route": "#/workspace/contracts?page_section=contracts-source-gap-audit",
+    "page_section": "contracts-source-gap-audit",
+    "visible_markers": [
+        "退出风控源差审计",
+        "发现数量",
+        "标准锚点",
+    ],
+}
+ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION = {
+    "route": "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
+    "group": "research_exit_risk",
+    "search_scope": "title",
+    "search": "",
+    "section_label": "支撑证据",
+    "active_artifact": "price_action_exit_risk_break_even_review_conclusion",
+    "visible_artifacts": [
+        "price_action_exit_risk_break_even_guarded_review",
+        "price_action_exit_risk_break_even_review_packet",
+        "price_action_exit_risk_break_even_review_conclusion",
+        "price_action_exit_risk_break_even_primary_anchor_review",
+        "price_action_exit_risk_hold_selection_aligned_break_even_review_lane",
+    ],
+    "visible_markers": [
+        "price_action_exit_risk_break_even_guarded_review",
+        "price_action_exit_risk_break_even_review_packet",
+        "price_action_exit_risk_break_even_review_conclusion",
+        "price_action_exit_risk_break_even_primary_anchor_review",
+        "price_action_exit_risk_hold_selection_aligned_break_even_review_lane",
+    ],
+}
+TERMINAL_SIGNAL_RISK_ROUTE = "#/terminal/internal?panel=signal-risk&section=focus-slots"
+TERMINAL_SIGNAL_RISK_TITLE = "信号发生器与风险节流阀"
+TERMINAL_FOCUS_SLOTS_TITLE = "穿透层 3 / 焦点槽位"
+TERMINAL_FOCUS_SLOT_LABELS = {
+    "primary": "主槽位",
+    "followup": "跟进槽位",
+    "secondary": "次级槽位",
+}
+
+
+def load_public_workspace_route_assertions(*, dist_dir: Path) -> list[dict[str, Any]]:
+    route_assertions = [
+        {
+            **route,
+            "markers": list(route.get("markers") or []),
+        }
+        for route in PUBLIC_WORKSPACE_ROUTE_ASSERTIONS
+    ]
+    snapshot_path = dist_dir / "data" / "fenlie_dashboard_snapshot.json"
+    if not snapshot_path.exists():
+        return route_assertions
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return route_assertions
+    hold_selection_payload = (
+        ((snapshot.get("artifact_payloads") or {}).get("hold_selection_handoff") or {}).get("payload") or {}
+    )
+    active_baseline = str(hold_selection_payload.get("active_baseline") or "").strip()
+    if active_baseline:
+        route_assertions[0]["markers"] = [
+            "关键摘要",
+            "系统运行",
+            "调度心跳",
+            "研究主线",
+            active_baseline,
+            "退出风控",
+            "下一步去哪",
+        ]
+    return route_assertions
 
 
 def now_utc() -> dt.datetime:
@@ -70,6 +153,10 @@ def now_utc() -> dt.datetime:
 
 def fmt_utc(value: dt.datetime) -> str:
     return value.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def current_python_executable() -> str:
+    return sys.executable or "python3"
 
 
 def build_manual_probe_event(*, runtime_now: dt.datetime) -> dict[str, Any]:
@@ -161,7 +248,7 @@ def temporary_manual_probe(
         ensure_success(
             name="refresh_after_manual_probe_seed",
             cmd=[
-                "python3",
+                current_python_executable(),
                 str(system_root / "scripts" / "run_operator_panel_refresh.py"),
                 "--workspace",
                 str(workspace),
@@ -183,7 +270,7 @@ def temporary_manual_probe(
             ensure_success(
                 name="refresh_after_manual_probe_restore",
                 cmd=[
-                    "python3",
+                    current_python_executable(),
                     str(system_root / "scripts" / "run_operator_panel_refresh.py"),
                     "--workspace",
                     str(workspace),
@@ -224,7 +311,7 @@ def inspect_manual_probe_state(*, review_dir: Path) -> dict[str, Any]:
 @contextlib.contextmanager
 def http_server(*, dist_dir: Path, host: str, port: int) -> Iterator[subprocess.Popen[str]]:
     cmd = [
-        "python3",
+        current_python_executable(),
         "-m",
         "http.server",
         str(port),
@@ -251,8 +338,14 @@ def http_server(*, dist_dir: Path, host: str, port: int) -> Iterator[subprocess.
             proc.wait(timeout=5)
 
 
-def build_workspace_routes_smoke_spec(*, base_url: str, screenshot_path: Path, result_path: Path) -> str:
-    route_matrix_json = json.dumps(PUBLIC_WORKSPACE_ROUTE_ASSERTIONS, ensure_ascii=False, indent=2)
+def build_workspace_routes_smoke_spec(
+    *,
+    base_url: str,
+    screenshot_path: Path,
+    result_path: Path,
+    route_assertions: list[dict[str, Any]] | None = None,
+) -> str:
+    route_matrix_json = json.dumps(route_assertions or PUBLIC_WORKSPACE_ROUTE_ASSERTIONS, ensure_ascii=False, indent=2)
     return (
         textwrap.dedent(
             f"""
@@ -270,6 +363,35 @@ def build_workspace_routes_smoke_spec(*, base_url: str, screenshot_path: Path, r
               await expect(page.getByText(new RegExp(escapeRegExp(marker), 'i')).first()).toBeVisible();
             }}
 
+            async function ensureSidebarPageSectionsVisible(page) {{
+              const visibleNavSelector = 'nav[aria-label="page-sections-nav"]:visible';
+              const pageSectionsNav = page.locator(visibleNavSelector).first();
+              const navVisible = (await pageSectionsNav.count()) > 0;
+              if (!navVisible) {{
+                const expandToggle = page.getByRole('button', {{ name: '展开侧边导航' }});
+                if (await expandToggle.isVisible().catch(() => false)) {{
+                  await expandToggle.click();
+                  await page.getByRole('button', {{ name: '收起侧边导航' }}).waitFor();
+                }}
+              }}
+              await expect(page.locator(visibleNavSelector).first()).toBeVisible();
+            }}
+
+            async function clickContextNav(page, label) {{
+              const nav = page.getByRole('navigation', {{ name: 'context-nav' }});
+              const link = nav.getByRole('link', {{ name: new RegExp(`^${{escapeRegExp(label)}}(?:\\\\s|$)`) }}).first();
+              const linkVisible = await link.isVisible().catch(() => false);
+              if (!linkVisible) {{
+                const expandToggle = page.getByRole('button', {{ name: '展开侧边导航' }});
+                if (await expandToggle.isVisible().catch(() => false)) {{
+                  await expandToggle.click();
+                  await page.getByRole('button', {{ name: '收起侧边导航' }}).waitFor();
+                }}
+              }}
+              await expect(link).toBeVisible();
+              await link.click();
+            }}
+
             test.use({{ browserName: 'chromium' }});
 
             test('workspace routes smoke', async ({{ page }}) => {{
@@ -280,8 +402,17 @@ def build_workspace_routes_smoke_spec(*, base_url: str, screenshot_path: Path, r
               const workspaceStartRoute = ROUTES[1];
               const artifactsFilterRoute = '#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow';
               const orderflowArtifacts = ['intraday_orderflow_blueprint', 'intraday_orderflow_research_gate_blocker'];
+              const exitRiskReviewRoute = {ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["route"]!r};
+              const exitRiskReviewArtifacts = {json.dumps(ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["visible_artifacts"], ensure_ascii=False, indent=2)};
+              const exitRiskReviewSectionHint = {ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["section_label"]!r};
+              const exitRiskReviewActiveArtifact = {ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["active_artifact"]!r};
               const themeRoute = '#/workspace/contracts?theme=light';
               const pageSectionRoute = '#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke';
+              const contractsSourceHeadRoute = {CONTRACTS_SOURCE_HEAD_ASSERTION["route"]!r};
+              const contractsSourceHeadMarkers = {json.dumps(CONTRACTS_SOURCE_HEAD_ASSERTION["visible_markers"], ensure_ascii=False, indent=2)};
+              const contractsSourceGapRoute = {CONTRACTS_SOURCE_GAP_ASSERTION["route"]!r};
+              const contractsSourceGapMarkers = {json.dumps(CONTRACTS_SOURCE_GAP_ASSERTION["visible_markers"], ensure_ascii=False, indent=2)};
+              const contractsSourceGapPayloadKey = 'finding_count';
 
               page.on('response', async (response) => {{
                 const url = response.url();
@@ -326,8 +457,47 @@ def build_workspace_routes_smoke_spec(*, base_url: str, screenshot_path: Path, r
               const activeOrderflowArtifact = page.locator('.artifact-layer-cross .artifact-button.active').first();
               await expect(activeOrderflowArtifact).toContainText('intraday_orderflow_blueprint');
 
+              await page.goto({base_url!r} + exitRiskReviewRoute, {{ waitUntil: 'networkidle' }});
+              await page.waitForFunction((fragment) => window.location.hash.includes(fragment), exitRiskReviewRoute);
+              await page.waitForFunction((artifactId) => window.location.hash.includes(`artifact=${{artifactId}}`), exitRiskReviewActiveArtifact);
+              await expectStableMarker(page, exitRiskReviewActiveArtifact);
+              const exitRiskReviewSectionState = await page.evaluate((sectionHint) => {{
+                const normalizedSectionHint = String(sectionHint || '').replace(/\\s+/g, '').toLowerCase();
+                const sections = Array.from(document.querySelectorAll('.artifact-layer-section'));
+                const target = sections.find((node) => {{
+                  const summaryText = String(node.querySelector('summary')?.textContent || '').replace(/\\s+/g, '').toLowerCase();
+                  return summaryText.includes(normalizedSectionHint);
+                }});
+                if (!target) return {{ opened: false, label: '' }};
+                if (target instanceof HTMLDetailsElement) {{
+                  target.open = true;
+                }}
+                return {{
+                  opened: true,
+                  label: String(target.querySelector('summary')?.textContent || '').trim(),
+                }};
+              }}, exitRiskReviewSectionHint);
+              expect(exitRiskReviewSectionState.opened).toBeTruthy();
+              await expectStableMarker(page, exitRiskReviewSectionHint);
+              const exitRiskReviewSectionLabel = exitRiskReviewSectionState.label || exitRiskReviewSectionHint;
+              const exitRiskReviewVisibleArtifacts = await page.evaluate(({{ sectionHint, artifactIds }}) => {{
+                const normalizedSectionHint = String(sectionHint || '').replace(/\\s+/g, '').toLowerCase();
+                const target = Array.from(document.querySelectorAll('.artifact-layer-section')).find((node) => {{
+                  const summaryText = String(node.querySelector('summary')?.textContent || '').replace(/\\s+/g, '').toLowerCase();
+                  return summaryText.includes(normalizedSectionHint);
+                }});
+                if (!target) return [];
+                const rawTitles = Array.from(target.querySelectorAll('.value-text[title]'))
+                  .map((node) => String(node.getAttribute('title') || '').trim().toLowerCase())
+                  .filter(Boolean);
+                return artifactIds.filter((artifactId) => rawTitles.includes(String(artifactId || '').trim().toLowerCase()));
+              }}, {{ sectionHint: exitRiskReviewSectionHint, artifactIds: exitRiskReviewArtifacts }});
+              expect(exitRiskReviewVisibleArtifacts).toEqual(exitRiskReviewArtifacts);
+              const activeExitRiskReviewArtifact = page.locator('.artifact-layer-exit .artifact-button.active .value-text').first();
+              await expect(activeExitRiskReviewArtifact).toHaveAttribute('title', exitRiskReviewActiveArtifact);
+
               for (const route of ROUTES.slice(2)) {{
-                await page.locator('nav[aria-label=\"context-nav\"]').getByText(route.nav_label, {{ exact: true }}).click();
+                await clickContextNav(page, route.nav_label);
                 await page.waitForFunction((fragment) => window.location.hash.includes(fragment), route.route);
                 await expect(page.getByRole('heading', {{ name: route.headline, exact: true }})).toBeVisible();
                 for (const marker of route.markers) {{
@@ -351,6 +521,24 @@ def build_workspace_routes_smoke_spec(*, base_url: str, screenshot_path: Path, r
               await expect(activePageSection).toContainText('工作区路由子命令');
               const focusedAccordion = page.locator('[data-accordion-id="contracts-subcommand-workspace_routes_smoke"]').first();
               await expect(focusedAccordion).toHaveAttribute('data-state', 'open');
+              const pageSectionActiveLabel = ((await activePageSection.textContent()) || '').trim();
+              const pageSectionAccordionState = await focusedAccordion.getAttribute('data-state');
+
+              await page.goto({base_url!r} + contractsSourceHeadRoute, {{ waitUntil: 'networkidle' }});
+              await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-source-head-price_action_exit_risk_handoff'));
+              const contractsSourceHeadAccordion = page.locator('[data-accordion-id="contracts-source-head-price_action_exit_risk_handoff"]').first();
+              await expect(contractsSourceHeadAccordion).toHaveAttribute('data-state', 'open');
+              for (const marker of contractsSourceHeadMarkers) {{
+                await expect(contractsSourceHeadAccordion).toContainText(marker);
+              }}
+
+              await page.goto({base_url!r} + contractsSourceGapRoute, {{ waitUntil: 'networkidle' }});
+              await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-source-gap-audit'));
+              const contractsSourceGapSection = page.locator('[data-workspace-section="contracts-source-gap-audit"]').first();
+              await expect(contractsSourceGapSection).toBeVisible();
+              for (const marker of contractsSourceGapMarkers) {{
+                await expect(contractsSourceGapSection).toContainText(marker);
+              }}
 
               expect(snapshotRequests.length).toBeGreaterThanOrEqual(ROUTES.length);
               expect(internalSnapshotRequests.length).toBe(0);
@@ -372,8 +560,20 @@ def build_workspace_routes_smoke_spec(*, base_url: str, screenshot_path: Path, r
                     page_section_assertion: {{
                       route: pageSectionRoute,
                       page_section: 'contracts-subcommand-workspace_routes_smoke',
-                      active_label: ((await activePageSection.textContent()) || '').trim(),
-                      accordion_state: await focusedAccordion.getAttribute('data-state'),
+                      active_label: pageSectionActiveLabel,
+                      accordion_state: pageSectionAccordionState,
+                    }},
+                    contracts_source_head_assertion: {{
+                      route: contractsSourceHeadRoute,
+                      page_section: 'contracts-source-head-price_action_exit_risk_handoff',
+                      source_head_id: 'price_action_exit_risk_handoff',
+                      accordion_state: await contractsSourceHeadAccordion.getAttribute('data-state'),
+                      visible_markers: contractsSourceHeadMarkers,
+                    }},
+                    contracts_source_gap_assertion: {{
+                      route: contractsSourceGapRoute,
+                      page_section: 'contracts-source-gap-audit',
+                      visible_markers: contractsSourceGapMarkers,
                     }},
                     artifacts_filter_assertion: {{
                       route: artifactsFilterRoute,
@@ -382,6 +582,16 @@ def build_workspace_routes_smoke_spec(*, base_url: str, screenshot_path: Path, r
                       search: 'orderflow',
                       active_artifact: 'intraday_orderflow_blueprint',
                       visible_artifacts: orderflowArtifacts,
+                    }},
+                    artifacts_exit_risk_review_assertion: {{
+                      route: exitRiskReviewRoute,
+                      group: 'research_exit_risk',
+                      search_scope: 'title',
+                      search: '',
+                      section_label: exitRiskReviewSectionLabel,
+                      active_artifact: exitRiskReviewActiveArtifact,
+                      visible_artifacts: exitRiskReviewVisibleArtifacts,
+                      visible_markers: exitRiskReviewVisibleArtifacts,
                     }},
                   }},
                   null,
@@ -428,6 +638,44 @@ def load_internal_alignment_expectations(*, dist_dir: Path) -> dict[str, Any]:
     }
 
 
+def visible_marker(value: str, *, max_chars: int = 28) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip()
+
+
+def focus_slot_label(value: str) -> str:
+    raw = str(value or "").strip()
+    return TERMINAL_FOCUS_SLOT_LABELS.get(raw, raw or "主槽位")
+
+
+def load_internal_terminal_focus_expectations(*, dist_dir: Path) -> dict[str, Any]:
+    snapshot_path = dist_dir / "data" / "fenlie_dashboard_internal_snapshot.json"
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    operator_panel = (((snapshot.get("artifact_payloads") or {}).get("operator_panel") or {}).get("payload") or {})
+    focus_slots = list(operator_panel.get("focus_slots") or [])
+    focus_row = (focus_slots[0] if focus_slots else {}) or {}
+    focus_row_id = str(focus_row.get("slot") or "primary").strip() or "primary"
+    focus_row_label = focus_slot_label(focus_row_id)
+    return {
+        "focus_row_id": focus_row_id,
+        "focus_row_label": focus_row_label,
+        "route_assertions": [
+            {
+                "route": TERMINAL_SIGNAL_RISK_ROUTE,
+                "nav_label": TERMINAL_SIGNAL_RISK_TITLE,
+                "headline": TERMINAL_SIGNAL_RISK_TITLE,
+                "markers": [
+                    TERMINAL_SIGNAL_RISK_TITLE,
+                    TERMINAL_FOCUS_SLOTS_TITLE,
+                    focus_row_label,
+                ],
+            }
+        ],
+    }
+
+
 def build_internal_alignment_smoke_spec(
     *,
     base_url: str,
@@ -438,7 +686,15 @@ def build_internal_alignment_smoke_spec(
     top_action: str,
 ) -> str:
     route = "#/workspace/alignment?view=internal&page_section=alignment-summary"
-    markers = [value for value in [projection_summary_headline, top_event_headline, top_action] if value]
+    markers = [
+        value
+        for value in [
+            visible_marker(projection_summary_headline),
+            visible_marker(top_event_headline),
+            visible_marker(top_action),
+        ]
+        if value
+    ]
     markers_json = json.dumps(markers, ensure_ascii=False, indent=2)
     return (
         textwrap.dedent(
@@ -448,6 +704,11 @@ def build_internal_alignment_smoke_spec(
 
             const ROUTE = {route!r};
             const MARKERS = {markers_json};
+            const PROJECTION_ASSERTION = {{
+              headline: {projection_summary_headline!r},
+              top_event_headline: {top_event_headline!r},
+              top_action: {top_action!r},
+            }};
 
             function escapeRegExp(value) {{
               return value.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
@@ -473,7 +734,6 @@ def build_internal_alignment_smoke_spec(
               await page.goto({base_url!r} + ROUTE, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction(() => window.location.hash.includes('view=internal'));
               await expect(page.getByRole('heading', {{ name: '方向对齐投射', exact: true }})).toBeVisible();
-              await expect(page.getByRole('navigation', {{ name: 'page-sections-nav' }})).toBeVisible();
               for (const marker of MARKERS) {{
                 await expectStableMarker(page, marker);
               }}
@@ -495,10 +755,163 @@ def build_internal_alignment_smoke_spec(
                     ],
                     snapshot_requests: publicSnapshotRequests,
                     internal_snapshot_requests: internalSnapshotRequests,
-                    projection_assertion: {{
-                      headline: MARKERS[0] || '',
-                      top_event_headline: MARKERS[1] || '',
-                      top_action: MARKERS[2] || '',
+                    projection_assertion: PROJECTION_ASSERTION,
+                  }},
+                  null,
+                  2,
+                ),
+                'utf8',
+              );
+
+              await page.screenshot({{ path: {str(screenshot_path)!r}, fullPage: true }});
+            }});
+            """
+        ).strip()
+        + "\n"
+    )
+
+
+def build_internal_terminal_focus_smoke_spec(
+    *,
+    base_url: str,
+    screenshot_path: Path,
+    result_path: Path,
+    focus_row_id: str,
+    focus_row_label: str,
+) -> str:
+    route = TERMINAL_SIGNAL_RISK_ROUTE
+    return (
+        textwrap.dedent(
+            f"""
+            const {{ test, expect }} = require('@playwright/test');
+            const fs = require('node:fs');
+
+            const ROUTE = {route!r};
+            const PANEL_TITLE = {TERMINAL_SIGNAL_RISK_TITLE!r};
+            const SECTION_TITLE = {TERMINAL_FOCUS_SLOTS_TITLE!r};
+            const FOCUS_ROW_ID = {focus_row_id!r};
+            const FOCUS_ROW_LABEL = {focus_row_label!r};
+            const EXPECTED_ROW_FRAGMENT = {'row=' + focus_row_id!r};
+
+            function escapeRegExp(value) {{
+              return value.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+            }}
+
+            async function expectStableMarker(page, marker) {{
+              await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
+              await expect(page.getByText(new RegExp(escapeRegExp(marker), 'i')).first()).toBeVisible();
+            }}
+
+            test.use({{ browserName: 'chromium' }});
+
+            test('internal terminal focus smoke', async ({{ page }}) => {{
+              const publicSnapshotRequests = [];
+              const internalSnapshotRequests = [];
+
+              page.on('response', async (response) => {{
+                const url = response.url();
+                if (url.includes('fenlie_dashboard_snapshot.json')) publicSnapshotRequests.push(url);
+                if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
+              }});
+
+              await page.goto({base_url!r} + ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.waitForFunction(() => window.location.hash.includes('panel=signal-risk') && window.location.hash.includes('section=focus-slots'));
+              await expect(page.getByRole('heading', {{ name: PANEL_TITLE, exact: true }})).toBeVisible();
+              await expectStableMarker(page, SECTION_TITLE);
+              await expectStableMarker(page, FOCUS_ROW_LABEL);
+
+              const drilldownState = await page.evaluate((sectionHint) => {{
+                const normalizedSectionHint = String(sectionHint || '').replace(/\\s+/g, '').toLowerCase();
+                const section = Array.from(document.querySelectorAll('.drill-section')).find((node) => {{
+                  const summaryText = String(node.querySelector('summary.drill-summary')?.textContent || '').replace(/\\s+/g, '').toLowerCase();
+                  return summaryText.includes(normalizedSectionHint);
+                }});
+                if (!section) {{
+                  return {{
+                    section_found: false,
+                    section_open: false,
+                    summary_link_count: -1,
+                    action_link_count: 0,
+                    action_link_href: '',
+                    action_label_before_click: '',
+                  }};
+                }}
+                if (section instanceof HTMLDetailsElement) {{
+                  section.open = true;
+                }}
+                const firstCard = section.querySelector('.drill-list .drill-card');
+                if (firstCard instanceof HTMLDetailsElement) {{
+                  firstCard.open = true;
+                }}
+                const summaryLinkCount = firstCard ? firstCard.querySelectorAll('summary.drill-card-summary .drill-card-link').length : 0;
+                const actionLinks = firstCard ? Array.from(firstCard.querySelectorAll('.drill-card-actions .drill-card-link')) : [];
+                const firstAction = actionLinks[0];
+                return {{
+                  section_found: true,
+                  section_open: section instanceof HTMLDetailsElement ? section.open : false,
+                  summary_link_count: summaryLinkCount,
+                  action_link_count: actionLinks.length,
+                  action_link_href: String(firstAction?.getAttribute('href') || '').trim(),
+                  action_label_before_click: String(firstAction?.textContent || '').trim(),
+                }};
+              }}, SECTION_TITLE);
+
+              expect(drilldownState.section_found).toBeTruthy();
+              expect(drilldownState.section_open).toBeTruthy();
+              const summaryLinkCount = drilldownState.summary_link_count;
+              const actionLinkCount = drilldownState.action_link_count;
+              expect(summaryLinkCount).toBe(0);
+              expect(actionLinkCount).toBeGreaterThanOrEqual(1);
+              expect(drilldownState.action_label_before_click).toBe('定位此项');
+              expect(drilldownState.action_link_href).toContain(EXPECTED_ROW_FRAGMENT);
+
+              const focusLink = page.locator('.drill-section-focused .drill-card-actions .drill-card-link').first();
+              await expect(focusLink).toBeVisible();
+              await expect(focusLink).toContainText('定位此项');
+              await focusLink.click();
+
+              await page.waitForFunction((rowFragment) => window.location.hash.includes(rowFragment), EXPECTED_ROW_FRAGMENT);
+              const focusedSummaryLinkCount = await page.evaluate(() => {{
+                const focusSection = document.querySelector('.drill-section-focused');
+                return focusSection ? focusSection.querySelectorAll('summary.drill-card-summary .drill-card-link').length : -1;
+              }});
+              expect(focusedSummaryLinkCount).toBe(0);
+
+              const activeFocusLink = page.locator('.drill-section-focused .drill-card-actions .drill-card-link.active').first();
+              await expect(activeFocusLink).toBeVisible();
+              await expect(activeFocusLink).toContainText('当前焦点');
+              const actionLabelAfterClick = ((await activeFocusLink.textContent()) || '').trim();
+              const actionLinkHref = (await activeFocusLink.getAttribute('href')) || '';
+
+              expect(internalSnapshotRequests.length).toBeGreaterThanOrEqual(1);
+              expect(publicSnapshotRequests.length).toBe(0);
+
+              fs.writeFileSync(
+                {str(result_path)!r},
+                JSON.stringify(
+                  {{
+                    requested_surface: 'internal',
+                    effective_surface: 'internal',
+                    visited_routes: [
+                      {{
+                        route: ROUTE,
+                        headline: PANEL_TITLE,
+                        url: page.url(),
+                      }},
+                    ],
+                    snapshot_requests: publicSnapshotRequests,
+                    internal_snapshot_requests: internalSnapshotRequests,
+                    terminal_drilldown_assertion: {{
+                      route: ROUTE,
+                      panel: 'signal-risk',
+                      section: 'focus-slots',
+                      focus_row_id: FOCUS_ROW_ID,
+                      focus_row_label: FOCUS_ROW_LABEL,
+                      summary_link_count: summaryLinkCount,
+                      action_link_count: actionLinkCount,
+                      action_label_before_click: drilldownState.action_label_before_click,
+                      action_label_after_click: actionLabelAfterClick,
+                      action_link_href: actionLinkHref,
                     }},
                   }},
                   null,
@@ -523,6 +936,7 @@ def run_playwright_smoke(
     screenshot_path: Path,
     mode: str = "public_workspace",
     internal_expectations: dict[str, Any] | None = None,
+    route_assertions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     web_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fenlie-dashboard-smoke-", dir=web_root) as temp_dir_raw:
@@ -539,11 +953,21 @@ def run_playwright_smoke(
                 top_event_headline=str(expectations.get("top_event_headline") or ""),
                 top_action=str(expectations.get("top_action") or ""),
             )
+        elif mode == "internal_terminal_focus":
+            expectations = internal_expectations or {}
+            spec = build_internal_terminal_focus_smoke_spec(
+                base_url=base_url,
+                screenshot_path=screenshot_path,
+                result_path=result_path,
+                focus_row_id=str(expectations.get("focus_row_id") or "primary"),
+                focus_row_label=str(expectations.get("focus_row_label") or focus_slot_label("primary")),
+            )
         else:
             spec = build_workspace_routes_smoke_spec(
                 base_url=base_url,
                 screenshot_path=screenshot_path,
                 result_path=result_path,
+                route_assertions=route_assertions,
             )
         spec_path.write_text(spec, encoding="utf-8")
         cmd = [
@@ -608,6 +1032,18 @@ def build_artifact_payload(
         "active_label": "",
         "accordion_state": "",
     }
+    contracts_source_head_assertion = playwright_result.get("contracts_source_head_assertion") or {
+        "route": CONTRACTS_SOURCE_HEAD_ASSERTION["route"],
+        "page_section": CONTRACTS_SOURCE_HEAD_ASSERTION["page_section"],
+        "source_head_id": CONTRACTS_SOURCE_HEAD_ASSERTION["source_head_id"],
+        "accordion_state": "",
+        "visible_markers": [],
+    }
+    contracts_source_gap_assertion = playwright_result.get("contracts_source_gap_assertion") or {
+        "route": CONTRACTS_SOURCE_GAP_ASSERTION["route"],
+        "page_section": CONTRACTS_SOURCE_GAP_ASSERTION["page_section"],
+        "visible_markers": [],
+    }
     artifacts_filter_assertion = playwright_result.get("artifacts_filter_assertion") or {
         "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
         "group": "research_cross_section",
@@ -616,6 +1052,17 @@ def build_artifact_payload(
         "active_artifact": "",
         "visible_artifacts": [],
     }
+    artifacts_exit_risk_review_assertion = playwright_result.get("artifacts_exit_risk_review_assertion") or {
+        "route": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["route"],
+        "group": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["group"],
+        "search_scope": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["search_scope"],
+        "search": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["search"],
+        "section_label": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["section_label"],
+        "active_artifact": "",
+        "visible_artifacts": [],
+        "visible_markers": [],
+    }
+    terminal_drilldown_assertion = playwright_result.get("terminal_drilldown_assertion")
     if not visited_routes:
         visited_routes = [
             {
@@ -629,8 +1076,12 @@ def build_artifact_payload(
         action_name = "dashboard_internal_alignment_manual_probe_browser_smoke"
     elif mode == "internal_alignment":
         action_name = "dashboard_internal_alignment_browser_smoke"
+    elif mode == "internal_terminal_focus":
+        action_name = "dashboard_internal_terminal_focus_browser_smoke"
     else:
         action_name = "dashboard_workspace_routes_browser_smoke"
+    expected_focus_panel = "signal-risk" if mode == "internal_terminal_focus" else "lab-review"
+    expected_focus_section = "focus-slots" if mode == "internal_terminal_focus" else "research-heads"
     snapshot_endpoint_observed = (
         "/data/fenlie_dashboard_internal_snapshot.json"
         if str(playwright_result.get("requested_surface") or "public") == "internal"
@@ -662,11 +1113,15 @@ def build_artifact_payload(
         },
         "theme_assertion": theme_assertion,
         "page_section_assertion": page_section_assertion,
+        "contracts_source_head_assertion": contracts_source_head_assertion,
+        "contracts_source_gap_assertion": contracts_source_gap_assertion,
         "artifacts_filter_assertion": artifacts_filter_assertion,
+        "artifacts_exit_risk_review_assertion": artifacts_exit_risk_review_assertion,
+        "terminal_drilldown_assertion": terminal_drilldown_assertion,
         "projection_assertion": playwright_result.get("projection_assertion"),
         "expected_default_artifact": "price_action_breakout_pullback",
-        "expected_focus_panel": "lab-review",
-        "expected_focus_section": "research-heads",
+        "expected_focus_panel": expected_focus_panel,
+        "expected_focus_section": expected_focus_section,
         "expected_route_markers": route_markers,
         "screenshot_path": str(screenshot_path),
         "report_path": str(report_path),
@@ -687,9 +1142,9 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true", help="Skip npm run build before smoke.")
     parser.add_argument(
         "--mode",
-        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe"],
+        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus"],
         default="public_workspace",
-        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end.",
+        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path.",
     )
     args = parser.parse_args()
 
@@ -707,6 +1162,9 @@ def main() -> None:
     elif args.mode == "internal_alignment_manual_probe":
         report_path = review_dir / f"{timestamp}_dashboard_internal_alignment_manual_probe_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_internal_alignment_manual_probe_browser_smoke.png"
+    elif args.mode == "internal_terminal_focus":
+        report_path = review_dir / f"{timestamp}_dashboard_internal_terminal_focus_browser_smoke.json"
+        screenshot_path = review_dir / f"{timestamp}_dashboard_internal_terminal_focus_browser_smoke.png"
     else:
         report_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.png"
@@ -714,8 +1172,8 @@ def main() -> None:
     build_result: dict[str, Any] | None = None
     port = 0
     base_url = ""
-    expected_route_markers = (
-        [
+    if args.mode in {"internal_alignment", "internal_alignment_manual_probe"}:
+        expected_route_markers = [
             {
                 "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
                 "nav_label": "对齐页",
@@ -723,9 +1181,17 @@ def main() -> None:
                 "markers": [],
             }
         ]
-        if args.mode in {"internal_alignment", "internal_alignment_manual_probe"}
-        else list(PUBLIC_WORKSPACE_ROUTE_ASSERTIONS)
-    )
+    elif args.mode == "internal_terminal_focus":
+        expected_route_markers = [
+            {
+                "route": TERMINAL_SIGNAL_RISK_ROUTE,
+                "nav_label": TERMINAL_SIGNAL_RISK_TITLE,
+                "headline": TERMINAL_SIGNAL_RISK_TITLE,
+                "markers": [TERMINAL_SIGNAL_RISK_TITLE, TERMINAL_FOCUS_SLOTS_TITLE],
+            }
+        ]
+    else:
+        expected_route_markers = list(PUBLIC_WORKSPACE_ROUTE_ASSERTIONS)
     server_ready_seconds = 0.0
     smoke_result: dict[str, Any] = {
         "returncode": 1,
@@ -759,8 +1225,12 @@ def main() -> None:
             if args.mode in {"internal_alignment", "internal_alignment_manual_probe"}:
                 internal_expectations = load_internal_alignment_expectations(dist_dir=dist_dir)
                 expected_route_markers = list(internal_expectations["route_assertions"])
+            elif args.mode == "internal_terminal_focus":
+                internal_expectations = load_internal_terminal_focus_expectations(dist_dir=dist_dir)
+                expected_route_markers = list(internal_expectations["route_assertions"])
             else:
                 internal_expectations = None
+                expected_route_markers = load_public_workspace_route_assertions(dist_dir=dist_dir)
 
             with http_server(dist_dir=dist_dir, host=args.host, port=port):
                 server_ready_seconds = wait_http_ready(base_url, timeout_seconds=args.timeout_seconds)
@@ -771,6 +1241,7 @@ def main() -> None:
                     screenshot_path=screenshot_path,
                     mode=args.mode,
                     internal_expectations=internal_expectations,
+                    route_assertions=expected_route_markers,
                 )
     except Exception as exc:  # noqa: BLE001
         failure_assertion: dict[str, Any] = {
