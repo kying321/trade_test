@@ -3,15 +3,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_release_checklist_includes_internal_alignment_and_terminal_focus_smoke() -> None:
-    package_json = Path('/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/package.json')
+    package_json = ROOT / 'system/dashboard/web/package.json'
     payload = json.loads(package_json.read_text(encoding='utf-8'))
     script = payload['scripts']['verify:release-checklist']
     public_surface_script = payload['scripts']['verify:public-surface']
     python_contracts = payload['scripts'].get('test:dashboard-python-contracts', '')
 
     assert python_contracts
+    assert 'node ./scripts/run-python.mjs' in python_contracts
+    assert '-m pytest -q' in python_contracts
     assert 'test_build_dashboard_frontend_snapshot_script.py' in python_contracts
     assert 'test_run_operator_panel_refresh_script.py' in python_contracts
     assert 'test_run_dashboard_workspace_artifacts_smoke_script.py' in python_contracts
@@ -36,7 +40,7 @@ def test_release_checklist_includes_internal_alignment_and_terminal_focus_smoke(
 
 
 def test_runbook_release_checklist_mentions_internal_alignment_smoke() -> None:
-    runbook = Path('/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_DASHBOARD_ENGINEERING_RUNBOOK.md').read_text(encoding='utf-8')
+    runbook = (ROOT / 'system/docs/FENLIE_DASHBOARD_ENGINEERING_RUNBOOK.md').read_text(encoding='utf-8')
 
     assert 'npm run verify:release-checklist' in runbook
     assert 'npm run test:dashboard-python-contracts' in runbook
@@ -54,9 +58,10 @@ def test_runbook_release_checklist_mentions_internal_alignment_smoke() -> None:
 
 
 def test_public_deploy_doc_mentions_shared_python_launcher() -> None:
-    deploy_doc = Path('/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_DASHBOARD_PUBLIC_DEPLOY.md').read_text(encoding='utf-8')
+    deploy_doc = (ROOT / 'system/docs/FENLIE_DASHBOARD_PUBLIC_DEPLOY.md').read_text(encoding='utf-8')
 
     assert 'npm run verify:public-surface -- --skip-workspace-build' in deploy_doc
+    assert 'npm run test:dashboard-python-contracts' in deploy_doc
     assert 'node ./scripts/run-python.mjs' in deploy_doc
     assert 'CONDA_PREFIX/bin/python3' in deploy_doc
     assert 'run_dashboard_public_acceptance.py' in deploy_doc

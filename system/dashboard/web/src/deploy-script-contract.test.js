@@ -25,7 +25,8 @@ describe('deploy script contract', () => {
     expect(scripts['verify:release-checklist']).toContain('npm run build');
     expect(scripts['verify:release-checklist']).toContain('npm test');
     expect(scripts['verify:release-checklist']).toContain('npx tsc --noEmit');
-    expect(scripts['test:dashboard-python-contracts']).toContain('pytest -q');
+    expect(scripts['test:dashboard-python-contracts']).toContain('node ./scripts/run-python.mjs');
+    expect(scripts['test:dashboard-python-contracts']).toContain('-m pytest -q');
     expect(scripts['test:dashboard-python-contracts']).toContain('test_build_dashboard_frontend_snapshot_script.py');
     expect(scripts['test:dashboard-python-contracts']).toContain('test_run_operator_panel_refresh_script.py');
     expect(scripts['test:dashboard-python-contracts']).toContain('test_run_dashboard_workspace_artifacts_smoke_script.py');
@@ -101,6 +102,7 @@ describe('deploy script contract', () => {
       'refresh:data',
       'strip:internal',
       'verify:public-surface',
+      'test:dashboard-python-contracts',
       'smoke:workspace-routes',
       'smoke:workspace-artifacts',
       'smoke:alignment-internal',

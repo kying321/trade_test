@@ -133,11 +133,11 @@ EOF
 
 当前最新公开验收工件：
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060234Z_dashboard_public_topology_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060310Z_dashboard_workspace_routes_browser_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060224Z_dashboard_internal_alignment_browser_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060228Z_dashboard_internal_terminal_focus_browser_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060318Z_dashboard_public_acceptance.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062149Z_dashboard_public_topology_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062219Z_dashboard_workspace_routes_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062139Z_dashboard_internal_alignment_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062143Z_dashboard_internal_terminal_focus_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062226Z_dashboard_public_acceptance.json`
 
 
 ## 当前入口拓扑
@@ -197,15 +197,15 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 
 当前最新截图证据前缀：
 
-- `20260325T060234Z_dashboard_public_topology_root_overview_browser.png`
-- `20260325T060234Z_dashboard_public_topology_pages_overview_browser.png`
-- `20260325T060234Z_dashboard_public_topology_root_contracts_browser.png`
-- `20260325T060234Z_dashboard_public_topology_pages_contracts_browser.png`
+- `20260325T062149Z_dashboard_public_topology_root_overview_browser.png`
+- `20260325T062149Z_dashboard_public_topology_pages_overview_browser.png`
+- `20260325T062149Z_dashboard_public_topology_root_contracts_browser.png`
+- `20260325T062149Z_dashboard_public_topology_pages_contracts_browser.png`
 
 当前最新 source-head 深链截图证据前缀：
 
-- `20260325T060234Z_dashboard_public_topology_root_contracts_source_head_browser.png`
-- `20260325T060234Z_dashboard_public_topology_pages_contracts_source_head_browser.png`
+- `20260325T062149Z_dashboard_public_topology_root_contracts_source_head_browser.png`
+- `20260325T062149Z_dashboard_public_topology_pages_contracts_source_head_browser.png`
 
 本轮额外确认：
 
@@ -286,7 +286,7 @@ node ./scripts/run-python.mjs ../../scripts/run_dashboard_public_acceptance.py -
 
 最新已验证通过的聚合工件：
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060318Z_dashboard_public_acceptance.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062226Z_dashboard_public_acceptance.json`
 
 当前本地还新增了单一上架前验证入口：
 
@@ -300,6 +300,7 @@ npm run verify:release-checklist
 - `npm run build`
 - `npm test`
 - `npx tsc --noEmit`
+- `npm run test:dashboard-python-contracts`
 - `npm run smoke:workspace-routes -- --skip-build`
 - `npm run smoke:alignment-internal -- --skip-build`
 - `npm run smoke:terminal-internal-focus -- --skip-build`
@@ -307,7 +308,7 @@ npm run verify:release-checklist
 
 当前本地已验证结果（`terminal/internal focus browser smoke` 已纳入 `verify:release-checklist` 并随整链通过）：
 
-- `25 files / 146 tests passed`
+- `25 files / 148 tests passed`
 - `dashboard python contracts => 79 passed`
 - `workspace routes smoke => ok = true`
 - `internal alignment smoke => ok = true`

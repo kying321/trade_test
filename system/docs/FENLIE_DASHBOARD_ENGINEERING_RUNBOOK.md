@@ -239,12 +239,12 @@ npm run verify:release-checklist
 
 最近一次本地通过证据：
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060214Z_dashboard_workspace_routes_browser_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060224Z_dashboard_internal_alignment_browser_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060228Z_dashboard_internal_terminal_focus_browser_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060234Z_dashboard_public_topology_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T060318Z_dashboard_public_acceptance.json`
-- `npm test` 当前结果：`25 files / 146 tests passed`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062219Z_dashboard_workspace_routes_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062139Z_dashboard_internal_alignment_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062143Z_dashboard_internal_terminal_focus_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062149Z_dashboard_public_topology_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062226Z_dashboard_public_acceptance.json`
+- `npm test` 当前结果：`25 files / 148 tests passed`
 - `npm run test:dashboard-python-contracts` 当前结果：`79 passed`
 
 ### 5.6 workspace 多路由 smoke
