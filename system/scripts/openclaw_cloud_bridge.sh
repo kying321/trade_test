@@ -620,7 +620,8 @@ PY
 build_infra_canary_remote_cmd() {
   local mode="$1"
   local -a args
-  local quoted_cmd
+  local quoted_cmd cred_env_arg
+  cred_env_arg="$(build_live_takeover_cred_env_arg)"
   args=(
     PYTHONPATH=src
     python3
@@ -641,8 +642,11 @@ build_infra_canary_remote_cmd() {
   if is_true "${infra_canary_allow_dust}"; then
     args+=(--allow-dust)
   fi
+  if is_true "${live_takeover_allow_daemon_env_fallback}"; then
+    args+=(--allow-daemon-env-fallback)
+  fi
   printf -v quoted_cmd '%q ' "${args[@]}"
-  printf '%s' "${quoted_cmd% }"
+  printf '%s%s' "${cred_env_arg}" "${quoted_cmd% }"
 }
 
 run_infra_canary_mode() {

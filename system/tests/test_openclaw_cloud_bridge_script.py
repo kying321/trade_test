@@ -136,6 +136,26 @@ print(json.dumps({"ok": True, "remote_cmd": remote_cmd}))
         assert "--daily-budget-cap-usdt 20" in remote_cmd
         assert "--allow-dust" in remote_cmd
 
+    def test_infra_canary_probe_forwards_local_creds_and_daemon_env_fallback(self) -> None:
+        proc = self._run_bridge(
+            "infra-canary-probe",
+            extra_env={
+                "LIVE_TAKEOVER_FORWARD_LOCAL_CREDS": "true",
+                "LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK": "true",
+                "BINANCE_API_KEY": "local-key",
+                "BINANCE_SECRET": "local-secret",
+            },
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        remote_cmds = self._read_remote_cmds(proc)
+        assert len(remote_cmds) == 1
+        remote_cmd = remote_cmds[0]
+        assert "BINANCE_API_KEY=local-key" in remote_cmd
+        assert "BINANCE_SECRET=local-secret" in remote_cmd
+        assert "--allow-daemon-env-fallback" in remote_cmd
+        assert "--mode probe" in remote_cmd
+
     def test_infra_canary_autopilot_skips_real_run_when_check_blocks(self) -> None:
         proc = self._run_bridge(
             "infra-canary-autopilot",
@@ -179,6 +199,28 @@ print(json.dumps({"ok": True, "remote_cmd": remote_cmd}))
         assert proc.returncode == 0, proc.stderr
         remote_cmds = self._read_remote_cmds(proc)
         assert len(remote_cmds) == 2
+        assert "--mode autopilot-check" in remote_cmds[0]
+        assert "--mode run" in remote_cmds[1]
+
+    def test_infra_canary_autopilot_passes_creds_and_fallback_to_check_and_run(self) -> None:
+        proc = self._run_bridge(
+            "infra-canary-autopilot",
+            extra_env={
+                "FAKE_SSH_AUTOPILOT_MODE": "allowed",
+                "LIVE_TAKEOVER_FORWARD_LOCAL_CREDS": "true",
+                "LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK": "true",
+                "BINANCE_API_KEY": "local-key",
+                "BINANCE_SECRET": "local-secret",
+            },
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        remote_cmds = self._read_remote_cmds(proc)
+        assert len(remote_cmds) == 2
+        for remote_cmd in remote_cmds:
+            assert "BINANCE_API_KEY=local-key" in remote_cmd
+            assert "BINANCE_SECRET=local-secret" in remote_cmd
+            assert "--allow-daemon-env-fallback" in remote_cmd
         assert "--mode autopilot-check" in remote_cmds[0]
         assert "--mode run" in remote_cmds[1]
 
