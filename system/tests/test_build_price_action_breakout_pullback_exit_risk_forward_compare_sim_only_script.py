@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import importlib.util
+import json
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,13 +12,16 @@ import pandas as pd
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "scripts"
-    / "build_price_action_breakout_pullback_exit_hold_forward_compare_sim_only.py"
+    / "build_price_action_breakout_pullback_exit_risk_forward_compare_sim_only.py"
 )
 
-MODULE_SPEC = importlib.util.spec_from_file_location("fenlie_exit_hold_forward_compare_script", SCRIPT_PATH)
-assert MODULE_SPEC is not None and MODULE_SPEC.loader is not None
-SCRIPT_MODULE = importlib.util.module_from_spec(MODULE_SPEC)
-MODULE_SPEC.loader.exec_module(SCRIPT_MODULE)
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("fenlie_exit_risk_forward_compare_script", SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _build_fixture_rows(total_bars: int = 2880) -> list[dict[str, object]]:
@@ -103,27 +106,54 @@ def _write_base_artifact(path: Path) -> None:
     path.write_text(json.dumps(base_artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def test_classify_research_decision_reflects_actual_winner_mix() -> None:
-    assert SCRIPT_MODULE.classify_research_decision(
-        aggregate_return_winner="hold_16_zero_risk",
-        aggregate_objective_winner="hold_16_zero_risk",
-        slice_majority_return_winner="hold_16_zero_risk",
+def _write_challenge_pair(path: Path) -> None:
+    payload = {
+        "symbol": "ETHUSDT",
+        "research_decision": "block_exit_risk_promotion_require_hold8_vs_hold16_forward_oos",
+        "challenge_pair": {
+            "baseline_exit_params": {
+                "max_hold_bars": 16,
+                "break_even_trigger_r": 0.0,
+                "trailing_stop_atr": 1.5,
+                "cooldown_after_losses": 0,
+                "cooldown_bars": 0,
+            },
+            "challenger_exit_params": {
+                "max_hold_bars": 8,
+                "break_even_trigger_r": 0.75,
+                "trailing_stop_atr": 1.5,
+                "cooldown_after_losses": 0,
+                "cooldown_bars": 0,
+            },
+            "primary_axis": "max_hold_bars",
+            "baseline_hold_bars": 16,
+            "challenger_hold_bars": 8,
+            "shared_trailing_stop_atr": 1.5,
+        },
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def test_classify_pair_research_decision_supports_mixed_profile() -> None:
+    module = _load_module()
+
+    assert module.classify_pair_research_decision(
+        aggregate_return_winner="baseline_pair",
+        aggregate_objective_winner="challenger_pair",
+        slice_majority_return_winner="baseline_pair",
         slice_majority_objective_winner="tie",
-    ) == "mixed_forward_profile_agg_ret_hold16_agg_obj_hold16_slice_ret_hold16_slice_obj_tie"
+    ) == "mixed_forward_oos_pair_agg_ret_baseline_agg_obj_challenger_slice_ret_baseline_slice_obj_tie"
 
 
-def test_validation_window_mode_reflects_overlap() -> None:
-    assert SCRIPT_MODULE.validation_window_mode(step_days=5, validation_days=10) == "overlapping"
-    assert SCRIPT_MODULE.validation_window_mode(step_days=10, validation_days=10) == "non_overlapping"
-
-
-def test_forward_compare_defaults_fail_on_30d_fixture_window(tmp_path: Path) -> None:
+def test_exit_risk_forward_compare_uses_blocker_pair_and_runs(tmp_path: Path) -> None:
     review_dir = tmp_path / "review"
     review_dir.mkdir(parents=True, exist_ok=True)
     dataset_path = review_dir / "20260321T000000Z_public_intraday_crypto_bars_dataset.csv"
     pd.DataFrame(_build_fixture_rows()).to_csv(dataset_path, index=False)
     base_artifact_path = review_dir / "20260321T000500Z_price_action_breakout_pullback_sim_only.json"
+    blocker_path = review_dir / "20260323T024500Z_price_action_breakout_pullback_exit_risk_forward_blocker_sim_only.json"
     _write_base_artifact(base_artifact_path)
+    _write_challenge_pair(blocker_path)
 
     proc = subprocess.run(
         [
@@ -133,44 +163,14 @@ def test_forward_compare_defaults_fail_on_30d_fixture_window(tmp_path: Path) -> 
             str(dataset_path),
             "--base-artifact-path",
             str(base_artifact_path),
+            "--challenge-pair-path",
+            str(blocker_path),
             "--symbol",
             "ETHUSDT",
             "--review-dir",
             str(review_dir),
             "--stamp",
-            "20260321T081000Z",
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert proc.returncode != 0
-    assert "dataset_too_small_for_forward_compare" in proc.stderr
-
-
-def test_forward_compare_runs_with_explicit_20_5_5_window(tmp_path: Path) -> None:
-    review_dir = tmp_path / "review"
-    review_dir.mkdir(parents=True, exist_ok=True)
-    dataset_path = review_dir / "20260321T000000Z_public_intraday_crypto_bars_dataset.csv"
-    pd.DataFrame(_build_fixture_rows()).to_csv(dataset_path, index=False)
-    base_artifact_path = review_dir / "20260321T000500Z_price_action_breakout_pullback_sim_only.json"
-    _write_base_artifact(base_artifact_path)
-
-    proc = subprocess.run(
-        [
-            "python3",
-            str(SCRIPT_PATH),
-            "--dataset-path",
-            str(dataset_path),
-            "--base-artifact-path",
-            str(base_artifact_path),
-            "--symbol",
-            "ETHUSDT",
-            "--review-dir",
-            str(review_dir),
-            "--stamp",
-            "20260321T081500Z",
+            "20260323T031000Z",
             "--train-days",
             "20",
             "--validation-days",
@@ -184,20 +184,23 @@ def test_forward_compare_runs_with_explicit_20_5_5_window(tmp_path: Path) -> Non
     )
 
     assert proc.returncode == 0, proc.stderr
-    payload_out = json.loads(proc.stdout)
-    json_path = Path(payload_out["json_path"])
+    output = json.loads(proc.stdout)
+    json_path = Path(output["json_path"])
+    latest_json_path = Path(output["latest_json_path"])
     payload = json.loads(json_path.read_text(encoding="utf-8"))
-    assert payload["action"] == "build_price_action_breakout_pullback_exit_hold_forward_compare_sim_only"
+    latest_payload = json.loads(latest_json_path.read_text(encoding="utf-8"))
+
+    assert payload["action"] == "build_price_action_breakout_pullback_exit_risk_forward_compare_sim_only"
     assert payload["change_class"] == "SIM_ONLY"
     assert payload["symbol"] == "ETHUSDT"
-    assert payload["slice_count"] == 2
     assert payload["train_days"] == 20
     assert payload["validation_days"] == 5
     assert payload["step_days"] == 5
     assert payload["validation_window_mode"] == "non_overlapping"
-    assert payload["research_decision"]
-    assert len(payload["forward_slices"]) == 2
-    assert set(payload["aggregate_validation_metrics_by_config"].keys()) == {
-        "hold_8_zero_risk",
-        "hold_16_zero_risk",
-    }
+    assert payload["slice_count"] == 2
+    assert payload["challenge_pair_source_decision"] == "block_exit_risk_promotion_require_hold8_vs_hold16_forward_oos"
+    assert [row["config_id"] for row in payload["comparison_configs"]] == ["baseline_pair", "challenger_pair"]
+    assert payload["comparison_configs"][0]["exit_params"]["max_hold_bars"] == 16
+    assert payload["comparison_configs"][1]["exit_params"]["max_hold_bars"] == 8
+    assert set(payload["aggregate_validation_metrics_by_config"].keys()) == {"baseline_pair", "challenger_pair"}
+    assert latest_payload["research_decision"] == payload["research_decision"]

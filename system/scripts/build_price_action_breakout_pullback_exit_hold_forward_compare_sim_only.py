@@ -80,6 +80,51 @@ def choose_winner(left_name: str, left_value: float, right_name: str, right_valu
     return left_name if float(left_value) > float(right_value) else right_name
 
 
+def decision_token(value: str) -> str:
+    normalized = text(value)
+    if normalized == "hold_8_zero_risk":
+        return "hold8"
+    if normalized == "hold_16_zero_risk":
+        return "hold16"
+    if normalized == "tie":
+        return "tie"
+    return "mixed"
+
+
+def classify_research_decision(
+    *,
+    aggregate_return_winner: str,
+    aggregate_objective_winner: str,
+    slice_majority_return_winner: str,
+    slice_majority_objective_winner: str,
+) -> str:
+    if (
+        aggregate_return_winner == "hold_8_zero_risk"
+        and aggregate_objective_winner == "hold_8_zero_risk"
+        and slice_majority_return_winner == "hold_8_zero_risk"
+        and slice_majority_objective_winner == "hold_8_zero_risk"
+    ):
+        return "hold_8_forward_leader_keep_sim_only_candidate"
+    if (
+        aggregate_return_winner == "hold_16_zero_risk"
+        and aggregate_objective_winner == "hold_16_zero_risk"
+        and slice_majority_return_winner == "hold_16_zero_risk"
+        and slice_majority_objective_winner == "hold_16_zero_risk"
+    ):
+        return "hold_16_forward_leader_keep_baseline"
+    return (
+        "mixed_forward_profile"
+        f"_agg_ret_{decision_token(aggregate_return_winner)}"
+        f"_agg_obj_{decision_token(aggregate_objective_winner)}"
+        f"_slice_ret_{decision_token(slice_majority_return_winner)}"
+        f"_slice_obj_{decision_token(slice_majority_objective_winner)}"
+    )
+
+
+def validation_window_mode(*, step_days: int, validation_days: int) -> str:
+    return "overlapping" if int(step_days) < int(validation_days) else "non_overlapping"
+
+
 def cadence_minutes(frame: pd.DataFrame) -> int:
     ts = pd.Series(sorted(frame["ts"].dropna().unique())).astype("datetime64[ns]")
     diffs = ts.diff().dropna()
@@ -230,6 +275,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- train_days: `{payload.get('train_days')}`",
         f"- validation_days: `{payload.get('validation_days')}`",
         f"- step_days: `{payload.get('step_days')}`",
+        f"- validation_window_mode: `{text(payload.get('validation_window_mode'))}`",
         f"- slice_count: `{payload.get('slice_count')}`",
         f"- research_decision: `{text(payload.get('research_decision'))}`",
         "",
@@ -419,24 +465,16 @@ def main() -> int:
         float(aggregate_validation_objective_by_config["hold_16_zero_risk"]),
     )
 
-    research_decision = "mixed_forward_profile_hold8_aggregate_hold16_consistency"
-    if (
-        aggregate_return_winner == "hold_8_zero_risk"
-        and aggregate_objective_winner == "hold_8_zero_risk"
-        and slice_majority_return_winner == "hold_8_zero_risk"
-        and slice_majority_objective_winner == "hold_8_zero_risk"
-    ):
-        research_decision = "hold_8_forward_leader_keep_sim_only_candidate"
-    elif (
-        aggregate_return_winner == "hold_16_zero_risk"
-        and aggregate_objective_winner == "hold_16_zero_risk"
-        and slice_majority_return_winner == "hold_16_zero_risk"
-        and slice_majority_objective_winner == "hold_16_zero_risk"
-    ):
-        research_decision = "hold_16_forward_leader_keep_baseline"
+    research_decision = classify_research_decision(
+        aggregate_return_winner=aggregate_return_winner,
+        aggregate_objective_winner=aggregate_objective_winner,
+        slice_majority_return_winner=slice_majority_return_winner,
+        slice_majority_objective_winner=slice_majority_objective_winner,
+    )
 
     coverage_start = pd.Timestamp(frame["ts"].min()).to_pydatetime().replace(tzinfo=dt.timezone.utc)
     coverage_end = pd.Timestamp(frame["ts"].max()).to_pydatetime().replace(tzinfo=dt.timezone.utc)
+    window_mode = validation_window_mode(step_days=args.step_days, validation_days=args.validation_days)
     payload = {
         "action": "build_price_action_breakout_pullback_exit_hold_forward_compare_sim_only",
         "ok": True,
@@ -452,6 +490,7 @@ def main() -> int:
         "train_days": int(args.train_days),
         "validation_days": int(args.validation_days),
         "step_days": int(args.step_days),
+        "validation_window_mode": window_mode,
         "slice_count": int(len(forward_slices)),
         "selection_scenario_id": BASE_MODULE.SELECTION_SCENARIO_ID,
         "source_catalog": list(BASE_MODULE.SOURCE_CATALOG),
@@ -482,7 +521,7 @@ def main() -> int:
         ),
         "research_note": (
             "冻结 base entry 参数，只比较 zero-risk 的 hold=8 与 hold=16；"
-            "使用 expanding-train + non-overlap forward validation slices 做 source-owned 研究对比。"
+            f"使用 expanding-train + {window_mode} forward validation slices 做 source-owned 研究对比。"
         ),
         "limitation_note": (
             "每个 slice 不重新选参，只验证固定 exit 持有窗；"
