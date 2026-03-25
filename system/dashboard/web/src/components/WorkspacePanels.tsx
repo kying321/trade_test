@@ -1235,8 +1235,8 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
                 <SectionAnchor id={`contracts-source-head-${safeDisplayValue(row.id)}`} key={String(row.id)}>
                   <AccordionCard
                     id={`contracts-source-head-${safeDisplayValue(row.id)}`}
-                    title={<ValueText value={safeDisplayValue(row.label || row.id)} showRaw={view.sourceHeadSummaryFields.label.showRaw} />}
-                    summary={<ValueText value={safeDisplayValue(row.summary || row.research_decision || row.status)} showRaw={view.sourceHeadSummaryFields.summary.showRaw} />}
+                    title={<ValueText value={safeDisplayValue(row.label || row.id)} showRaw={view.sourceHeadSummaryFields.label.showRaw} expandable={false} />}
+                    summary={<ValueText value={safeDisplayValue(row.summary || row.research_decision || row.status)} showRaw={view.sourceHeadSummaryFields.summary.showRaw} expandable={false} />}
                     meta={<Badge value={row.status as string | undefined} />}
                     open={openAccordion.sourceHeads === safeDisplayValue(row.id)}
                     onToggle={() => setOpenAccordion((current) => ({

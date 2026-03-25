@@ -935,6 +935,26 @@ describe('Fenlie terminal console', () => {
     });
   });
 
+  it('keeps contracts source-head accordion triggers free of nested clamp toggles when labels overflow', async () => {
+    const restoreOverflow = mockClampOverflow({ overflows: true });
+
+    try {
+      installPassiveStore(mockSnapshot as DashboardSnapshot);
+      window.location.hash = '#/workspace/contracts?page_section=contracts-source-head-system_scheduler_state';
+      await renderApp();
+
+      await waitFor(() => {
+        expect(document.querySelector('[data-accordion-id="contracts-source-head-system_scheduler_state"] .accordion-trigger')).toBeTruthy();
+      });
+
+      expect(
+        document.querySelector('[data-accordion-id="contracts-source-head-system_scheduler_state"] .accordion-trigger .clamp-toggle'),
+      ).toBeNull();
+    } finally {
+      restoreOverflow();
+    }
+  });
+
   it('shows page-level toc for backtests and updates section query on drill jump', async () => {
     window.location.hash = '#/workspace/backtests';
     await renderApp();
