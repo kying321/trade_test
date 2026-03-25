@@ -9,11 +9,18 @@
 - symbol：`BTCUSDT`
 - market：`spot`
 - round_trip：`true`（买入 + 成交 + 卖出）
-- quote：`5 USDT`，允许残余 `BTC` dust
+- requested quote：`10 USDT`
+- single_run_cap_usdt：`12`
+- effective quote：按交易所 `min_notional`、步长、手续费损耗计算“最小可安全回平金额”，并取 `max(requested_quote_usdt, required_round_trip_quote_usdt)`
 - daily_budget_cap_usdt：`20`
 - allow_dust：`true`
 
 这些默认参数不随策略票变化，保持可审计、低自由度，防止 infra canary 越权。
+
+若 `required_round_trip_quote_usdt > single_run_cap_usdt`：
+- 直接 `graceful skip`
+- 不下单
+- 记录结构化 skip reason
 
 ## Success criteria（成功判定）
 1. buy order ack/filled，实际买入数量被记录。
@@ -31,6 +38,7 @@
 - `output/state/infra_canary_idempotency.json` 防止重复下单，命中时直接 `probe`/`run` 退出。
 - 剩余 dust 是允许的（`allow_dust=true`），但必须写入 `dust` summary，不能视为策略持仓。
 - 所有 artifact 和 telemetry 需通过 `infra_canary_run_id` 建立一次性 trace。
+- 历史残留说明：若旧版固定 5 USDT canary 已留下 `needs_recovery / sell_exchange_reject` attempt，该状态仍保持 source-of-truth，不会被新版 cap/skip 原因覆盖。
 
 ## Infra Canary 与 strategy canary 的关系
 - strategy canary（`binance_live_takeover.py` + `signal_to_order_tickets`）证明信号/策略 readiness；infra canary 只证明 execution infrastructure 可用。

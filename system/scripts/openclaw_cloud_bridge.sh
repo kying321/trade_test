@@ -57,7 +57,8 @@ Environment:
   LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK default: true
   LIVE_TAKEOVER_FORWARD_LOCAL_CREDS  default: false (forward local BINANCE_API_KEY/BINANCE_SECRET to remote run env)
   INFRA_CANARY_SYMBOL                default: BTCUSDT
-  INFRA_CANARY_QUOTE_USDT            default: 5
+  INFRA_CANARY_QUOTE_USDT            default: 10
+  INFRA_CANARY_SINGLE_RUN_CAP_USDT   default: 12
   INFRA_CANARY_DAILY_BUDGET_CAP_USDT default: 20
   INFRA_CANARY_ALLOW_DUST            default: true
 
@@ -135,7 +136,8 @@ live_takeover_market="$(printf '%s' "${LIVE_TAKEOVER_MARKET:-spot}" | tr '[:uppe
 live_takeover_allow_daemon_env_fallback="${LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK:-true}"
 live_takeover_forward_local_creds="${LIVE_TAKEOVER_FORWARD_LOCAL_CREDS:-false}"
 infra_canary_symbol="${INFRA_CANARY_SYMBOL:-BTCUSDT}"
-infra_canary_quote_usdt="${INFRA_CANARY_QUOTE_USDT:-5}"
+infra_canary_quote_usdt="${INFRA_CANARY_QUOTE_USDT:-10}"
+infra_canary_single_run_cap_usdt="${INFRA_CANARY_SINGLE_RUN_CAP_USDT:-12}"
 infra_canary_daily_budget_cap_usdt="${INFRA_CANARY_DAILY_BUDGET_CAP_USDT:-20}"
 infra_canary_allow_dust="${INFRA_CANARY_ALLOW_DUST:-true}"
 
@@ -636,6 +638,8 @@ build_infra_canary_remote_cmd() {
     "${infra_canary_symbol}"
     --quote-usdt
     "${infra_canary_quote_usdt}"
+    --single-run-cap-usdt
+    "${infra_canary_single_run_cap_usdt}"
     --daily-budget-cap-usdt
     "${infra_canary_daily_budget_cap_usdt}"
   )

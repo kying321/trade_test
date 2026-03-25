@@ -105,6 +105,7 @@ print(json.dumps({"ok": True, "remote_cmd": remote_cmd}))
         assert "infra-canary-autopilot" in proc.stdout
         assert "INFRA_CANARY_SYMBOL" in proc.stdout
         assert "INFRA_CANARY_QUOTE_USDT" in proc.stdout
+        assert "INFRA_CANARY_SINGLE_RUN_CAP_USDT" in proc.stdout
         assert "INFRA_CANARY_DAILY_BUDGET_CAP_USDT" in proc.stdout
         assert "INFRA_CANARY_ALLOW_DUST" in proc.stdout
 
@@ -118,7 +119,8 @@ print(json.dumps({"ok": True, "remote_cmd": remote_cmd}))
         assert "scripts/binance_infra_canary.py" in remote_cmd
         assert "--mode probe" in remote_cmd
         assert "--symbol BTCUSDT" in remote_cmd
-        assert "--quote-usdt 5" in remote_cmd
+        assert "--quote-usdt 10" in remote_cmd
+        assert "--single-run-cap-usdt 12" in remote_cmd
         assert "--daily-budget-cap-usdt 20" in remote_cmd
         assert "--allow-dust" in remote_cmd
 
@@ -132,7 +134,8 @@ print(json.dumps({"ok": True, "remote_cmd": remote_cmd}))
         assert "scripts/binance_infra_canary.py" in remote_cmd
         assert "--mode run" in remote_cmd
         assert "--symbol BTCUSDT" in remote_cmd
-        assert "--quote-usdt 5" in remote_cmd
+        assert "--quote-usdt 10" in remote_cmd
+        assert "--single-run-cap-usdt 12" in remote_cmd
         assert "--daily-budget-cap-usdt 20" in remote_cmd
         assert "--allow-dust" in remote_cmd
 
