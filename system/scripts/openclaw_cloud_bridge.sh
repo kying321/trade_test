@@ -701,7 +701,17 @@ except Exception as exc:
     print(json.dumps(out, ensure_ascii=False, indent=2))
     raise SystemExit(4)
 
-autopilot_allowed = bool(payload.get("autopilot_allowed", False))
+raw_autopilot_allowed = payload.get("autopilot_allowed", None)
+autopilot_allowed = True if isinstance(raw_autopilot_allowed, bool) and raw_autopilot_allowed is True else False
+has_valid_gate_type = isinstance(raw_autopilot_allowed, bool)
+if "reason" in payload:
+    reason = str(payload.get("reason"))
+elif not has_valid_gate_type:
+    reason = "invalid_autopilot_allowed_type"
+elif autopilot_allowed:
+    reason = "ready"
+else:
+    reason = "autopilot_check_blocked"
 out = {
     "executed": False,
     "status": "ready_to_run" if autopilot_allowed else "skipped_not_ready",
@@ -709,8 +719,14 @@ out = {
     "check_mode": "autopilot-check",
     "check_ok": bool(payload.get("ok", False)),
     "autopilot_allowed": autopilot_allowed,
-    "reason": str(payload.get("reason", "ready" if autopilot_allowed else "autopilot_check_blocked")),
+    "reason": reason,
 }
+if not has_valid_gate_type:
+    out["gate_field_error"] = {
+        "field": "autopilot_allowed",
+        "expected_type": "bool",
+        "actual_type": type(raw_autopilot_allowed).__name__,
+    }
 steps = payload.get("steps", {})
 if isinstance(steps, dict):
     out["steps"] = steps
