@@ -52,6 +52,53 @@ async function clickAndFlush(target: HTMLElement) {
   });
 }
 
+function mockClampOverflow({ overflows }: { overflows: boolean }) {
+  const keys = ['scrollHeight', 'clientHeight', 'scrollWidth', 'clientWidth'] as const;
+  const originals = new Map(
+    keys.map((key) => [key, Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)]),
+  );
+
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('clamp-copy')) return overflows ? 64 : 32;
+      return 32;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('clamp-copy')) return 32;
+      return 32;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('clamp-copy')) return overflows ? 220 : 120;
+      return 120;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('clamp-copy')) return 120;
+      return 120;
+    },
+  });
+
+  return () => {
+    keys.forEach((key) => {
+      const descriptor = originals.get(key);
+      if (descriptor) {
+        Object.defineProperty(HTMLElement.prototype, key, descriptor);
+      } else {
+        delete (HTMLElement.prototype as Partial<typeof HTMLElement.prototype>)[key];
+      }
+    });
+  };
+}
+
 async function changeAndFlush(target: HTMLElement, value: string) {
   await act(async () => {
     fireEvent.change(target, { target: { value } });
@@ -1249,6 +1296,23 @@ describe('Fenlie terminal console', () => {
       expect(document.querySelector('.artifact-group-button.active')?.textContent || '').toMatch(/核心研究主线|研究主线/);
       expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/price_action_breakout_pullback|ETH 15m 主线/);
     });
+  });
+
+  it('keeps artifact selector buttons free of nested clamp toggles when titles overflow', async () => {
+    const restoreOverflow = mockClampOverflow({ overflows: true });
+
+    try {
+      window.location.hash = '#/workspace/artifacts?artifact=price_action_breakout_pullback';
+      await renderApp();
+
+      await waitFor(() => {
+        expect(document.querySelector('.artifact-button')).toBeTruthy();
+      });
+
+      expect(document.querySelector('.artifact-button .clamp-toggle')).toBeNull();
+    } finally {
+      restoreOverflow();
+    }
   });
 
   it('defaults workspace selection to research mainline instead of system anchors', async () => {

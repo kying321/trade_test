@@ -237,11 +237,12 @@ function renderArtifactButton({
         <ValueText
           value={titleFor(row)}
           showRaw={showRawTitle}
+          expandable={false}
         />
       </strong>
       <span>{labelFor(row.category as string | undefined)}</span>
       <Badge value={row.research_decision || row.status} />
-      <PathText value={row.path} showRaw={showRawPath} />
+      <PathText value={row.path} showRaw={showRawPath} expandable={false} />
     </button>
   );
 }

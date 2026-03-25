@@ -159,16 +159,18 @@ export function ValueText({
   value,
   className = '',
   showRaw = true,
+  expandable = true,
 }: {
   value: unknown;
   className?: string;
   showRaw?: boolean;
+  expandable?: boolean;
 }) {
   const raw = safeDisplayValue(value);
   const { primary, secondary } = explainLabel(raw);
   return (
     <span className={`value-text ${className}`.trim()} title={raw}>
-      <ClampText className="value-primary" raw={raw}>{primary}</ClampText>
+      <ClampText className="value-primary" raw={raw} expandable={expandable}>{primary}</ClampText>
       {showRaw && secondary ? <small className="value-raw">{secondary}</small> : null}
     </span>
   );
@@ -296,17 +298,19 @@ export function PathText({
   value,
   showRaw = false,
   keepSegments = 4,
+  expandable = true,
 }: {
   value: unknown;
   showRaw?: boolean;
   keepSegments?: number;
+  expandable?: boolean;
 }) {
   const raw = safeDisplayValue(value);
   const primary = compactPath(raw, keepSegments);
   const showSecondary = showRaw && raw !== primary && raw !== '—';
   return (
     <span className="value-text" title={raw}>
-      <ClampText className="value-primary" raw={raw}>{primary}</ClampText>
+      <ClampText className="value-primary" raw={raw} expandable={expandable}>{primary}</ClampText>
       {showSecondary ? <small className="value-raw">{raw}</small> : null}
     </span>
   );
