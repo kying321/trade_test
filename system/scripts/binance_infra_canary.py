@@ -449,17 +449,6 @@ def main() -> int:
                 write_summary(output_root, summary)
                 return 0
 
-            if skip_reasons:
-                summary["steps"]["round_trip"] = {
-                    "executed": False,
-                    "reason": skip_reasons[0],
-                    "skip_reasons": skip_reasons,
-                    **quote_context,
-                }
-                summary["autopilot_allowed"] = False
-                write_summary(output_root, summary)
-                return 0
-
             if should_skip:
                 summary["steps"]["idempotency"] = {
                     **summary["steps"]["idempotency"],
@@ -475,6 +464,17 @@ def main() -> int:
                 summary["autopilot_allowed"] = False
                 write_summary(output_root, summary)
                 return 0 if skip_reason == "idempotent_skip" else 2
+
+            if skip_reasons:
+                summary["steps"]["round_trip"] = {
+                    "executed": False,
+                    "reason": skip_reasons[0],
+                    "skip_reasons": skip_reasons,
+                    **quote_context,
+                }
+                summary["autopilot_allowed"] = False
+                write_summary(output_root, summary)
+                return 0
 
             if not within_cap:
                 summary["ok"] = False

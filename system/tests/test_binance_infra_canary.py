@@ -403,6 +403,70 @@ def test_run_skips_gracefully_when_required_quote_exceeds_single_run_cap(tmp_pat
     assert str(plan.get("skip_reasons", [""])[0]) == "single_run_cap_exceeded"
 
 
+def test_run_prioritizes_recovery_state_over_cap_skip_reason(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    client = _DynamicQuoteClient(price=100_000.0, step_size=0.000003, min_notional=11.0)
+    monkeypatch.setattr(mod, "BinanceSpotClient", lambda **kwargs: client)
+    monkeypatch.setattr(mod, "resolve_binance_credentials", lambda allow_daemon_env_fallback: ("k", "s", "process_env"))
+
+    cfg_path = tmp_path / "config.yaml"
+    _write_config(cfg_path)
+    out_root = tmp_path / "output"
+    state_path = out_root / "state" / "infra_canary_idempotency.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    idem_key = mod.build_idempotency_key(
+        day_key=mod.current_utc_date().isoformat(),
+        market="spot",
+        symbol="BTCUSDT",
+        quote_usdt=11.1,
+    )
+    state_path.write_text(
+        json.dumps(
+            {
+                "attempts": {
+                    idem_key: {
+                        "attempt_key": idem_key,
+                        "status": "needs_recovery",
+                        "phase": "sell_transport_ambiguous",
+                    }
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "binance_infra_canary.py",
+            "--config",
+            str(cfg_path),
+            "--output-root",
+            str(out_root),
+            "--mode",
+            "run",
+            "--single-run-cap-usdt",
+            "11.0",
+        ],
+    )
+    rc = mod.main()
+    assert rc == 2
+    assert client.orders == []
+
+    payload = _read_summary(out_root)
+    idem = payload.get("steps", {}).get("idempotency", {})
+    assert isinstance(idem, dict)
+    assert bool(idem.get("skipped")) is True
+    assert str(idem.get("reason", "")) == "recovery_required"
+
+    round_trip = payload.get("steps", {}).get("round_trip", {})
+    assert isinstance(round_trip, dict)
+    assert str(round_trip.get("reason", "")) == "recovery_required"
+
+
 def test_sell_ambiguity_recovery_uses_effective_quote_for_budget_and_idempotency(tmp_path: Path, monkeypatch) -> None:
     mod = _load_module()
     client = _DynamicQuoteClient(price=100_000.0, step_size=0.000003, min_notional=11.0, sell_transport_error=True)
