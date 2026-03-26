@@ -745,9 +745,10 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
       ),
     );
   }
-  const analogyCandidates = toArray<unknown>(eventAnalogy.top_analogues ?? [])
+  const analogyRows = toArray<unknown>(eventAnalogy.top_analogues ?? [])
     .map((analogy) => toRecord<Dict>(analogy))
-    .filter((row): row is Dict => Boolean(row))
+    .filter((row): row is Dict => Boolean(row));
+  const analogyCandidates = analogyRows
     .map((row) => ({
       row,
       id: normalizedString(row.archetype_id),
@@ -775,15 +776,14 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
       ),
     );
   }
-  const assetCandidates = toArray<unknown>(eventAssetShockMap.assets ?? [])
+  const assetRows = toArray<unknown>(eventAssetShockMap.assets ?? [])
     .map((entry) => toRecord<Dict>(entry))
-    .filter((row): row is Dict => Boolean(row))
-    .map((row) => {
-      return {
-        row,
-        asset: normalizedString(row.asset),
-      };
-    })
+    .filter((row): row is Dict => Boolean(row));
+  const assetCandidates = assetRows
+    .map((row) => ({
+      row,
+      asset: normalizedString(row.asset),
+    }))
     .filter((candidate): candidate is { row: Dict; asset: string } => Boolean(candidate.asset));
   const assetNames = assetCandidates.map((candidate) => candidate.asset);
   if (assetNames.length) {
