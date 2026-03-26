@@ -668,6 +668,20 @@ def main() -> int:
         if artifact_id:
             selected_paths[artifact_id] = (resolved_path, category, artifact_group)
 
+    # Ensure core event crisis artifacts are always exposed when available.
+    event_artifacts = [
+        ("event_regime_snapshot", "research", "event_insight", "event_regime_snapshot.json"),
+        ("event_crisis_analogy", "research", "event_insight", "event_crisis_analogy.json"),
+        ("event_asset_shock_map", "research", "event_insight", "event_asset_shock_map.json"),
+        ("event_crisis_operator_summary", "research", "event_insight", "event_crisis_operator_summary.json"),
+    ]
+    for artifact_id, category, artifact_group, suffix in event_artifacts:
+        if artifact_id in selected_paths:
+            continue
+        candidate = latest_review_suffix(review_dir, suffix)
+        if candidate:
+            selected_paths[artifact_id] = (candidate, category, artifact_group)
+
     outputs = []
     for surface in (
         SurfaceSpec(key="public", output_name="fenlie_dashboard_snapshot.json", expose_absolute_paths=False, redaction_level="public_summary"),

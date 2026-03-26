@@ -89,6 +89,112 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "research_decision": "no_edge",
         },
     )
+    event_regime_path = review_dir / "latest_event_regime_snapshot.json"
+    write_json(
+        event_regime_path,
+        {
+            "event_severity_score": 0.78,
+            "systemic_risk_score": 0.63,
+            "regime_state": "sector_stress",
+            "top_risk_assets": ["BTC", "ETH", "GOLD"],
+            "headline_drivers": ["credit_liquidity_stress"],
+        },
+    )
+    event_analogy_path = review_dir / "latest_event_crisis_analogy.json"
+    write_json(
+        event_analogy_path,
+        {
+            "top_analogues": [
+                {
+                    "archetype_id": "gfc_2008",
+                    "similarity_score": 0.82,
+                    "match_axes": ["contagion", "credit"],
+                    "mismatch_axes": ["policy"],
+                },
+            ],
+        },
+    )
+    event_shock_map_path = review_dir / "latest_event_asset_shock_map.json"
+    write_json(
+        event_shock_map_path,
+        {
+            "assets": [
+                {
+                    "asset": "BTC",
+                    "class": "crypto",
+                    "shock_direction_bias": "down",
+                    "expected_volatility_rank": "high",
+                    "contagion_sensitivity": "strong",
+                    "risk_1d": "elevated",
+                    "risk_3d": "elevated",
+                    "risk_7d": "elevated",
+                }
+            ],
+        },
+    )
+    event_operator_summary_path = review_dir / "latest_event_crisis_operator_summary.json"
+    write_json(
+        event_operator_summary_path,
+        {
+            "status": "watch",
+            "change_class": "RESEARCH_ONLY",
+            "summary": "event crisis watch",
+            "takeaway": "monitor private credit flow",
+        },
+    )
+    event_regime_path = review_dir / "latest_event_regime_snapshot.json"
+    write_json(
+        event_regime_path,
+        {
+            "event_severity_score": 0.78,
+            "systemic_risk_score": 0.63,
+            "regime_state": "sector_stress",
+            "top_risk_assets": ["BTC", "ETH", "GOLD"],
+            "headline_drivers": ["credit_liquidity_stress"],
+        },
+    )
+    event_analogy_path = review_dir / "latest_event_crisis_analogy.json"
+    write_json(
+        event_analogy_path,
+        {
+            "top_analogues": [
+                {
+                    "archetype_id": "gfc_2008",
+                    "similarity_score": 0.82,
+                    "match_axes": ["contagion", "credit"],
+                    "mismatch_axes": ["policy"],
+                },
+            ],
+        },
+    )
+    event_shock_map_path = review_dir / "latest_event_asset_shock_map.json"
+    write_json(
+        event_shock_map_path,
+        {
+            "assets": [
+                {
+                    "asset": "BTC",
+                    "class": "crypto",
+                    "shock_direction_bias": "down",
+                    "expected_volatility_rank": "high",
+                    "contagion_sensitivity": "strong",
+                    "risk_1d": "elevated",
+                    "risk_3d": "elevated",
+                    "risk_7d": "elevated",
+                }
+            ],
+        },
+    )
+    event_operator_summary_path = review_dir / "latest_event_crisis_operator_summary.json"
+    write_json(
+        event_operator_summary_path,
+        {
+            "status": "watch",
+            "change_class": "RESEARCH_ONLY",
+            "summary": "event crisis watch",
+            "takeaway": "monitor private credit flow",
+        },
+    )
 
     mod.build_surface_snapshot(
         surface=mod.SurfaceSpec(
@@ -106,7 +212,11 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "architecture_audit": (anchor_path, "orchestration", "system_anchor"),
             "price_action_exit_hold_robustness": (review_dir / "latest_price_action_breakout_pullback_exit_hold_robustness_sim_only.json", "sim-only", "research_exit_risk"),
             "hold_selection_handoff": (review_dir / "latest_price_action_breakout_pullback_hold_selection_handoff_sim_only.json", "research", "research_hold_transfer"),
-            "cross_section_backtest": (review_dir / "20260315T105000Z_crypto_shortline_cross_section_backtest.json", "backtest", "research_cross_section"),
+        "cross_section_backtest": (review_dir / "20260315T105000Z_crypto_shortline_cross_section_backtest.json", "backtest", "research_cross_section"),
+        "event_regime_snapshot": (event_regime_path, "research", "event_insight"),
+        "event_crisis_analogy": (event_analogy_path, "research", "event_insight"),
+        "event_asset_shock_map": (event_shock_map_path, "research", "event_insight"),
+        "event_crisis_operator_summary": (event_operator_summary_path, "research", "event_insight"),
         },
         route_contract={"ui_routes": {}, "surface_contracts": {}, "experience_contract": {}},
         source_head_contract={
@@ -212,6 +322,16 @@ def test_selected_artifact_uses_alias_as_catalog_id(tmp_path: Path) -> None:
 
     cross_section_row = next(row for row in snapshot["catalog"] if row.get("payload_key") == "cross_section_backtest")
     assert cross_section_row["artifact_group"] == "research_cross_section"
+
+
+def test_event_crisis_artifacts_exposed(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    assert "event_regime_snapshot" in payloads
+    assert "event_crisis_analogy" in payloads
+    assert "event_asset_shock_map" in payloads
+    assert "event_crisis_operator_summary" in payloads
 
 
 def test_public_catalog_dedupes_selected_artifact_against_same_review_file(tmp_path: Path) -> None:

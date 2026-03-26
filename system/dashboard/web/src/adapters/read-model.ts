@@ -43,6 +43,10 @@ function artifactPayload(snapshot: DashboardSnapshot, id: string): Dict {
   return toRecord<Dict>(artifactEntry(snapshot, id)?.payload) || {};
 }
 
+function eventArtifact(snapshot: DashboardSnapshot, id: string): Dict {
+  return toRecord<Dict>(artifactPayload(snapshot, id)) || {};
+}
+
 function nested(source: unknown, path: string): unknown {
   let current: unknown = source;
   for (const key of path.split('.')) {
@@ -663,6 +667,11 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
   const latestSummary = toRecord<Dict>(latestResult.summary) || {};
   const rolling = toRecord<Dict>(latestResult.rolling_7d) || {};
 
+  const eventRegime = eventArtifact(snapshot, 'event_regime_snapshot');
+  const eventAnalogy = eventArtifact(snapshot, 'event_crisis_analogy');
+  const eventAssetShockMap = eventArtifact(snapshot, 'event_asset_shock_map');
+  const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
+
   const sourceConfidence: MetricItem[] = [
     toMetric('schema-ok-ratio', 'data_schema_ok_ratio', latestSummary.selected_schema_ok_ratio, t('selected_schema_ok_ratio')),
     toMetric('time-sync-ratio', 'data_time_sync_ok_ratio', latestSummary.selected_time_sync_ok_ratio, t('selected_time_sync_ok_ratio')),
@@ -681,6 +690,65 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
     toMetric('rolling-cross-source-fail', 'data_rolling_cross_source_fail_7d', rolling.avg_cross_source_fail_ratio, t('rolling_7d.avg_cross_source_fail_ratio')),
   ];
 
+  const addEventMetric = (metric: MetricItem) => {
+    microCapture.push(metric);
+  };
+
+  if (eventRegime.event_severity_score !== undefined) {
+    addEventMetric(
+      toMetric(
+        'event-severity',
+        'event_severity_score',
+        eventRegime.event_severity_score,
+        eventRegime.headline_drivers,
+        eventRegime.regime_state,
+      ),
+    );
+  }
+  if (eventRegime.systemic_risk_score !== undefined) {
+    addEventMetric(
+      toMetric(
+        'event-systemic-risk',
+        'systemic_risk_score',
+        eventRegime.systemic_risk_score,
+        eventRegime.regime_state,
+        eventRegime.regime_state,
+      ),
+    );
+  }
+  if (eventRegime.regime_state) {
+    addEventMetric(
+      toMetric(
+        'event-regime-state',
+        'event_regime_state',
+        eventRegime.regime_state,
+        eventAnalogy.top_analogues ? `analogues=${(eventAnalogy.top_analogues as Dict[]).map((analogy) => safeDisplayValue(analogy.archetype_id)).join(',')}` : undefined,
+      ),
+    );
+  }
+  const topAnalogy = Array.isArray(eventAnalogy.top_analogues) ? eventAnalogy.top_analogues[0] : undefined;
+  if (topAnalogy?.archetype_id) {
+    addEventMetric(
+      toMetric(
+        'event-analogy',
+        'event_crisis_analogy',
+        topAnalogy.archetype_id,
+        `score=${safeDisplayValue(topAnalogy.similarity_score)} / match=${toArray(topAnalogy.match_axes).join(',')}`,
+      ),
+    );
+  }
+  const shockAssets = Array.isArray(eventAssetShockMap.assets) ? eventAssetShockMap.assets.map((entry) => safeDisplayValue(toRecord<Dict>(entry).asset)).filter((asset) => asset && asset !== '—') : [];
+  if (shockAssets.length) {
+    addEventMetric(
+      toMetric(
+        'event-shock-map',
+        'event_asset_shock_map',
+        shockAssets.join(' ｜ '),
+        `assets=${shockAssets.slice(0, 3).join(',')}`,
+      ),
+    );
+  }
+
   return {
     sourceConfidence,
     microCapture,
@@ -693,6 +761,7 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
   const operatorPanel = artifactPayload(snapshot, 'operator_panel');
   const summary = toRecord<Dict>(operatorPanel.summary) || {};
   const repairPlan = toRecord<Dict>(operatorPanel.priority_repair_plan) || {};
+  const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
 
   const gateScores: MetricItem[] = [
     toMetric('guardian-clearance', 'signal_guardian_clearance', summary.openclaw_guardian_clearance_status, buildAssignmentHint('score', summary.openclaw_guardian_clearance_score)),
@@ -713,6 +782,17 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
     toMetric('repair-verify', 'signal_repair_verify', summary.priority_repair_verification_brief, displayValue(summary.priority_repair_verification_artifact)),
     toMetric('remote-diagnosis', 'signal_remote_diagnosis', summary.remote_live_diagnosis_brief, displayValue(summary.remote_live_history_brief)),
   ];
+  if (eventOperatorSummary.summary || eventOperatorSummary.status) {
+    repairMetrics.push(
+      toMetric(
+        'event-crisis-summary',
+        'event_crisis_operator_summary',
+        eventOperatorSummary.summary || eventOperatorSummary.status,
+        eventOperatorSummary.takeaway,
+        eventOperatorSummary.status,
+      ),
+    );
+  }
 
   return {
     laneCards: toArray(snapshot.artifact_payloads?.operator_panel?.payload && operatorPanel.lane_cards) as TerminalReadModel['signalRisk']['laneCards'],
