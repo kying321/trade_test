@@ -361,6 +361,15 @@ class BinanceSpotClient:
             return 0.0
         return to_float(out.get("price", 0.0), 0.0)
 
+    def ticker_snapshot(self, symbol: str) -> dict[str, Any]:
+        out = self._request(method="GET", path="/api/v3/ticker/price", params={"symbol": symbol}, signed=False)
+        if not isinstance(out, dict):
+            return {"symbol": str(symbol).upper(), "price": 0.0}
+        return {
+            "symbol": str(out.get("symbol") or symbol).upper(),
+            "price": to_float(out.get("price", 0.0), 0.0),
+        }
+
     def exchange_info(self, symbol: str) -> dict[str, Any]:
         out = self._request(method="GET", path="/api/v3/exchangeInfo", params={"symbol": symbol}, signed=False)
         return out if isinstance(out, dict) else {}
@@ -412,6 +421,88 @@ class BinanceSpotClient:
             params["quantity"] = f"{quantity:.8f}"
         out = self._request(method="POST", path="/api/v3/order", params=params, signed=True)
         return out if isinstance(out, dict) else {}
+
+
+class BinanceUsdMMarketClient:
+    def __init__(
+        self,
+        *,
+        api_key: str = "",
+        api_secret: str = "",
+        rate_limit_per_minute: int = DEFAULT_RATE_LIMIT_PER_MINUTE,
+        timeout_ms: int = DEFAULT_TIMEOUT_MS,
+        base_url: str = "https://fapi.binance.com",
+    ) -> None:
+        self.api_key = str(api_key or "").strip()
+        self.api_secret = str(api_secret or "").strip()
+        self.base_url = str(base_url).rstrip("/")
+        self.bucket = TokenBucket(rate_per_minute=max(1, int(rate_limit_per_minute)))
+        self.timeout_seconds = min(5.0, max(0.1, float(max(100, int(timeout_ms))) / 1000.0))
+
+    def _request(
+        self,
+        *,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        payload = dict(params or {})
+        query = parse.urlencode(payload, doseq=True)
+        if not self.bucket.acquire(self.timeout_seconds):
+            raise RuntimeError("token_bucket_acquire_timeout")
+        url = f"{self.base_url}{path}"
+        if query:
+            url = f"{url}?{query}"
+        req = request.Request(url=url, method=method.upper(), headers={})
+        try:
+            with request.urlopen(req, timeout=self.timeout_seconds) as resp:
+                body = resp.read()
+                if not body:
+                    return {}
+                return json.loads(body.decode("utf-8"))
+        except urlerror.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="ignore")
+            except Exception:
+                detail = ""
+            raise RuntimeError(f"http_{exc.code}:{detail[:240]}") from exc
+        except (urlerror.URLError, TimeoutError, OSError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    def mark_index_funding_snapshot(self, symbol: str) -> dict[str, Any]:
+        out = self._request(method="GET", path="/fapi/v1/premiumIndex", params={"symbol": symbol})
+        if not isinstance(out, dict):
+            return {
+                "symbol": str(symbol).upper(),
+                "mark_price": 0.0,
+                "index_price": 0.0,
+                "funding_rate_8h": 0.0,
+                "next_funding_time_ms": 0,
+                "snapshot_time_ms": 0,
+            }
+        return {
+            "symbol": str(out.get("symbol") or symbol).upper(),
+            "mark_price": to_float(out.get("markPrice", 0.0), 0.0),
+            "index_price": to_float(out.get("indexPrice", 0.0), 0.0),
+            "funding_rate_8h": to_float(out.get("lastFundingRate", 0.0), 0.0),
+            "next_funding_time_ms": to_int(out.get("nextFundingTime", 0), 0),
+            "snapshot_time_ms": to_int(out.get("time", 0), 0),
+        }
+
+    def open_interest_snapshot(self, symbol: str) -> dict[str, Any]:
+        out = self._request(method="GET", path="/fapi/v1/openInterest", params={"symbol": symbol})
+        if not isinstance(out, dict):
+            return {
+                "symbol": str(symbol).upper(),
+                "open_interest_contracts": 0.0,
+                "snapshot_time_ms": 0,
+            }
+        return {
+            "symbol": str(out.get("symbol") or symbol).upper(),
+            "open_interest_contracts": to_float(out.get("openInterest", 0.0), 0.0),
+            "snapshot_time_ms": to_int(out.get("time", 0), 0),
+        }
 
 
 def load_list_ledger(path: Path, key: str) -> list[str]:
