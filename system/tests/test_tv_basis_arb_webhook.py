@@ -85,3 +85,35 @@ def test_duplicate_alerts_emit_distinct_files(tmp_path: Path) -> None:
     assert first != second
     assert first.exists()
     assert second.exists()
+
+
+def test_duplicate_alert_id_still_creates_distinct_file_names(tmp_path: Path) -> None:
+    webhook = _load_webhook_module()
+    payload = _minimal_payload()
+    payload["alert_id"] = "unique-alert"
+
+    first = webhook.handle_webhook(payload, output_root=tmp_path)
+    second = webhook.handle_webhook(payload, output_root=tmp_path)
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
+
+
+def test_sanitized_alert_id_collisions_remain_distinct(tmp_path: Path) -> None:
+    webhook = _load_webhook_module()
+    payload_a = _minimal_payload()
+    payload_b = _minimal_payload()
+    payload_a["alert_id"] = "alert/123"
+    payload_b["alert_id"] = "alert?123"
+
+    sanitized_a = webhook._sanitize_filename(payload_a["alert_id"])
+    sanitized_b = webhook._sanitize_filename(payload_b["alert_id"])
+    assert sanitized_a == sanitized_b
+
+    first = webhook.handle_webhook(payload_a, output_root=tmp_path)
+    second = webhook.handle_webhook(payload_b, output_root=tmp_path)
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
