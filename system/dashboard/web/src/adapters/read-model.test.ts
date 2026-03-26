@@ -321,6 +321,61 @@ describe('buildTerminalReadModel', () => {
     expect(model.view.workspace.contracts.sourceHeadDetailFields.find((field) => field.key === 'path')?.showRaw).toBe(true);
   });
 
+  it('maps event crisis artifacts into terminal data-regime and signal-risk metrics', () => {
+    const eventSnapshot = {
+      ...loaded.snapshot,
+      artifact_payloads: {
+        ...loaded.snapshot.artifact_payloads,
+        event_regime_snapshot: {
+          payload: {
+            event_severity_score: 0.82,
+            systemic_risk_score: 0.61,
+            regime_state: 'sector_stress',
+            headline_drivers: ['credit_liquidity_stress'],
+          },
+        },
+        event_crisis_analogy: {
+          payload: {
+            top_analogues: [
+              {
+                archetype_id: 'gfc_2008',
+                similarity_score: 0.77,
+                match_axes: ['credit', 'contagion'],
+                mismatch_axes: ['policy'],
+              },
+            ],
+          },
+        },
+        event_asset_shock_map: {
+          payload: {
+            assets: [
+              {
+                asset: 'BTC',
+                class: 'crypto',
+                shock_direction_bias: 'down',
+              },
+            ],
+          },
+        },
+        event_crisis_operator_summary: {
+          payload: {
+            status: 'watch',
+            summary: 'event crisis watch',
+            takeaway: 'monitor private credit flow',
+          },
+        },
+      },
+    };
+    const model = buildTerminalReadModel({
+      ...loaded,
+      snapshot: eventSnapshot,
+    });
+
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-severity')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-regime-state')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-crisis-summary')).toBe(true);
+  });
+
   it('builds a dedicated feedback slice without polluting artifact rows', () => {
     const model = buildTerminalReadModel(loaded);
 
