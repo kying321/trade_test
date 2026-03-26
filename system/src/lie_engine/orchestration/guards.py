@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 import math
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
@@ -176,6 +176,7 @@ def build_guard_assessment(
     lookback_hours: int,
     cooldown_losses: int,
     black_swan_threshold: float,
+    event_overlay: Mapping[str, Any] | None = None,
 ) -> GuardAssessment:
     bs_score, bs_items, bs_trigger = black_swan_assessment(
         atr_z=atr_z,
@@ -197,6 +198,16 @@ def build_guard_assessment(
         non_trade_reasons.append("连亏冷却期未结束：暂停新增仓位")
     if bs_trigger:
         non_trade_reasons.append("黑天鹅评分超阈值：保护模式生效")
+    if event_overlay:
+        if bool(event_overlay.get("canary_freeze")):
+            reason = "事件 overlay 冻结 canary：暂停新增仓位"
+            non_trade_reasons.append(reason)
+        override_codes = event_overlay.get("override_reason_codes")
+        if isinstance(override_codes, Sequence):
+            for entry in override_codes:
+                if isinstance(entry, str):
+                    reason = f"事件 overlay 理由：{entry}"
+                    non_trade_reasons.append(reason)
 
     return GuardAssessment(
         black_swan_score=bs_score,
