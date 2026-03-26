@@ -60,6 +60,24 @@ def _blocked_entry_snapshot() -> dict[str, float | str]:
     }
 
 
+def _exchange_blocked_entry_snapshot() -> dict[str, float | str | dict[str, dict[str, float]]]:
+    return {
+        **_entry_snapshot(),
+        "exchange_constraints": {
+            "spot": {
+                "min_qty": 0.00001,
+                "step_size": 0.00001,
+                "min_notional": 5.0,
+            },
+            "perp": {
+                "min_qty": 0.001,
+                "step_size": 0.001,
+                "min_notional": 100.0,
+            },
+        },
+    }
+
+
 class _FakeSpotClient:
     def __init__(self, responses: list[dict[str, str] | Exception]) -> None:
         self._responses = list(responses)
@@ -165,6 +183,25 @@ def test_gate_blocked_artifact_keeps_notional_cap_fields(
     assert gate["requested_notional_usdt"] == 20.0
     assert gate["max_notional_usdt"] == 20.0
     assert gate["thresholds"]["max_notional_usdt"] == 20.0
+
+
+def test_gate_blocked_artifact_keeps_exchange_constraint_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _exchange_blocked_entry_snapshot())
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+    gate = _read_json(Path(result["gate_artifact_path"]))
+
+    assert result["status"] == "gate_blocked"
+    assert "perp_min_qty_unmet" in gate["reasons"]
+    assert "perp_min_notional_unmet" in gate["reasons"]
+    assert gate["estimated_base_qty"] == pytest.approx(0.0002)
+    assert gate["estimated_perp_notional_usdt"] == pytest.approx(20.024)
+    assert gate["exchange_constraints"]["perp"]["min_qty"] == 0.001
+    assert gate["exchange_constraints"]["perp"]["min_notional"] == 100.0
 
 
 def test_symbol_override_mismatch_rejected(tmp_path: Path) -> None:

@@ -62,6 +62,46 @@ def _parse_requested_notional(requested_notional_usdt: Any) -> tuple[float | Non
     return value, False
 
 
+def _pick_filter(filters: Any, *names: str) -> dict[str, Any]:
+    if not isinstance(filters, list):
+        return {}
+    want = {str(name).upper() for name in names}
+    for row in filters:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("filterType", "")).upper() in want:
+            return row
+    return {}
+
+
+def _spot_exchange_constraints(exchange_info: Any) -> dict[str, float]:
+    symbols = exchange_info.get("symbols", []) if isinstance(exchange_info, dict) else []
+    row = symbols[0] if symbols else {}
+    filters = row.get("filters", []) if isinstance(row, dict) else []
+    lot = _pick_filter(filters, "LOT_SIZE")
+    notional = _pick_filter(filters, "NOTIONAL", "MIN_NOTIONAL")
+    return {
+        "min_qty": to_float(lot.get("minQty", 0.0), 0.0),
+        "step_size": to_float(lot.get("stepSize", 0.0), 0.0),
+        "min_notional": to_float(notional.get("minNotional", notional.get("notional", 0.0)), 0.0),
+    }
+
+
+def _perp_exchange_constraints(exchange_info: Any) -> dict[str, float]:
+    symbols = exchange_info.get("symbols", []) if isinstance(exchange_info, dict) else []
+    row = symbols[0] if symbols else {}
+    filters = row.get("filters", []) if isinstance(row, dict) else []
+    market_lot = _pick_filter(filters, "MARKET_LOT_SIZE")
+    lot = _pick_filter(filters, "LOT_SIZE")
+    chosen = market_lot or lot
+    notional = _pick_filter(filters, "MIN_NOTIONAL", "NOTIONAL")
+    return {
+        "min_qty": to_float(chosen.get("minQty", 0.0), 0.0),
+        "step_size": to_float(chosen.get("stepSize", 0.0), 0.0),
+        "min_notional": to_float(notional.get("notional", notional.get("minNotional", 0.0)), 0.0),
+    }
+
+
 def build_market_snapshot(
     *,
     symbol: str,
@@ -71,8 +111,10 @@ def build_market_snapshot(
     spot = spot_client if spot_client is not None else BinanceSpotClient(api_key="", api_secret="")
     perp = perp_client if perp_client is not None else BinanceUsdMMarketClient()
     spot_row = spot.ticker_snapshot(symbol)
+    spot_exchange_info = spot.exchange_info(symbol)
     perp_row = perp.mark_index_funding_snapshot(symbol)
     oi_row = perp.open_interest_snapshot(symbol)
+    perp_exchange_info = perp.exchange_info(symbol)
 
     spot_price = to_float(spot_row.get("price", 0.0), 0.0)
     perp_mark_price = to_float(perp_row.get("mark_price", 0.0), 0.0)
@@ -101,6 +143,10 @@ def build_market_snapshot(
         "open_interest_usdt": open_interest_usdt,
         "snapshot_time_ms": snapshot_time_ms,
         "snapshot_ts_utc": snapshot_ts_utc,
+        "exchange_constraints": {
+            "spot": _spot_exchange_constraints(spot_exchange_info),
+            "perp": _perp_exchange_constraints(perp_exchange_info),
+        },
     }
 
 
@@ -127,9 +173,17 @@ def evaluate_tv_basis_gate(
     )
     requested, requested_invalid = _parse_requested_notional(requested_notional_usdt)
     max_notional_usdt = to_float(cfg.get("max_notional_usdt", 20.0), 20.0)
+    exchange_constraints = market_snapshot.get("exchange_constraints", {})
+    spot_constraints = exchange_constraints.get("spot", {}) if isinstance(exchange_constraints, dict) else {}
+    perp_constraints = exchange_constraints.get("perp", {}) if isinstance(exchange_constraints, dict) else {}
 
     basis_bps = _basis_bps(spot_price, perp_mark_price)
     mark_index_spread_bps = _mark_index_spread_bps(perp_mark_price, perp_index_price)
+    estimated_base_qty = 0.0
+    estimated_perp_notional_usdt = 0.0
+    if requested is not None and spot_price > 0.0:
+        estimated_base_qty = float(requested) / float(spot_price)
+        estimated_perp_notional_usdt = float(estimated_base_qty) * float(perp_mark_price)
 
     reasons: list[str] = []
     if basis_bps < to_float(cfg.get("min_basis_bps", 0.0), 0.0):
@@ -142,6 +196,15 @@ def evaluate_tv_basis_gate(
         reasons.append("requested_notional_invalid")
     if requested is not None and requested > max_notional_usdt:
         reasons.append("requested_notional_above_cap")
+    spot_min_notional = to_float(spot_constraints.get("min_notional", 0.0), 0.0)
+    perp_min_qty = to_float(perp_constraints.get("min_qty", 0.0), 0.0)
+    perp_min_notional = to_float(perp_constraints.get("min_notional", 0.0), 0.0)
+    if requested is not None and spot_min_notional > 0.0 and float(requested) < spot_min_notional:
+        reasons.append("spot_min_notional_unmet")
+    if requested is not None and perp_min_qty > 0.0 and estimated_base_qty < perp_min_qty:
+        reasons.append("perp_min_qty_unmet")
+    if requested is not None and perp_min_notional > 0.0 and estimated_perp_notional_usdt < perp_min_notional:
+        reasons.append("perp_min_notional_unmet")
 
     return {
         "strategy_id": strategy_id,
@@ -150,6 +213,8 @@ def evaluate_tv_basis_gate(
         "reasons": reasons,
         "requested_notional_usdt": requested,
         "max_notional_usdt": max_notional_usdt,
+        "estimated_base_qty": estimated_base_qty,
+        "estimated_perp_notional_usdt": estimated_perp_notional_usdt,
         "basis_bps": basis_bps,
         "mark_index_spread_bps": mark_index_spread_bps,
         "open_interest_usdt": open_interest_usdt,
@@ -158,6 +223,18 @@ def evaluate_tv_basis_gate(
         "perp_mark_price": perp_mark_price,
         "perp_index_price": perp_index_price,
         "funding_rate_8h": funding_rate_8h,
+        "exchange_constraints": {
+            "spot": {
+                "min_qty": to_float(spot_constraints.get("min_qty", 0.0), 0.0),
+                "step_size": to_float(spot_constraints.get("step_size", 0.0), 0.0),
+                "min_notional": spot_min_notional,
+            },
+            "perp": {
+                "min_qty": perp_min_qty,
+                "step_size": to_float(perp_constraints.get("step_size", 0.0), 0.0),
+                "min_notional": perp_min_notional,
+            },
+        },
         "snapshot_ts_utc": market_snapshot.get("snapshot_ts_utc"),
         "snapshot_time_ms": int(to_float(market_snapshot.get("snapshot_time_ms", 0), 0.0)),
         "thresholds": {

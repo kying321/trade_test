@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 def _load_gate_module():
     root = Path(__file__).resolve().parents[1]
@@ -25,6 +27,81 @@ def _base_snapshot() -> dict[str, float | str]:
         "funding_rate_8h": 0.0001,
         "snapshot_ts_utc": "2026-03-26T12:30:00Z",
     }
+
+
+def _exchange_blocked_snapshot() -> dict[str, float | str | dict[str, dict[str, float]]]:
+    return {
+        **_base_snapshot(),
+        "exchange_constraints": {
+            "spot": {
+                "min_qty": 0.00001,
+                "step_size": 0.00001,
+                "min_notional": 5.0,
+            },
+            "perp": {
+                "min_qty": 0.001,
+                "step_size": 0.001,
+                "min_notional": 100.0,
+            },
+        },
+    }
+
+
+class _FakeSpotClient:
+    def ticker_snapshot(self, symbol: str) -> dict[str, float | str]:
+        return {
+            "symbol": symbol,
+            "price": 100_000.0,
+            "snapshot_time_ms": 1_774_534_200_000,
+            "snapshot_ts_utc": "2026-03-26T12:30:00Z",
+        }
+
+    def exchange_info(self, symbol: str) -> dict[str, object]:
+        return {
+            "symbols": [
+                {
+                    "symbol": symbol,
+                    "filters": [
+                        {"filterType": "LOT_SIZE", "minQty": "0.00001", "stepSize": "0.00001"},
+                        {"filterType": "NOTIONAL", "minNotional": "5"},
+                    ],
+                }
+            ]
+        }
+
+
+class _FakePerpClient:
+    def mark_index_funding_snapshot(self, symbol: str) -> dict[str, float | str]:
+        return {
+            "symbol": symbol,
+            "mark_price": 100_120.0,
+            "index_price": 100_100.0,
+            "funding_rate_8h": 0.0001,
+            "next_funding_time_ms": 0,
+            "snapshot_time_ms": 1_774_534_200_000,
+            "snapshot_ts_utc": "2026-03-26T12:30:00Z",
+        }
+
+    def open_interest_snapshot(self, symbol: str) -> dict[str, float | str]:
+        return {
+            "symbol": symbol,
+            "open_interest_contracts": 1_200.0,
+            "snapshot_time_ms": 1_774_534_200_000,
+            "snapshot_ts_utc": "2026-03-26T12:30:00Z",
+        }
+
+    def exchange_info(self, symbol: str) -> dict[str, object]:
+        return {
+            "symbols": [
+                {
+                    "symbol": symbol,
+                    "filters": [
+                        {"filterType": "MARKET_LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                        {"filterType": "MIN_NOTIONAL", "notional": "100"},
+                    ],
+                }
+            ]
+        }
 
 
 def test_gate_passes_when_basis_vol_oi_all_green() -> None:
@@ -125,6 +202,34 @@ def test_gate_blocks_when_requested_notional_is_not_numeric() -> None:
     assert bool(result["passed"]) is False
     assert "requested_notional_invalid" in result["reasons"]
     assert result["requested_notional_usdt"] is None
+
+
+def test_gate_blocks_when_exchange_constraints_make_20usdt_unexecutable() -> None:
+    mod = _load_gate_module()
+    result = mod.evaluate_tv_basis_gate(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        requested_notional_usdt=20.0,
+        market_snapshot=_exchange_blocked_snapshot(),
+    )
+
+    assert bool(result["passed"]) is False
+    assert "perp_min_qty_unmet" in result["reasons"]
+    assert "perp_min_notional_unmet" in result["reasons"]
+    assert float(result["estimated_base_qty"]) == pytest.approx(0.0002)
+    assert float(result["estimated_perp_notional_usdt"]) == pytest.approx(20.024)
+
+
+def test_build_market_snapshot_includes_exchange_constraints() -> None:
+    mod = _load_gate_module()
+    snapshot = mod.build_market_snapshot(
+        symbol="BTCUSDT",
+        spot_client=_FakeSpotClient(),
+        perp_client=_FakePerpClient(),
+    )
+
+    assert snapshot["exchange_constraints"]["spot"]["min_notional"] == 5.0
+    assert snapshot["exchange_constraints"]["perp"]["min_qty"] == 0.001
+    assert snapshot["exchange_constraints"]["perp"]["min_notional"] == 100.0
 
 
 def test_strategy_config_is_single_sourced_from_common_contract() -> None:

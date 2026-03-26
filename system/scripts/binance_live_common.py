@@ -529,6 +529,10 @@ class BinanceUsdMMarketClient:
             "snapshot_ts_utc": now_utc_iso(),
         }
 
+    def exchange_info(self, symbol: str) -> dict[str, Any]:
+        out = self._request(method="GET", path="/fapi/v1/exchangeInfo", params={"symbol": symbol})
+        return out if isinstance(out, dict) else {}
+
     def place_market_order(
         self,
         *,
