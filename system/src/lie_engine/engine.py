@@ -34,6 +34,7 @@ from lie_engine.orchestration import (
 )
 from lie_engine.orchestration.event_overlay import load_event_live_guard_overlay
 from lie_engine.orchestration.guards import (
+    black_swan_assessment,
     build_guard_assessment,
     loss_cooldown_active,
     major_event_window,
@@ -1136,18 +1137,37 @@ class LieEngine:
         recent_trades: pd.DataFrame,
         event_overlay: Mapping[str, Any] | None = None,
     ) -> GuardAssessment:
-        return build_guard_assessment(
-            as_of=as_of,
-            regime=regime.consensus,
-            atr_z=float(regime.atr_z),
-            quality_passed=quality_passed,
-            sentiment=sentiment,
-            news=news,
-            recent_trades=recent_trades,
-            lookback_hours=int(self.settings.validation.get("major_event_window_hours", 24)),
-            cooldown_losses=int(self.settings.validation.get("cooldown_consecutive_losses", 3)),
-            black_swan_threshold=float(self.settings.validation.get("black_swan_score_threshold", 70.0)),
-            event_overlay=event_overlay,
+        score, items, trigger = self._black_swan_assessment(regime=regime, sentiment=sentiment, news=news)
+        event_window = self._major_event_window(as_of=as_of, news=news)
+        cooldown = self._loss_cooldown_active(recent_trades=recent_trades)
+
+        reasons: list[str] = []
+        if event_window:
+            reasons.append("重大事件窗口：暂停新增仓位")
+        if not quality_passed:
+            reasons.append("数据质量未通过门禁：进入保护模式并禁止开新仓")
+        if regime.consensus in {RegimeLabel.UNCERTAIN, RegimeLabel.EXTREME_VOL}:
+            reasons.append("体制冲突/极端波动：不做方向强判")
+        if cooldown:
+            reasons.append("连亏冷却期未结束：暂停新增仓位")
+        if trigger:
+            reasons.append("黑天鹅评分超阈值：保护模式生效")
+        if event_overlay:
+            if bool(event_overlay.get("canary_freeze")):
+                reasons.append("事件 overlay 冻结 canary：暂停新增仓位")
+            override_codes = event_overlay.get("override_reason_codes")
+            if isinstance(override_codes, list):
+                for entry in override_codes:
+                    if isinstance(entry, str):
+                        reasons.append(f"事件 overlay 理由：{entry}")
+
+        return GuardAssessment(
+            black_swan_score=score,
+            black_swan_items=items,
+            black_swan_trigger=trigger,
+            major_event_window=event_window,
+            cooldown_active=cooldown,
+            non_trade_reasons=reasons,
         )
 
     def _estimate_factor_contrib_120d(self, as_of: date) -> dict[str, float]:
