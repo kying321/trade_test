@@ -73,3 +73,42 @@ def test_load_event_live_guard_overlay_expired_payload_utc_fail_closed(tmp_path:
     )
     payload = load_event_live_guard_overlay(target)
     _assert_fail_closed(payload)
+
+
+def test_load_event_live_guard_overlay_malformed_string_canary_fail_closed(tmp_path: Path) -> None:
+    target = tmp_path / "event_live_guard_overlay.json"
+    target.write_text(
+        "{\n"
+        "  \"canary_freeze\": \"tru\"\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    payload = load_event_live_guard_overlay(target)
+    _assert_fail_closed(payload)
+
+
+def test_load_event_live_guard_overlay_bool_risk_override_fail_closed(tmp_path: Path) -> None:
+    target = tmp_path / "event_live_guard_overlay.json"
+    target.write_text(
+        "{\n"
+        "  \"risk_multiplier_override\": true\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    payload = load_event_live_guard_overlay(target)
+    _assert_fail_closed(payload)
+
+
+def test_load_event_live_guard_overlay_dual_expiry_conflict_fail_closed(tmp_path: Path) -> None:
+    target = tmp_path / "event_live_guard_overlay.json"
+    future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    target.write_text(
+        "{\n"
+        f"  \"valid_until_utc\": \"{future}\",\n"
+        f"  \"valid_until\": \"{expired}\"\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    payload = load_event_live_guard_overlay(target)
+    _assert_fail_closed(payload)
