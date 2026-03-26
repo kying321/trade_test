@@ -8,9 +8,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_operator_panel_refresh.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_operator_panel_refresh.py"
 
 
 def load_module():
@@ -65,18 +63,22 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
             return {
                 "artifact": str(review_dir / "20260321T084000Z_operator_task_visual_panel.json"),
                 "html": str(review_dir / "20260321T084000Z_operator_task_visual_panel.html"),
-                "summary": {
-                    "operator_head_brief": "ETHUSDT:wait_for_pullback",
-                    "review_head_brief": "review:hold16_anchor",
-                    "repair_head_brief": "repair:none",
-                    "remote_live_gate_brief": "remote_live:not_applicable",
-                    "lane_state_brief": "lanes:stable",
-                    "lane_priority_order_brief": "ETHUSDT>BNBUSDT",
-                    "action_queue_brief": "queue:empty",
-                    "crypto_refresh_reuse_brief": "crypto_refresh:reuse_ok",
-                    "remote_live_history_brief": "remote_history:n/a",
-                    "brooks_refresh_brief": "brooks:ok",
-                },
+            "summary": {
+                "operator_head_brief": "ETHUSDT:wait_for_pullback",
+                "review_head_brief": "review:hold16_anchor",
+                "repair_head_brief": "repair:none",
+                "remote_live_gate_brief": "remote_live:not_applicable",
+                "lane_state_brief": "lanes:stable",
+                "lane_priority_order_brief": "ETHUSDT>BNBUSDT",
+                "action_queue_brief": "queue:empty",
+                "crypto_refresh_reuse_brief": "crypto_refresh:reuse_ok",
+                "remote_live_history_brief": "remote_history:n/a",
+                "brooks_refresh_brief": "brooks:ok",
+                "event_crisis_regime_brief": "sector_stress watch",
+                "event_crisis_top_analogue_brief": "analogous to gfc",
+                "event_crisis_watch_assets_brief": "monitor BTC/ETH/BNB",
+                "event_crisis_guard_brief": "guarding live gate",
+            },
             }
         if name == "build_conversation_feedback_projection_internal":
             return {
@@ -122,6 +124,10 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
     assert payload["operator_head_brief"] == "ETHUSDT:wait_for_pullback"
     assert payload["review_head_brief"] == "review:hold16_anchor"
     assert payload["lane_priority_order_brief"] == "ETHUSDT>BNBUSDT"
+    assert payload["event_crisis_regime_brief"] == "sector_stress watch"
+    assert payload["event_crisis_top_analogue_brief"] == "analogous to gfc"
+    assert payload["event_crisis_watch_assets_brief"] == "monitor BTC/ETH/BNB"
+    assert payload["event_crisis_guard_brief"] == "guarding live gate"
     assert payload["snapshot_outputs"] == [
         str(public_dir / "data" / "fenlie_dashboard_snapshot.json"),
         str(public_dir / "data" / "fenlie_dashboard_internal_snapshot.json"),

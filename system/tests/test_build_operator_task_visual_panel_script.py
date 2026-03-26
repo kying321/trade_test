@@ -6,9 +6,7 @@ import json
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_operator_task_visual_panel.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "build_operator_task_visual_panel.py"
 
 
 def load_module():
@@ -409,6 +407,18 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
         },
     )
 
+    event_summary_path = review_dir / "latest_event_crisis_operator_summary.json"
+    write_json(
+        event_summary_path,
+        {
+            "status": "watch",
+            "event_crisis_regime_brief": "sector_stress watch",
+            "event_crisis_top_analogue_brief": "analogous to gfc",
+            "event_crisis_watch_assets_brief": "monitor BTC/ETH/BNB",
+            "event_crisis_guard_brief": "guarding live gate",
+        },
+    )
+
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -521,6 +531,10 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert payload["summary"]["openclaw_top_backlog_why"] == (
         "blocked:SC2603:probe_blocked+environment_blocked+review_head_time_sync_blocked"
     )
+    assert payload["summary"]["event_crisis_regime_brief"] == "sector_stress watch"
+    assert payload["summary"]["event_crisis_top_analogue_brief"] == "analogous to gfc"
+    assert payload["summary"]["event_crisis_watch_assets_brief"] == "monitor BTC/ETH/BNB"
+    assert payload["summary"]["event_crisis_guard_brief"] == "guarding live gate"
     assert payload["priority_repair_plan"]["admin_required"] is True
     assert payload["priority_repair_verification"]["status"] == "blocked"
     assert payload["openclaw_orderflow_blueprint"]["status"] == "ok"

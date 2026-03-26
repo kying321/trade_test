@@ -752,6 +752,14 @@ def build_panel_payload(
         ),
     }
     source_payloads = {key: load_optional_payload(path) for key, path in source_paths.items()}
+    event_summary_path = resolve_source_path(
+        source_payload=hot_brief,
+        artifact_key="source_event_crisis_operator_summary_artifact",
+        review_dir=review_dir,
+        suffix="event_crisis_operator_summary",
+        reference_now=reference_now,
+    )
+    event_summary = load_optional_payload(event_summary_path)
 
     promotion_unblock_brief = safe_text(
         hot_brief.get("source_openclaw_orderflow_blueprint_remote_promotion_unblock_readiness_brief")
@@ -822,6 +830,7 @@ def build_panel_payload(
             "hot_brief": str(hot_brief_path),
             "cross_market": str(cross_market_path),
             **{key: str(path or "") for key, path in source_paths.items()},
+            "event_crisis_operator_summary": str(event_summary_path or ""),
         },
         "summary": {
             "operator_head": safe_row(operator_head_lane.get("head")),
@@ -1178,6 +1187,14 @@ def build_panel_payload(
             "openclaw_top_backlog_why": safe_text(
                 hot_brief.get("source_openclaw_orderflow_blueprint_top_backlog_why")
             ),
+            "event_crisis_regime_brief": safe_text(event_summary.get("event_crisis_regime_brief")),
+            "event_crisis_top_analogue_brief": safe_text(
+                event_summary.get("event_crisis_top_analogue_brief")
+            ),
+            "event_crisis_watch_assets_brief": safe_text(
+                event_summary.get("event_crisis_watch_assets_brief")
+            ),
+            "event_crisis_guard_brief": safe_text(event_summary.get("event_crisis_guard_brief")),
         },
         "lane_cards": build_lane_cards(cross_market),
         "focus_slots": operator_focus_slots,
