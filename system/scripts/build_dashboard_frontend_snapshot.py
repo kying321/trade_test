@@ -142,6 +142,47 @@ def sanitize_value(value: Any) -> Any:
     return value
 
 
+def sanitize_surface_value(
+    value: Any,
+    *,
+    surface: SurfaceSpec,
+    workspace: Path,
+    review_dir: Path,
+    artifacts_dir: Path,
+    public_dir: Path,
+) -> Any:
+    sanitized = sanitize_value(value)
+    if isinstance(sanitized, dict):
+        return {
+            key: sanitize_surface_value(
+                child,
+                surface=surface,
+                workspace=workspace,
+                review_dir=review_dir,
+                artifacts_dir=artifacts_dir,
+                public_dir=public_dir,
+            )
+            for key, child in sanitized.items()
+        }
+    if isinstance(sanitized, list):
+        return [
+            sanitize_surface_value(
+                item,
+                surface=surface,
+                workspace=workspace,
+                review_dir=review_dir,
+                artifacts_dir=artifacts_dir,
+                public_dir=public_dir,
+            )
+            for item in sanitized
+        ]
+    if isinstance(sanitized, str) and not surface.expose_absolute_paths:
+        candidate = Path(sanitized)
+        if candidate.is_absolute():
+            return path_locator(candidate, workspace, review_dir, artifacts_dir, public_dir)
+    return sanitized
+
+
 def path_locator(path: Path, workspace: Path, review_dir: Path, artifacts_dir: Path, public_dir: Path) -> str:
     resolved = path.resolve()
     candidates = (
@@ -248,7 +289,14 @@ def payload_entry(
     if path is None or not path.exists() or path_is_sensitive(path):
         return None
     raw = load_json(path)
-    payload = sanitize_value(raw)
+    payload = sanitize_surface_value(
+        raw,
+        surface=surface,
+        workspace=workspace,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        public_dir=public_dir,
+    )
     display_path = surface_path(path, surface, workspace, review_dir, artifacts_dir, public_dir)
     key = label
     return key, {
@@ -603,7 +651,7 @@ def build_surface_snapshot(
         "change_class": "RESEARCH_ONLY",
         "surface": surface.key,
         "generated_at_utc": generated_at,
-        "workspace": str(workspace),
+        "workspace": str(workspace) if surface.expose_absolute_paths else workspace.name,
         "ui_routes": ui_routes,
         "meta": {
             "generated_at_utc": generated_at,

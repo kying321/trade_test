@@ -6,9 +6,7 @@ import sys
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_dashboard_frontend_snapshot.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "build_dashboard_frontend_snapshot.py"
 
 
 def load_module():
@@ -442,6 +440,75 @@ def test_internal_snapshot_sets_feedback_projection_null_when_missing(tmp_path: 
     assert "conversation_feedback_projection" not in public_snapshot
     assert "conversation_feedback_projection" in internal_snapshot
     assert internal_snapshot["conversation_feedback_projection"] is None
+
+
+def test_workspace_path_visibility_respects_surface(tmp_path: Path) -> None:
+    public_snapshot, internal_snapshot = build_dual_snapshots(tmp_path)
+
+    assert not Path(str(public_snapshot["workspace"])).is_absolute()
+    assert Path(str(internal_snapshot["workspace"])).is_absolute()
+
+
+def test_public_snapshot_sanitizes_nested_payload_paths(tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "system" / "output" / "review"
+    artifacts_dir = workspace / "system" / "output" / "artifacts"
+    public_dir = workspace / "system" / "dashboard" / "web" / "public"
+    review_dir.mkdir(parents=True)
+    artifacts_dir.mkdir(parents=True)
+    public_dir.mkdir(parents=True)
+    (public_dir / "data").mkdir(parents=True)
+
+    write_json(
+        review_dir / "latest_event_regime_snapshot.json",
+        {
+            "status": "watch",
+            "report_path": str(workspace / "system" / "output" / "review" / "report.json"),
+            "nested": {"source_artifact": str(workspace / "system" / "output" / "review" / "nested.json")},
+            "items": [{"path": str(workspace / "system" / "output" / "artifacts" / "foo.json")}],
+        },
+    )
+
+    for surface in (
+        mod.SurfaceSpec(
+            key="public",
+            output_name="fenlie_dashboard_snapshot.json",
+            expose_absolute_paths=False,
+            redaction_level="public_summary",
+        ),
+        mod.SurfaceSpec(
+            key="internal",
+            output_name="fenlie_dashboard_internal_snapshot.json",
+            expose_absolute_paths=True,
+            redaction_level="full_internal",
+        ),
+    ):
+        mod.build_surface_snapshot(
+            surface=surface,
+            workspace=workspace,
+            public_dir=public_dir,
+            review_dir=review_dir,
+            artifacts_dir=artifacts_dir,
+            selected_paths={},
+            route_contract={"ui_routes": {}, "surface_contracts": {}, "experience_contract": {}},
+            source_head_contract={"source_heads": []},
+            max_catalog=10,
+            max_backtests=0,
+            max_equity_points=0,
+        )
+
+    public_snapshot = json.loads((public_dir / "data" / "fenlie_dashboard_snapshot.json").read_text(encoding="utf-8"))
+    internal_snapshot = json.loads((public_dir / "data" / "fenlie_dashboard_internal_snapshot.json").read_text(encoding="utf-8"))
+    public_payload = public_snapshot["artifact_payloads"]["event_regime_snapshot"]["payload"]
+    internal_payload = internal_snapshot["artifact_payloads"]["event_regime_snapshot"]["payload"]
+
+    assert not Path(public_payload["report_path"]).is_absolute()
+    assert not Path(public_payload["nested"]["source_artifact"]).is_absolute()
+    assert not Path(public_payload["items"][0]["path"]).is_absolute()
+    assert Path(internal_payload["report_path"]).is_absolute()
+    assert Path(internal_payload["nested"]["source_artifact"]).is_absolute()
+    assert Path(internal_payload["items"][0]["path"]).is_absolute()
 
 
 def test_repo_route_contract_uses_custom_pages_fallback_domain() -> None:
