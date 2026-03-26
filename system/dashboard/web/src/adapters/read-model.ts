@@ -47,6 +47,12 @@ function eventArtifact(snapshot: DashboardSnapshot, id: string): Dict {
   return toRecord<Dict>(artifactPayload(snapshot, id)) || {};
 }
 
+function normalizedString(value: unknown): string | undefined {
+  const text = safeDisplayValue(value);
+  if (!text || text === '—') return undefined;
+  return text;
+}
+
 function nested(source: unknown, path: string): unknown {
   let current: unknown = source;
   for (const key of path.split('.')) {
@@ -694,14 +700,27 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
     microCapture.push(metric);
   };
 
+  const regimeState = normalizedString(eventRegime.regime_state);
+  const headlineDrivers = toArray<unknown>(eventRegime.headline_drivers)
+    .map((value) => normalizedString(value))
+    .filter((value): value is string => Boolean(value));
+  const regimeDriversHint = headlineDrivers.length ? headlineDrivers.join(', ') : undefined;
+  const analogyHint = (() => {
+    const analogues = toArray<Dict>(eventAnalogy.top_analogues ?? []);
+    const ids = analogues
+      .map((analogy) => normalizedString(analogy.archetype_id))
+      .filter((value): value is string => Boolean(value));
+    return ids.length ? `analogues=${ids.join(',')}` : undefined;
+  })();
+
   if (eventRegime.event_severity_score !== undefined) {
     addEventMetric(
       toMetric(
         'event-severity',
         'event_severity_score',
         eventRegime.event_severity_score,
-        eventRegime.headline_drivers,
-        eventRegime.regime_state,
+        regimeDriversHint,
+        regimeState,
       ),
     );
   }
@@ -711,8 +730,8 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
         'event-systemic-risk',
         'systemic_risk_score',
         eventRegime.systemic_risk_score,
-        eventRegime.regime_state,
-        eventRegime.regime_state,
+        regimeState,
+        regimeState,
       ),
     );
   }
@@ -721,30 +740,59 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
       toMetric(
         'event-regime-state',
         'event_regime_state',
-        eventRegime.regime_state,
-        eventAnalogy.top_analogues ? `analogues=${(eventAnalogy.top_analogues as Dict[]).map((analogy) => safeDisplayValue(analogy.archetype_id)).join(',')}` : undefined,
+        regimeState,
+        analogyHint,
       ),
     );
   }
-  const topAnalogy = Array.isArray(eventAnalogy.top_analogues) ? eventAnalogy.top_analogues[0] : undefined;
-  if (topAnalogy?.archetype_id) {
+  const analogyCandidates = toArray<unknown>(eventAnalogy.top_analogues ?? [])
+    .map((analogy) => toRecord<Dict>(analogy))
+    .filter((row): row is Dict => Boolean(row))
+    .map((row) => ({
+      row,
+      id: normalizedString(row.archetype_id),
+    }))
+    .filter((candidate): candidate is { row: Dict; id: string } => Boolean(candidate.id));
+  const firstAnalogyCandidate = analogyCandidates[0];
+  if (firstAnalogyCandidate) {
+    const firstAnalogy = firstAnalogyCandidate.row;
+    const analogyHintParts: string[] = [];
+    if (firstAnalogy.similarity_score !== undefined) {
+      analogyHintParts.push(`score=${safeDisplayValue(firstAnalogy.similarity_score)}`);
+    }
+    const matchAxes = toArray<unknown>(firstAnalogy.match_axes ?? [])
+      .map((value) => normalizedString(value))
+      .filter((value): value is string => Boolean(value));
+    if (matchAxes.length) {
+      analogyHintParts.push(`match=${matchAxes.join(',')}`);
+    }
     addEventMetric(
       toMetric(
         'event-analogy',
         'event_crisis_analogy',
-        topAnalogy.archetype_id,
-        `score=${safeDisplayValue(topAnalogy.similarity_score)} / match=${toArray(topAnalogy.match_axes).join(',')}`,
+        normalizedString(firstAnalogy.archetype_id),
+        analogyHintParts.join(' / ') || undefined,
       ),
     );
   }
-  const shockAssets = Array.isArray(eventAssetShockMap.assets) ? eventAssetShockMap.assets.map((entry) => safeDisplayValue(toRecord<Dict>(entry).asset)).filter((asset) => asset && asset !== '—') : [];
-  if (shockAssets.length) {
+  const assetCandidates = toArray<unknown>(eventAssetShockMap.assets ?? [])
+    .map((entry) => toRecord<Dict>(entry))
+    .filter((row): row is Dict => Boolean(row))
+    .map((row) => {
+      return {
+        row,
+        asset: normalizedString(row.asset),
+      };
+    })
+    .filter((candidate): candidate is { row: Dict; asset: string } => Boolean(candidate.asset));
+  const assetNames = assetCandidates.map((candidate) => candidate.asset);
+  if (assetNames.length) {
     addEventMetric(
       toMetric(
         'event-shock-map',
         'event_asset_shock_map',
-        shockAssets.join(' ｜ '),
-        `assets=${shockAssets.slice(0, 3).join(',')}`,
+        assetNames.join(' ｜ '),
+        `assets=${assetNames.slice(0, 3).join(',')}`,
       ),
     );
   }
@@ -787,9 +835,9 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
       toMetric(
         'event-crisis-summary',
         'event_crisis_operator_summary',
-        eventOperatorSummary.summary || eventOperatorSummary.status,
-        eventOperatorSummary.takeaway,
-        eventOperatorSummary.status,
+        normalizedString(eventOperatorSummary.summary || eventOperatorSummary.status),
+        normalizedString(eventOperatorSummary.takeaway),
+        normalizedString(eventOperatorSummary.status),
       ),
     );
   }
@@ -1668,6 +1716,13 @@ function buildViewSchema(intent: DisplayIntent): TerminalViewSchema {
         sourceHeadSummaryFields: {
           label: field('label', 'label', { showRaw: showValueText('workspace.contracts.sourceHeads.summary', 'label') }),
           summary: field('summary', 'summary', { showRaw: showValueText('workspace.contracts.sourceHeads.summary', 'summary') }),
+        },
+        sourceHeadMetricFields: {
+          metrics: [
+            field('label', 'label', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'label') }),
+            field('status', 'status', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'status') }),
+            field('path', 'path', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'path') }),
+          ],
         },
         sourceHeadDetailFields: [
           field('status', 'status', { showRaw: showKeyValue('workspace.contracts.sourceHeads', 'status') }),
