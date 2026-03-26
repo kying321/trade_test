@@ -14,8 +14,15 @@ from binance_live_common import (  # noqa: E402
     BinanceSpotClient,
     BinanceUsdMMarketClient,
     now_utc_iso,
+    read_json,
     resolve_binance_credentials,
     write_json,
+)
+from bybit_live_common import (  # noqa: E402
+    BybitFuturesClient,
+    BybitSignedClient,
+    build_bybit_venue_payload,
+    resolve_bybit_credentials,
 )
 from venue_capability_common import SCHEMA_VERSION  # noqa: E402
 
@@ -151,41 +158,88 @@ def build_binance_venue_payload(
 
 def build_venue_capability_payload(
     *,
-    spot_client: Any,
-    futures_client: Any,
+    spot_client: Any | None = None,
+    futures_client: Any | None = None,
+    bybit_spot_client: Any | None = None,
+    bybit_futures_client: Any | None = None,
     checked_at_utc: str | None = None,
     account_scope: str = "openclaw-system:daemon_env",
+    bybit_account_scope: str | None = None,
 ) -> dict[str, Any]:
+    venues: dict[str, Any] = {}
+    if spot_client is not None and futures_client is not None:
+        venues["binance"] = build_binance_venue_payload(
+            spot_client=spot_client,
+            futures_client=futures_client,
+            checked_at_utc=checked_at_utc,
+            account_scope=account_scope,
+        )
+    if bybit_spot_client is not None and bybit_futures_client is not None:
+        venues["bybit"] = build_bybit_venue_payload(
+            spot_client=bybit_spot_client,
+            futures_client=bybit_futures_client,
+            checked_at_utc=checked_at_utc,
+            account_scope=str(bybit_account_scope or account_scope),
+        )
+    if not venues:
+        raise ValueError("no probed venue payloads")
     return {
         "schema_version": SCHEMA_VERSION,
-        "venues": {
-            "binance": build_binance_venue_payload(
-                spot_client=spot_client,
-                futures_client=futures_client,
-                checked_at_utc=checked_at_utc,
-                account_scope=account_scope,
-            )
-        },
+        "venues": venues,
     }
 
 
 def build_venue_capability_artifact(
     *,
     output_root: Path,
-    spot_client: Any,
-    futures_client: Any,
+    spot_client: Any | None = None,
+    futures_client: Any | None = None,
+    bybit_spot_client: Any | None = None,
+    bybit_futures_client: Any | None = None,
     checked_at_utc: str | None = None,
     account_scope: str = "openclaw-system:daemon_env",
+    bybit_account_scope: str | None = None,
 ) -> Path:
     artifact_path = Path(output_root) / ARTIFACT_REL_PATH
     payload = build_venue_capability_payload(
         spot_client=spot_client,
         futures_client=futures_client,
+        bybit_spot_client=bybit_spot_client,
+        bybit_futures_client=bybit_futures_client,
         checked_at_utc=checked_at_utc,
         account_scope=account_scope,
+        bybit_account_scope=bybit_account_scope,
     )
-    write_json(artifact_path, payload)
+    existing = read_json(artifact_path, {})
+    merged_venues: dict[str, Any] = {}
+    if (
+        isinstance(existing, dict)
+        and existing.get("schema_version") == SCHEMA_VERSION
+        and isinstance(existing.get("venues"), dict)
+    ):
+        merged_venues.update(dict(existing.get("venues") or {}))
+    merged_venues.update(dict(payload.get("venues") or {}))
+    write_json(
+        artifact_path,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "venues": merged_venues,
+        },
+    )
     return artifact_path
+
+
+def _parse_probe_venues(raw: str) -> list[str]:
+    text = str(raw or "").strip().lower()
+    if text in {"", "all", "*"}:
+        return ["binance", "bybit"]
+    venues = [item.strip() for item in text.split(",") if item.strip()]
+    if not venues:
+        return ["binance", "bybit"]
+    allowed = {"binance", "bybit"}
+    if any(item not in allowed for item in venues):
+        raise SystemExit("unsupported venue")
+    return venues
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -201,30 +255,56 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if str(args.venue).strip().lower() != "binance":
-        raise SystemExit("unsupported venue")
+    probe_venues = _parse_probe_venues(str(args.venue))
     output_root = Path(args.output_root).expanduser().resolve()
 
-    api_key, api_secret, cred_source = resolve_binance_credentials(bool(args.allow_daemon_env_fallback))
-    spot_client = BinanceSpotClient(
-        api_key=api_key,
-        api_secret=api_secret,
-        timeout_ms=int(args.timeout_ms),
-        rate_limit_per_minute=int(args.rpm),
-    )
-    futures_client = BinanceUsdMMarketClient(
-        api_key=api_key,
-        api_secret=api_secret,
-        timeout_ms=int(args.timeout_ms),
-        rate_limit_per_minute=int(args.rpm),
-    )
+    spot_client: Any | None = None
+    futures_client: Any | None = None
+    account_scope = "openclaw-system:daemon_env"
+    if "binance" in probe_venues:
+        api_key, api_secret, cred_source = resolve_binance_credentials(bool(args.allow_daemon_env_fallback))
+        spot_client = BinanceSpotClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            timeout_ms=int(args.timeout_ms),
+            rate_limit_per_minute=int(args.rpm),
+        )
+        futures_client = BinanceUsdMMarketClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            timeout_ms=int(args.timeout_ms),
+            rate_limit_per_minute=int(args.rpm),
+        )
+        account_scope = f"openclaw-system:{cred_source}"
+
+    bybit_spot_client: Any | None = None
+    bybit_futures_client: Any | None = None
+    bybit_account_scope = "openclaw-system:process_env"
+    if "bybit" in probe_venues:
+        bybit_api_key, bybit_api_secret, bybit_cred_source = resolve_bybit_credentials(bool(args.allow_daemon_env_fallback))
+        bybit_spot_client = BybitSignedClient(
+            api_key=bybit_api_key,
+            api_secret=bybit_api_secret,
+            timeout_ms=int(args.timeout_ms),
+            rate_limit_per_minute=int(args.rpm),
+        )
+        bybit_futures_client = BybitFuturesClient(
+            api_key=bybit_api_key,
+            api_secret=bybit_api_secret,
+            timeout_ms=int(args.timeout_ms),
+            rate_limit_per_minute=int(args.rpm),
+        )
+        bybit_account_scope = f"openclaw-system:{bybit_cred_source}"
 
     build_venue_capability_artifact(
         output_root=output_root,
         spot_client=spot_client,
         futures_client=futures_client,
+        bybit_spot_client=bybit_spot_client,
+        bybit_futures_client=bybit_futures_client,
         checked_at_utc=str(args.checked_at_utc).strip() or None,
-        account_scope=f"openclaw-system:{cred_source}",
+        account_scope=account_scope,
+        bybit_account_scope=bybit_account_scope,
     )
     return 0
 

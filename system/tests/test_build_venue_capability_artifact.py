@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import sys
 
 
 SCRIPT_PATH = (
@@ -68,6 +70,41 @@ class _FakeFuturesClientBlocked:
 class _FakeFuturesClientInvalid:
     def _request(self, *, method: str, path: str, params=None, signed: bool = False):
         return ["not-a-dict"]
+
+
+class _FakeBybitSpotClient:
+    def __init__(
+        self,
+        *,
+        spot_trade: bool = True,
+        futures_trade: bool = True,
+        wallet_payload: object | None = None,
+    ) -> None:
+        self._spot_trade = bool(spot_trade)
+        self._futures_trade = bool(futures_trade)
+        self._wallet_payload = wallet_payload
+
+    def wallet_balance(self) -> object:
+        if self._wallet_payload is not None:
+            return self._wallet_payload
+        return {"retCode": 0}
+
+    def api_key_info(self) -> dict[str, object]:
+        return {
+            "retCode": 0,
+            "result": {
+                "permissions": {
+                    "Spot": ["SpotTrade"] if self._spot_trade else [],
+                    "ContractTrade": ["Order", "Position"] if self._futures_trade else [],
+                },
+                "ips": ["*"],
+            },
+        }
+
+
+class _FakeBybitFuturesClientReady:
+    def futures_account_info(self) -> dict[str, object]:
+        return {"retCode": 0}
 
 
 def _load_module(path: Path, name: str):
@@ -243,3 +280,152 @@ def test_writer_unknown_capability_is_preserved_for_task1_helper(tmp_path: Path)
 
     assert result["live_route_status"] == "live_blocked"
     assert result["live_route_reason"] == "venue_capability_unknown"
+
+
+def test_build_venue_capability_payload_includes_bybit_when_probed() -> None:
+    module = _load_module(SCRIPT_PATH, "build_venue_capability_artifact")
+
+    payload = module.build_venue_capability_payload(
+        spot_client=_FakeSpotClient(enable_futures=True),
+        futures_client=_FakeFuturesClientReady(),
+        bybit_spot_client=_FakeBybitSpotClient(spot_trade=True, futures_trade=True),
+        bybit_futures_client=_FakeBybitFuturesClientReady(),
+        checked_at_utc="2026-03-26T13:00:00Z",
+    )
+
+    venues = payload["venues"]
+    assert "binance" in venues
+    assert "bybit" in venues
+    assert venues["bybit"]["status"] == "live_ready"
+
+
+def test_main_preserves_existing_binance_and_bybit_on_single_venue_probe(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module(SCRIPT_PATH, "build_venue_capability_artifact")
+
+    output_root = tmp_path / "output"
+    artifact_path = output_root / "state" / "venue_capabilities.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "venues": {
+                    "binance": {"checked_at_utc": "2026-03-26T10:00:00Z", "status": "live_blocked", "blockers": []},
+                    "bybit": {"checked_at_utc": "2026-03-26T10:00:00Z", "status": "live_ready", "blockers": []},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "resolve_binance_credentials", lambda allow_daemon_env_fallback: ("k", "s", "process_env"))
+    monkeypatch.setattr(module, "resolve_bybit_credentials", lambda allow_daemon_env_fallback: ("k2", "s2", "process_env"))
+    monkeypatch.setattr(
+        module,
+        "BinanceSpotClient",
+        lambda **kwargs: _FakeSpotClient(enable_futures=True, enable_spot_trade=True),
+    )
+    monkeypatch.setattr(module, "BinanceUsdMMarketClient", lambda **kwargs: _FakeFuturesClientReady())
+    monkeypatch.setattr(module, "BybitSignedClient", lambda **kwargs: _FakeBybitSpotClient(spot_trade=True, futures_trade=True))
+    monkeypatch.setattr(module, "BybitFuturesClient", lambda **kwargs: _FakeBybitFuturesClientReady())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_venue_capability_artifact.py",
+            "--venue",
+            "binance",
+            "--output-root",
+            str(output_root),
+        ],
+    )
+
+    rc = module.main()
+    assert rc == 0
+    written = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert set(written["venues"].keys()) == {"binance", "bybit"}
+
+
+def test_main_with_venue_bybit_preserves_existing_binance_entry(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module(SCRIPT_PATH, "build_venue_capability_artifact")
+
+    output_root = tmp_path / "output"
+    artifact_path = output_root / "state" / "venue_capabilities.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "venues": {
+                    "binance": {
+                        "checked_at_utc": "2026-03-26T10:00:00Z",
+                        "account_scope": "openclaw-system:daemon_env",
+                        "status": "live_blocked",
+                        "spot_signed_read_status": "ready",
+                        "spot_signed_trade_status": "ready",
+                        "futures_signed_read_status": "blocked",
+                        "futures_signed_trade_status": "blocked",
+                        "ip_restrict": False,
+                        "blockers": ["enableFutures=false"],
+                        "raw": {"apiRestrictions": {"enableFutures": False}},
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "resolve_bybit_credentials", lambda allow_daemon_env_fallback: ("k2", "s2", "process_env"))
+    monkeypatch.setattr(module, "BybitSignedClient", lambda **kwargs: _FakeBybitSpotClient(spot_trade=True, futures_trade=True))
+    monkeypatch.setattr(module, "BybitFuturesClient", lambda **kwargs: _FakeBybitFuturesClientReady())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_venue_capability_artifact.py",
+            "--venue",
+            "bybit",
+            "--output-root",
+            str(output_root),
+        ],
+    )
+
+    rc = module.main()
+    assert rc == 0
+    written = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert set(written["venues"].keys()) == {"binance", "bybit"}
+    assert written["venues"]["binance"]["status"] == "live_blocked"
+
+
+def test_main_without_existing_artifact_keeps_schema_and_probed_venue_only(tmp_path: Path, monkeypatch) -> None:
+    module = _load_module(SCRIPT_PATH, "build_venue_capability_artifact")
+    output_root = tmp_path / "output"
+
+    monkeypatch.setattr(module, "resolve_bybit_credentials", lambda allow_daemon_env_fallback: ("k2", "s2", "process_env"))
+    monkeypatch.setattr(module, "BybitSignedClient", lambda **kwargs: _FakeBybitSpotClient(spot_trade=True, futures_trade=True))
+    monkeypatch.setattr(module, "BybitFuturesClient", lambda **kwargs: _FakeBybitFuturesClientReady())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_venue_capability_artifact.py",
+            "--venue",
+            "bybit",
+            "--output-root",
+            str(output_root),
+        ],
+    )
+
+    rc = module.main()
+    assert rc == 0
+    written = json.loads((output_root / "state" / "venue_capabilities.json").read_text(encoding="utf-8"))
+    assert written["schema_version"] == 1
+    assert "bybit" in written["venues"]
+    assert "binance" not in written["venues"]
+    assert "binance" not in written["venues"]
