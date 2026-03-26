@@ -453,15 +453,28 @@ class BinanceUsdMMarketClient:
         method: str,
         path: str,
         params: dict[str, Any] | None = None,
+        signed: bool = False,
     ) -> Any:
         payload = dict(params or {})
+        headers: dict[str, str] = {}
+        if signed:
+            if not self.api_key or not self.api_secret:
+                raise RuntimeError("missing_signed_credentials")
+            payload["timestamp"] = int(time.time() * 1000)
+            payload.setdefault("recvWindow", 5000)
         query = parse.urlencode(payload, doseq=True)
+        if signed:
+            sig = hmac.new(self.api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
+            query = f"{query}&signature={sig}"
+            headers["X-MBX-APIKEY"] = self.api_key
+        elif self.api_key:
+            headers["X-MBX-APIKEY"] = self.api_key
         if not self.bucket.acquire(self.timeout_seconds):
             raise RuntimeError("token_bucket_acquire_timeout")
         url = f"{self.base_url}{path}"
         if query:
             url = f"{url}?{query}"
-        req = request.Request(url=url, method=method.upper(), headers={})
+        req = request.Request(url=url, method=method.upper(), headers=headers)
         try:
             with request.urlopen(req, timeout=self.timeout_seconds) as resp:
                 body = resp.read()
@@ -515,6 +528,32 @@ class BinanceUsdMMarketClient:
             "snapshot_time_ms": to_int(out.get("time", 0), 0),
             "snapshot_ts_utc": now_utc_iso(),
         }
+
+    def place_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        client_order_id: str,
+        reduce_only: bool = False,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": f"{float(quantity):.8f}",
+            "newClientOrderId": client_order_id,
+        }
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        out = self._request(
+            method="POST",
+            path="/fapi/v1/order",
+            params=params,
+            signed=True,
+        )
+        return out if isinstance(out, dict) else {}
 
 
 def load_list_ledger(path: Path, key: str) -> list[str]:
