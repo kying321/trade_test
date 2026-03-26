@@ -9,6 +9,22 @@
 2. 门控：`system/scripts/tv_basis_arb_gate.py` 提供 `evaluate_tv_basis_gate`，返回 `passed`、`reasons` 和 `thresholds`；`system/scripts/tv_basis_arb_webhook.py` 在 `entry_check`/`exit_check` 中写入 `gate` 记录并在通过时触发执行器。
 3. 执行器：`system/scripts/tv_basis_arb_executor.py` 通过 `TvBasisArbStateLedger` 维护幂等、头寸、恢复，同步 spot/perp 下单并写回 artifacts。
 
+## Venue capability boundary
+- source-of-truth artifact：`output/state/venue_capabilities.json`
+- 当前 same-venue `spot + perp` 路径在进入真实 live execution 前，会先读取 venue capability artifact，而不是默认假设 Binance futures 可用。
+- 当前已知 Binance 诊断结论应被表达为：
+  - `spot ready`
+  - `futures blocked`
+  - blocker=`enableFutures=false`
+
+### 状态语义
+- `dry_only`
+  - 只允许本地测试 / fake executor / replay / dry acceptance
+- `live_blocked`
+  - 代码路径存在，但 venue/account capability 不满足；本策略当前 Binance futures 路径应视为这一类
+- `live_ready`
+  - venue/account capability 满足，且策略侧 gate 也允许
+
 ## Webhook payload exemplar
 ```json
 {
@@ -27,8 +43,9 @@
   - `mark_index_spread_bps` ≤ `max_mark_index_spread_bps`（目前 15 bps）。
   - `open_interest_usdt` ≥ `min_open_interest_usdt`（≥ 10,000,000 USDT）。
   - v1 entry 合同是固定 `target_base_qty = 0.002 BTC`，不是旧的 `20 USDT` quote authority；预算上限由 `max_quote_budget_usdt = 160.0` 控制。
+  - 若 `output/state/venue_capabilities.json` 显示当前 venue/account 缺少 same-venue `spot + perp` 所需能力，entry route 会在 executor 前直接 fail-close 为 `live_blocked`。
   - gate 会先检查 `exchange_constraints`（spot/perp 最小数量、最小名义）和 `effective_quote_budget_usdt`，只有这些条件都通过才允许进入执行器。
-  - `gate` artifact 会写入 `target_base_qty`、`max_quote_budget_usdt`、`effective_quote_budget_usdt`、`estimated_quote_for_target_usdt`、`estimated_perp_notional_usdt`、`snapshot_ts_utc`、`thresholds`、`reasons` 等字段；通过时会附带 `idempotency_key` 和 `runtime_policy` 给执行器。
+  - `gate` artifact 会写入 `target_base_qty`、`max_quote_budget_usdt`、`effective_quote_budget_usdt`、`estimated_quote_for_target_usdt`、`estimated_perp_notional_usdt`、`snapshot_ts_utc`、`thresholds`、`reasons` 等字段；若被 capability 阻断，还会写 `live_route_status`、`live_route_reason`、`venue`、`venue_blockers`。
 - 出口门控每次 `exit_check` 会：
   - 先检查 `state/tv_basis_arb_recovery.json`，只要存在 `needs_recovery` 状态就返回 `recovery_required`，不会再做行情调用。
   - 如果头寸还在 `open_hedged`，根据 `runtime_policy.exit_basis_bps`（4 bps）或 `holding_time_seconds >= max_holding_seconds`（3600s）判断是否 `should_exit`。
@@ -103,6 +120,14 @@ curl -sS http://127.0.0.1:8787 \
 - `execution = null`
 - `reasons` 中出现 `quote_budget_exceeded` / `perp_min_qty_unmet` / `perp_min_notional_unmet` 等 fail-close reason
 
+如果 gate 因 venue capability 被阻断，应看到：
+
+- `status = gate_blocked`
+- `gate.live_route_status = live_blocked`
+- `gate.live_route_reason = venue_capability` / `venue_capability_missing` / `venue_capability_stale` / `venue_capability_incomplete` / `venue_capability_unknown`
+- `gate.venue = binance`
+- `gate.venue_blockers` 中出现如 `enableFutures=false`
+
 ## 运行审计要点
 - 浏览 `output/review/tv_basis_arb` 下的 `*_gate.json`/`*_signal.json`，确认每条 signal 记载的 `snapshot_ts_utc` 与 `reasons`。
 - `TvBasisArbExecutor` 记录 `entry_orders`/`exit_orders`，需要把 `spot_leg` / `perp_leg` 的 `status` 和 `filled_qty` 与 Binance API 返回值对齐。
@@ -110,4 +135,4 @@ curl -sS http://127.0.0.1:8787 \
 
 > 注意：套利成功 ≠ infra canary 成功 ≠ strategy ticket ready，infra canary 只是 infra plumbing 检查，策略就绪还要等 gate、状态账本、恢复检查全部干净。
 
-> 额外注意：即使本地/云端 dry acceptance 通过，真实 acceptance 仍受 Binance futures 权限、账户余额、保证金与白名单/IP 约束控制；这些条件没绿之前，不应把该策略视为 real-ready。
+> 额外注意：即使本地/云端 dry acceptance 通过，真实 acceptance 仍受 `output/state/venue_capabilities.json` 裁决约束。对于当前 Binance futures 路径，只要 blocker 仍是 `enableFutures=false`，就应明确视为 `live_blocked`，而不是 real-ready。
