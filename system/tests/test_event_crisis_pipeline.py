@@ -49,6 +49,11 @@ def test_build_event_regime_snapshot_outputs_scores_and_regime_state() -> None:
     assert 0.0 <= float(snapshot["systemic_risk_score"]) <= 1.0
 
 
+def test_build_event_regime_snapshot_defaults_to_sector_stress_for_recent_event() -> None:
+    snapshot = build_event_regime_snapshot(event_rows=_sample_event_rows(), market_inputs={})
+    assert snapshot["regime_state"] == "sector_stress"
+
+
 def test_build_event_asset_shock_map_covers_priority_assets() -> None:
     payload = build_event_asset_shock_map(
         event_rows=_sample_event_rows(), market_inputs=_sample_market_inputs()

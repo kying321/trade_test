@@ -36,6 +36,36 @@ DEFAULT_ARCHETYPE_LIBRARY: List[Dict[str, object]] = [
         "match_axes": ["energy_supply_shock", "policy_geopolitical_shock"],
         "mismatch_axes": ["bank_intermediary_chain_risk"],
     },
+    {
+        "archetype_id": "ltcm_russia_1998",
+        "description": "Emerging market contagion triggered by LTCM unwind and Russian default.",
+        "match_axes": ["liquidity_redemption_stress", "bank_intermediary_chain_risk"],
+        "mismatch_axes": ["energy_supply_shock"],
+    },
+    {
+        "archetype_id": "eurozone_sovereign_2011",
+        "description": "Eurozone sovereign debt crisis with policy uncertainty and contagion.",
+        "match_axes": ["policy_geopolitical_shock", "credit_deterioration"],
+        "mismatch_axes": ["crypto_market_infrastructure_shock"],
+    },
+    {
+        "archetype_id": "covid_liquidity_2020",
+        "description": "Global liquidity squeeze around COVID shutdowns with central bank backstops.",
+        "match_axes": ["liquidity_redemption_stress", "policy_geopolitical_shock"],
+        "mismatch_axes": ["energy_supply_shock"],
+    },
+    {
+        "archetype_id": "europe_energy_2022",
+        "description": "Post-COVID energy crisis driven by supply shocks and policy-driven rationing.",
+        "match_axes": ["energy_supply_shock", "policy_geopolitical_shock"],
+        "mismatch_axes": ["bank_intermediary_chain_risk"],
+    },
+    {
+        "archetype_id": "regional_banks_2023",
+        "description": "Regional bank stress with deposit run risks and contagion to credit markets.",
+        "match_axes": ["bank_intermediary_chain_risk", "credit_deterioration"],
+        "mismatch_axes": ["energy_supply_shock"],
+    },
 ]
 
 

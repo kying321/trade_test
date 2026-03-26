@@ -135,11 +135,12 @@ def build_event_regime_snapshot(
     policy_offset = _clamp01(market_inputs.get("policy_offset_score", 0.2))
     confidence = _clamp01(market_inputs.get("confidence_score", 0.5))
 
-    severity = _clamp01(credit * 0.45 + energy * 0.25 + cross_asset * 0.3)
+    axes = _collect_event_axes(event_rows)
+    axis_bonus = 0.1 if axes else 0.0
+    severity = _clamp01(credit * 0.45 + energy * 0.25 + cross_asset * 0.3 + axis_bonus)
     systemic = _clamp01(
         credit * 0.35 + breadth * 0.2 + contagion * 0.25 + persistence * 0.2
     )
-    axes = _collect_event_axes(event_rows)
     headlines = _collect_headlines(event_rows)
     regime_state = _determine_regime_state(severity, systemic, cross_asset, contagion, breadth)
 
