@@ -24,8 +24,10 @@ def test_analogy_library_contains_required_archetypes() -> None:
 def test_archetype_library_returns_independent_objects() -> None:
     first_batch = build_default_archetypes()
     first_batch[0]["archetype_id"] = "mutated"
+    first_batch[0]["match_axes"].append("new_axis")
     second_batch = build_default_archetypes()
     assert second_batch[0]["archetype_id"] == "gfc_2008"
+    assert "new_axis" not in second_batch[0]["match_axes"]
 
 
 def test_top_analogues_reports_conflict_and_penalizes_mismatch_axes() -> None:
