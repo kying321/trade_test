@@ -409,6 +409,21 @@ def build_source_heads(artifact_payloads: dict[str, dict[str, Any]], source_head
     return result
 
 
+def ensure_event_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    event_artifacts = [
+        ("event_regime_snapshot", "research", "event_insight", "event_regime_snapshot.json"),
+        ("event_crisis_analogy", "research", "event_insight", "event_crisis_analogy.json"),
+        ("event_asset_shock_map", "research", "event_insight", "event_asset_shock_map.json"),
+        ("event_crisis_operator_summary", "research", "event_insight", "event_crisis_operator_summary.json"),
+    ]
+    for artifact_id, category, artifact_group, suffix in event_artifacts:
+        if artifact_id in selected_paths:
+            continue
+        candidate = latest_review_suffix(review_dir, suffix)
+        if candidate:
+            selected_paths[artifact_id] = (candidate, category, artifact_group)
+
+
 def build_backtests(
     artifacts_dir: Path,
     max_backtests: int,
@@ -538,6 +553,7 @@ def build_surface_snapshot(
     max_backtests: int,
     max_equity_points: int,
 ) -> dict[str, Any]:
+    ensure_event_artifacts(selected_paths, review_dir)
     generated_at = utc_now()
     artifact_payloads: dict[str, dict[str, Any]] = {}
     for label, (path, category, artifact_group) in selected_paths.items():
@@ -667,20 +683,6 @@ def main() -> int:
             resolved_path = workspace / value
         if artifact_id:
             selected_paths[artifact_id] = (resolved_path, category, artifact_group)
-
-    # Ensure core event crisis artifacts are always exposed when available.
-    event_artifacts = [
-        ("event_regime_snapshot", "research", "event_insight", "event_regime_snapshot.json"),
-        ("event_crisis_analogy", "research", "event_insight", "event_crisis_analogy.json"),
-        ("event_asset_shock_map", "research", "event_insight", "event_asset_shock_map.json"),
-        ("event_crisis_operator_summary", "research", "event_insight", "event_crisis_operator_summary.json"),
-    ]
-    for artifact_id, category, artifact_group, suffix in event_artifacts:
-        if artifact_id in selected_paths:
-            continue
-        candidate = latest_review_suffix(review_dir, suffix)
-        if candidate:
-            selected_paths[artifact_id] = (candidate, category, artifact_group)
 
     outputs = []
     for surface in (

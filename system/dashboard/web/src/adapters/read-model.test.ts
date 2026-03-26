@@ -373,6 +373,8 @@ describe('buildTerminalReadModel', () => {
 
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-severity')).toBe(true);
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-regime-state')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-analogy')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-shock-map')).toBe(true);
     expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-crisis-summary')).toBe(true);
   });
 
