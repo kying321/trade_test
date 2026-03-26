@@ -436,6 +436,52 @@ def test_internal_snapshot_includes_feedback_projection_only_for_internal_surfac
     assert internal_snapshot["conversation_feedback_projection"]["summary"]["headline"] == "keep dashboard aligned with operator intent"
 
 
+def test_workspace_path_visibility(tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "system" / "output" / "review"
+    artifacts_dir = workspace / "system" / "output" / "artifacts"
+    public_dir = workspace / "system" / "dashboard" / "web" / "public"
+    review_dir.mkdir(parents=True)
+    artifacts_dir.mkdir(parents=True)
+    public_dir.mkdir(parents=True)
+    (public_dir / "data").mkdir(parents=True)
+    write_json(review_dir / "placeholder.json", {"status": "ok"})
+
+    mod.build_surface_snapshot(
+        surface=mod.SurfaceSpec(key="public", output_name="fenlie_dashboard_snapshot.json", expose_absolute_paths=False, redaction_level="public_summary"),
+        workspace=workspace,
+        public_dir=public_dir,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        selected_paths={},
+        route_contract={"ui_routes": {}, "surface_contracts": {}, "experience_contract": {}},
+        source_head_contract={"source_heads": []},
+        max_catalog=0,
+        max_backtests=0,
+        max_equity_points=0,
+    )
+    mod.build_surface_snapshot(
+        surface=mod.SurfaceSpec(key="internal", output_name="fenlie_dashboard_internal_snapshot.json", expose_absolute_paths=True, redaction_level="full_internal"),
+        workspace=workspace,
+        public_dir=public_dir,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        selected_paths={},
+        route_contract={"ui_routes": {}, "surface_contracts": {}, "experience_contract": {}},
+        source_head_contract={"source_heads": []},
+        max_catalog=0,
+        max_backtests=0,
+        max_equity_points=0,
+    )
+
+    public_snapshot = json.loads((public_dir / "data" / "fenlie_dashboard_snapshot.json").read_text(encoding="utf-8"))
+    internal_snapshot = json.loads((public_dir / "data" / "fenlie_dashboard_internal_snapshot.json").read_text(encoding="utf-8"))
+
+    assert not Path(public_snapshot["workspace"]).is_absolute()
+    assert internal_snapshot["workspace"] == str(workspace)
+
+
 def test_internal_snapshot_sets_feedback_projection_null_when_missing(tmp_path: Path) -> None:
     public_snapshot, internal_snapshot = build_dual_snapshots(tmp_path)
 

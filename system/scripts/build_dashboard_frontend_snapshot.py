@@ -603,7 +603,7 @@ def build_surface_snapshot(
         "change_class": "RESEARCH_ONLY",
         "surface": surface.key,
         "generated_at_utc": generated_at,
-        "workspace": str(workspace),
+    "workspace": surface.expose_absolute_paths and str(workspace) or workspace.name,
         "ui_routes": ui_routes,
         "meta": {
             "generated_at_utc": generated_at,

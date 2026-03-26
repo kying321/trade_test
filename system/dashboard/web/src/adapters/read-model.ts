@@ -1717,7 +1717,13 @@ function buildViewSchema(intent: DisplayIntent): TerminalViewSchema {
           label: field('label', 'label', { showRaw: showValueText('workspace.contracts.sourceHeads.summary', 'label') }),
           summary: field('summary', 'summary', { showRaw: showValueText('workspace.contracts.sourceHeads.summary', 'summary') }),
         },
-        sourceHeadMetricFields: {},
+        sourceHeadMetricFields: {
+          metrics: [
+            field('label', 'label', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'label') }),
+            field('status', 'status', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'status') }),
+            field('path', 'path', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'path') }),
+          ],
+        },
         sourceHeadDetailFields: [
           field('status', 'status', { showRaw: showKeyValue('workspace.contracts.sourceHeads', 'status') }),
           field('research_decision', 'research_decision', { showRaw: showKeyValue('workspace.contracts.sourceHeads', 'research_decision') }),
