@@ -19,11 +19,11 @@ def _load_gate_module():
 def _base_snapshot() -> dict[str, float | str]:
     return {
         "symbol": "BTCUSDT",
-        "spot_price": 100_000.0,
-        "perp_mark_price": 100_120.0,
-        "perp_index_price": 100_100.0,
+        "spot_price": 70_500.0,
+        "perp_mark_price": 70_600.0,
+        "perp_index_price": 70_590.0,
         "open_interest_contracts": 1_200.0,
-        "open_interest_usdt": 120_144_000.0,
+        "open_interest_usdt": 84_720_000.0,
         "funding_rate_8h": 0.0001,
         "snapshot_ts_utc": "2026-03-26T12:30:00Z",
     }
@@ -108,13 +108,13 @@ def test_gate_passes_when_basis_vol_oi_all_green() -> None:
     mod = _load_gate_module()
     result = mod.evaluate_tv_basis_gate(
         strategy_id="tv_basis_btc_spot_perp_v1",
-        requested_notional_usdt=10.0,
+        requested_notional_usdt=160.0,
         market_snapshot=_base_snapshot(),
     )
 
     assert bool(result["passed"]) is True
     assert result["reasons"] == []
-    assert float(result["requested_notional_usdt"]) == 10.0
+    assert float(result["requested_notional_usdt"]) == 160.0
     assert float(result["max_notional_usdt"]) == 160.0
     assert float(result["basis_bps"]) > float(result["thresholds"]["min_basis_bps"])
     assert float(result["mark_index_spread_bps"]) < float(result["thresholds"]["max_mark_index_spread_bps"])
@@ -124,10 +124,10 @@ def test_gate_passes_when_basis_vol_oi_all_green() -> None:
 def test_gate_blocks_when_basis_below_threshold() -> None:
     mod = _load_gate_module()
     snapshot = _base_snapshot()
-    snapshot["perp_mark_price"] = 100_030.0
+    snapshot["perp_mark_price"] = 70_540.0
     result = mod.evaluate_tv_basis_gate(
         strategy_id="tv_basis_btc_spot_perp_v1",
-        requested_notional_usdt=10.0,
+        requested_notional_usdt=160.0,
         market_snapshot=snapshot,
     )
 
@@ -138,10 +138,10 @@ def test_gate_blocks_when_basis_below_threshold() -> None:
 def test_gate_blocks_when_mark_index_spread_above_threshold() -> None:
     mod = _load_gate_module()
     snapshot = _base_snapshot()
-    snapshot["perp_index_price"] = 99_900.0
+    snapshot["perp_index_price"] = 70_200.0
     result = mod.evaluate_tv_basis_gate(
         strategy_id="tv_basis_btc_spot_perp_v1",
-        requested_notional_usdt=10.0,
+        requested_notional_usdt=160.0,
         market_snapshot=snapshot,
     )
 
@@ -156,7 +156,7 @@ def test_gate_blocks_when_oi_below_threshold() -> None:
     snapshot["open_interest_usdt"] = 5_000_000.0
     result = mod.evaluate_tv_basis_gate(
         strategy_id="tv_basis_btc_spot_perp_v1",
-        requested_notional_usdt=10.0,
+        requested_notional_usdt=160.0,
         market_snapshot=snapshot,
     )
 
@@ -204,19 +204,46 @@ def test_gate_blocks_when_requested_notional_is_not_numeric() -> None:
     assert result["requested_notional_usdt"] is None
 
 
-def test_gate_blocks_when_exchange_constraints_make_20usdt_unexecutable() -> None:
+def test_gate_outputs_target_base_qty_and_effective_budget() -> None:
     mod = _load_gate_module()
     result = mod.evaluate_tv_basis_gate(
         strategy_id="tv_basis_btc_spot_perp_v1",
-        requested_notional_usdt=20.0,
-        market_snapshot=_exchange_blocked_snapshot(),
+        requested_notional_usdt=160.0,
+        market_snapshot=_base_snapshot(),
+    )
+
+    assert bool(result["passed"]) is True
+    assert float(result["target_base_qty"]) == pytest.approx(0.002)
+    assert float(result["max_quote_budget_usdt"]) == 160.0
+    assert float(result["effective_quote_budget_usdt"]) == 160.0
+    assert float(result["estimated_quote_for_target_usdt"]) == pytest.approx(141.0)
+    assert float(result["estimated_perp_notional_usdt"]) == pytest.approx(141.2)
+
+
+def test_gate_blocks_when_effective_budget_is_below_estimated_quote() -> None:
+    mod = _load_gate_module()
+    result = mod.evaluate_tv_basis_gate(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        requested_notional_usdt=140.0,
+        market_snapshot=_base_snapshot(),
     )
 
     assert bool(result["passed"]) is False
-    assert "perp_min_qty_unmet" in result["reasons"]
-    assert "perp_min_notional_unmet" in result["reasons"]
-    assert float(result["estimated_base_qty"]) == pytest.approx(0.0002)
-    assert float(result["estimated_perp_notional_usdt"]) == pytest.approx(20.024)
+    assert "quote_budget_exceeded" in result["reasons"]
+    assert float(result["effective_quote_budget_usdt"]) == 140.0
+    assert float(result["estimated_quote_for_target_usdt"]) == pytest.approx(141.0)
+
+
+def test_gate_passes_when_target_base_qty_and_budget_are_both_executable() -> None:
+    mod = _load_gate_module()
+    result = mod.evaluate_tv_basis_gate(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        requested_notional_usdt=160.0,
+        market_snapshot=_base_snapshot(),
+    )
+
+    assert bool(result["passed"]) is True
+    assert result["reasons"] == []
 
 
 def test_build_market_snapshot_includes_exchange_constraints() -> None:
@@ -249,6 +276,8 @@ def test_strategy_config_is_single_sourced_from_common_contract() -> None:
 
     assert common["symbol"] == "BTCUSDT"
     gate = common["gate"]
+    assert gate["target_base_qty"] == 0.002
+    assert gate["max_quote_budget_usdt"] == 160.0
     assert gate["max_notional_usdt"] == 160.0
     assert "max_mark_index_spread_bps" in gate
     assert "max_volatility_bps" not in gate

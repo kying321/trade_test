@@ -27,6 +27,8 @@ def _strategy_gate_config(strategy_id: str) -> dict[str, float]:
     if not isinstance(gate, dict):
         raise ValueError(f"missing gate config:{strategy_id}")
     required = (
+        "target_base_qty",
+        "max_quote_budget_usdt",
         "min_basis_bps",
         "max_mark_index_spread_bps",
         "min_open_interest_usdt",
@@ -173,17 +175,24 @@ def evaluate_tv_basis_gate(
     )
     requested, requested_invalid = _parse_requested_notional(requested_notional_usdt)
     max_notional_usdt = to_float(cfg.get("max_notional_usdt", 20.0), 20.0)
+    target_base_qty = to_float(cfg.get("target_base_qty", 0.0), 0.0)
+    max_quote_budget_usdt = to_float(cfg.get("max_quote_budget_usdt", max_notional_usdt), max_notional_usdt)
     exchange_constraints = market_snapshot.get("exchange_constraints", {})
     spot_constraints = exchange_constraints.get("spot", {}) if isinstance(exchange_constraints, dict) else {}
     perp_constraints = exchange_constraints.get("perp", {}) if isinstance(exchange_constraints, dict) else {}
 
     basis_bps = _basis_bps(spot_price, perp_mark_price)
     mark_index_spread_bps = _mark_index_spread_bps(perp_mark_price, perp_index_price)
-    estimated_base_qty = 0.0
+    effective_quote_budget_usdt = max_quote_budget_usdt
+    if requested is not None and not requested_invalid and requested > 0.0:
+        effective_quote_budget_usdt = min(max_quote_budget_usdt, float(requested))
+    estimated_base_qty = target_base_qty
+    estimated_quote_for_target_usdt = 0.0
     estimated_perp_notional_usdt = 0.0
-    if requested is not None and spot_price > 0.0:
-        estimated_base_qty = float(requested) / float(spot_price)
-        estimated_perp_notional_usdt = float(estimated_base_qty) * float(perp_mark_price)
+    if target_base_qty > 0.0 and spot_price > 0.0:
+        estimated_quote_for_target_usdt = float(target_base_qty) * float(spot_price)
+    if target_base_qty > 0.0 and perp_mark_price > 0.0:
+        estimated_perp_notional_usdt = float(target_base_qty) * float(perp_mark_price)
 
     reasons: list[str] = []
     if basis_bps < to_float(cfg.get("min_basis_bps", 0.0), 0.0):
@@ -197,14 +206,19 @@ def evaluate_tv_basis_gate(
     if requested is not None and requested > max_notional_usdt:
         reasons.append("requested_notional_above_cap")
     spot_min_notional = to_float(spot_constraints.get("min_notional", 0.0), 0.0)
+    spot_min_qty = to_float(spot_constraints.get("min_qty", 0.0), 0.0)
     perp_min_qty = to_float(perp_constraints.get("min_qty", 0.0), 0.0)
     perp_min_notional = to_float(perp_constraints.get("min_notional", 0.0), 0.0)
-    if requested is not None and spot_min_notional > 0.0 and float(requested) < spot_min_notional:
+    if spot_min_qty > 0.0 and target_base_qty < spot_min_qty:
+        reasons.append("spot_min_qty_unmet")
+    if spot_min_notional > 0.0 and estimated_quote_for_target_usdt < spot_min_notional:
         reasons.append("spot_min_notional_unmet")
-    if requested is not None and perp_min_qty > 0.0 and estimated_base_qty < perp_min_qty:
+    if perp_min_qty > 0.0 and target_base_qty < perp_min_qty:
         reasons.append("perp_min_qty_unmet")
-    if requested is not None and perp_min_notional > 0.0 and estimated_perp_notional_usdt < perp_min_notional:
+    if perp_min_notional > 0.0 and estimated_perp_notional_usdt < perp_min_notional:
         reasons.append("perp_min_notional_unmet")
+    if estimated_quote_for_target_usdt > effective_quote_budget_usdt:
+        reasons.append("quote_budget_exceeded")
 
     return {
         "strategy_id": strategy_id,
@@ -213,7 +227,11 @@ def evaluate_tv_basis_gate(
         "reasons": reasons,
         "requested_notional_usdt": requested,
         "max_notional_usdt": max_notional_usdt,
+        "target_base_qty": target_base_qty,
+        "max_quote_budget_usdt": max_quote_budget_usdt,
+        "effective_quote_budget_usdt": effective_quote_budget_usdt,
         "estimated_base_qty": estimated_base_qty,
+        "estimated_quote_for_target_usdt": estimated_quote_for_target_usdt,
         "estimated_perp_notional_usdt": estimated_perp_notional_usdt,
         "basis_bps": basis_bps,
         "mark_index_spread_bps": mark_index_spread_bps,
@@ -225,7 +243,7 @@ def evaluate_tv_basis_gate(
         "funding_rate_8h": funding_rate_8h,
         "exchange_constraints": {
             "spot": {
-                "min_qty": to_float(spot_constraints.get("min_qty", 0.0), 0.0),
+                "min_qty": spot_min_qty,
                 "step_size": to_float(spot_constraints.get("step_size", 0.0), 0.0),
                 "min_notional": spot_min_notional,
             },
