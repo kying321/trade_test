@@ -30,6 +30,14 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _state_artifact_paths(root: Path) -> dict[str, Path]:
+    return {
+        "execution_artifact_path": root / "state" / "tv_basis_arb_idempotency.json",
+        "position_artifact_path": root / "state" / "tv_basis_arb_positions.json",
+        "closeout_artifact_path": root / "state" / "tv_basis_arb_recovery.json",
+    }
+
+
 def _entry_snapshot() -> dict[str, float | str]:
     return {
         "symbol": "BTCUSDT",
@@ -253,6 +261,19 @@ def test_entry_check_writes_signal_gate_and_opens_position(
     assert gate["requested_notional_usdt"] == 20.0
     assert gate["holding_time_seconds"] == 0.0
     assert gate["max_holding_seconds"] == 3600.0
+    assert gate["runtime_policy"] == {
+        "requested_notional_usdt": 20.0,
+        "exit_basis_bps": 4.0,
+        "max_holding_seconds": 3600.0,
+    }
+
+    artifact_paths = _state_artifact_paths(tmp_path)
+    assert result["execution_artifact_path"] == str(artifact_paths["execution_artifact_path"])
+    assert result["position_artifact_path"] == str(artifact_paths["position_artifact_path"])
+    assert artifact_paths["execution_artifact_path"].exists()
+    assert artifact_paths["position_artifact_path"].exists()
+    assert gate["execution_artifact_path"] == str(artifact_paths["execution_artifact_path"])
+    assert gate["position_artifact_path"] == str(artifact_paths["position_artifact_path"])
 
     positions = _read_json(tmp_path / "state" / "tv_basis_arb_positions.json")
     position = next(iter(positions["positions"].values()))
@@ -407,3 +428,129 @@ def test_exit_check_closes_position_when_max_holding_time_exceeded(
     position = next(iter(positions["positions"].values()))
     assert position["status"] == "closed"
     assert position["close_reason"] == "max_holding_time_exceeded"
+
+
+def test_exit_check_surfaces_pending_recovery_instead_of_no_open_position(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    snapshots = iter(
+        [
+            _entry_snapshot(),
+            {
+                **_entry_snapshot(),
+                "perp_mark_price": 100_015.0,
+                "perp_index_price": 100_010.0,
+                "snapshot_ts_utc": "2026-03-26T12:45:00Z",
+                "snapshot_time_ms": 1_774_535_100_000,
+            },
+        ]
+    )
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: next(snapshots))
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00020",
+                "cummulativeQuoteQty": "20.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+    perp = _FakePerpClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-entry",
+                "executedQty": "0.00020",
+                "avgPrice": "100120.0",
+                "status": "FILLED",
+            },
+            RuntimeError("perp_close_rejected"),
+        ]
+    )
+
+    webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path, spot_client=spot, perp_client=perp)
+    exit_payload = _minimal_payload()
+    exit_payload["event_type"] = "exit_check"
+    exit_payload["tv_timestamp"] = "2026-03-26T12:45:00Z"
+    first = webhook.handle_webhook(payload=exit_payload, output_root=tmp_path, spot_client=spot, perp_client=perp)
+
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: pytest.fail("recovery_required should not fetch snapshot"))
+    second = webhook.handle_webhook(payload=exit_payload, output_root=tmp_path, spot_client=spot, perp_client=perp)
+
+    assert first["status"] == "needs_recovery"
+    assert second["status"] == "needs_recovery"
+    assert second["gate"]["action"] == "recovery_required"
+    assert second["gate"]["recovery_reason"] == "perp_close_rejected"
+    assert second["gate"]["position_key"] == first["execution"]["position"]["position_key"]
+    assert second["gate"]["runtime_policy"]["exit_basis_bps"] == 4.0
+    gate = _read_json(Path(second["gate_artifact_path"]))
+    assert gate["action"] == "recovery_required"
+    assert gate["recovery_reason"] == "perp_close_rejected"
+    assert gate["closeout_artifact_path"] == str(_state_artifact_paths(tmp_path)["closeout_artifact_path"])
+
+
+def test_exit_check_recovery_response_emits_review_artifact_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    snapshots = iter(
+        [
+            _entry_snapshot(),
+            {
+                **_entry_snapshot(),
+                "perp_mark_price": 100_015.0,
+                "perp_index_price": 100_010.0,
+                "snapshot_ts_utc": "2026-03-26T12:45:00Z",
+                "snapshot_time_ms": 1_774_535_100_000,
+            },
+        ]
+    )
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: next(snapshots))
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00020",
+                "cummulativeQuoteQty": "20.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+    perp = _FakePerpClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-entry",
+                "executedQty": "0.00020",
+                "avgPrice": "100120.0",
+                "status": "FILLED",
+            },
+            RuntimeError("perp_close_rejected"),
+        ]
+    )
+
+    webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path, spot_client=spot, perp_client=perp)
+    exit_payload = _minimal_payload()
+    exit_payload["event_type"] = "exit_check"
+    exit_payload["tv_timestamp"] = "2026-03-26T12:45:00Z"
+    result = webhook.handle_webhook(payload=exit_payload, output_root=tmp_path, spot_client=spot, perp_client=perp)
+
+    artifact_paths = _state_artifact_paths(tmp_path)
+    assert result["status"] == "needs_recovery"
+    assert result["execution_artifact_path"] == str(artifact_paths["execution_artifact_path"])
+    assert result["position_artifact_path"] == str(artifact_paths["position_artifact_path"])
+    assert result["closeout_artifact_path"] == str(artifact_paths["closeout_artifact_path"])
+    assert artifact_paths["execution_artifact_path"].exists()
+    assert artifact_paths["position_artifact_path"].exists()
+    assert artifact_paths["closeout_artifact_path"].exists()
+
+    gate = _read_json(Path(result["gate_artifact_path"]))
+    assert gate["execution_artifact_path"] == str(artifact_paths["execution_artifact_path"])
+    assert gate["position_artifact_path"] == str(artifact_paths["position_artifact_path"])
+    assert gate["closeout_artifact_path"] == str(artifact_paths["closeout_artifact_path"])

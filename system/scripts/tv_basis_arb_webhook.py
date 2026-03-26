@@ -19,7 +19,7 @@ from tv_basis_arb_common import (
 )
 from tv_basis_arb_executor import TvBasisArbExecutor
 from tv_basis_arb_gate import build_market_snapshot, evaluate_tv_basis_gate
-from tv_basis_arb_state import load_positions_state
+from tv_basis_arb_state import load_positions_state, load_recovery_state
 
 _STRATEGY_RUNTIME_POLICY: dict[str, dict[str, float | None]] = {
     "tv_basis_btc_spot_perp_v1": {
@@ -70,6 +70,18 @@ def gate_artifact_path(signal_path: Path) -> Path:
     return signal_path.with_name(f"{signal_path.stem}_gate.json")
 
 
+def execution_artifact_path(output_root: Path) -> Path:
+    return output_root / "state" / "tv_basis_arb_idempotency.json"
+
+
+def position_artifact_path(output_root: Path) -> Path:
+    return output_root / "state" / "tv_basis_arb_positions.json"
+
+
+def closeout_artifact_path(output_root: Path) -> Path:
+    return output_root / "state" / "tv_basis_arb_recovery.json"
+
+
 def _build_signal_payload(signal: TvBasisWebhookSignal) -> Dict[str, Any]:
     data: Dict[str, Any] = {
         "strategy_id": signal.strategy_id,
@@ -88,7 +100,7 @@ def write_signal_artifact(output_root: Path, signal: TvBasisWebhookSignal, paylo
     return target
 
 
-def _load_runtime_policy(strategy_id: str) -> dict[str, float]:
+def _current_runtime_policy(strategy_id: str) -> dict[str, float]:
     strategy = load_strategy_definition(strategy_id)
     gate = strategy.get("gate", {})
     if not isinstance(gate, dict):
@@ -169,16 +181,58 @@ def _latest_open_position(*, output_root: Path, strategy_id: str, symbol: str) -
     return candidates[-1]
 
 
+def _latest_pending_recovery(*, output_root: Path, strategy_id: str, symbol: str) -> dict[str, Any] | None:
+    recoveries_payload = load_recovery_state(closeout_artifact_path(output_root))
+    candidates: list[dict[str, Any]] = []
+    for recovery in recoveries_payload["recoveries"].values():
+        if not isinstance(recovery, dict):
+            continue
+        if str(recovery.get("strategy_id", "")) != str(strategy_id):
+            continue
+        if str(recovery.get("symbol", "")).upper() != str(symbol).upper():
+            continue
+        if str(recovery.get("status", "")).strip().lower() != "needs_recovery":
+            continue
+        candidates.append(dict(recovery))
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda row: (
+            str(row.get("updated_at_utc", "")),
+            str(row.get("created_at_utc", "")),
+            str(row.get("position_key", "")),
+        )
+    )
+    return candidates[-1]
+
+
 def _write_gate_artifact(signal_path: Path, payload: dict[str, Any]) -> Path:
     target = gate_artifact_path(signal_path)
     _write_json(target, payload)
     return target
 
 
+def _review_artifact_family(output_root: Path, *, include_closeout: bool) -> dict[str, str]:
+    family = {
+        "execution_artifact_path": str(execution_artifact_path(output_root)),
+        "position_artifact_path": str(position_artifact_path(output_root)),
+    }
+    if include_closeout:
+        family["closeout_artifact_path"] = str(closeout_artifact_path(output_root))
+    return family
+
+
+def _attach_review_artifact_family(payload: dict[str, Any], output_root: Path, *, include_closeout: bool) -> dict[str, str]:
+    family = _review_artifact_family(output_root, include_closeout=include_closeout)
+    payload.update(family)
+    return family
+
+
 def _base_gate_payload(
     *,
     signal: TvBasisWebhookSignal,
     signal_path: Path,
+    runtime_policy: dict[str, float],
     requested_notional_usdt: float,
     max_holding_seconds: float,
     holding_time_seconds: float,
@@ -192,6 +246,7 @@ def _base_gate_payload(
         "requested_notional_usdt": float(requested_notional_usdt),
         "holding_time_seconds": float(holding_time_seconds),
         "max_holding_seconds": float(max_holding_seconds),
+        "runtime_policy": dict(runtime_policy),
     }
 
 
@@ -203,7 +258,7 @@ def _handle_entry_check(
     spot_client: Any | None,
     perp_client: Any | None,
 ) -> dict[str, Any]:
-    runtime_policy = _load_runtime_policy(signal.strategy_id)
+    runtime_policy = _current_runtime_policy(signal.strategy_id)
     requested_notional_usdt = float(runtime_policy["requested_notional_usdt"])
     market_snapshot = build_market_snapshot(
         symbol=signal.symbol,
@@ -218,6 +273,7 @@ def _handle_entry_check(
     artifact_payload = _base_gate_payload(
         signal=signal,
         signal_path=signal_path,
+        runtime_policy=runtime_policy,
         requested_notional_usdt=requested_notional_usdt,
         max_holding_seconds=float(runtime_policy["max_holding_seconds"]),
         holding_time_seconds=0.0,
@@ -255,15 +311,24 @@ def _handle_entry_check(
         artifact_payload["action"] = "execute_entry"
         artifact_payload["execution_status"] = execution.get("status")
         artifact_payload["position_key"] = execution.get("position", {}).get("position_key")
+        artifact_family = _attach_review_artifact_family(
+            artifact_payload,
+            output_root,
+            include_closeout=str(execution.get("status", "")) == "needs_recovery",
+        )
         status = str(execution.get("status", "gate_blocked"))
+    else:
+        artifact_family = {}
     gate_path = _write_gate_artifact(signal_path, artifact_payload)
-    return {
+    result = {
         "status": status,
         "signal_artifact_path": str(signal_path),
         "gate_artifact_path": str(gate_path),
         "gate": artifact_payload,
         "execution": execution,
     }
+    result.update(artifact_family)
+    return result
 
 
 def _handle_exit_check(
@@ -274,7 +339,8 @@ def _handle_exit_check(
     spot_client: Any | None,
     perp_client: Any | None,
 ) -> dict[str, Any]:
-    runtime_policy = _load_runtime_policy(signal.strategy_id)
+    runtime_policy = _current_runtime_policy(signal.strategy_id)
+    recovery = _latest_pending_recovery(output_root=output_root, strategy_id=signal.strategy_id, symbol=signal.symbol)
     position = _latest_open_position(output_root=output_root, strategy_id=signal.strategy_id, symbol=signal.symbol)
     requested_notional_usdt = float(
         position.get("requested_notional_usdt", runtime_policy["requested_notional_usdt"]) if isinstance(position, dict) else runtime_policy["requested_notional_usdt"]
@@ -287,6 +353,7 @@ def _handle_exit_check(
     artifact_payload = _base_gate_payload(
         signal=signal,
         signal_path=signal_path,
+        runtime_policy=runtime_policy,
         requested_notional_usdt=requested_notional_usdt,
         max_holding_seconds=float(runtime_policy["max_holding_seconds"]),
         holding_time_seconds=holding_time_seconds,
@@ -297,6 +364,31 @@ def _handle_exit_check(
     artifact_payload["exit_basis_bps"] = float(runtime_policy["exit_basis_bps"])
     execution: dict[str, Any] | None = None
     status = "no_open_position"
+    artifact_family: dict[str, str] = {}
+
+    if isinstance(recovery, dict):
+        artifact_payload.update(
+            {
+                "action": "recovery_required",
+                "position_key": recovery.get("position_key"),
+                "attempt_key": recovery.get("attempt_key"),
+                "recovery_reason": recovery.get("reason"),
+                "recovery_action": recovery.get("recovery_action"),
+                "failure_phase": recovery.get("failure_phase"),
+            }
+        )
+        artifact_family = _attach_review_artifact_family(artifact_payload, output_root, include_closeout=True)
+        gate_path = _write_gate_artifact(signal_path, artifact_payload)
+        result = {
+            "status": "needs_recovery",
+            "signal_artifact_path": str(signal_path),
+            "gate_artifact_path": str(gate_path),
+            "gate": artifact_payload,
+            "execution": None,
+            "recovery": recovery,
+        }
+        result.update(artifact_family)
+        return result
 
     if isinstance(position, dict):
         market_snapshot = build_market_snapshot(
@@ -340,19 +432,26 @@ def _handle_exit_check(
             )
             artifact_payload["action"] = "execute_exit"
             artifact_payload["execution_status"] = execution.get("status")
+            artifact_family = _attach_review_artifact_family(
+                artifact_payload,
+                output_root,
+                include_closeout=str(execution.get("status", "")) == "needs_recovery",
+            )
             status = str(execution.get("status", "hold_position"))
         else:
             artifact_payload["action"] = "hold_position"
             status = "hold_position"
 
     gate_path = _write_gate_artifact(signal_path, artifact_payload)
-    return {
+    result = {
         "status": status,
         "signal_artifact_path": str(signal_path),
         "gate_artifact_path": str(gate_path),
         "gate": artifact_payload,
         "execution": execution,
     }
+    result.update(artifact_family)
+    return result
 
 
 def handle_webhook(
