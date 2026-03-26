@@ -6,6 +6,7 @@ from typing import Any, Dict
 STRATEGY_CONFIG = {
     "tv_basis_btc_spot_perp_v1": {
         "symbol": "BTCUSDT",
+        "preferred_venue": "bybit",
         "gate": {
             "min_basis_bps": 8.0,
             "max_mark_index_spread_bps": 15.0,

@@ -281,3 +281,6 @@ def test_strategy_config_is_single_sourced_from_common_contract() -> None:
     assert gate["max_notional_usdt"] == 160.0
     assert "max_mark_index_spread_bps" in gate
     assert "max_volatility_bps" not in gate
+    assert common.get("preferred_venue") == "bybit"
+
+    assert common.get("preferred_venue") == "bybit"
