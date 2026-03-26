@@ -52,3 +52,25 @@ def test_run_event_crisis_pipeline_writes_latest_artifacts(tmp_path: Path) -> No
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert isinstance(payload, dict)
         assert path in artifacts.values()
+
+
+def test_run_pipeline_normalizes_naive_datetime(tmp_path: Path) -> None:
+    module = _load_module()
+    naive = dt.datetime(2026, 3, 25, 12, 0)
+    artifacts = module.run_pipeline(
+        output_root=tmp_path,
+        mode="snapshot",
+        event_rows=[_fake_row()],
+        generated_at=naive,
+    )
+    intake = json.loads(artifacts["intake"].read_text(encoding="utf-8"))
+    assert intake["generated_at_utc"].endswith("Z")
+
+
+def test_load_event_rows_from_file_validates(tmp_path: Path) -> None:
+    module = _load_module()
+    payload = {"events": "not-a-list"}
+    path = tmp_path / "rows.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="events must be a list"):
+        module.load_event_rows_from_file(path)

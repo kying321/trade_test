@@ -27,16 +27,20 @@ ARTIFACT_ORDER = [
 ]
 
 
+def _ensure_utc(value: dt.datetime) -> dt.datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value.astimezone(dt.timezone.utc)
+
+
 def _parse_now(raw: str | None) -> dt.datetime:
     if not raw:
-        return dt.datetime.now(dt.timezone.utc)
+        return _ensure_utc(dt.datetime.now(dt.timezone.utc))
     text = raw.strip()
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
     parsed = dt.datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
+    return _ensure_utc(parsed)
 
 
 def _write_json(path: Path, payload: Mapping[str, object]) -> None:
@@ -52,7 +56,7 @@ def run_pipeline(
     market_inputs: Mapping[str, float] | None = None,
     generated_at: dt.datetime | None = None,
 ) -> Mapping[str, Path]:
-    now = generated_at or dt.datetime.now(dt.timezone.utc)
+    now = _ensure_utc(generated_at or dt.datetime.now(dt.timezone.utc))
     normalized_events = normalize_public_event_rows(event_rows or [], default_ts=now)
     normalized_markets = normalize_market_inputs(market_inputs)
 
@@ -112,6 +116,14 @@ def load_json(path: Path) -> Mapping[str, object]:
     return payload
 
 
+def load_event_rows_from_file(path: Path) -> list[Mapping[str, object]]:
+    payload = load_json(path)
+    events = payload.get("events")
+    if not isinstance(events, list):
+        raise ValueError("events must be a list")
+    return [row for row in events if isinstance(row, Mapping)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the event crisis pipeline and write latest review artifacts.")
     parser.add_argument("--mode", choices=["snapshot", "hourly", "eod_summary"], required=True)
@@ -123,7 +135,7 @@ def main() -> None:
 
     event_rows: list[Mapping[str, object]] = []
     if args.event_rows_file:
-        event_rows = list(load_json(Path(args.event_rows_file)).get("events") or [])  # type: ignore[assignment]
+        event_rows = load_event_rows_from_file(Path(args.event_rows_file))
 
     market_inputs: Mapping[str, float] | None = None
     if args.market_inputs_file:

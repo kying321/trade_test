@@ -36,3 +36,31 @@ def test_default_priority_assets_include_core_assets() -> None:
         "HIGH_YIELD",
     }
     assert expected.issubset(assets)
+
+
+def test_normalize_public_event_rows_string_fields() -> None:
+    now = dt.datetime(2026, 3, 25, 12, 0, tzinfo=dt.timezone.utc)
+    rows = event_crisis_sources.normalize_public_event_rows(
+        [
+            {
+                "event_id": "evt-2",
+                "event_ts": "2026-03-25T12:00:00Z",
+                "event_classes": "credit_deterioration",
+                "regions": "global",
+                "affected_assets": "BTC",
+            }
+        ],
+        default_ts=now,
+    )
+
+    assert rows[0]["event_classes"] == ["credit_deterioration"]
+    assert rows[0]["regions"] == ["global"]
+    assert rows[0]["affected_assets"] == ["BTC"]
+
+
+def test_normalize_market_inputs_handles_none() -> None:
+    result = event_crisis_sources.normalize_market_inputs(
+        {"credit_liquidity_stress_score": None, "breadth_score": ""}
+    )
+    assert result["credit_liquidity_stress_score"] == 0.45
+    assert result["breadth_score"] == 0.3

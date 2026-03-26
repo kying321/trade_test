@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Iterable, List, Mapping, Sequence
+from typing import Iterable, List, Mapping, Sequence, Union
 
 DEFAULT_MARKET_INPUTS: Mapping[str, float] = {
     "credit_liquidity_stress_score": 0.45,
@@ -128,9 +128,9 @@ def normalize_public_event_rows(
                 "source": row.get("source", "public"),
                 "source_type": row.get("source_type", "public"),
                 "headline": row.get("headline"),
-                "event_classes": list(row.get("event_classes") or []),
-                "regions": sorted(set(row.get("regions") or [])),
-                "affected_assets": sorted(set(row.get("affected_assets") or [])),
+                "event_classes": _ensure_str_list(row.get("event_classes")),
+                "regions": sorted(set(_ensure_str_list(row.get("regions")))),
+                "affected_assets": sorted(set(_ensure_str_list(row.get("affected_assets")))),
                 "credibility_score": row.get("credibility_score", 0.5),
                 "novelty_score": row.get("novelty_score", 0.5),
             }
@@ -139,11 +139,37 @@ def normalize_public_event_rows(
 
 
 def normalize_market_inputs(
-    inputs: Mapping[str, float] | None = None
+    inputs: Mapping[str, object] | None = None
 ) -> Mapping[str, float]:
     inputs = inputs or {}
     normalized: dict[str, float] = {}
     for key, default in DEFAULT_MARKET_INPUTS.items():
-        value = inputs.get(key, default)
-        normalized[key] = _clamp01(float(value))
+        raw_value = inputs.get(key, default)
+        normalized[key] = _clamp01(_safe_float(raw_value, default))
     return normalized
+
+
+def _ensure_str_list(value: object | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return [trimmed] if trimmed else []
+    if isinstance(value, Iterable):
+        result: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                result.append(item.strip())
+        return result
+    raise TypeError(f"event field expects str or iterable of str, got {type(value).__name__}")
+
+
+def _safe_float(value: object | None, default: float) -> float:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str) and not value.strip():
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
