@@ -20,6 +20,7 @@ from tv_basis_arb_common import (
 from tv_basis_arb_executor import TvBasisArbExecutor
 from tv_basis_arb_gate import build_market_snapshot, evaluate_tv_basis_gate
 from tv_basis_arb_state import load_positions_state, load_recovery_state
+from venue_capability_common import evaluate_live_route_for_requirements
 
 _STRATEGY_RUNTIME_POLICY: dict[str, dict[str, float | None]] = {
     "tv_basis_btc_spot_perp_v1": {
@@ -82,6 +83,10 @@ def position_artifact_path(output_root: Path) -> Path:
 
 def closeout_artifact_path(output_root: Path) -> Path:
     return output_root / "state" / "tv_basis_arb_recovery.json"
+
+
+def venue_capability_artifact_path(output_root: Path) -> Path:
+    return output_root / "state" / "venue_capabilities.json"
 
 
 def _build_signal_payload(signal: TvBasisWebhookSignal) -> Dict[str, Any]:
@@ -276,6 +281,10 @@ def _handle_entry_check(
     spot_client: Any | None,
     perp_client: Any | None,
 ) -> dict[str, Any]:
+    use_live_clients = spot_client is None and perp_client is None
+    use_injected_clients = spot_client is not None and perp_client is not None
+    if not use_live_clients and not use_injected_clients:
+        raise ValueError("partial client injection is not allowed")
     runtime_policy = _current_runtime_policy(signal.strategy_id)
     requested_notional_usdt = float(runtime_policy["requested_notional_usdt"])
     market_snapshot = build_market_snapshot(
@@ -324,6 +333,30 @@ def _handle_entry_check(
     execution: dict[str, Any] | None = None
     status = "gate_blocked"
     if bool(gate["passed"]):
+        if use_live_clients:
+            live_route = evaluate_live_route_for_requirements(
+                path=venue_capability_artifact_path(output_root),
+                venue="binance",
+                required_statuses={
+                    "spot_signed_read_status": "ready",
+                    "spot_signed_trade_status": "ready",
+                    "futures_signed_read_status": "ready",
+                    "futures_signed_trade_status": "ready",
+                },
+            )
+            artifact_payload.update(live_route)
+            if str(live_route.get("live_route_status", "")) != "live_ready":
+                reason = str(live_route.get("live_route_reason", "")).strip()
+                if reason and reason not in artifact_payload["reasons"]:
+                    artifact_payload["reasons"].append(reason)
+                gate_path = _write_gate_artifact(signal_path, artifact_payload)
+                return {
+                    "status": "gate_blocked",
+                    "signal_artifact_path": str(signal_path),
+                    "gate_artifact_path": str(gate_path),
+                    "gate": artifact_payload,
+                    "execution": None,
+                }
         executor = TvBasisArbExecutor(
             output_root=output_root,
             spot_client=spot_client,
@@ -367,6 +400,10 @@ def _handle_exit_check(
     spot_client: Any | None,
     perp_client: Any | None,
 ) -> dict[str, Any]:
+    use_live_clients = spot_client is None and perp_client is None
+    use_injected_clients = spot_client is not None and perp_client is not None
+    if not use_live_clients and not use_injected_clients:
+        raise ValueError("partial client injection is not allowed")
     runtime_policy = _current_runtime_policy(signal.strategy_id)
     recovery = _latest_pending_recovery(output_root=output_root, strategy_id=signal.strategy_id, symbol=signal.symbol)
     position = _latest_open_position(output_root=output_root, strategy_id=signal.strategy_id, symbol=signal.symbol)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,38 @@ def _exchange_blocked_entry_snapshot() -> dict[str, float | str | dict[str, dict
             },
         },
     }
+
+
+def _write_venue_capability_artifact(
+    root: Path,
+    *,
+    checked_at_utc: str | None = None,
+    status: str = "live_ready",
+    spot_signed_read_status: str = "ready",
+    spot_signed_trade_status: str = "ready",
+    futures_signed_read_status: str = "ready",
+    futures_signed_trade_status: str = "ready",
+    blockers: list[str] | None = None,
+) -> Path:
+    path = root / "state" / "venue_capabilities.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    effective_checked_at = checked_at_utc or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {
+        "schema_version": 1,
+        "venues": {
+            "binance": {
+                "checked_at_utc": effective_checked_at,
+                "status": status,
+                "blockers": list(blockers or []),
+                "spot_signed_read_status": spot_signed_read_status,
+                "spot_signed_trade_status": spot_signed_trade_status,
+                "futures_signed_read_status": futures_signed_read_status,
+                "futures_signed_trade_status": futures_signed_trade_status,
+            }
+        },
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 class _FakeSpotClient:
@@ -343,6 +376,269 @@ def test_entry_check_writes_signal_gate_and_opens_position(
     assert position["requested_notional_usdt"] == 160.0
     assert position["target_base_qty"] == pytest.approx(0.002)
     assert position["max_quote_budget_usdt"] == 160.0
+
+
+def test_entry_check_live_blocked_when_capability_artifact_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+
+    assert result["status"] == "gate_blocked"
+    assert result["gate"]["live_route_status"] == "live_blocked"
+    assert result["gate"]["live_route_reason"] == "venue_capability_missing"
+    assert result["gate"]["venue"] == "binance"
+    assert result["gate"]["venue_blockers"] == []
+
+
+def test_entry_check_live_blocked_when_capability_futures_trade_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    _write_venue_capability_artifact(
+        tmp_path,
+        futures_signed_trade_status="blocked",
+        blockers=["futures_signed_trade_status"],
+    )
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+
+    assert result["status"] == "gate_blocked"
+    assert result["gate"]["live_route_status"] == "live_blocked"
+    assert result["gate"]["live_route_reason"] == "venue_capability"
+    assert result["gate"]["venue"] == "binance"
+    assert result["gate"]["venue_blockers"] == ["futures_signed_trade_status"]
+
+
+def test_entry_check_live_blocked_when_capability_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    _write_venue_capability_artifact(tmp_path, checked_at_utc="2026-03-26T12:00:00Z")
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+
+    assert result["status"] == "gate_blocked"
+    assert result["gate"]["live_route_status"] == "live_blocked"
+    assert result["gate"]["live_route_reason"] == "venue_capability_stale"
+    assert result["gate"]["venue"] == "binance"
+
+
+def test_entry_check_live_blocked_when_capability_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    path = _write_venue_capability_artifact(tmp_path)
+    payload = _read_json(path)
+    del payload["venues"]["binance"]["futures_signed_trade_status"]
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+
+    assert result["status"] == "gate_blocked"
+    assert result["gate"]["live_route_status"] == "live_blocked"
+    assert result["gate"]["live_route_reason"] == "venue_capability_incomplete"
+
+
+def test_entry_check_live_blocked_when_capability_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    _write_venue_capability_artifact(tmp_path, futures_signed_trade_status="unknown", status="unknown")
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+
+    assert result["status"] == "gate_blocked"
+    assert result["gate"]["live_route_status"] == "live_blocked"
+    assert result["gate"]["live_route_reason"] == "venue_capability_unknown"
+
+
+def test_entry_check_with_fake_clients_bypasses_capability_live_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+    perp = _FakePerpClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-entry",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+
+    result = webhook.handle_webhook(
+        payload=_minimal_payload(),
+        output_root=tmp_path,
+        spot_client=spot,
+        perp_client=perp,
+    )
+
+    assert result["status"] == "open_hedged"
+    assert result["gate"]["action"] == "execute_entry"
+    assert "live_route_status" not in result["gate"]
+    assert "live_route_reason" not in result["gate"]
+
+
+def test_exit_check_rejects_partial_client_injection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+    perp = _FakePerpClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-entry",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+
+    webhook.handle_webhook(
+        payload=_minimal_payload(),
+        output_root=tmp_path,
+        spot_client=spot,
+        perp_client=perp,
+    )
+    exit_payload = _minimal_payload()
+    exit_payload["event_type"] = "exit_check"
+    exit_payload["tv_timestamp"] = "2026-03-26T12:45:00Z"
+
+    with pytest.raises(ValueError, match="partial client injection"):
+        webhook.handle_webhook(
+            payload=exit_payload,
+            output_root=tmp_path,
+            spot_client=spot,
+            perp_client=None,
+        )
+
+
+def test_entry_check_rejects_partial_client_injection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="partial client injection"):
+        webhook.handle_webhook(
+            payload=_minimal_payload(),
+            output_root=tmp_path,
+            spot_client=spot,
+            perp_client=None,
+        )
+
+
+def test_entry_check_live_ready_artifact_allows_execution_without_fake_clients(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    _write_venue_capability_artifact(tmp_path, status="live_ready")
+
+    def _fake_execute(self, *, strategy_id, symbol, idempotency_key, requested_notional_usdt, tv_timestamp):
+        return {
+            "status": "open_hedged",
+            "position": {
+                "position_key": "cap-live-ready-pos",
+                "status": "open_hedged",
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "requested_notional_usdt": requested_notional_usdt,
+                "target_base_qty": 0.002,
+                "max_quote_budget_usdt": 160.0,
+            },
+        }
+
+    monkeypatch.setattr(webhook.TvBasisArbExecutor, "execute_entry", _fake_execute)
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+
+    assert result["status"] == "open_hedged"
+    assert result["gate"]["action"] == "execute_entry"
+    assert result["gate"]["live_route_status"] == "live_ready"
+    assert result["gate"]["live_route_reason"] is None
+
+
+def test_entry_check_does_not_use_signal_timestamp_as_capability_now(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    _write_venue_capability_artifact(tmp_path, checked_at_utc="2026-03-26T12:45:00Z", status="live_ready")
+
+    def _capture_live_route(*, path, venue, required_statuses, now_utc=None, max_age_seconds=900):
+        assert now_utc is None
+        return {
+            "live_route_status": "live_ready",
+            "live_route_reason": None,
+            "venue": venue,
+            "venue_blockers": [],
+        }
+
+    def _fake_execute(self, *, strategy_id, symbol, idempotency_key, requested_notional_usdt, tv_timestamp):
+        return {
+            "status": "open_hedged",
+            "position": {
+                "position_key": "cap-live-now-pos",
+                "status": "open_hedged",
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "requested_notional_usdt": requested_notional_usdt,
+                "target_base_qty": 0.002,
+                "max_quote_budget_usdt": 160.0,
+            },
+        }
+
+    monkeypatch.setattr(webhook, "evaluate_live_route_for_requirements", _capture_live_route)
+    monkeypatch.setattr(webhook.TvBasisArbExecutor, "execute_entry", _fake_execute)
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+
+    assert result["status"] == "open_hedged"
+    assert result["gate"]["live_route_status"] == "live_ready"
+    assert result["gate"]["live_route_reason"] is None
 
 
 def test_exit_check_closes_position_when_basis_reverts(
