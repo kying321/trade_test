@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
-VALID_STRATEGY_IDS = {
-    "tv_basis_btc_spot_perp_v1",
+STRATEGY_CONFIG = {
+    "tv_basis_btc_spot_perp_v1": {"symbol": "BTCUSDT"},
 }
+VALID_STRATEGY_IDS = set(STRATEGY_CONFIG)
 VALID_EVENT_TYPES = {"entry_check", "exit_check"}
 
 
@@ -40,12 +41,15 @@ def parse_tv_basis_webhook_payload(payload: Dict[str, Any]) -> TvBasisWebhookSig
     strategy_id = _require_text(payload, "strategy_id")
     if strategy_id not in VALID_STRATEGY_IDS:
         raise ValueError(f"unknown strategy_id:{strategy_id}")
-    symbol = _require_text(payload, "symbol")
+    symbol_override = _optional_text(payload, "symbol")
     event_type = _require_text(payload, "event_type")
     if event_type not in VALID_EVENT_TYPES:
         raise ValueError(f"invalid event_type:{event_type}")
     tv_timestamp = _require_text(payload, "tv_timestamp")
     alert_id = _optional_text(payload, "alert_id")
+    symbol = STRATEGY_CONFIG[strategy_id]["symbol"].upper()
+    if symbol_override is not None and symbol_override.upper() != symbol:
+        raise ValueError(f"symbol mismatch:{symbol_override}")
     return TvBasisWebhookSignal(
         strategy_id=strategy_id,
         symbol=symbol,

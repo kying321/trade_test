@@ -54,3 +54,34 @@ def test_minimal_payload_writes_signal_artifact(tmp_path: Path) -> None:
     assert written["event_type"] == payload["event_type"]
     assert written["symbol"] == payload["symbol"]
     assert written["tv_timestamp"] == payload["tv_timestamp"]
+
+
+def test_symbol_override_mismatch_rejected(tmp_path: Path) -> None:
+    webhook = _load_webhook_module()
+    payload = _minimal_payload()
+    payload["symbol"] = "ETHUSDT"
+
+    with pytest.raises(ValueError, match="symbol mismatch"):
+        webhook.handle_webhook(payload, output_root=tmp_path)
+
+
+def test_signal_written_under_review_path(tmp_path: Path) -> None:
+    webhook = _load_webhook_module()
+    payload = _minimal_payload()
+    artifact_path = webhook.handle_webhook(payload, output_root=tmp_path)
+
+    assert (tmp_path / "review") in artifact_path.parents
+    assert artifact_path.name.endswith(".json")
+    assert "tv_basis_btc_spot_perp_v1" in artifact_path.name
+
+
+def test_duplicate_alerts_emit_distinct_files(tmp_path: Path) -> None:
+    webhook = _load_webhook_module()
+    payload = _minimal_payload()
+
+    first = webhook.handle_webhook(payload, output_root=tmp_path)
+    second = webhook.handle_webhook(payload, output_root=tmp_path)
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
