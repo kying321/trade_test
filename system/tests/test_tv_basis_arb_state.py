@@ -165,3 +165,85 @@ def test_new_entry_is_blocked_while_active_recovery_exists(tmp_path: Path) -> No
             requested_notional_usdt=10.0,
             tv_timestamp="2026-03-26T12:32:00Z",
         )
+
+
+def test_recovery_is_cleared_when_recovery_position_is_closed(tmp_path: Path) -> None:
+    mod = _load_state_module()
+    ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
+
+    ledger.begin_entry(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        symbol="BTCUSDT",
+        idempotency_key="entry-4",
+        requested_notional_usdt=10.0,
+        tv_timestamp="2026-03-26T12:33:00Z",
+    )
+    ledger.record_spot_buy_submitting(idempotency_key="entry-4", spot_order_id="spot-4")
+    ledger.record_spot_buy_fill(
+        idempotency_key="entry-4",
+        spot_order_id="spot-4",
+        filled_base_qty=0.00008,
+        filled_quote_usdt=8.0,
+        partial_fill=True,
+    )
+    recovery = ledger.record_needs_recovery(
+        idempotency_key="entry-4",
+        reason="perp_short_rejected",
+        failure_phase="perp_short_submitting",
+        recovery_action="flatten_spot_or_complete_hedge",
+    )
+
+    closed = ledger.record_closed(idempotency_key="entry-4", close_reason="manual_recovery_flattened")
+    allowed, reason = ledger.can_start_entry(strategy_id="tv_basis_btc_spot_perp_v1", symbol="BTCUSDT")
+    recovery_state = _read_json(ledger.recovery_path)
+
+    assert closed["status"] == "closed"
+    assert allowed is True
+    assert reason == ""
+    assert recovery_state["recoveries"][recovery["position_key"]]["status"] == "closed"
+    assert recovery_state["recoveries"][recovery["position_key"]]["resolved_by"] == "record_closed"
+
+
+def test_begin_entry_replays_existing_attempt_for_same_idempotency_key(tmp_path: Path) -> None:
+    mod = _load_state_module()
+    ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
+
+    first = ledger.begin_entry(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        symbol="BTCUSDT",
+        idempotency_key="entry-5",
+        requested_notional_usdt=10.0,
+        tv_timestamp="2026-03-26T12:34:00Z",
+    )
+    replayed = ledger.begin_entry(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        symbol="BTCUSDT",
+        idempotency_key="entry-5",
+        requested_notional_usdt=10.0,
+        tv_timestamp="2026-03-26T12:34:00Z",
+    )
+
+    assert replayed == first
+    assert len(_read_json(ledger.idempotency_path)["attempts"]) == 1
+
+
+def test_illegal_transition_is_rejected(tmp_path: Path) -> None:
+    mod = _load_state_module()
+    ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
+
+    ledger.begin_entry(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        symbol="BTCUSDT",
+        idempotency_key="entry-6",
+        requested_notional_usdt=10.0,
+        tv_timestamp="2026-03-26T12:35:00Z",
+    )
+
+    with pytest.raises(mod.IllegalTransitionError, match="entry_pending"):
+        ledger.record_open_hedged(
+            idempotency_key="entry-6",
+            perp_order_id="perp-6",
+            filled_base_qty=0.0001,
+            avg_entry_price=100_100.0,
+            basis_bps=12.0,
+        )

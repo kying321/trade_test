@@ -23,9 +23,28 @@ SUPPORTED_STATUSES = (
     "closed",
 )
 _ACTIVE_RECOVERY_STATUSES = {"needs_recovery"}
+_ALLOWED_PREDECESSORS: dict[str, set[str]] = {
+    "spot_buy_submitting": {"entry_pending"},
+    "spot_buy_filled_perp_pending": {"spot_buy_submitting"},
+    "perp_short_submitting": {"spot_buy_filled_perp_pending"},
+    "open_hedged": {"perp_short_submitting"},
+    "exit_pending": {"open_hedged"},
+    "needs_recovery": {
+        "spot_buy_submitting",
+        "spot_buy_filled_perp_pending",
+        "perp_short_submitting",
+        "open_hedged",
+        "exit_pending",
+    },
+    "closed": {"exit_pending", "needs_recovery"},
+}
 
 
 class StateConflictError(RuntimeError):
+    pass
+
+
+class IllegalTransitionError(StateConflictError):
     pass
 
 
@@ -108,6 +127,17 @@ def _missing_leg(side: str) -> dict[str, Any]:
     }
 
 
+def _dict_contains(superset: Any, subset: Any) -> bool:
+    if isinstance(subset, dict):
+        if not isinstance(superset, dict):
+            return False
+        for key, value in subset.items():
+            if key not in superset or not _dict_contains(superset[key], value):
+                return False
+        return True
+    return superset == subset
+
+
 class TvBasisArbStateLedger:
     def __init__(self, *, output_root: Path | str) -> None:
         self.output_root = Path(output_root)
@@ -180,6 +210,71 @@ class TvBasisArbStateLedger:
         save_recovery_state(self.recovery_path, payload)
         return dict(updated)
 
+    def _get_position(self, position_key: str) -> dict[str, Any]:
+        positions = load_positions_state(self.positions_path)["positions"]
+        position = positions.get(position_key)
+        if not isinstance(position, dict):
+            raise KeyError(f"unknown position:{position_key}")
+        return dict(position)
+
+    def _assert_begin_entry_replay_matches(
+        self,
+        *,
+        attempt: dict[str, Any],
+        strategy_id: str,
+        symbol: str,
+        requested_notional_usdt: float,
+        tv_timestamp: str,
+    ) -> None:
+        if str(attempt.get("strategy_id", "")) != str(strategy_id):
+            raise StateConflictError("idempotency payload mismatch:strategy_id")
+        if str(attempt.get("symbol", "")).upper() != str(symbol).upper():
+            raise StateConflictError("idempotency payload mismatch:symbol")
+        if float(attempt.get("requested_notional_usdt", 0.0)) != float(requested_notional_usdt):
+            raise StateConflictError("idempotency payload mismatch:requested_notional_usdt")
+        if str(attempt.get("tv_timestamp", "")) != str(tv_timestamp):
+            raise StateConflictError("idempotency payload mismatch:tv_timestamp")
+
+    def _assert_transition_allowed(self, *, current_status: str, target_status: str) -> None:
+        if target_status not in SUPPORTED_STATUSES:
+            raise ValueError(f"unsupported status:{target_status}")
+        if current_status == target_status:
+            return
+        allowed = _ALLOWED_PREDECESSORS.get(target_status, set())
+        if current_status not in allowed:
+            raise IllegalTransitionError(f"illegal transition:{current_status}->{target_status}")
+
+    def _assert_replay_patch_matches(
+        self,
+        *,
+        current_attempt: dict[str, Any],
+        current_position: dict[str, Any],
+        attempt_patch: dict[str, Any] | None,
+        position_patch: dict[str, Any] | None,
+    ) -> None:
+        if attempt_patch and not _dict_contains(current_attempt, attempt_patch):
+            raise StateConflictError("replay mismatch:attempt_patch")
+        if position_patch and not _dict_contains(current_position, position_patch):
+            raise StateConflictError("replay mismatch:position_patch")
+
+    def _resolve_recovery_for_position(
+        self,
+        *,
+        position_key: str,
+        resolved_status: str,
+        close_reason: str,
+    ) -> dict[str, Any] | None:
+        payload = load_recovery_state(self.recovery_path)
+        current = payload["recoveries"].get(position_key)
+        if not isinstance(current, dict):
+            return None
+        recovery = dict(current)
+        recovery["status"] = str(resolved_status)
+        recovery["resolved_at_utc"] = now_utc_iso()
+        recovery["resolved_by"] = "record_closed"
+        recovery["close_reason"] = str(close_reason)
+        return self._save_recovery(recovery)
+
     def can_start_entry(self, *, strategy_id: str, symbol: str) -> tuple[bool, str]:
         recoveries = load_recovery_state(self.recovery_path)["recoveries"]
         want_symbol = str(symbol).upper()
@@ -203,8 +298,16 @@ class TvBasisArbStateLedger:
         requested_notional_usdt: float,
         tv_timestamp: str,
     ) -> dict[str, Any]:
-        if self._get_attempt_or_none(idempotency_key) is not None:
-            raise StateConflictError(f"attempt already exists:{idempotency_key}")
+        existing_attempt = self._get_attempt_or_none(idempotency_key)
+        if existing_attempt is not None:
+            self._assert_begin_entry_replay_matches(
+                attempt=existing_attempt,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                requested_notional_usdt=requested_notional_usdt,
+                tv_timestamp=tv_timestamp,
+            )
+            return existing_attempt
         allowed, reason = self.can_start_entry(strategy_id=strategy_id, symbol=symbol)
         if not allowed:
             raise StateConflictError(f"recovery exists:{reason}")
@@ -255,9 +358,18 @@ class TvBasisArbStateLedger:
         attempt_patch: dict[str, Any] | None = None,
         position_patch: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        if status not in SUPPORTED_STATUSES:
-            raise ValueError(f"unsupported status:{status}")
         current_attempt = self._get_attempt(idempotency_key)
+        current_position = self._get_position(str(current_attempt["position_key"]))
+        current_status = str(current_attempt.get("status", ""))
+        self._assert_transition_allowed(current_status=current_status, target_status=status)
+        if current_status == status:
+            self._assert_replay_patch_matches(
+                current_attempt=current_attempt,
+                current_position=current_position,
+                attempt_patch=attempt_patch,
+                position_patch=position_patch,
+            )
+            return current_attempt, current_position
         updated_attempt = dict(current_attempt)
         updated_attempt["status"] = status
         updated_attempt["phase"] = str(phase or status)
@@ -265,8 +377,7 @@ class TvBasisArbStateLedger:
             updated_attempt.update(attempt_patch)
         saved_attempt = self._save_attempt(updated_attempt)
 
-        current_position = load_positions_state(self.positions_path)["positions"].get(saved_attempt["position_key"], {})
-        updated_position = dict(current_position) if isinstance(current_position, dict) else {}
+        updated_position = dict(current_position)
         updated_position.update(
             {
                 "position_key": saved_attempt["position_key"],
@@ -387,6 +498,11 @@ class TvBasisArbStateLedger:
             status="closed",
             attempt_patch={"close_reason": str(close_reason)},
             position_patch={"close_reason": str(close_reason), "closed_at_utc": now_utc_iso()},
+        )
+        self._resolve_recovery_for_position(
+            position_key=str(saved_position["position_key"]),
+            resolved_status="closed",
+            close_reason=close_reason,
         )
         return saved_position
 
