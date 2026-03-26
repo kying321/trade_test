@@ -737,6 +737,45 @@ describe('buildTerminalReadModel', () => {
     );
   });
 
+  it('suppresses raw workspace handoffs on public surface', () => {
+    const model = buildTerminalReadModel({
+      ...loaded,
+      requestedSurface: 'public',
+      effectiveSurface: 'public',
+      snapshot: {
+        ...loaded.snapshot,
+        artifact_payloads: {
+          ...loaded.snapshot.artifact_payloads,
+          operator_panel: {
+            ...(loaded.snapshot.artifact_payloads?.operator_panel || {}),
+            payload: {
+              ...((loaded.snapshot.artifact_payloads?.operator_panel as { payload?: Record<string, unknown> })?.payload || {}),
+              control_chain: [
+                {
+                  stage: 'risk',
+                  label: '风控',
+                  source_status: 'blocked',
+                  source_decision: 'hold',
+                  source_artifact: '/tmp/crypto_shortline_pattern_router.json',
+                  next_target_artifact: 'crypto_shortline_pattern_router',
+                },
+              ],
+            },
+            summary: { status: 'warning' },
+          },
+          crypto_shortline_pattern_router: {
+            path: '/tmp/crypto_shortline_pattern_router.json',
+            payload: {},
+            summary: { status: 'warning' },
+          },
+        },
+      },
+    });
+
+    const handoffs = model.navigation.terminalHandoffs['signal-risk|control-chain|risk'];
+    expect(findLinkByPath(handoffs, '/workspace/raw')).toBeUndefined();
+  });
+
   it('maps public acceptance into workspace contracts and keeps raw evidence internal-only', () => {
     const acceptanceLoaded: LoadedSurface = {
       ...loaded,

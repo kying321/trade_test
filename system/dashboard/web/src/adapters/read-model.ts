@@ -139,6 +139,7 @@ function artifactAlertLinks(options: {
   artifact?: unknown;
   rawArtifact?: unknown;
   includeContracts?: boolean;
+  allowRaw?: boolean;
   terminalFocus?: { surface: SurfaceView['effective']; panel?: string; section?: string; row?: string };
   tone?: OperatorAlertLink['tone'];
 }): OperatorAlertLink[] {
@@ -148,7 +149,7 @@ function artifactAlertLinks(options: {
   if (artifact !== '—') {
     links.push(alertLink(`${options.idPrefix}-artifact`, 'alert_link_view_artifact', buildWorkspaceLink('artifacts', { artifact }), options.tone));
   }
-  if (rawArtifact !== '—') {
+  if (options.allowRaw && rawArtifact !== '—') {
     links.push(alertLink(`${options.idPrefix}-raw`, 'alert_link_view_raw', buildWorkspaceLink('raw', { artifact: rawArtifact }), options.tone));
   }
   if (options.terminalFocus?.panel) {
@@ -325,7 +326,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
             ),
           ],
           links: [
-            alertLink('live-path-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'negative'),
+            ...(showRawPaths ? [alertLink('live-path-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'negative')] : []),
             alertLink('live-path-terminal', 'alert_link_view_terminal', buildTerminalLink(surface.effective, {
               panel: 'orchestration',
               section: 'guards',
@@ -391,6 +392,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
               row: surface.effective === 'internal' ? buildDrilldownRowId({ stage: 'risk' }, ['stage']) : undefined,
             },
             tone: guardianTone,
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -459,6 +461,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
                 : undefined,
             },
             tone: statusTone(controlChainBlocker.source_status || controlChainBlocker.source_decision || controlChainBlocker.blocking_reason),
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -516,6 +519,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
               section: 'action-log',
             },
             tone: 'negative',
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -607,6 +611,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
                 section: 'freshness',
               },
               tone: 'warning',
+              allowRaw: showRawPaths,
             }),
           }]
         : []),
@@ -642,7 +647,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
           ],
           links: [
             alertLink('surface-fallback-contracts', 'alert_link_view_contracts', buildWorkspaceLink('contracts'), 'warning'),
-            alertLink('surface-fallback-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'warning'),
+            ...(showRawPaths ? [alertLink('surface-fallback-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'warning')] : []),
             alertLink('surface-fallback-terminal', 'alert_link_view_terminal', buildTerminalLink(surface.effective), 'warning'),
           ],
         }]
@@ -1089,6 +1094,7 @@ function buildTerminalWorkspaceHandoffs(snapshot: DashboardSnapshot, surface: Su
   const focusSlots = toArray<Dict>(operatorPanel.focus_slots);
   const actionQueue = toArray<Dict>(operatorPanel.action_queue);
   const summary = toRecord<Dict>(operatorPanel.summary) || {};
+  const showRawPaths = surface.effective === 'internal';
   const handoffs: Record<string, OperatorAlertLink[]> = {};
   const primaryArtifact: Record<string, string> = {};
   const seen = new Set<string>();
@@ -1124,7 +1130,7 @@ function buildTerminalWorkspaceHandoffs(snapshot: DashboardSnapshot, surface: Su
         tone,
       }, artifactValue);
     }
-    if (rawValue && rawValue !== '—') {
+    if (showRawPaths && rawValue && rawValue !== '—') {
       push(focus, {
         id: `${idPrefix}-raw`,
         label: `${t('alert_link_view_raw')} / ${displayValue(rawValue)}`,
