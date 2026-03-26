@@ -86,6 +86,28 @@ def test_entry_flow_creates_open_hedged_position_and_persists_state_files(tmp_pa
     assert recovery["recoveries"] == {}
 
 
+def test_begin_entry_persists_target_base_qty_and_budget(tmp_path: Path) -> None:
+    mod = _load_state_module()
+    ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
+
+    attempt = ledger.begin_entry(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        symbol="BTCUSDT",
+        idempotency_key="entry-baseqty-1",
+        requested_notional_usdt=160.0,
+        target_base_qty=0.002,
+        max_quote_budget_usdt=160.0,
+        tv_timestamp="2026-03-26T12:30:00Z",
+    )
+    positions = _read_json(ledger.positions_path)
+    position = next(iter(positions["positions"].values()))
+
+    assert attempt["target_base_qty"] == pytest.approx(0.002)
+    assert attempt["max_quote_budget_usdt"] == 160.0
+    assert position["target_base_qty"] == pytest.approx(0.002)
+    assert position["max_quote_budget_usdt"] == 160.0
+
+
 def test_partial_fill_then_leg_failure_marks_position_needs_recovery(tmp_path: Path) -> None:
     mod = _load_state_module()
     ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
@@ -125,6 +147,38 @@ def test_partial_fill_then_leg_failure_marks_position_needs_recovery(tmp_path: P
     assert idempotency["attempts"]["entry-2"]["status"] == "needs_recovery"
     assert positions["positions"][position_key]["status"] == "needs_recovery"
     assert recoveries["recoveries"][position_key]["failure_phase"] == "perp_short_submitting"
+
+
+def test_recovery_state_keeps_target_base_qty_and_budget(tmp_path: Path) -> None:
+    mod = _load_state_module()
+    ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
+
+    ledger.begin_entry(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        symbol="BTCUSDT",
+        idempotency_key="entry-baseqty-2",
+        requested_notional_usdt=160.0,
+        target_base_qty=0.002,
+        max_quote_budget_usdt=160.0,
+        tv_timestamp="2026-03-26T12:31:00Z",
+    )
+    ledger.record_spot_buy_submitting(idempotency_key="entry-baseqty-2", spot_order_id="spot-baseqty-2")
+    ledger.record_spot_buy_fill(
+        idempotency_key="entry-baseqty-2",
+        spot_order_id="spot-baseqty-2",
+        filled_base_qty=0.002,
+        filled_quote_usdt=141.0,
+        partial_fill=False,
+    )
+    recovery = ledger.record_needs_recovery(
+        idempotency_key="entry-baseqty-2",
+        reason="perp_short_rejected",
+        failure_phase="perp_short_submitting",
+        recovery_action="flatten_spot_or_complete_hedge",
+    )
+
+    assert recovery["target_base_qty"] == pytest.approx(0.002)
+    assert recovery["max_quote_budget_usdt"] == 160.0
 
 
 def test_new_entry_is_blocked_while_active_recovery_exists(tmp_path: Path) -> None:

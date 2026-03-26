@@ -224,6 +224,8 @@ class TvBasisArbStateLedger:
         strategy_id: str,
         symbol: str,
         requested_notional_usdt: float,
+        target_base_qty: float | None,
+        max_quote_budget_usdt: float | None,
         tv_timestamp: str,
     ) -> None:
         if str(attempt.get("strategy_id", "")) != str(strategy_id):
@@ -232,6 +234,10 @@ class TvBasisArbStateLedger:
             raise StateConflictError("idempotency payload mismatch:symbol")
         if float(attempt.get("requested_notional_usdt", 0.0)) != float(requested_notional_usdt):
             raise StateConflictError("idempotency payload mismatch:requested_notional_usdt")
+        if target_base_qty is not None and float(attempt.get("target_base_qty", 0.0)) != float(target_base_qty):
+            raise StateConflictError("idempotency payload mismatch:target_base_qty")
+        if max_quote_budget_usdt is not None and float(attempt.get("max_quote_budget_usdt", 0.0)) != float(max_quote_budget_usdt):
+            raise StateConflictError("idempotency payload mismatch:max_quote_budget_usdt")
         if str(attempt.get("tv_timestamp", "")) != str(tv_timestamp):
             raise StateConflictError("idempotency payload mismatch:tv_timestamp")
 
@@ -296,6 +302,8 @@ class TvBasisArbStateLedger:
         symbol: str,
         idempotency_key: str,
         requested_notional_usdt: float,
+        target_base_qty: float | None = None,
+        max_quote_budget_usdt: float | None = None,
         tv_timestamp: str,
     ) -> dict[str, Any]:
         existing_attempt = self._get_attempt_or_none(idempotency_key)
@@ -305,6 +313,8 @@ class TvBasisArbStateLedger:
                 strategy_id=strategy_id,
                 symbol=symbol,
                 requested_notional_usdt=requested_notional_usdt,
+                target_base_qty=target_base_qty,
+                max_quote_budget_usdt=max_quote_budget_usdt,
                 tv_timestamp=tv_timestamp,
             )
             return existing_attempt
@@ -323,6 +333,8 @@ class TvBasisArbStateLedger:
                 "phase": "entry_pending",
                 "tv_timestamp": str(tv_timestamp),
                 "requested_notional_usdt": float(requested_notional_usdt),
+                "target_base_qty": None if target_base_qty is None else float(target_base_qty),
+                "max_quote_budget_usdt": None if max_quote_budget_usdt is None else float(max_quote_budget_usdt),
                 "position_key": position_key,
                 "spot_leg": _missing_leg("spot_buy"),
                 "perp_leg": _missing_leg("perp_short"),
@@ -337,6 +349,8 @@ class TvBasisArbStateLedger:
                 "status": "entry_pending",
                 "tv_timestamp": str(tv_timestamp),
                 "requested_notional_usdt": float(requested_notional_usdt),
+                "target_base_qty": None if target_base_qty is None else float(target_base_qty),
+                "max_quote_budget_usdt": None if max_quote_budget_usdt is None else float(max_quote_budget_usdt),
                 "spot_leg": dict(attempt["spot_leg"]),
                 "perp_leg": dict(attempt["perp_leg"]),
             }
@@ -387,6 +401,8 @@ class TvBasisArbStateLedger:
                 "status": status,
                 "tv_timestamp": saved_attempt["tv_timestamp"],
                 "requested_notional_usdt": saved_attempt["requested_notional_usdt"],
+                "target_base_qty": saved_attempt.get("target_base_qty"),
+                "max_quote_budget_usdt": saved_attempt.get("max_quote_budget_usdt"),
                 "spot_leg": dict(saved_attempt.get("spot_leg", _missing_leg("spot_buy"))),
                 "perp_leg": dict(saved_attempt.get("perp_leg", _missing_leg("perp_short"))),
             }
@@ -537,6 +553,8 @@ class TvBasisArbStateLedger:
                 "reason": str(reason),
                 "failure_phase": str(failure_phase),
                 "recovery_action": str(recovery_action),
+                "target_base_qty": saved_position.get("target_base_qty"),
+                "max_quote_budget_usdt": saved_position.get("max_quote_budget_usdt"),
                 "spot_leg": dict(saved_position.get("spot_leg", _missing_leg("spot_buy"))),
                 "perp_leg": dict(saved_position.get("perp_leg", _missing_leg("perp_short"))),
             }
