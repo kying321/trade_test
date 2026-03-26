@@ -17,6 +17,7 @@ from tv_basis_arb_common import (
     load_strategy_definition,
     parse_tv_basis_webhook_payload,
 )
+from bybit_basis_live_adapter import BybitBasisLiveAdapter
 from tv_basis_arb_executor import TvBasisArbExecutor
 from tv_basis_arb_gate import build_market_snapshot, evaluate_tv_basis_gate
 from tv_basis_arb_state import load_positions_state, load_recovery_state
@@ -135,6 +136,12 @@ def _current_runtime_policy(strategy_id: str) -> dict[str, float]:
         "exit_basis_bps": float(exit_basis_bps),
         "max_holding_seconds": float(max_holding_seconds),
     }
+
+
+def _preferred_venue(strategy_id: str) -> str:
+    strategy = load_strategy_definition(strategy_id)
+    venue = str(strategy.get("preferred_venue", "binance")).strip().lower()
+    return venue or "binance"
 
 
 def _iso_to_utc(ts: str) -> datetime:
@@ -285,6 +292,7 @@ def _handle_entry_check(
     use_injected_clients = spot_client is not None and perp_client is not None
     if not use_live_clients and not use_injected_clients:
         raise ValueError("partial client injection is not allowed")
+    preferred_venue = _preferred_venue(signal.strategy_id)
     runtime_policy = _current_runtime_policy(signal.strategy_id)
     requested_notional_usdt = float(runtime_policy["requested_notional_usdt"])
     market_snapshot = build_market_snapshot(
@@ -336,7 +344,7 @@ def _handle_entry_check(
         if use_live_clients:
             live_route = evaluate_live_route_for_requirements(
                 path=venue_capability_artifact_path(output_root),
-                venue="binance",
+                venue=preferred_venue,
                 required_statuses={
                     "spot_signed_read_status": "ready",
                     "spot_signed_trade_status": "ready",
@@ -362,6 +370,12 @@ def _handle_entry_check(
             spot_client=spot_client,
             perp_client=perp_client,
         )
+        if preferred_venue == "bybit":
+            executor = BybitBasisLiveAdapter(
+                output_root=output_root,
+                spot_client=spot_client,
+                perp_client=perp_client,
+            )
         execution = executor.execute_entry(
             strategy_id=signal.strategy_id,
             symbol=signal.symbol,
@@ -372,6 +386,7 @@ def _handle_entry_check(
         artifact_payload["action"] = "execute_entry"
         artifact_payload["execution_status"] = execution.get("status")
         artifact_payload["position_key"] = execution.get("position", {}).get("position_key")
+        artifact_payload["venue"] = preferred_venue
         artifact_family = _attach_review_artifact_family(
             artifact_payload,
             output_root,
@@ -443,6 +458,7 @@ def _handle_exit_check(
         artifact_payload.update(
             {
                 "action": "recovery_required",
+                "venue": recovery.get("execution_venue"),
                 "position_key": recovery.get("position_key"),
                 "attempt_key": recovery.get("attempt_key"),
                 "recovery_reason": recovery.get("reason"),
@@ -464,6 +480,7 @@ def _handle_exit_check(
         return result
 
     if isinstance(position, dict):
+        execution_venue = str(position.get("execution_venue", "")).strip().lower()
         market_snapshot = build_market_snapshot(
             symbol=signal.symbol,
             spot_client=spot_client,
@@ -483,6 +500,7 @@ def _handle_exit_check(
             reasons.append("max_holding_time_exceeded")
         artifact_payload.update(
             {
+                "venue": execution_venue or None,
                 "attempt_key": position.get("attempt_key"),
                 "position_key": position.get("position_key"),
                 "basis_bps": float(current_basis_bps),
@@ -494,11 +512,17 @@ def _handle_exit_check(
             }
         )
         if reasons:
-            executor = TvBasisArbExecutor(
+            executor: Any = TvBasisArbExecutor(
                 output_root=output_root,
                 spot_client=spot_client,
                 perp_client=perp_client,
             )
+            if execution_venue == "bybit":
+                executor = BybitBasisLiveAdapter(
+                    output_root=output_root,
+                    spot_client=spot_client,
+                    perp_client=perp_client,
+                )
             execution = executor.execute_exit(
                 idempotency_key=str(position["attempt_key"]),
                 close_reason=close_reason,

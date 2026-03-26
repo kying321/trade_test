@@ -93,23 +93,6 @@ class BybitBasisLiveAdapter:
     def _is_transport_ambiguity(exc: Exception) -> bool:
         return isinstance(exc, (ConnectionError, TimeoutError, OSError))
 
-    def _stamp_execution_venue(self, idempotency_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
-        attempt, position = self._load_attempt_state(idempotency_key)
-        attempt["execution_venue"] = "bybit"
-        position["execution_venue"] = "bybit"
-        saved_attempt = self.ledger._save_attempt(attempt)
-        saved_position = self.ledger._save_position(position)
-        return saved_attempt, saved_position
-
-    def _stamp_recovery_execution_venue(self, position_key: str) -> dict[str, Any]:
-        recoveries = load_recovery_state(self.ledger.recovery_path)
-        recovery = recoveries["recoveries"].get(position_key)
-        if not isinstance(recovery, dict):
-            raise KeyError(f"unknown recovery:{position_key}")
-        updated = dict(recovery)
-        updated["execution_venue"] = "bybit"
-        return self.ledger._save_recovery(updated)
-
     def execute_entry(
         self,
         *,
@@ -129,9 +112,9 @@ class BybitBasisLiveAdapter:
                 requested_notional_usdt=requested_notional_usdt,
                 target_base_qty=target_base_qty,
                 max_quote_budget_usdt=max_quote_budget_usdt,
+                execution_venue="bybit",
                 tv_timestamp=tv_timestamp,
             )
-            self._stamp_execution_venue(idempotency_key)
             if str(attempt.get("status", "")) == "open_hedged":
                 _, position = self._load_attempt_state(idempotency_key)
                 return {"status": "open_hedged", "attempt": attempt, "position": position}
@@ -158,7 +141,6 @@ class BybitBasisLiveAdapter:
                 filled_quote_usdt=spot_quote_qty,
                 partial_fill=spot_base_qty <= 0.0 or abs(spot_base_qty - float(target_base_qty)) > 1e-9,
             )
-            self._stamp_execution_venue(idempotency_key)
 
             perp_client_order_id = f"{idempotency_key}-perp-short"
             try:
@@ -180,8 +162,6 @@ class BybitBasisLiveAdapter:
                     failure_phase="perp_short_submitting",
                     recovery_action=recovery_action,
                 )
-                self._stamp_execution_venue(idempotency_key)
-                recovery = self._stamp_recovery_execution_venue(str(recovery["position_key"]))
                 _, recovery_position = self._load_attempt_state(idempotency_key)
                 return {
                     "status": "needs_recovery",
@@ -209,7 +189,6 @@ class BybitBasisLiveAdapter:
                 avg_entry_price=perp_avg_price,
                 basis_bps=basis_bps,
             )
-            _, open_position = self._stamp_execution_venue(idempotency_key)
             return {
                 "status": "open_hedged",
                 "attempt": self.ledger._get_attempt(idempotency_key),
@@ -232,7 +211,6 @@ class BybitBasisLiveAdapter:
                 raise RuntimeError(f"position not open_hedged:{status}")
 
             exit_position = self.ledger.record_exit_pending(idempotency_key=idempotency_key, reason=close_reason)
-            self._stamp_execution_venue(idempotency_key)
             perp_qty = to_float(attempt.get("perp_leg", {}).get("filled_base_qty", 0.0), 0.0)
             spot_qty = to_float(attempt.get("spot_leg", {}).get("filled_base_qty", 0.0), 0.0)
 
@@ -257,8 +235,6 @@ class BybitBasisLiveAdapter:
                     failure_phase="exit_pending",
                     recovery_action=recovery_action,
                 )
-                self._stamp_execution_venue(idempotency_key)
-                recovery = self._stamp_recovery_execution_venue(str(recovery["position_key"]))
                 _, recovery_position = self._load_attempt_state(idempotency_key)
                 return {
                     "status": "needs_recovery",
@@ -276,7 +252,6 @@ class BybitBasisLiveAdapter:
                 client_order_id=spot_client_order_id,
             )
             closed_position = self.ledger.record_closed(idempotency_key=idempotency_key, close_reason=close_reason)
-            _, closed_position = self._stamp_execution_venue(idempotency_key)
             return {
                 "status": "closed",
                 "attempt": self.ledger._get_attempt(idempotency_key),

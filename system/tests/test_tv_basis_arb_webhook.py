@@ -82,6 +82,7 @@ def _exchange_blocked_entry_snapshot() -> dict[str, float | str | dict[str, dict
 def _write_venue_capability_artifact(
     root: Path,
     *,
+    venue: str = "binance",
     checked_at_utc: str | None = None,
     status: str = "live_ready",
     spot_signed_read_status: str = "ready",
@@ -96,7 +97,7 @@ def _write_venue_capability_artifact(
     payload = {
         "schema_version": 1,
         "venues": {
-            "binance": {
+            str(venue): {
                 "checked_at_utc": effective_checked_at,
                 "status": status,
                 "blockers": list(blockers or []),
@@ -387,7 +388,7 @@ def test_entry_check_live_blocked_when_capability_artifact_missing(tmp_path: Pat
     assert result["status"] == "gate_blocked"
     assert result["gate"]["live_route_status"] == "live_blocked"
     assert result["gate"]["live_route_reason"] == "venue_capability_missing"
-    assert result["gate"]["venue"] == "binance"
+    assert result["gate"]["venue"] == "bybit"
     assert result["gate"]["venue_blockers"] == []
 
 
@@ -399,6 +400,7 @@ def test_entry_check_live_blocked_when_capability_futures_trade_blocked(
     monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
     _write_venue_capability_artifact(
         tmp_path,
+        venue="bybit",
         futures_signed_trade_status="blocked",
         blockers=["futures_signed_trade_status"],
     )
@@ -408,29 +410,61 @@ def test_entry_check_live_blocked_when_capability_futures_trade_blocked(
     assert result["status"] == "gate_blocked"
     assert result["gate"]["live_route_status"] == "live_blocked"
     assert result["gate"]["live_route_reason"] == "venue_capability"
-    assert result["gate"]["venue"] == "binance"
+    assert result["gate"]["venue"] == "bybit"
     assert result["gate"]["venue_blockers"] == ["futures_signed_trade_status"]
+
+
+def test_entry_check_does_not_fallback_to_binance_when_bybit_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    path = _write_venue_capability_artifact(
+        tmp_path,
+        venue="bybit",
+        futures_signed_trade_status="blocked",
+        blockers=["futures_signed_trade_status"],
+    )
+    payload = _read_json(path)
+    payload["venues"]["binance"] = {
+        "checked_at_utc": payload["venues"]["bybit"]["checked_at_utc"],
+        "status": "live_ready",
+        "blockers": [],
+        "spot_signed_read_status": "ready",
+        "spot_signed_trade_status": "ready",
+        "futures_signed_read_status": "ready",
+        "futures_signed_trade_status": "ready",
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+
+    assert result["status"] == "gate_blocked"
+    assert result["gate"]["live_route_status"] == "live_blocked"
+    assert result["gate"]["live_route_reason"] == "venue_capability"
+    assert result["gate"]["venue"] == "bybit"
 
 
 def test_entry_check_live_blocked_when_capability_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     webhook = _load_webhook_module()
     monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
-    _write_venue_capability_artifact(tmp_path, checked_at_utc="2026-03-26T12:00:00Z")
+    _write_venue_capability_artifact(tmp_path, venue="bybit", checked_at_utc="2026-03-26T12:00:00Z")
 
     result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
 
     assert result["status"] == "gate_blocked"
     assert result["gate"]["live_route_status"] == "live_blocked"
     assert result["gate"]["live_route_reason"] == "venue_capability_stale"
-    assert result["gate"]["venue"] == "binance"
+    assert result["gate"]["venue"] == "bybit"
 
 
 def test_entry_check_live_blocked_when_capability_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     webhook = _load_webhook_module()
     monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
-    path = _write_venue_capability_artifact(tmp_path)
+    path = _write_venue_capability_artifact(tmp_path, venue="bybit")
     payload = _read_json(path)
-    del payload["venues"]["binance"]["futures_signed_trade_status"]
+    del payload["venues"]["bybit"]["futures_signed_trade_status"]
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
@@ -443,7 +477,7 @@ def test_entry_check_live_blocked_when_capability_incomplete(tmp_path: Path, mon
 def test_entry_check_live_blocked_when_capability_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     webhook = _load_webhook_module()
     monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
-    _write_venue_capability_artifact(tmp_path, futures_signed_trade_status="unknown", status="unknown")
+    _write_venue_capability_artifact(tmp_path, venue="bybit", futures_signed_trade_status="unknown", status="unknown")
 
     result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
 
@@ -575,7 +609,7 @@ def test_entry_check_live_ready_artifact_allows_execution_without_fake_clients(
 ) -> None:
     webhook = _load_webhook_module()
     monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
-    _write_venue_capability_artifact(tmp_path, status="live_ready")
+    _write_venue_capability_artifact(tmp_path, venue="bybit", status="live_ready")
 
     def _fake_execute(self, *, strategy_id, symbol, idempotency_key, requested_notional_usdt, tv_timestamp):
         return {
@@ -591,13 +625,14 @@ def test_entry_check_live_ready_artifact_allows_execution_without_fake_clients(
             },
         }
 
-    monkeypatch.setattr(webhook.TvBasisArbExecutor, "execute_entry", _fake_execute)
+    monkeypatch.setattr(webhook.BybitBasisLiveAdapter, "execute_entry", _fake_execute)
     result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
 
     assert result["status"] == "open_hedged"
     assert result["gate"]["action"] == "execute_entry"
     assert result["gate"]["live_route_status"] == "live_ready"
     assert result["gate"]["live_route_reason"] is None
+    assert result["gate"]["venue"] == "bybit"
 
 
 def test_entry_check_does_not_use_signal_timestamp_as_capability_now(
@@ -606,7 +641,7 @@ def test_entry_check_does_not_use_signal_timestamp_as_capability_now(
 ) -> None:
     webhook = _load_webhook_module()
     monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
-    _write_venue_capability_artifact(tmp_path, checked_at_utc="2026-03-26T12:45:00Z", status="live_ready")
+    _write_venue_capability_artifact(tmp_path, venue="bybit", checked_at_utc="2026-03-26T12:45:00Z", status="live_ready")
 
     def _capture_live_route(*, path, venue, required_statuses, now_utc=None, max_age_seconds=900):
         assert now_utc is None
@@ -632,13 +667,94 @@ def test_entry_check_does_not_use_signal_timestamp_as_capability_now(
         }
 
     monkeypatch.setattr(webhook, "evaluate_live_route_for_requirements", _capture_live_route)
-    monkeypatch.setattr(webhook.TvBasisArbExecutor, "execute_entry", _fake_execute)
+    monkeypatch.setattr(webhook.BybitBasisLiveAdapter, "execute_entry", _fake_execute)
 
     result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
 
     assert result["status"] == "open_hedged"
     assert result["gate"]["live_route_status"] == "live_ready"
     assert result["gate"]["live_route_reason"] is None
+    assert result["gate"]["venue"] == "bybit"
+
+
+def test_exit_check_dispatches_to_bybit_adapter_using_execution_venue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    snapshots = iter(
+        [
+            _entry_snapshot(),
+            {
+                **_entry_snapshot(),
+                "perp_mark_price": 70_520.0,
+                "perp_index_price": 70_515.0,
+                "snapshot_ts_utc": "2026-03-26T12:45:00Z",
+                "snapshot_time_ms": 1_774_535_100_000,
+            },
+        ]
+    )
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: next(snapshots))
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+    perp = _FakePerpClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-entry",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+    called = {"bybit": False}
+
+    def _fake_bybit_execute_exit(self, *, idempotency_key, close_reason=""):
+        called["bybit"] = True
+        return {
+            "status": "closed",
+            "position": {
+                "position_key": "bybit-pos-1",
+                "attempt_key": idempotency_key,
+                "status": "closed",
+                "close_reason": close_reason,
+                "execution_venue": "bybit",
+            },
+        }
+
+    monkeypatch.setattr(webhook.BybitBasisLiveAdapter, "execute_exit", _fake_bybit_execute_exit)
+    monkeypatch.setattr(webhook.TvBasisArbExecutor, "execute_exit", lambda *args, **kwargs: pytest.fail("should not route exit to binance executor"))
+    _write_venue_capability_artifact(tmp_path, venue="bybit", status="live_ready")
+
+    webhook.handle_webhook(
+        payload=_minimal_payload(),
+        output_root=tmp_path,
+        spot_client=spot,
+        perp_client=perp,
+    )
+    exit_payload = _minimal_payload()
+    exit_payload["event_type"] = "exit_check"
+    exit_payload["tv_timestamp"] = "2026-03-26T12:45:00Z"
+    result = webhook.handle_webhook(
+        payload=exit_payload,
+        output_root=tmp_path,
+        spot_client=spot,
+        perp_client=perp,
+    )
+
+    assert result["status"] == "closed"
+    assert called["bybit"] is True
+    assert result["gate"]["venue"] == "bybit"
 
 
 def test_exit_check_closes_position_when_basis_reverts(

@@ -108,6 +108,27 @@ def test_begin_entry_persists_target_base_qty_and_budget(tmp_path: Path) -> None
     assert position["max_quote_budget_usdt"] == 160.0
 
 
+def test_begin_entry_persists_execution_venue(tmp_path: Path) -> None:
+    mod = _load_state_module()
+    ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
+
+    attempt = ledger.begin_entry(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        symbol="BTCUSDT",
+        idempotency_key="entry-venue-1",
+        requested_notional_usdt=160.0,
+        target_base_qty=0.002,
+        max_quote_budget_usdt=160.0,
+        execution_venue="bybit",
+        tv_timestamp="2026-03-26T12:30:00Z",
+    )
+    positions = _read_json(ledger.positions_path)
+    position = next(iter(positions["positions"].values()))
+
+    assert attempt["execution_venue"] == "bybit"
+    assert position["execution_venue"] == "bybit"
+
+
 def test_partial_fill_then_leg_failure_marks_position_needs_recovery(tmp_path: Path) -> None:
     mod = _load_state_module()
     ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
@@ -179,6 +200,38 @@ def test_recovery_state_keeps_target_base_qty_and_budget(tmp_path: Path) -> None
 
     assert recovery["target_base_qty"] == pytest.approx(0.002)
     assert recovery["max_quote_budget_usdt"] == 160.0
+
+
+def test_recovery_state_keeps_execution_venue(tmp_path: Path) -> None:
+    mod = _load_state_module()
+    ledger = mod.TvBasisArbStateLedger(output_root=tmp_path)
+
+    ledger.begin_entry(
+        strategy_id="tv_basis_btc_spot_perp_v1",
+        symbol="BTCUSDT",
+        idempotency_key="entry-venue-2",
+        requested_notional_usdt=160.0,
+        target_base_qty=0.002,
+        max_quote_budget_usdt=160.0,
+        execution_venue="bybit",
+        tv_timestamp="2026-03-26T12:31:00Z",
+    )
+    ledger.record_spot_buy_submitting(idempotency_key="entry-venue-2", spot_order_id="spot-venue-2")
+    ledger.record_spot_buy_fill(
+        idempotency_key="entry-venue-2",
+        spot_order_id="spot-venue-2",
+        filled_base_qty=0.002,
+        filled_quote_usdt=141.0,
+        partial_fill=False,
+    )
+    recovery = ledger.record_needs_recovery(
+        idempotency_key="entry-venue-2",
+        reason="perp_short_rejected",
+        failure_phase="perp_short_submitting",
+        recovery_action="flatten_spot_or_complete_hedge",
+    )
+
+    assert recovery["execution_venue"] == "bybit"
 
 
 def test_new_entry_is_blocked_while_active_recovery_exists(tmp_path: Path) -> None:
