@@ -60,3 +60,16 @@ def test_load_event_live_guard_overlay_expired_payload_fail_closed(tmp_path: Pat
     )
     payload = load_event_live_guard_overlay(target)
     _assert_fail_closed(payload)
+
+
+def test_load_event_live_guard_overlay_expired_payload_utc_fail_closed(tmp_path: Path) -> None:
+    target = tmp_path / "event_live_guard_overlay.json"
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    target.write_text(
+        "{\n"
+        f"  \"valid_until_utc\": \"{expired}\"\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    payload = load_event_live_guard_overlay(target)
+    _assert_fail_closed(payload)

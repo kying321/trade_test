@@ -29,17 +29,19 @@ def _parse_bool(value: Any) -> bool:
 
 
 def _is_payload_expired(payload: dict[str, Any]) -> bool:
-    valid_until = payload.get("valid_until")
-    if not valid_until:
-        return False
-    try:
-        ts = datetime.fromisoformat(str(valid_until))
-    except (ValueError, TypeError):
-        return True
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-    return ts < now
+    for key in ("valid_until_utc", "valid_until"):
+        valid_until = payload.get(key)
+        if not valid_until:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(valid_until))
+        except (ValueError, TypeError):
+            return True
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return ts < now
+    return False
 
 
 def load_event_live_guard_overlay(path: Path | str) -> dict[str, Any]:
