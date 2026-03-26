@@ -11,11 +11,15 @@
 
 ## Venue capability boundary
 - source-of-truth artifact：`output/state/venue_capabilities.json`
-- 当前 same-venue `spot + perp` 路径在进入真实 live execution 前，会先读取 venue capability artifact，而不是默认假设 Binance futures 可用。
-- 当前已知 Binance 诊断结论应被表达为：
+- 当前 `tv_basis_btc_spot_perp_v1` 的 live candidate 已 hard-switch 到 `preferred_venue = bybit`。
+- same-venue `spot + perp` 路径在进入真实 live execution 前，会先读取 `venue_capabilities.json` 中的 `venues.bybit`，而不是默认假设 Binance 或 Binance futures 可用。
+- 当前 Binance 仍是 source-of-truth blocker 参考项：
   - `spot ready`
   - `futures blocked`
   - blocker=`enableFutures=false`
+- Bybit-first 主线是否达到实盘前置完成态，另由：
+  - `output/review/latest_bybit_live_route_ready_check.json`
+  作为唯一 `canary-ready` 判定来源。
 
 ### 状态语义
 - `dry_only`
@@ -24,6 +28,8 @@
   - 代码路径存在，但 venue/account capability 不满足；本策略当前 Binance futures 路径应视为这一类
 - `live_ready`
   - venue/account capability 满足，且策略侧 gate 也允许
+- `canary_ready`
+  - readiness check 已确认 venue capability、route、contract、recovery、account 等前置条件全绿；这是单次真实 canary 之前的唯一机械完成态
 
 ## Webhook payload exemplar
 ```json
@@ -43,9 +49,9 @@
   - `mark_index_spread_bps` ≤ `max_mark_index_spread_bps`（目前 15 bps）。
   - `open_interest_usdt` ≥ `min_open_interest_usdt`（≥ 10,000,000 USDT）。
   - v1 entry 合同是固定 `target_base_qty = 0.002 BTC`，不是旧的 `20 USDT` quote authority；预算上限由 `max_quote_budget_usdt = 160.0` 控制。
-  - 若 `output/state/venue_capabilities.json` 显示当前 venue/account 缺少 same-venue `spot + perp` 所需能力，entry route 会在 executor 前直接 fail-close 为 `live_blocked`。
+  - 若 `output/state/venue_capabilities.json` 显示 `venues.bybit` 缺少 same-venue `spot + perp` 所需能力，entry route 会在 executor 前直接 fail-close 为 `live_blocked`。
   - gate 会先检查 `exchange_constraints`（spot/perp 最小数量、最小名义）和 `effective_quote_budget_usdt`，只有这些条件都通过才允许进入执行器。
-  - `gate` artifact 会写入 `target_base_qty`、`max_quote_budget_usdt`、`effective_quote_budget_usdt`、`estimated_quote_for_target_usdt`、`estimated_perp_notional_usdt`、`snapshot_ts_utc`、`thresholds`、`reasons` 等字段；若被 capability 阻断，还会写 `live_route_status`、`live_route_reason`、`venue`、`venue_blockers`。
+  - `gate` artifact 会写入 `target_base_qty`、`max_quote_budget_usdt`、`effective_quote_budget_usdt`、`estimated_quote_for_target_usdt`、`estimated_perp_notional_usdt`、`snapshot_ts_utc`、`thresholds`、`reasons` 等字段；若被 capability 阻断，还会写 `live_route_status`、`live_route_reason`、`venue`、`venue_blockers`。在 Bybit-first 主线下，`gate.venue` 应优先表现为 `bybit`。
 - 出口门控每次 `exit_check` 会：
   - 先检查 `state/tv_basis_arb_recovery.json`，只要存在 `needs_recovery` 状态就返回 `recovery_required`，不会再做行情调用。
   - 如果头寸还在 `open_hedged`，根据 `runtime_policy.exit_basis_bps`（4 bps）或 `holding_time_seconds >= max_holding_seconds`（3600s）判断是否 `should_exit`。
@@ -54,8 +60,8 @@
 ## 状态账本（State Ledger）说明
 - 类：`system/scripts/tv_basis_arb_state.py` 中的 `TvBasisArbStateLedger`。它维护三张 JSON：
   1. `output/state/tv_basis_arb_idempotency.json`（`attempts` 键）——每次 entry/exit 执行的幂等记录，包含 leg、status、idempotency_key、时间戳。
-  2. `output/state/tv_basis_arb_positions.json`（`positions` 键）——活仓/平仓状态和 `status`：`entry_pending`→`open_hedged`→`exit_pending`→`closed`，并持久化 `target_base_qty` / `max_quote_budget_usdt`；`needs_recovery` 会插入特殊状态并阻挡新 entry。
-  3. `output/state/tv_basis_arb_recovery.json`（`recoveries` 键）——当 `perp_short`、`exit_close` 拒单或传输模糊时会写 `recovery_reason`、`recovery_action`、`failure_phase`，并保留对应的 `target_base_qty` / `max_quote_budget_usdt`，直到人工/脚本确认 `close_reason` 才改成 `closed`。
+  2. `output/state/tv_basis_arb_positions.json`（`positions` 键）——活仓/平仓状态和 `status`：`entry_pending`→`open_hedged`→`exit_pending`→`closed`，并持久化 `target_base_qty` / `max_quote_budget_usdt` / `execution_venue`；`needs_recovery` 会插入特殊状态并阻挡新 entry。
+  3. `output/state/tv_basis_arb_recovery.json`（`recoveries` 键）——当 `perp_short`、`exit_close` 拒单或传输模糊时会写 `recovery_reason`、`recovery_action`、`failure_phase`，并保留对应的 `target_base_qty` / `max_quote_budget_usdt` / `execution_venue`，直到人工/脚本确认 `close_reason` 才改成 `closed`。
 - 每次调用会更新 `updated_at_utc`，可以用 `jq`/`cat` 追踪最新 `position_key`。
 - Ledger 在 entry 前调用 `_get_attempt_or_none`，避免重复下单；恢复状态会阻止新的 entry，直到 `recovery.status` 变更不是 `needs_recovery`・或人为清理文件。
 
@@ -105,6 +111,7 @@ PY
 - `target_base_qty = 0.002 BTC`
 - `max_quote_budget_usdt = 160.0`
 - `requested_notional_usdt = 160.0`（仅作为预算 ceiling 兼容字段）
+- `preferred_venue = bybit`
 
 ### curl 示例（entry_check）
 ```bash
@@ -125,14 +132,29 @@ curl -sS http://127.0.0.1:8787 \
 - `status = gate_blocked`
 - `gate.live_route_status = live_blocked`
 - `gate.live_route_reason = venue_capability` / `venue_capability_missing` / `venue_capability_stale` / `venue_capability_incomplete` / `venue_capability_unknown`
-- `gate.venue = binance`
-- `gate.venue_blockers` 中出现如 `enableFutures=false`
+- `gate.venue = bybit`
+- `gate.venue_blockers` 中出现 Bybit 侧 blocker；若你仍在审计 Binance frozen 线，则可在 `venue_capabilities.json` 中看到 `enableFutures=false`
+
+## Bybit readiness / canary-ready
+- readiness check 唯一入口：
+  - `system/scripts/bybit_live_route_ready_check.py`
+- readiness check 唯一 latest artifact：
+  - `output/review/latest_bybit_live_route_ready_check.json`
+- 当且仅当 latest readiness artifact 同时满足：
+  - `ok = true`
+  - `status = canary_ready`
+  - `required_checks.venue_capability_ready = true`
+  - `required_checks.route_selected_bybit = true`
+  - `required_checks.baseqty_budget_contract_ready = true`
+  - `required_checks.no_active_recovery = true`
+  - `required_checks.account_ready = true`
+  才能认为 Bybit-first 主线达到了 `canary-ready`。
 
 ## 运行审计要点
 - 浏览 `output/review/tv_basis_arb` 下的 `*_gate.json`/`*_signal.json`，确认每条 signal 记载的 `snapshot_ts_utc` 与 `reasons`。
-- `TvBasisArbExecutor` 记录 `entry_orders`/`exit_orders`，需要把 `spot_leg` / `perp_leg` 的 `status` 和 `filled_qty` 与 Binance API 返回值对齐。
+- `TvBasisArbExecutor` / Bybit live adapter 记录 `entry_orders`/`exit_orders`，需要把 `spot_leg` / `perp_leg` 的 `status` 和 `filled_qty` 与实际 `execution_venue` 的 API 返回值对齐。
 - `state/run-halfhour-pulse.lock` 反映最近一次入锁时间，运行失败可通过 `tail -n 20 output/state/run-halfhour-pulse.lock` 查看。
 
 > 注意：套利成功 ≠ infra canary 成功 ≠ strategy ticket ready，infra canary 只是 infra plumbing 检查，策略就绪还要等 gate、状态账本、恢复检查全部干净。
 
-> 额外注意：即使本地/云端 dry acceptance 通过，真实 acceptance 仍受 `output/state/venue_capabilities.json` 裁决约束。对于当前 Binance futures 路径，只要 blocker 仍是 `enableFutures=false`，就应明确视为 `live_blocked`，而不是 real-ready。
+> 额外注意：即使本地/云端 dry acceptance 通过，真实 acceptance 仍受 `output/state/venue_capabilities.json` 与 `output/review/latest_bybit_live_route_ready_check.json` 双重裁决约束。对于 Bybit-first 主线，只有 readiness artifact 明确给出 `canary_ready`，才应进入单次真实 canary 的 operator 决策。
