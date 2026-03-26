@@ -93,7 +93,7 @@ def _open_position(
         strategy_id="tv_basis_btc_spot_perp_v1",
         symbol="BTCUSDT",
         idempotency_key="entry-open",
-        requested_notional_usdt=10.0,
+        requested_notional_usdt=160.0,
         tv_timestamp="2026-03-26T12:32:00Z",
     )
     spot.calls.clear()
@@ -108,8 +108,8 @@ def test_entry_executes_spot_buy_then_perp_short(tmp_path: Path) -> None:
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-1",
-                "executedQty": "0.00010",
-                "cummulativeQuoteQty": "10.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             }
         ]
@@ -119,8 +119,8 @@ def test_entry_executes_spot_buy_then_perp_short(tmp_path: Path) -> None:
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-1",
-                "executedQty": "0.00010",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             }
         ]
@@ -131,15 +131,16 @@ def test_entry_executes_spot_buy_then_perp_short(tmp_path: Path) -> None:
         strategy_id="tv_basis_btc_spot_perp_v1",
         symbol="BTCUSDT",
         idempotency_key="entry-1",
-        requested_notional_usdt=10.0,
+        requested_notional_usdt=160.0,
         tv_timestamp="2026-03-26T12:30:00Z",
     )
 
     assert result["status"] == "open_hedged"
     assert [call["side"] for call in spot.calls] == ["BUY"]
     assert [call["side"] for call in perp.calls] == ["SELL"]
-    assert spot.calls[0]["quote_order_qty"] == 10.0
-    assert perp.calls[0]["quantity"] == pytest.approx(0.00010)
+    assert spot.calls[0]["quantity"] == pytest.approx(0.002)
+    assert spot.calls[0]["quote_order_qty"] is None
+    assert perp.calls[0]["quantity"] == pytest.approx(0.002)
     assert result["position"]["spot_leg"]["status"] == "filled"
     assert result["position"]["perp_leg"]["status"] == "filled"
 
@@ -151,8 +152,8 @@ def test_spot_fill_then_perp_reject_marks_recovery(tmp_path: Path) -> None:
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-2",
-                "executedQty": "0.00008",
-                "cummulativeQuoteQty": "8.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             }
         ]
@@ -164,7 +165,7 @@ def test_spot_fill_then_perp_reject_marks_recovery(tmp_path: Path) -> None:
         strategy_id="tv_basis_btc_spot_perp_v1",
         symbol="BTCUSDT",
         idempotency_key="entry-2",
-        requested_notional_usdt=8.0,
+        requested_notional_usdt=160.0,
         tv_timestamp="2026-03-26T12:31:00Z",
     )
 
@@ -177,7 +178,7 @@ def test_spot_fill_then_perp_reject_marks_recovery(tmp_path: Path) -> None:
     recoveries = _read_json(tmp_path / "state" / "tv_basis_arb_recovery.json")
     recovery = next(iter(recoveries["recoveries"].values()))
     assert recovery["reason"] == "perp_short_rejected"
-    assert recovery["spot_leg"]["filled_quote_usdt"] == 8.0
+    assert recovery["spot_leg"]["filled_quote_usdt"] == 141.0
 
 
 def test_exit_executes_perp_close_then_spot_sell(tmp_path: Path) -> None:
@@ -189,15 +190,15 @@ def test_exit_executes_perp_close_then_spot_sell(tmp_path: Path) -> None:
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-entry-3",
-                "executedQty": "0.00010",
-                "cummulativeQuoteQty": "10.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             },
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-exit-3",
-                "executedQty": "0.00010",
-                "cummulativeQuoteQty": "10.01",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.10",
                 "status": "FILLED",
             },
         ],
@@ -205,15 +206,15 @@ def test_exit_executes_perp_close_then_spot_sell(tmp_path: Path) -> None:
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-entry-3",
-                "executedQty": "0.00010",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             },
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-exit-3",
-                "executedQty": "0.00010",
-                "avgPrice": "100050.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70550.0",
                 "status": "FILLED",
             },
         ],
@@ -224,7 +225,7 @@ def test_exit_executes_perp_close_then_spot_sell(tmp_path: Path) -> None:
     assert [call["side"] for call in perp.calls] == ["BUY"]
     assert [call["side"] for call in spot.calls] == ["SELL"]
     assert perp.calls[0]["reduce_only"] is True
-    assert spot.calls[0]["quantity"] == pytest.approx(0.00010)
+    assert spot.calls[0]["quantity"] == pytest.approx(0.002)
 
     positions = _read_json(tmp_path / "state" / "tv_basis_arb_positions.json")
     position = next(iter(positions["positions"].values()))
@@ -240,8 +241,8 @@ def test_exit_first_leg_failure_enters_needs_recovery(tmp_path: Path) -> None:
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-entry-4",
-                "executedQty": "0.00010",
-                "cummulativeQuoteQty": "10.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             }
         ],
@@ -249,8 +250,8 @@ def test_exit_first_leg_failure_enters_needs_recovery(tmp_path: Path) -> None:
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-entry-4",
-                "executedQty": "0.00010",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             },
             RuntimeError("perp_close_rejected"),
@@ -279,8 +280,8 @@ def test_exit_retry_while_recovery_active_returns_existing_recovery_without_new_
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-entry-5",
-                "executedQty": "0.00010",
-                "cummulativeQuoteQty": "10.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             }
         ],
@@ -288,8 +289,8 @@ def test_exit_retry_while_recovery_active_returns_existing_recovery_without_new_
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-entry-5",
-                "executedQty": "0.00010",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             },
             RuntimeError("perp_close_rejected"),
@@ -316,8 +317,8 @@ def test_transport_ambiguity_is_distinct_from_exchange_reject(tmp_path: Path) ->
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-6",
-                "executedQty": "0.00008",
-                "cummulativeQuoteQty": "8.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             }
         ]
@@ -329,7 +330,7 @@ def test_transport_ambiguity_is_distinct_from_exchange_reject(tmp_path: Path) ->
         strategy_id="tv_basis_btc_spot_perp_v1",
         symbol="BTCUSDT",
         idempotency_key="entry-6",
-        requested_notional_usdt=8.0,
+        requested_notional_usdt=160.0,
         tv_timestamp="2026-03-26T12:33:00Z",
     )
 

@@ -16,6 +16,7 @@ from binance_live_common import (
     resolve_binance_credentials,
     to_float,
 )
+from tv_basis_arb_common import load_strategy_definition
 from tv_basis_arb_state import TvBasisArbStateLedger, load_recovery_state
 
 
@@ -112,6 +113,16 @@ class TvBasisArbExecutor:
         saved_position = self.ledger._save_position(position)
         return saved_attempt, saved_position
 
+    @staticmethod
+    def _entry_contract(strategy_id: str) -> tuple[float, float]:
+        strategy = load_strategy_definition(strategy_id)
+        gate = strategy.get("gate", {})
+        if not isinstance(gate, dict):
+            raise ValueError(f"missing gate config:{strategy_id}")
+        target_base_qty = float(gate.get("target_base_qty", 0.0))
+        max_quote_budget_usdt = float(gate.get("max_quote_budget_usdt", gate.get("max_notional_usdt", 0.0)))
+        return target_base_qty, max_quote_budget_usdt
+
     def execute_entry(
         self,
         *,
@@ -122,12 +133,15 @@ class TvBasisArbExecutor:
         tv_timestamp: str,
     ) -> dict[str, Any]:
         spot_client, perp_client = self._ensure_clients()
+        target_base_qty, max_quote_budget_usdt = self._entry_contract(strategy_id)
         with self._run_mutex():
             attempt = self.ledger.begin_entry(
                 strategy_id=strategy_id,
                 symbol=symbol,
                 idempotency_key=idempotency_key,
                 requested_notional_usdt=requested_notional_usdt,
+                target_base_qty=target_base_qty,
+                max_quote_budget_usdt=max_quote_budget_usdt,
                 tv_timestamp=tv_timestamp,
             )
             if str(attempt.get("status", "")) == "open_hedged":
@@ -146,8 +160,7 @@ class TvBasisArbExecutor:
             spot_order = spot_client.place_market_order(
                 symbol=symbol,
                 side="BUY",
-                quantity=0.0,
-                quote_order_qty=float(requested_notional_usdt),
+                quantity=float(target_base_qty),
                 client_order_id=spot_client_order_id,
             )
             spot_order_id = self._order_id(spot_order, spot_client_order_id)
@@ -158,7 +171,7 @@ class TvBasisArbExecutor:
                 spot_order_id=spot_order_id,
                 filled_base_qty=spot_base_qty,
                 filled_quote_usdt=spot_quote_qty,
-                partial_fill=spot_base_qty <= 0.0 or abs(spot_quote_qty - float(requested_notional_usdt)) > 1e-9,
+                partial_fill=spot_base_qty <= 0.0 or abs(spot_base_qty - float(target_base_qty)) > 1e-9,
             )
 
             perp_client_order_id = f"{idempotency_key}-perp-short"
