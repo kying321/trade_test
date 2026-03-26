@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 from typing import Iterable, List, Mapping, Sequence, Union
 
 DEFAULT_MARKET_INPUTS: Mapping[str, float] = {
@@ -170,6 +171,9 @@ def _safe_float(value: object | None, default: float) -> float:
             return default
         if isinstance(value, str) and not value.strip():
             return default
-        return float(value)
+        result = float(value)
+        if not math.isfinite(result):
+            return default
+        return result
     except (TypeError, ValueError):
         return default

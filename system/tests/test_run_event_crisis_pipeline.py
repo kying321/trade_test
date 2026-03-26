@@ -67,6 +67,19 @@ def test_run_pipeline_normalizes_naive_datetime(tmp_path: Path) -> None:
     assert intake["generated_at_utc"].endswith("Z")
 
 
+def test_run_pipeline_handles_aware_datetime(tmp_path: Path) -> None:
+    module = _load_module()
+    aware = dt.datetime(2026, 3, 25, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=2)))
+    artifacts = module.run_pipeline(
+        output_root=tmp_path,
+        mode="snapshot",
+        event_rows=[_fake_row()],
+        generated_at=aware,
+    )
+    intake = json.loads(artifacts["intake"].read_text(encoding="utf-8"))
+    assert intake["generated_at_utc"].endswith("Z")
+
+
 def test_load_event_rows_from_file_validates(tmp_path: Path) -> None:
     module = _load_module()
     payload = {"events": "not-a-list"}

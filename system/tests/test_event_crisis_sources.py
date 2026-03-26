@@ -64,3 +64,11 @@ def test_normalize_market_inputs_handles_none() -> None:
     )
     assert result["credit_liquidity_stress_score"] == 0.45
     assert result["breadth_score"] == 0.3
+
+
+def test_normalize_market_inputs_rejects_non_finite() -> None:
+    result = event_crisis_sources.normalize_market_inputs(
+        {"credit_liquidity_stress_score": float("nan"), "breadth_score": float("inf")}
+    )
+    assert result["credit_liquidity_stress_score"] == 0.45
+    assert result["breadth_score"] == 0.3
