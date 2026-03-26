@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Dict, List
 
 
@@ -17,7 +18,7 @@ DEFAULT_ARCHETYPE_LIBRARY: List[Dict[str, object]] = [
     {
         "archetype_id": "energy_credit_2014_2016",
         "description": "Energy-led credit turbulence after price collapse.",
-        "match_axes": ["energy_supply_shock", "credit_liquidity_stress"],
+        "match_axes": ["energy_supply_shock", "credit_deterioration"],
         "mismatch_axes": ["crypto_market_infrastructure_shock"],
     },
     {
@@ -70,27 +71,26 @@ DEFAULT_ARCHETYPE_LIBRARY: List[Dict[str, object]] = [
 
 
 def build_default_archetypes() -> List[Dict[str, object]]:
-    return [dict(entry) for entry in DEFAULT_ARCHETYPE_LIBRARY]
+    return copy.deepcopy(DEFAULT_ARCHETYPE_LIBRARY)
 
 
 def build_top_analogues(event_axes: List[str], max_results: int = 3) -> List[Dict[str, object]]:
-    if not event_axes:
-        event_axes = []
-
+    event_axes_set = set(event_axes)
     analogues: List[Dict[str, object]] = []
     for archetype in DEFAULT_ARCHETYPE_LIBRARY:
-        match_axes = [axis for axis in archetype.get("match_axes", []) if axis in event_axes]
-        mismatch_axes = [axis for axis in archetype.get("mismatch_axes", []) if axis not in event_axes]
-        raw_score = 0.5
-        if archetype.get("match_axes"):
-            raw_score += 0.5 * (len(match_axes) / max(len(archetype["match_axes"]), 1))
-        similarity_score = min(1.0, round(raw_score, 3))
+        archetype_match_axes = archetype.get("match_axes", [])
+        archetype_mismatch_axes = archetype.get("mismatch_axes", [])
+        match_axes = [axis for axis in archetype_match_axes if axis in event_axes_set]
+        conflicts = [axis for axis in archetype_mismatch_axes if axis in event_axes_set]
+        match_ratio = len(match_axes) / max(len(archetype_match_axes), 1)
+        mismatch_penalty = (len(conflicts) / max(len(archetype_mismatch_axes), 1)) * 0.5
+        similarity_score = max(0.0, min(1.0, round(match_ratio - mismatch_penalty, 3)))
         analogues.append(
             {
                 "archetype_id": archetype["archetype_id"],
                 "similarity_score": similarity_score,
                 "match_axes": match_axes,
-                "mismatch_axes": mismatch_axes,
+                "mismatch_axes": conflicts,
             }
         )
     analogues.sort(key=lambda payload: payload["similarity_score"], reverse=True)

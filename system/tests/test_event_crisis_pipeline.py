@@ -60,3 +60,29 @@ def test_build_event_asset_shock_map_covers_priority_assets() -> None:
     )
     asset_names = {entry["asset"] for entry in payload["assets"]}
     assert {"BTC", "ETH", "SOL", "BNB", "GOLD", "UST_LONG", "OIL", "BANKS", "HIGH_YIELD"} <= asset_names
+
+
+def test_build_event_asset_shock_map_senses_raw_stress_inputs() -> None:
+    low_inputs = {
+        "credit_liquidity_stress_score": 0.1,
+        "energy_geopolitical_stress_score": 0.1,
+        "cross_asset_deleveraging_score": 0.1,
+        "contagion_score": 0.1,
+    }
+    high_inputs = {
+        "credit_liquidity_stress_score": 0.9,
+        "energy_geopolitical_stress_score": 0.85,
+        "cross_asset_deleveraging_score": 0.8,
+        "contagion_score": 0.9,
+    }
+
+    low_payload = build_event_asset_shock_map(
+        event_rows=_sample_event_rows(), market_inputs=low_inputs
+    )
+    high_payload = build_event_asset_shock_map(
+        event_rows=_sample_event_rows(), market_inputs=high_inputs
+    )
+
+    low_btc = next(entry for entry in low_payload["assets"] if entry["asset"] == "BTC")
+    high_btc = next(entry for entry in high_payload["assets"] if entry["asset"] == "BTC")
+    assert high_btc["risk_1d"] > low_btc["risk_1d"]

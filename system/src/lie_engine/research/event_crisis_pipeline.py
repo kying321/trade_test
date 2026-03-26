@@ -123,6 +123,14 @@ def _project_risk(base: float, severity: float, contagion: float, horizon: float
     return _clamp01(base * severity * (0.7 + contagion * 0.3) * horizon)
 
 
+def _raw_severity_score(credit: float, energy: float, cross_asset: float) -> float:
+    return _clamp01(credit * 0.45 + energy * 0.25 + cross_asset * 0.3)
+
+
+def _default_contagion_score(credit: float, energy: float, cross_asset: float) -> float:
+    return _clamp01(cross_asset * 0.55 + credit * 0.2 + energy * 0.15 + 0.1)
+
+
 def build_event_regime_snapshot(
     *, event_rows: List[Dict[str, object]], market_inputs: Dict[str, float]
 ) -> Dict[str, object]:
@@ -137,7 +145,8 @@ def build_event_regime_snapshot(
 
     axes = _collect_event_axes(event_rows)
     axis_bonus = 0.1 if axes else 0.0
-    severity = _clamp01(credit * 0.45 + energy * 0.25 + cross_asset * 0.3 + axis_bonus)
+    raw_severity = _raw_severity_score(credit, energy, cross_asset)
+    severity = _clamp01(raw_severity + axis_bonus)
     systemic = _clamp01(
         credit * 0.35 + breadth * 0.2 + contagion * 0.25 + persistence * 0.2
     )
@@ -170,8 +179,17 @@ def build_event_crisis_analogy(
 def build_event_asset_shock_map(
     *, event_rows: List[Dict[str, object]], market_inputs: Dict[str, float]
 ) -> Dict[str, List[Dict[str, object]]]:
-    severity = _clamp01(market_inputs.get("event_severity_score", 0.5))
-    contagion = _clamp01(market_inputs.get("contagion_score", 0.3))
+    credit = market_inputs.get("credit_liquidity_stress_score", 0.4)
+    energy = market_inputs.get("energy_geopolitical_stress_score", 0.3)
+    cross_asset = market_inputs.get("cross_asset_deleveraging_score", 0.25)
+    computed_severity = _raw_severity_score(credit, energy, cross_asset)
+    severity = _clamp01(market_inputs.get("event_severity_score", computed_severity))
+    contagion_source = market_inputs.get("contagion_score")
+    contagion = (
+        _clamp01(contagion_source)
+        if contagion_source is not None
+        else _default_contagion_score(credit, energy, cross_asset)
+    )
 
     assets = []
     for config in PRIORITY_ASSET_CONFIG:
