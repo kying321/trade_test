@@ -51,7 +51,7 @@
 ### 本地 webhook 服务器（演示和调试）
 ```bash
 cd /Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1
-PYTHONPATH=./system python - <<'PY'
+PYTHONPATH=./system/scripts python3 - <<'PY'
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
