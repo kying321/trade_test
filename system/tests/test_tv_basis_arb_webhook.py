@@ -41,11 +41,11 @@ def _state_artifact_paths(root: Path) -> dict[str, Path]:
 def _entry_snapshot() -> dict[str, float | str]:
     return {
         "symbol": "BTCUSDT",
-        "spot_price": 100_000.0,
-        "perp_mark_price": 100_120.0,
-        "perp_index_price": 100_100.0,
+        "spot_price": 70_500.0,
+        "perp_mark_price": 70_600.0,
+        "perp_index_price": 70_590.0,
         "open_interest_contracts": 1_200.0,
-        "open_interest_usdt": 120_144_000.0,
+        "open_interest_usdt": 84_720_000.0,
         "funding_rate_8h": 0.0001,
         "snapshot_ts_utc": "2026-03-26T12:30:00Z",
         "snapshot_time_ms": 1_774_534_200_000,
@@ -55,8 +55,8 @@ def _entry_snapshot() -> dict[str, float | str]:
 def _blocked_entry_snapshot() -> dict[str, float | str]:
     return {
         **_entry_snapshot(),
-        "perp_mark_price": 100_030.0,
-        "perp_index_price": 100_020.0,
+        "perp_mark_price": 70_540.0,
+        "perp_index_price": 70_530.0,
     }
 
 
@@ -70,9 +70,9 @@ def _exchange_blocked_entry_snapshot() -> dict[str, float | str | dict[str, dict
                 "min_notional": 5.0,
             },
             "perp": {
-                "min_qty": 0.001,
+                "min_qty": 0.003,
                 "step_size": 0.001,
-                "min_notional": 100.0,
+                "min_notional": 200.0,
             },
         },
     }
@@ -180,9 +180,11 @@ def test_gate_blocked_artifact_keeps_notional_cap_fields(
 
     assert result["status"] == "gate_blocked"
     assert gate["action"] == "gate_blocked"
-    assert gate["requested_notional_usdt"] == 20.0
-    assert gate["max_notional_usdt"] == 20.0
-    assert gate["thresholds"]["max_notional_usdt"] == 20.0
+    assert gate["requested_notional_usdt"] == 160.0
+    assert gate["max_notional_usdt"] == 160.0
+    assert gate["max_quote_budget_usdt"] == 160.0
+    assert gate["target_base_qty"] == pytest.approx(0.002)
+    assert gate["thresholds"]["max_notional_usdt"] == 160.0
 
 
 def test_gate_blocked_artifact_keeps_exchange_constraint_fields(
@@ -198,10 +200,11 @@ def test_gate_blocked_artifact_keeps_exchange_constraint_fields(
     assert result["status"] == "gate_blocked"
     assert "perp_min_qty_unmet" in gate["reasons"]
     assert "perp_min_notional_unmet" in gate["reasons"]
-    assert gate["estimated_base_qty"] == pytest.approx(0.0002)
-    assert gate["estimated_perp_notional_usdt"] == pytest.approx(20.024)
-    assert gate["exchange_constraints"]["perp"]["min_qty"] == 0.001
-    assert gate["exchange_constraints"]["perp"]["min_notional"] == 100.0
+    assert gate["target_base_qty"] == pytest.approx(0.002)
+    assert gate["estimated_base_qty"] == pytest.approx(0.002)
+    assert gate["estimated_perp_notional_usdt"] == pytest.approx(141.2)
+    assert gate["exchange_constraints"]["perp"]["min_qty"] == 0.003
+    assert gate["exchange_constraints"]["perp"]["min_notional"] == 200.0
 
 
 def test_symbol_override_mismatch_rejected(tmp_path: Path) -> None:
@@ -283,8 +286,8 @@ def test_entry_check_writes_signal_gate_and_opens_position(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-entry",
-                "executedQty": "0.00020",
-                "cummulativeQuoteQty": "20.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             }
         ]
@@ -294,8 +297,8 @@ def test_entry_check_writes_signal_gate_and_opens_position(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-entry",
-                "executedQty": "0.00020",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             }
         ]
@@ -312,11 +315,16 @@ def test_entry_check_writes_signal_gate_and_opens_position(
     gate = _read_json(gate_artifact)
     assert gate["event_type"] == "entry_check"
     assert gate["action"] == "execute_entry"
-    assert gate["requested_notional_usdt"] == 20.0
+    assert gate["requested_notional_usdt"] == 160.0
+    assert gate["target_base_qty"] == pytest.approx(0.002)
+    assert gate["max_quote_budget_usdt"] == 160.0
+    assert gate["effective_quote_budget_usdt"] == 160.0
     assert gate["holding_time_seconds"] == 0.0
     assert gate["max_holding_seconds"] == 3600.0
     assert gate["runtime_policy"] == {
-        "requested_notional_usdt": 20.0,
+        "requested_notional_usdt": 160.0,
+        "target_base_qty": 0.002,
+        "max_quote_budget_usdt": 160.0,
         "exit_basis_bps": 4.0,
         "max_holding_seconds": 3600.0,
     }
@@ -332,7 +340,9 @@ def test_entry_check_writes_signal_gate_and_opens_position(
     positions = _read_json(tmp_path / "state" / "tv_basis_arb_positions.json")
     position = next(iter(positions["positions"].values()))
     assert position["status"] == "open_hedged"
-    assert position["requested_notional_usdt"] == 20.0
+    assert position["requested_notional_usdt"] == 160.0
+    assert position["target_base_qty"] == pytest.approx(0.002)
+    assert position["max_quote_budget_usdt"] == 160.0
 
 
 def test_exit_check_closes_position_when_basis_reverts(
@@ -345,8 +355,8 @@ def test_exit_check_closes_position_when_basis_reverts(
             _entry_snapshot(),
             {
                 **_entry_snapshot(),
-                "perp_mark_price": 100_015.0,
-                "perp_index_price": 100_010.0,
+                "perp_mark_price": 70_520.0,
+                "perp_index_price": 70_515.0,
                 "snapshot_ts_utc": "2026-03-26T12:45:00Z",
                 "snapshot_time_ms": 1_774_535_100_000,
             },
@@ -358,15 +368,15 @@ def test_exit_check_closes_position_when_basis_reverts(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-entry",
-                "executedQty": "0.00020",
-                "cummulativeQuoteQty": "20.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             },
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-exit",
-                "executedQty": "0.00020",
-                "cummulativeQuoteQty": "20.01",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.05",
                 "status": "FILLED",
             },
         ]
@@ -376,15 +386,15 @@ def test_exit_check_closes_position_when_basis_reverts(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-entry",
-                "executedQty": "0.00020",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             },
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-exit",
-                "executedQty": "0.00020",
-                "avgPrice": "100015.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70520.0",
                 "status": "FILLED",
             },
         ]
@@ -402,7 +412,8 @@ def test_exit_check_closes_position_when_basis_reverts(
     assert gate["action"] == "execute_exit"
     assert gate["close_reason"] == "basis_reverted"
     assert gate["holding_time_seconds"] == 900.0
-    assert gate["requested_notional_usdt"] == 20.0
+    assert gate["requested_notional_usdt"] == 160.0
+    assert gate["target_base_qty"] == pytest.approx(0.002)
 
     positions = _read_json(tmp_path / "state" / "tv_basis_arb_positions.json")
     position = next(iter(positions["positions"].values()))
@@ -420,8 +431,8 @@ def test_exit_check_closes_position_when_max_holding_time_exceeded(
             _entry_snapshot(),
             {
                 **_entry_snapshot(),
-                "perp_mark_price": 100_110.0,
-                "perp_index_price": 100_105.0,
+                "perp_mark_price": 70_580.0,
+                "perp_index_price": 70_575.0,
                 "snapshot_ts_utc": "2026-03-26T13:31:00Z",
                 "snapshot_time_ms": 1_774_537_860_000,
             },
@@ -433,15 +444,15 @@ def test_exit_check_closes_position_when_max_holding_time_exceeded(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-entry",
-                "executedQty": "0.00020",
-                "cummulativeQuoteQty": "20.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             },
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-exit",
-                "executedQty": "0.00020",
-                "cummulativeQuoteQty": "20.02",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.08",
                 "status": "FILLED",
             },
         ]
@@ -451,15 +462,15 @@ def test_exit_check_closes_position_when_max_holding_time_exceeded(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-entry",
-                "executedQty": "0.00020",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             },
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-exit",
-                "executedQty": "0.00020",
-                "avgPrice": "100110.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70580.0",
                 "status": "FILLED",
             },
         ]
@@ -494,8 +505,8 @@ def test_exit_check_surfaces_pending_recovery_instead_of_no_open_position(
             _entry_snapshot(),
             {
                 **_entry_snapshot(),
-                "perp_mark_price": 100_015.0,
-                "perp_index_price": 100_010.0,
+                "perp_mark_price": 70_520.0,
+                "perp_index_price": 70_515.0,
                 "snapshot_ts_utc": "2026-03-26T12:45:00Z",
                 "snapshot_time_ms": 1_774_535_100_000,
             },
@@ -507,8 +518,8 @@ def test_exit_check_surfaces_pending_recovery_instead_of_no_open_position(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-entry",
-                "executedQty": "0.00020",
-                "cummulativeQuoteQty": "20.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             }
         ]
@@ -518,8 +529,8 @@ def test_exit_check_surfaces_pending_recovery_instead_of_no_open_position(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-entry",
-                "executedQty": "0.00020",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             },
             RuntimeError("perp_close_rejected"),
@@ -557,8 +568,8 @@ def test_exit_check_recovery_response_emits_review_artifact_family(
             _entry_snapshot(),
             {
                 **_entry_snapshot(),
-                "perp_mark_price": 100_015.0,
-                "perp_index_price": 100_010.0,
+                "perp_mark_price": 70_520.0,
+                "perp_index_price": 70_515.0,
                 "snapshot_ts_utc": "2026-03-26T12:45:00Z",
                 "snapshot_time_ms": 1_774_535_100_000,
             },
@@ -570,8 +581,8 @@ def test_exit_check_recovery_response_emits_review_artifact_family(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "spot-entry",
-                "executedQty": "0.00020",
-                "cummulativeQuoteQty": "20.0",
+                "executedQty": "0.00200",
+                "cummulativeQuoteQty": "141.0",
                 "status": "FILLED",
             }
         ]
@@ -581,8 +592,8 @@ def test_exit_check_recovery_response_emits_review_artifact_family(
             {
                 "symbol": "BTCUSDT",
                 "orderId": "perp-entry",
-                "executedQty": "0.00020",
-                "avgPrice": "100120.0",
+                "executedQty": "0.00200",
+                "avgPrice": "70600.0",
                 "status": "FILLED",
             },
             RuntimeError("perp_close_rejected"),

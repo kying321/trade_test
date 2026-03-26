@@ -24,6 +24,8 @@ from tv_basis_arb_state import load_positions_state, load_recovery_state
 _STRATEGY_RUNTIME_POLICY: dict[str, dict[str, float | None]] = {
     "tv_basis_btc_spot_perp_v1": {
         "requested_notional_usdt": None,
+        "target_base_qty": None,
+        "max_quote_budget_usdt": None,
         "exit_basis_bps": 4.0,
         "max_holding_seconds": 3600.0,
     }
@@ -106,9 +108,15 @@ def _current_runtime_policy(strategy_id: str) -> dict[str, float]:
     if not isinstance(gate, dict):
         raise ValueError(f"missing gate config:{strategy_id}")
     policy = dict(_STRATEGY_RUNTIME_POLICY.get(strategy_id, {}))
+    target_base_qty = policy.get("target_base_qty")
+    if target_base_qty is None:
+        target_base_qty = gate.get("target_base_qty", 0.0)
+    max_quote_budget_usdt = policy.get("max_quote_budget_usdt")
+    if max_quote_budget_usdt is None:
+        max_quote_budget_usdt = gate.get("max_quote_budget_usdt", gate.get("max_notional_usdt", 0.0))
     requested_notional = policy.get("requested_notional_usdt")
     if requested_notional is None:
-        requested_notional = gate.get("max_notional_usdt", 0.0)
+        requested_notional = max_quote_budget_usdt
     exit_basis_bps = policy.get("exit_basis_bps")
     if exit_basis_bps is None:
         exit_basis_bps = float(gate.get("min_basis_bps", 0.0)) / 2.0
@@ -117,6 +125,8 @@ def _current_runtime_policy(strategy_id: str) -> dict[str, float]:
         max_holding_seconds = 3600.0
     return {
         "requested_notional_usdt": float(requested_notional),
+        "target_base_qty": float(target_base_qty),
+        "max_quote_budget_usdt": float(max_quote_budget_usdt),
         "exit_basis_bps": float(exit_basis_bps),
         "max_holding_seconds": float(max_holding_seconds),
     }
@@ -234,9 +244,14 @@ def _base_gate_payload(
     signal_path: Path,
     runtime_policy: dict[str, float],
     requested_notional_usdt: float,
+    target_base_qty: float,
+    max_quote_budget_usdt: float,
     max_holding_seconds: float,
     holding_time_seconds: float,
 ) -> dict[str, Any]:
+    effective_quote_budget_usdt = float(max_quote_budget_usdt)
+    if requested_notional_usdt > 0.0:
+        effective_quote_budget_usdt = min(float(max_quote_budget_usdt), float(requested_notional_usdt))
     return {
         "strategy_id": signal.strategy_id,
         "symbol": signal.symbol,
@@ -244,6 +259,9 @@ def _base_gate_payload(
         "tv_timestamp": signal.tv_timestamp,
         "signal_artifact_path": str(signal_path),
         "requested_notional_usdt": float(requested_notional_usdt),
+        "target_base_qty": float(target_base_qty),
+        "max_quote_budget_usdt": float(max_quote_budget_usdt),
+        "effective_quote_budget_usdt": float(effective_quote_budget_usdt),
         "holding_time_seconds": float(holding_time_seconds),
         "max_holding_seconds": float(max_holding_seconds),
         "runtime_policy": dict(runtime_policy),
@@ -275,6 +293,8 @@ def _handle_entry_check(
         signal_path=signal_path,
         runtime_policy=runtime_policy,
         requested_notional_usdt=requested_notional_usdt,
+        target_base_qty=float(runtime_policy["target_base_qty"]),
+        max_quote_budget_usdt=float(runtime_policy["max_quote_budget_usdt"]),
         max_holding_seconds=float(runtime_policy["max_holding_seconds"]),
         holding_time_seconds=0.0,
     )
@@ -289,7 +309,11 @@ def _handle_entry_check(
             "mark_index_spread_bps": float(gate["mark_index_spread_bps"]),
             "open_interest_usdt": float(gate["open_interest_usdt"]),
             "max_notional_usdt": float(gate["max_notional_usdt"]),
+            "target_base_qty": float(gate["target_base_qty"]),
+            "max_quote_budget_usdt": float(gate["max_quote_budget_usdt"]),
+            "effective_quote_budget_usdt": float(gate["effective_quote_budget_usdt"]),
             "estimated_base_qty": float(gate["estimated_base_qty"]),
+            "estimated_quote_for_target_usdt": float(gate["estimated_quote_for_target_usdt"]),
             "estimated_perp_notional_usdt": float(gate["estimated_perp_notional_usdt"]),
             "exchange_constraints": dict(gate["exchange_constraints"]),
             "thresholds": dict(gate["thresholds"]),
@@ -349,6 +373,12 @@ def _handle_exit_check(
     requested_notional_usdt = float(
         position.get("requested_notional_usdt", runtime_policy["requested_notional_usdt"]) if isinstance(position, dict) else runtime_policy["requested_notional_usdt"]
     )
+    target_base_qty = float(
+        position.get("target_base_qty", runtime_policy["target_base_qty"]) if isinstance(position, dict) else runtime_policy["target_base_qty"]
+    )
+    max_quote_budget_usdt = float(
+        position.get("max_quote_budget_usdt", runtime_policy["max_quote_budget_usdt"]) if isinstance(position, dict) else runtime_policy["max_quote_budget_usdt"]
+    )
     holding_time_seconds = (
         _holding_time_seconds(str(position.get("tv_timestamp", signal.tv_timestamp)), signal.tv_timestamp)
         if isinstance(position, dict)
@@ -359,6 +389,8 @@ def _handle_exit_check(
         signal_path=signal_path,
         runtime_policy=runtime_policy,
         requested_notional_usdt=requested_notional_usdt,
+        target_base_qty=target_base_qty,
+        max_quote_budget_usdt=max_quote_budget_usdt,
         max_holding_seconds=float(runtime_policy["max_holding_seconds"]),
         holding_time_seconds=holding_time_seconds,
     )
