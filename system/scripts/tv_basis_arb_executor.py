@@ -96,6 +96,22 @@ class TvBasisArbExecutor:
             raise KeyError(f"unknown recovery:{position_key}")
         return dict(recovery)
 
+    @staticmethod
+    def _is_transport_ambiguity(exc: Exception) -> bool:
+        return isinstance(exc, (ConnectionError, TimeoutError, OSError))
+
+    def _merge_leg_patch(self, *, idempotency_key: str, leg_key: str, leg_patch: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        attempt, position = self._load_attempt_state(idempotency_key)
+        current_leg = attempt.get(leg_key, {})
+        merged_leg = dict(current_leg) if isinstance(current_leg, dict) else {}
+        merged_leg.update(leg_patch)
+
+        attempt[leg_key] = dict(merged_leg)
+        position[leg_key] = dict(merged_leg)
+        saved_attempt = self.ledger._save_attempt(attempt)
+        saved_position = self.ledger._save_position(position)
+        return saved_attempt, saved_position
+
     def execute_entry(
         self,
         *,
@@ -153,12 +169,28 @@ class TvBasisArbExecutor:
                     quantity=spot_base_qty,
                     client_order_id=perp_client_order_id,
                 )
-            except Exception:
+            except Exception as exc:
+                recovery_reason = "perp_short_rejected"
+                recovery_action = "flatten_spot_or_complete_hedge"
+                if self._is_transport_ambiguity(exc):
+                    recovery_reason = "perp_short_transport_ambiguous"
+                    recovery_action = "confirm_perp_then_flatten_or_complete_hedge"
+                    self._merge_leg_patch(
+                        idempotency_key=idempotency_key,
+                        leg_key="perp_leg",
+                        leg_patch={
+                            "side": "perp_short",
+                            "status": "submitting",
+                            "order_id": perp_client_order_id,
+                            "target_base_qty": float(spot_base_qty),
+                            "submission_state": "transport_ambiguous",
+                        },
+                    )
                 recovery = self.ledger.record_needs_recovery(
                     idempotency_key=idempotency_key,
-                    reason="perp_short_rejected",
+                    reason=recovery_reason,
                     failure_phase="perp_short_submitting",
-                    recovery_action="flatten_spot_or_complete_hedge",
+                    recovery_action=recovery_action,
                 )
                 _, recovery_position = self._load_attempt_state(idempotency_key)
                 return {
@@ -210,6 +242,14 @@ class TvBasisArbExecutor:
             status = str(attempt.get("status", ""))
             if status == "closed":
                 return {"status": "closed", "attempt": attempt, "position": position}
+            if status == "needs_recovery":
+                recovery = self._load_recovery(str(position["position_key"]))
+                return {
+                    "status": "needs_recovery",
+                    "attempt": attempt,
+                    "position": position,
+                    "recovery": recovery,
+                }
             if status != "open_hedged":
                 raise RuntimeError(f"position not open_hedged:{status}")
 
@@ -218,13 +258,44 @@ class TvBasisArbExecutor:
             spot_qty = to_float(attempt.get("spot_leg", {}).get("filled_base_qty", 0.0), 0.0)
 
             perp_client_order_id = f"{idempotency_key}-perp-close"
-            perp_order = perp_client.place_market_order(
-                symbol=str(attempt.get("symbol", "")),
-                side="BUY",
-                quantity=perp_qty,
-                client_order_id=perp_client_order_id,
-                reduce_only=True,
-            )
+            try:
+                perp_order = perp_client.place_market_order(
+                    symbol=str(attempt.get("symbol", "")),
+                    side="BUY",
+                    quantity=perp_qty,
+                    client_order_id=perp_client_order_id,
+                    reduce_only=True,
+                )
+            except Exception as exc:
+                recovery_reason = "perp_close_rejected"
+                recovery_action = "retry_perp_close_then_sell_spot"
+                if self._is_transport_ambiguity(exc):
+                    recovery_reason = "perp_close_transport_ambiguous"
+                    recovery_action = "confirm_perp_close_then_sell_spot"
+                    self._merge_leg_patch(
+                        idempotency_key=idempotency_key,
+                        leg_key="perp_leg",
+                        leg_patch={
+                            "close_order_id": perp_client_order_id,
+                            "close_requested_base_qty": float(perp_qty),
+                            "close_reduce_only": True,
+                            "close_submission_state": "transport_ambiguous",
+                        },
+                    )
+                recovery = self.ledger.record_needs_recovery(
+                    idempotency_key=idempotency_key,
+                    reason=recovery_reason,
+                    failure_phase="exit_pending",
+                    recovery_action=recovery_action,
+                )
+                _, recovery_position = self._load_attempt_state(idempotency_key)
+                return {
+                    "status": "needs_recovery",
+                    "attempt": self.ledger._get_attempt(idempotency_key),
+                    "position": recovery_position,
+                    "recovery": recovery,
+                    "pre_exit_position": exit_position,
+                }
             try:
                 spot_client_order_id = f"{idempotency_key}-spot-sell"
                 spot_order = spot_client.place_market_order(
@@ -233,12 +304,26 @@ class TvBasisArbExecutor:
                     quantity=spot_qty,
                     client_order_id=spot_client_order_id,
                 )
-            except Exception:
+            except Exception as exc:
+                recovery_reason = "spot_sell_rejected"
+                recovery_action = "sell_spot_or_rebuild_hedge"
+                if self._is_transport_ambiguity(exc):
+                    recovery_reason = "spot_sell_transport_ambiguous"
+                    recovery_action = "confirm_spot_sell_or_rehedge"
+                    self._merge_leg_patch(
+                        idempotency_key=idempotency_key,
+                        leg_key="spot_leg",
+                        leg_patch={
+                            "close_order_id": spot_client_order_id,
+                            "close_requested_base_qty": float(spot_qty),
+                            "close_submission_state": "transport_ambiguous",
+                        },
+                    )
                 recovery = self.ledger.record_needs_recovery(
                     idempotency_key=idempotency_key,
-                    reason="spot_sell_rejected",
+                    reason=recovery_reason,
                     failure_phase="exit_pending",
-                    recovery_action="sell_spot_or_rebuild_hedge",
+                    recovery_action=recovery_action,
                 )
                 _, recovery_position = self._load_attempt_state(idempotency_key)
                 return {
