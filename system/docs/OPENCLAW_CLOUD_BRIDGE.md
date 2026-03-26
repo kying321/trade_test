@@ -151,6 +151,10 @@ scripts/openclaw_cloud_bridge.sh live-takeover-autopilot
 - Infra canary 成功只证明 execution plumbing 没问题，**不代表策略 ready**；操作文档/brief 必须写明 `infra canary success ≠ strategy ready`。
 - 历史残留提示：旧版固定 `5 USDT` canary 若已留下 `needs_recovery / sell_exchange_reject`，仍以 `output/state/infra_canary_idempotency.json` 为准，不会因新版动态金额合同自动清除。
 
+## TradingView Basis Arbitrage 路径
+- 需要 TradingView 信号触发的基差套利请参考 `system/docs/TRADINGVIEW_BASIS_ARB_RUNBOOK.md`，内含 webhook payload、entry/exit gate、状态账本、恢复流程与 smoke 命令。
+- 同样强调：**套利成功 ≠ infra canary 成功 ≠ strategy ticket ready**，只有 gate/pass、artifact 不留 `needs_recovery`、state 账本干净之后才算策略真正就绪。
+
 ## Sync policy
 - Sync scope: `src/`, `scripts/`, `docs/`, `tests/`, `config.yaml`, `pyproject.toml`
 - Excludes: `.git`, `__pycache__`, `*.pyc`, `output/`, `dashboard/node_modules`, `dashboard/.next`, `dashboard/out`
