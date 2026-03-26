@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from typing import Dict, Iterable, List
 
 from lie_engine.research.event_crisis_analogies import build_top_analogues
@@ -81,6 +82,59 @@ PRIORITY_ASSET_CONFIG = [
         "base_risk": 0.65,
     },
 ]
+
+
+STATE_OVERLAY_TTL = dt.timedelta(hours=1)
+
+STATE_OVERLAY = {
+    "watch": {
+        "risk_multiplier_override": 1.0,
+        "gate_tightening_state": "normal",
+        "canary_freeze": False,
+        "review_required": False,
+    },
+    "sector_stress": {
+        "risk_multiplier_override": 0.9,
+        "gate_tightening_state": "moderate",
+        "canary_freeze": False,
+        "review_required": True,
+    },
+    "cross_asset_contagion": {
+        "risk_multiplier_override": 0.75,
+        "gate_tightening_state": "tight",
+        "canary_freeze": True,
+        "review_required": True,
+    },
+    "systemic_risk": {
+        "risk_multiplier_override": 0.6,
+        "gate_tightening_state": "tight",
+        "canary_freeze": True,
+        "review_required": True,
+    },
+}
+
+
+def _serialize_utc(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def build_event_live_guard_overlay(
+    *, regime_snapshot: Dict[str, object], generated_at: dt.datetime | None = None
+) -> Dict[str, object]:
+    regime_state = regime_snapshot.get("regime_state")
+    if regime_state not in STATE_OVERLAY:
+        regime_state = "watch"
+    override = STATE_OVERLAY[regime_state]
+    now = generated_at or dt.datetime.now(dt.timezone.utc)
+    overlay: Dict[str, object] = {
+        "risk_multiplier_override": override["risk_multiplier_override"],
+        "gate_tightening_state": override["gate_tightening_state"],
+        "canary_freeze": override["canary_freeze"],
+        "review_required": override["review_required"],
+        "override_reason_codes": [f"event_state:{regime_state}"],
+        "valid_until_utc": _serialize_utc(now + STATE_OVERLAY_TTL),
+    }
+    return overlay
 
 
 def _clamp01(value: float) -> float:

@@ -53,6 +53,12 @@ def test_run_event_crisis_pipeline_writes_latest_artifacts(tmp_path: Path) -> No
         assert isinstance(payload, dict)
         assert path in artifacts.values()
 
+    overlay_path = tmp_path / "state" / "event_live_guard_overlay.json"
+    assert overlay_path.exists()
+    overlay_payload = json.loads(overlay_path.read_text(encoding="utf-8"))
+    assert overlay_payload["override_reason_codes"] == ["event_state:sector_stress"]
+    assert overlay_path == artifacts["overlay"]
+
 
 def test_run_pipeline_normalizes_naive_datetime(tmp_path: Path) -> None:
     module = _load_module()

@@ -9,6 +9,7 @@ from typing import Iterable, Mapping, Sequence
 from lie_engine.research.event_crisis_pipeline import (
     build_event_asset_shock_map,
     build_event_crisis_analogy,
+    build_event_live_guard_overlay,
     build_event_regime_snapshot,
 )
 from lie_engine.research.event_crisis_sources import (
@@ -23,6 +24,7 @@ ARTIFACT_ORDER = [
     "latest_event_regime_snapshot.json",
     "latest_event_crisis_analogy.json",
     "latest_event_asset_shock_map.json",
+    "event_live_guard_overlay.json",
     "latest_event_crisis_operator_summary.json",
 ]
 
@@ -76,6 +78,9 @@ def run_pipeline(
     asset_shock_map = build_event_asset_shock_map(
         event_rows=normalized_events, market_inputs=normalized_markets
     )
+    overlay_payload = build_event_live_guard_overlay(
+        regime_snapshot=regime_snapshot, generated_at=now
+    )
     operator_summary = {
         "generated_at_utc": intake_payload["generated_at_utc"],
         "mode": mode,
@@ -92,11 +97,13 @@ def run_pipeline(
     analogy_path = review_dir / "latest_event_crisis_analogy.json"
     asset_map_path = review_dir / "latest_event_asset_shock_map.json"
     operator_summary_path = review_dir / "latest_event_crisis_operator_summary.json"
+    overlay_path = output_root / "state" / "event_live_guard_overlay.json"
 
     _write_json(intake_path, intake_payload)
     _write_json(regime_path, regime_snapshot)
     _write_json(analogy_path, analogy_payload)
     _write_json(asset_map_path, asset_shock_map)
+    _write_json(overlay_path, overlay_payload)
     _write_json(operator_summary_path, operator_summary)
 
     return {
@@ -104,6 +111,7 @@ def run_pipeline(
         "regime": regime_path,
         "analogy": analogy_path,
         "asset_map": asset_map_path,
+        "overlay": overlay_path,
         "operator_summary": operator_summary_path,
     }
 

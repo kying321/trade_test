@@ -1,7 +1,10 @@
 from typing import List
 
+import datetime as dt
+
 from lie_engine.research.event_crisis_pipeline import (
     build_event_asset_shock_map,
+    build_event_live_guard_overlay,
     build_event_regime_snapshot,
 )
 
@@ -86,3 +89,17 @@ def test_build_event_asset_shock_map_senses_raw_stress_inputs() -> None:
     low_btc = next(entry for entry in low_payload["assets"] if entry["asset"] == "BTC")
     high_btc = next(entry for entry in high_payload["assets"] if entry["asset"] == "BTC")
     assert high_btc["risk_1d"] > low_btc["risk_1d"]
+
+
+def test_build_event_live_guard_overlay_provides_valid_degraded_state() -> None:
+    snapshot = build_event_regime_snapshot(
+        event_rows=_sample_event_rows(), market_inputs=_sample_market_inputs()
+    )
+    overlay = build_event_live_guard_overlay(
+        regime_snapshot=snapshot,
+        generated_at=dt.datetime(2026, 3, 25, 12, 0, tzinfo=dt.timezone.utc),
+    )
+    assert overlay["risk_multiplier_override"] <= 1.0
+    assert isinstance(overlay["canary_freeze"], bool)
+    assert overlay["override_reason_codes"] == ["event_state:sector_stress"]
+    assert overlay["valid_until_utc"].endswith("Z")
