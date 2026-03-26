@@ -26,6 +26,90 @@ def _minimal_payload(strategy_id: str = "tv_basis_btc_spot_perp_v1") -> dict[str
     }
 
 
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _entry_snapshot() -> dict[str, float | str]:
+    return {
+        "symbol": "BTCUSDT",
+        "spot_price": 100_000.0,
+        "perp_mark_price": 100_120.0,
+        "perp_index_price": 100_100.0,
+        "open_interest_contracts": 1_200.0,
+        "open_interest_usdt": 120_144_000.0,
+        "funding_rate_8h": 0.0001,
+        "snapshot_ts_utc": "2026-03-26T12:30:00Z",
+        "snapshot_time_ms": 1_774_534_200_000,
+    }
+
+
+def _blocked_entry_snapshot() -> dict[str, float | str]:
+    return {
+        **_entry_snapshot(),
+        "perp_mark_price": 100_030.0,
+        "perp_index_price": 100_020.0,
+    }
+
+
+class _FakeSpotClient:
+    def __init__(self, responses: list[dict[str, str] | Exception]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def place_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        client_order_id: str,
+        quote_order_qty: float | None = None,
+    ) -> dict[str, str]:
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "quote_order_qty": quote_order_qty,
+            }
+        )
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+class _FakePerpClient:
+    def __init__(self, responses: list[dict[str, str] | Exception]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def place_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        client_order_id: str,
+        reduce_only: bool = False,
+    ) -> dict[str, str]:
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "reduce_only": reduce_only,
+            }
+        )
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
 def test_missing_strategy_id_rejected(tmp_path: Path) -> None:
     webhook = _load_webhook_module()
     payload = _minimal_payload()
@@ -43,13 +127,15 @@ def test_unknown_strategy_id_rejected(tmp_path: Path) -> None:
         webhook.handle_webhook(payload, output_root=tmp_path)
 
 
-def test_minimal_payload_writes_signal_artifact(tmp_path: Path) -> None:
+def test_minimal_payload_writes_signal_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _blocked_entry_snapshot())
     payload = _minimal_payload()
-    artifact_path = webhook.handle_webhook(payload, output_root=tmp_path)
+    result = webhook.handle_webhook(payload, output_root=tmp_path)
+    artifact_path = Path(result["signal_artifact_path"])
 
     assert artifact_path.exists()
-    written = json.loads(artifact_path.read_text(encoding="utf-8"))
+    written = _read_json(artifact_path)
     assert written["strategy_id"] == payload["strategy_id"]
     assert written["event_type"] == payload["event_type"]
     assert written["symbol"] == payload["symbol"]
@@ -65,43 +151,48 @@ def test_symbol_override_mismatch_rejected(tmp_path: Path) -> None:
         webhook.handle_webhook(payload, output_root=tmp_path)
 
 
-def test_signal_written_under_review_path(tmp_path: Path) -> None:
+def test_signal_written_under_review_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _blocked_entry_snapshot())
     payload = _minimal_payload()
-    artifact_path = webhook.handle_webhook(payload, output_root=tmp_path)
+    result = webhook.handle_webhook(payload, output_root=tmp_path)
+    artifact_path = Path(result["signal_artifact_path"])
 
     assert (tmp_path / "review") in artifact_path.parents
     assert artifact_path.name.endswith(".json")
     assert "tv_basis_btc_spot_perp_v1" in artifact_path.name
 
 
-def test_duplicate_alerts_emit_distinct_files(tmp_path: Path) -> None:
+def test_duplicate_alerts_emit_distinct_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _blocked_entry_snapshot())
     payload = _minimal_payload()
 
     first = webhook.handle_webhook(payload, output_root=tmp_path)
     second = webhook.handle_webhook(payload, output_root=tmp_path)
 
-    assert first != second
-    assert first.exists()
-    assert second.exists()
+    assert first["signal_artifact_path"] != second["signal_artifact_path"]
+    assert Path(first["signal_artifact_path"]).exists()
+    assert Path(second["signal_artifact_path"]).exists()
 
 
-def test_duplicate_alert_id_still_creates_distinct_file_names(tmp_path: Path) -> None:
+def test_duplicate_alert_id_still_creates_distinct_file_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _blocked_entry_snapshot())
     payload = _minimal_payload()
     payload["alert_id"] = "unique-alert"
 
     first = webhook.handle_webhook(payload, output_root=tmp_path)
     second = webhook.handle_webhook(payload, output_root=tmp_path)
 
-    assert first != second
-    assert first.exists()
-    assert second.exists()
+    assert first["signal_artifact_path"] != second["signal_artifact_path"]
+    assert Path(first["signal_artifact_path"]).exists()
+    assert Path(second["signal_artifact_path"]).exists()
 
 
-def test_sanitized_alert_id_collisions_remain_distinct(tmp_path: Path) -> None:
+def test_sanitized_alert_id_collisions_remain_distinct(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _blocked_entry_snapshot())
     payload_a = _minimal_payload()
     payload_b = _minimal_payload()
     payload_a["alert_id"] = "alert/123"
@@ -114,6 +205,205 @@ def test_sanitized_alert_id_collisions_remain_distinct(tmp_path: Path) -> None:
     first = webhook.handle_webhook(payload_a, output_root=tmp_path)
     second = webhook.handle_webhook(payload_b, output_root=tmp_path)
 
-    assert first != second
-    assert first.exists()
-    assert second.exists()
+    assert first["signal_artifact_path"] != second["signal_artifact_path"]
+    assert Path(first["signal_artifact_path"]).exists()
+    assert Path(second["signal_artifact_path"]).exists()
+
+
+def test_entry_check_writes_signal_gate_and_opens_position(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _entry_snapshot())
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00020",
+                "cummulativeQuoteQty": "20.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+    perp = _FakePerpClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-entry",
+                "executedQty": "0.00020",
+                "avgPrice": "100120.0",
+                "status": "FILLED",
+            }
+        ]
+    )
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path, spot_client=spot, perp_client=perp)
+
+    assert result["status"] == "open_hedged"
+    signal_artifact = Path(result["signal_artifact_path"])
+    gate_artifact = Path(result["gate_artifact_path"])
+    assert signal_artifact.exists()
+    assert gate_artifact.exists()
+
+    gate = _read_json(gate_artifact)
+    assert gate["event_type"] == "entry_check"
+    assert gate["action"] == "execute_entry"
+    assert gate["requested_notional_usdt"] == 20.0
+    assert gate["holding_time_seconds"] == 0.0
+    assert gate["max_holding_seconds"] == 3600.0
+
+    positions = _read_json(tmp_path / "state" / "tv_basis_arb_positions.json")
+    position = next(iter(positions["positions"].values()))
+    assert position["status"] == "open_hedged"
+    assert position["requested_notional_usdt"] == 20.0
+
+
+def test_exit_check_closes_position_when_basis_reverts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    snapshots = iter(
+        [
+            _entry_snapshot(),
+            {
+                **_entry_snapshot(),
+                "perp_mark_price": 100_015.0,
+                "perp_index_price": 100_010.0,
+                "snapshot_ts_utc": "2026-03-26T12:45:00Z",
+                "snapshot_time_ms": 1_774_535_100_000,
+            },
+        ]
+    )
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: next(snapshots))
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00020",
+                "cummulativeQuoteQty": "20.0",
+                "status": "FILLED",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-exit",
+                "executedQty": "0.00020",
+                "cummulativeQuoteQty": "20.01",
+                "status": "FILLED",
+            },
+        ]
+    )
+    perp = _FakePerpClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-entry",
+                "executedQty": "0.00020",
+                "avgPrice": "100120.0",
+                "status": "FILLED",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-exit",
+                "executedQty": "0.00020",
+                "avgPrice": "100015.0",
+                "status": "FILLED",
+            },
+        ]
+    )
+
+    webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path, spot_client=spot, perp_client=perp)
+    exit_payload = _minimal_payload()
+    exit_payload["event_type"] = "exit_check"
+    exit_payload["tv_timestamp"] = "2026-03-26T12:45:00Z"
+    result = webhook.handle_webhook(payload=exit_payload, output_root=tmp_path, spot_client=spot, perp_client=perp)
+
+    assert result["status"] == "closed"
+    gate = _read_json(Path(result["gate_artifact_path"]))
+    assert gate["event_type"] == "exit_check"
+    assert gate["action"] == "execute_exit"
+    assert gate["close_reason"] == "basis_reverted"
+    assert gate["holding_time_seconds"] == 900.0
+    assert gate["requested_notional_usdt"] == 20.0
+
+    positions = _read_json(tmp_path / "state" / "tv_basis_arb_positions.json")
+    position = next(iter(positions["positions"].values()))
+    assert position["status"] == "closed"
+    assert position["close_reason"] == "basis_reverted"
+
+
+def test_exit_check_closes_position_when_max_holding_time_exceeded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    snapshots = iter(
+        [
+            _entry_snapshot(),
+            {
+                **_entry_snapshot(),
+                "perp_mark_price": 100_110.0,
+                "perp_index_price": 100_105.0,
+                "snapshot_ts_utc": "2026-03-26T13:31:00Z",
+                "snapshot_time_ms": 1_774_537_860_000,
+            },
+        ]
+    )
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: next(snapshots))
+    spot = _FakeSpotClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-entry",
+                "executedQty": "0.00020",
+                "cummulativeQuoteQty": "20.0",
+                "status": "FILLED",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "spot-exit",
+                "executedQty": "0.00020",
+                "cummulativeQuoteQty": "20.02",
+                "status": "FILLED",
+            },
+        ]
+    )
+    perp = _FakePerpClient(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-entry",
+                "executedQty": "0.00020",
+                "avgPrice": "100120.0",
+                "status": "FILLED",
+            },
+            {
+                "symbol": "BTCUSDT",
+                "orderId": "perp-exit",
+                "executedQty": "0.00020",
+                "avgPrice": "100110.0",
+                "status": "FILLED",
+            },
+        ]
+    )
+
+    webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path, spot_client=spot, perp_client=perp)
+    exit_payload = _minimal_payload()
+    exit_payload["event_type"] = "exit_check"
+    exit_payload["tv_timestamp"] = "2026-03-26T13:31:00Z"
+    result = webhook.handle_webhook(payload=exit_payload, output_root=tmp_path, spot_client=spot, perp_client=perp)
+
+    assert result["status"] == "closed"
+    gate = _read_json(Path(result["gate_artifact_path"]))
+    assert gate["close_reason"] == "max_holding_time_exceeded"
+    assert gate["action"] == "execute_exit"
+    assert gate["holding_time_seconds"] == 3660.0
+    assert gate["max_holding_seconds"] == 3600.0
+
+    positions = _read_json(tmp_path / "state" / "tv_basis_arb_positions.json")
+    position = next(iter(positions["positions"].values()))
+    assert position["status"] == "closed"
+    assert position["close_reason"] == "max_holding_time_exceeded"
