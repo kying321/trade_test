@@ -4,6 +4,7 @@ import importlib.util
 import hashlib
 import hmac
 import json
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -64,6 +65,9 @@ class _FakeBybitFuturesClientReady:
 
 
 def _load_module(path: Path, name: str):
+    scripts_dir = str(path.parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -232,3 +236,37 @@ def test_bybit_signed_client_uses_official_v5_auth_headers() -> None:
     assert headers["x-bapi-timestamp"] == "1700000000123"
     assert headers["x-bapi-recv-window"] == "5000"
     assert headers["x-bapi-sign"] == expected_sign
+
+
+def test_load_bybit_credentials_from_env_file_reads_values(tmp_path: Path) -> None:
+    module = _load_module(SCRIPT_PATH, "bybit_live_common")
+    env_file = tmp_path / "bybit.env"
+    env_file.write_text(
+        "BYBIT_API_KEY='k-123'\nBYBIT_API_SECRET='s$#-456'\n",
+        encoding="utf-8",
+    )
+
+    creds = module.load_bybit_credentials_from_env_file(env_file)
+
+    assert str(creds.get("BYBIT_API_KEY", "")) == "k-123"
+    assert str(creds.get("BYBIT_SECRET", "")) == "s$#-456"
+
+
+def test_resolve_bybit_credentials_uses_env_file_when_daemon_secret_missing(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module(SCRIPT_PATH, "bybit_live_common")
+    env_file = tmp_path / "bybit.env"
+    env_file.write_text(
+        "BYBIT_API_KEY='k-abc'\nBYBIT_API_SECRET='s-def'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BYBIT_CREDENTIALS_ENV_FILE", str(env_file))
+    monkeypatch.setattr(module, "load_bybit_credentials_from_daemon", lambda: {"BYBIT_API_KEY": "k-abc"})
+    monkeypatch.setenv("BYBIT_API_KEY", "")
+    monkeypatch.setenv("BYBIT_API_SECRET", "")
+    monkeypatch.setenv("BYBIT_SECRET", "")
+
+    api_key, api_secret, source = module.resolve_bybit_credentials(True)
+
+    assert api_key == "k-abc"
+    assert api_secret == "s-def"
+    assert source == "env_file"

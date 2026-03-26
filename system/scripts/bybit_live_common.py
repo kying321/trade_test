@@ -4,6 +4,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import shlex
+import subprocess
+from pathlib import Path
 from typing import Any
 from urllib import error as urlerror
 from urllib import parse, request
@@ -12,21 +16,105 @@ from binance_live_common import (  # noqa: F401
     DEFAULT_RATE_LIMIT_PER_MINUTE,
     DEFAULT_TIMEOUT_MS,
     TokenBucket,
+    detect_lie_daemon_pid,
     load_string_env,
     now_epoch_ms,
     now_utc_iso,
 )
 
 
+def load_bybit_credentials_from_daemon() -> dict[str, str]:
+    out: dict[str, str] = {}
+    pid = detect_lie_daemon_pid()
+    if not pid:
+        return out
+    env_path = Path("/proc") / pid / "environ"
+    if not env_path.exists():
+        return out
+    try:
+        raw = env_path.read_bytes().decode("utf-8", errors="ignore")
+    except Exception:
+        return out
+    for row in raw.split("\x00"):
+        if "=" not in row:
+            continue
+        k, v = row.split("=", 1)
+        key = str(k).strip()
+        if key in {
+            "BYBIT_API_KEY",
+            "BYBIT_KEY",
+            "BYBIT_API_SECRET",
+            "BYBIT_SECRET_KEY",
+            "BYBIT_SECRET",
+        }:
+            out[key] = str(v).strip()
+    return out
+
+
+def load_bybit_credentials_from_env_file(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not path.exists() or not path.is_file():
+        return out
+    source_cmd = (
+        "set -a; "
+        f"source {shlex.quote(str(path))}; "
+        "set +a; "
+        "printf 'BYBIT_API_KEY=%s\\n' \"${BYBIT_API_KEY:-${BYBIT_KEY:-}}\"; "
+        "printf 'BYBIT_SECRET=%s\\n' \"${BYBIT_SECRET_KEY:-${BYBIT_API_SECRET:-${BYBIT_SECRET:-}}}\""
+    )
+    try:
+        proc = subprocess.run(
+            ["bash", "-lc", source_cmd],
+            text=True,
+            capture_output=True,
+            timeout=5.0,
+            check=False,
+        )
+    except Exception:
+        return out
+    if int(proc.returncode) != 0:
+        return out
+    for raw in str(proc.stdout or "").splitlines():
+        if "=" not in raw:
+            continue
+        k, v = raw.split("=", 1)
+        key = str(k).strip()
+        if key in {"BYBIT_API_KEY", "BYBIT_SECRET"}:
+            out[key] = str(v).strip()
+    return out
+
+
 def resolve_bybit_credentials(allow_daemon_env_fallback: bool) -> tuple[str, str, str]:
-    _ = allow_daemon_env_fallback
     api_key = load_string_env("BYBIT_API_KEY") or load_string_env("BYBIT_KEY")
     api_secret = (
         load_string_env("BYBIT_API_SECRET")
         or load_string_env("BYBIT_SECRET_KEY")
         or load_string_env("BYBIT_SECRET")
     )
-    return api_key, api_secret, "process_env"
+    source = "process_env"
+    if allow_daemon_env_fallback and (not api_key or not api_secret):
+        env_map = load_bybit_credentials_from_daemon()
+        if not api_key:
+            api_key = str(env_map.get("BYBIT_API_KEY") or env_map.get("BYBIT_KEY") or "").strip()
+        if not api_secret:
+            api_secret = str(
+                env_map.get("BYBIT_API_SECRET")
+                or env_map.get("BYBIT_SECRET_KEY")
+                or env_map.get("BYBIT_SECRET")
+                or ""
+            ).strip()
+        if env_map:
+            source = "daemon_env"
+        if not api_key or not api_secret:
+            env_file = Path(os.environ.get("BYBIT_CREDENTIALS_ENV_FILE", "~/.openclaw/.env")).expanduser()
+            file_map = load_bybit_credentials_from_env_file(env_file)
+            if not api_key:
+                api_key = str(file_map.get("BYBIT_API_KEY") or "").strip()
+            if not api_secret:
+                api_secret = str(file_map.get("BYBIT_SECRET") or "").strip()
+            if file_map:
+                source = "env_file"
+    return api_key, api_secret, source
 
 
 class BybitSignedClient:
