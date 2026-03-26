@@ -363,11 +363,19 @@ class BinanceSpotClient:
 
     def ticker_snapshot(self, symbol: str) -> dict[str, Any]:
         out = self._request(method="GET", path="/api/v3/ticker/price", params={"symbol": symbol}, signed=False)
+        snapshot_time_ms = now_epoch_ms()
         if not isinstance(out, dict):
-            return {"symbol": str(symbol).upper(), "price": 0.0}
+            return {
+                "symbol": str(symbol).upper(),
+                "price": 0.0,
+                "snapshot_time_ms": snapshot_time_ms,
+                "snapshot_ts_utc": now_utc_iso(),
+            }
         return {
             "symbol": str(out.get("symbol") or symbol).upper(),
             "price": to_float(out.get("price", 0.0), 0.0),
+            "snapshot_time_ms": snapshot_time_ms,
+            "snapshot_ts_utc": now_utc_iso(),
         }
 
     def exchange_info(self, symbol: str) -> dict[str, Any]:
@@ -480,6 +488,7 @@ class BinanceUsdMMarketClient:
                 "funding_rate_8h": 0.0,
                 "next_funding_time_ms": 0,
                 "snapshot_time_ms": 0,
+                "snapshot_ts_utc": "",
             }
         return {
             "symbol": str(out.get("symbol") or symbol).upper(),
@@ -488,6 +497,7 @@ class BinanceUsdMMarketClient:
             "funding_rate_8h": to_float(out.get("lastFundingRate", 0.0), 0.0),
             "next_funding_time_ms": to_int(out.get("nextFundingTime", 0), 0),
             "snapshot_time_ms": to_int(out.get("time", 0), 0),
+            "snapshot_ts_utc": now_utc_iso(),
         }
 
     def open_interest_snapshot(self, symbol: str) -> dict[str, Any]:
@@ -497,11 +507,13 @@ class BinanceUsdMMarketClient:
                 "symbol": str(symbol).upper(),
                 "open_interest_contracts": 0.0,
                 "snapshot_time_ms": 0,
+                "snapshot_ts_utc": "",
             }
         return {
             "symbol": str(out.get("symbol") or symbol).upper(),
             "open_interest_contracts": to_float(out.get("openInterest", 0.0), 0.0),
             "snapshot_time_ms": to_int(out.get("time", 0), 0),
+            "snapshot_ts_utc": now_utc_iso(),
         }
 
 

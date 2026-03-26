@@ -4,7 +4,15 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 STRATEGY_CONFIG = {
-    "tv_basis_btc_spot_perp_v1": {"symbol": "BTCUSDT"},
+    "tv_basis_btc_spot_perp_v1": {
+        "symbol": "BTCUSDT",
+        "gate": {
+            "min_basis_bps": 8.0,
+            "max_mark_index_spread_bps": 15.0,
+            "min_open_interest_usdt": 10_000_000.0,
+            "max_notional_usdt": 20.0,
+        },
+    },
 }
 VALID_STRATEGY_IDS = set(STRATEGY_CONFIG)
 VALID_EVENT_TYPES = {"entry_check", "exit_check"}
@@ -37,6 +45,16 @@ def _optional_text(payload: Dict[str, Any], key: str) -> str | None:
     return text or None
 
 
+def load_strategy_definition(strategy_id: str) -> Dict[str, Any]:
+    cfg = STRATEGY_CONFIG.get(str(strategy_id))
+    if not isinstance(cfg, dict):
+        raise ValueError(f"unknown strategy_id:{strategy_id}")
+    symbol = str(cfg.get("symbol", "")).strip().upper()
+    if not symbol:
+        raise ValueError(f"missing symbol config:{strategy_id}")
+    return cfg
+
+
 def parse_tv_basis_webhook_payload(payload: Dict[str, Any]) -> TvBasisWebhookSignal:
     strategy_id = _require_text(payload, "strategy_id")
     if strategy_id not in VALID_STRATEGY_IDS:
@@ -47,7 +65,7 @@ def parse_tv_basis_webhook_payload(payload: Dict[str, Any]) -> TvBasisWebhookSig
         raise ValueError(f"invalid event_type:{event_type}")
     tv_timestamp = _require_text(payload, "tv_timestamp")
     alert_id = _optional_text(payload, "alert_id")
-    symbol = STRATEGY_CONFIG[strategy_id]["symbol"].upper()
+    symbol = str(load_strategy_definition(strategy_id)["symbol"]).upper()
     if symbol_override is not None and symbol_override.upper() != symbol:
         raise ValueError(f"symbol mismatch:{symbol_override}")
     return TvBasisWebhookSignal(
