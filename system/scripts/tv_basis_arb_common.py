@@ -10,7 +10,9 @@ STRATEGY_CONFIG = {
             "min_basis_bps": 8.0,
             "max_mark_index_spread_bps": 15.0,
             "min_open_interest_usdt": 10_000_000.0,
-            "max_notional_usdt": 20.0,
+            "target_base_qty": 0.002,
+            "max_quote_budget_usdt": 160.0,
+            "max_notional_usdt": 160.0,
         },
     },
 }

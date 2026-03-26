@@ -115,7 +115,7 @@ def test_gate_passes_when_basis_vol_oi_all_green() -> None:
     assert bool(result["passed"]) is True
     assert result["reasons"] == []
     assert float(result["requested_notional_usdt"]) == 10.0
-    assert float(result["max_notional_usdt"]) == 20.0
+    assert float(result["max_notional_usdt"]) == 160.0
     assert float(result["basis_bps"]) > float(result["thresholds"]["min_basis_bps"])
     assert float(result["mark_index_spread_bps"]) < float(result["thresholds"]["max_mark_index_spread_bps"])
     assert "volatility_bps" not in result
@@ -168,14 +168,14 @@ def test_gate_blocks_when_requested_notional_exceeds_cap() -> None:
     mod = _load_gate_module()
     result = mod.evaluate_tv_basis_gate(
         strategy_id="tv_basis_btc_spot_perp_v1",
-        requested_notional_usdt=25.0,
+        requested_notional_usdt=161.0,
         market_snapshot=_base_snapshot(),
     )
 
     assert bool(result["passed"]) is False
     assert "requested_notional_above_cap" in result["reasons"]
-    assert float(result["requested_notional_usdt"]) == 25.0
-    assert float(result["max_notional_usdt"]) == 20.0
+    assert float(result["requested_notional_usdt"]) == 161.0
+    assert float(result["max_notional_usdt"]) == 160.0
 
 
 def test_gate_blocks_when_requested_notional_is_negative() -> None:
@@ -232,12 +232,23 @@ def test_build_market_snapshot_includes_exchange_constraints() -> None:
     assert snapshot["exchange_constraints"]["perp"]["min_notional"] == 100.0
 
 
+def test_strategy_config_includes_baseqty_and_budget_contract() -> None:
+    mod = _load_gate_module()
+    common = mod.load_strategy_definition("tv_basis_btc_spot_perp_v1")
+
+    assert common["symbol"] == "BTCUSDT"
+    gate = common["gate"]
+    assert gate["target_base_qty"] == 0.002
+    assert gate["max_quote_budget_usdt"] == 160.0
+    assert gate["max_notional_usdt"] == 160.0
+
+
 def test_strategy_config_is_single_sourced_from_common_contract() -> None:
     mod = _load_gate_module()
     common = mod.load_strategy_definition("tv_basis_btc_spot_perp_v1")
 
     assert common["symbol"] == "BTCUSDT"
     gate = common["gate"]
-    assert gate["max_notional_usdt"] == 20.0
+    assert gate["max_notional_usdt"] == 160.0
     assert "max_mark_index_spread_bps" in gate
     assert "max_volatility_bps" not in gate
