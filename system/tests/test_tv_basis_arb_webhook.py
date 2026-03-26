@@ -150,6 +150,23 @@ def test_minimal_payload_writes_signal_artifact(tmp_path: Path, monkeypatch: pyt
     assert written["tv_timestamp"] == payload["tv_timestamp"]
 
 
+def test_gate_blocked_artifact_keeps_notional_cap_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    webhook = _load_webhook_module()
+    monkeypatch.setattr(webhook, "build_market_snapshot", lambda **_: _blocked_entry_snapshot())
+
+    result = webhook.handle_webhook(payload=_minimal_payload(), output_root=tmp_path)
+    gate = _read_json(Path(result["gate_artifact_path"]))
+
+    assert result["status"] == "gate_blocked"
+    assert gate["action"] == "gate_blocked"
+    assert gate["requested_notional_usdt"] == 20.0
+    assert gate["max_notional_usdt"] == 20.0
+    assert gate["thresholds"]["max_notional_usdt"] == 20.0
+
+
 def test_symbol_override_mismatch_rejected(tmp_path: Path) -> None:
     webhook = _load_webhook_module()
     payload = _minimal_payload()

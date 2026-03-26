@@ -288,6 +288,7 @@ def _handle_entry_check(
             "basis_bps": float(gate["basis_bps"]),
             "mark_index_spread_bps": float(gate["mark_index_spread_bps"]),
             "open_interest_usdt": float(gate["open_interest_usdt"]),
+            "max_notional_usdt": float(gate["max_notional_usdt"]),
             "thresholds": dict(gate["thresholds"]),
             "snapshot_ts_utc": gate.get("snapshot_ts_utc"),
             "snapshot_time_ms": gate.get("snapshot_time_ms"),
