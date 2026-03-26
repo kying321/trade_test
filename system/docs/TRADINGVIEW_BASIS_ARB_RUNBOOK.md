@@ -25,8 +25,10 @@
 - 入口门控由 `evaluate_tv_basis_gate` 执行：
   - `basis_bps` 必须 ≥ `min_basis_bps`（目前 8 bps）。
   - `mark_index_spread_bps` ≤ `max_mark_index_spread_bps`（目前 15 bps）。
-  - `open_interest_usdt` ≥ `min_open_interest_usdt`（≥ 10,000,000 USDT），`requested_notional_usdt` 不得高于 `max_notional_usdt`（20 USDT）。
-  - `gate` 会在 artifact 中写入 `snapshot_ts_utc`、`thresholds`、`reasons` 等字段；通过时会附带 `idempotency_key` 和 `runtime_policy` 给执行器。
+  - `open_interest_usdt` ≥ `min_open_interest_usdt`（≥ 10,000,000 USDT）。
+  - v1 entry 合同是固定 `target_base_qty = 0.002 BTC`，不是旧的 `20 USDT` quote authority；预算上限由 `max_quote_budget_usdt = 160.0` 控制。
+  - gate 会先检查 `exchange_constraints`（spot/perp 最小数量、最小名义）和 `effective_quote_budget_usdt`，只有这些条件都通过才允许进入执行器。
+  - `gate` artifact 会写入 `target_base_qty`、`max_quote_budget_usdt`、`effective_quote_budget_usdt`、`estimated_quote_for_target_usdt`、`estimated_perp_notional_usdt`、`snapshot_ts_utc`、`thresholds`、`reasons` 等字段；通过时会附带 `idempotency_key` 和 `runtime_policy` 给执行器。
 - 出口门控每次 `exit_check` 会：
   - 先检查 `state/tv_basis_arb_recovery.json`，只要存在 `needs_recovery` 状态就返回 `recovery_required`，不会再做行情调用。
   - 如果头寸还在 `open_hedged`，根据 `runtime_policy.exit_basis_bps`（4 bps）或 `holding_time_seconds >= max_holding_seconds`（3600s）判断是否 `should_exit`。
@@ -35,8 +37,8 @@
 ## 状态账本（State Ledger）说明
 - 类：`system/scripts/tv_basis_arb_state.py` 中的 `TvBasisArbStateLedger`。它维护三张 JSON：
   1. `output/state/tv_basis_arb_idempotency.json`（`attempts` 键）——每次 entry/exit 执行的幂等记录，包含 leg、status、idempotency_key、时间戳。
-  2. `output/state/tv_basis_arb_positions.json`（`positions` 键）——活仓/平仓状态和 `status`：`entry_pending`→`open_hedged`→`exit_pending`→`closed`，`needs_recovery` 会插入特殊状态并阻挡新 entry。
-  3. `output/state/tv_basis_arb_recovery.json`（`recoveries` 键）——当 `perp_short`、`exit_close` 拒单或传输模糊时会写 `recovery_reason`、`recovery_action`、`failure_phase`，直到人工/脚本确认 `close_reason` 才改成 `closed`。
+  2. `output/state/tv_basis_arb_positions.json`（`positions` 键）——活仓/平仓状态和 `status`：`entry_pending`→`open_hedged`→`exit_pending`→`closed`，并持久化 `target_base_qty` / `max_quote_budget_usdt`；`needs_recovery` 会插入特殊状态并阻挡新 entry。
+  3. `output/state/tv_basis_arb_recovery.json`（`recoveries` 键）——当 `perp_short`、`exit_close` 拒单或传输模糊时会写 `recovery_reason`、`recovery_action`、`failure_phase`，并保留对应的 `target_base_qty` / `max_quote_budget_usdt`，直到人工/脚本确认 `close_reason` 才改成 `closed`。
 - 每次调用会更新 `updated_at_utc`，可以用 `jq`/`cat` 追踪最新 `position_key`。
 - Ledger 在 entry 前调用 `_get_attempt_or_none`，避免重复下单；恢复状态会阻止新的 entry，直到 `recovery.status` 变更不是 `needs_recovery`・或人为清理文件。
 
@@ -45,6 +47,7 @@
   - Spot 买入成功但 perp 卖空被拒（`perp_short_rejected` 或 `transport_ambiguous`）。
   - 退出时 perp close 或 spot sell 被拒，分别产出 `perp_close_*` 或 `spot_sell_*` 的恢复记录。
   - 任何 `needs_recovery` 会写入 `state/tv_basis_arb_recovery.json` 并通过 `exit_check` 以 `recovery_required` 形式曝光；同时 `output/review` 会生成 `*_gate.json`、`*_signal.json`、`closeout_artifact` 路径。
+- base-qty 驱动只把“数量/预算不可执行”的风险前移到 gate，并不会消除真实执行风险；任何 partial fill、reject、transport ambiguity 仍然必须进 `needs_recovery`。
 - 恢复后续：人工确认该 `position_key` 需要再次开/平时，掀起 `exit_check`（避免重复 entry 直到确定 `recovery.status` 变更）；可直接编辑 `state/tv_basis_arb_recovery.json` 以非 `needs_recovery` 状态后再次 entry。
 
 ## 烟雾命令（Smoke commands）
@@ -80,6 +83,12 @@ PY
 ```
 这个服务器会直接写 `output/review/tv_basis_arb`、`output/state/*`，`TvBasisArbExecutor` 默认会尝试从 `BINANCE_API_KEY` / `BINANCE_SECRET_KEY` 读取凭据；测试时可以用 `monkeypatch` 或手动替换 `spot_client`/`perp_client`。
 
+默认 runtime policy 会按本地策略合同使用：
+
+- `target_base_qty = 0.002 BTC`
+- `max_quote_budget_usdt = 160.0`
+- `requested_notional_usdt = 160.0`（仅作为预算 ceiling 兼容字段）
+
 ### curl 示例（entry_check）
 ```bash
 curl -sS http://127.0.0.1:8787 \
@@ -88,9 +97,17 @@ curl -sS http://127.0.0.1:8787 \
 ```
 响应中包含 `gate_artifact_path` 与 `execution_artifact_path` 路径，可用 `cat` 检查 `output/state` 中的 `tv_basis_arb_idempotency.json`、`tv_basis_arb_positions.json`、`tv_basis_arb_recovery.json`。
 
+如果 gate 因 exchange constraints 或 budget 被阻断，应看到：
+
+- `status = gate_blocked`
+- `execution = null`
+- `reasons` 中出现 `quote_budget_exceeded` / `perp_min_qty_unmet` / `perp_min_notional_unmet` 等 fail-close reason
+
 ## 运行审计要点
 - 浏览 `output/review/tv_basis_arb` 下的 `*_gate.json`/`*_signal.json`，确认每条 signal 记载的 `snapshot_ts_utc` 与 `reasons`。
 - `TvBasisArbExecutor` 记录 `entry_orders`/`exit_orders`，需要把 `spot_leg` / `perp_leg` 的 `status` 和 `filled_qty` 与 Binance API 返回值对齐。
 - `state/run-halfhour-pulse.lock` 反映最近一次入锁时间，运行失败可通过 `tail -n 20 output/state/run-halfhour-pulse.lock` 查看。
 
 > 注意：套利成功 ≠ infra canary 成功 ≠ strategy ticket ready，infra canary 只是 infra plumbing 检查，策略就绪还要等 gate、状态账本、恢复检查全部干净。
+
+> 额外注意：即使本地/云端 dry acceptance 通过，真实 acceptance 仍受 Binance futures 权限、账户余额、保证金与白名单/IP 约束控制；这些条件没绿之前，不应把该策略视为 real-ready。
