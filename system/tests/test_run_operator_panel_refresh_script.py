@@ -230,3 +230,33 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
         "--now",
         "2026-03-21T08:40:00Z",
     ]
+
+
+def test_build_summary_does_not_report_degraded_operator_head_when_full_source_panel_exists(tmp_path: Path) -> None:
+    mod = load_module()
+    payload = mod.build_summary(
+        workspace=tmp_path,
+        public_dir=tmp_path / "public",
+        dist_dir=tmp_path / "dist",
+        panel_payload={
+            "summary": {
+                "operator_head_brief": "review:brooks_structure:SC2603:review_manual_stop_entry:92",
+                "review_head_brief": "review:brooks_structure:SC2603:review_manual_stop_entry:92",
+                "repair_head_brief": "inactive:-",
+                "remote_live_gate_brief": "current_head_outside_remote_live_scope:brooks_structure:SC2603:scope_unknown",
+                "lane_state_brief": "waiting=0 | review=1 | watch=0 | blocked=0 | repair=0",
+                "lane_priority_order_brief": "review@92:1 > waiting@0:0 > watch@0:0 > blocked@0:0 > repair@0:0",
+                "action_queue_brief": "1:brooks_structure:SC2603:review_manual_stop_entry",
+                "brooks_refresh_brief": "ready:SC2603:second_entry_trend_continuation:manual_structure_review_now",
+                "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                "event_crisis_dominant_chain_brief": "usd_liquidity_chain",
+                "event_crisis_safety_margin_brief": "system_margin=0.627433",
+                "event_crisis_hard_boundary_brief": "none",
+            }
+        },
+        snapshot_payload={"outputs": []},
+        feedback_payload={},
+        sync_results=[],
+    )
+    assert payload["operator_head_brief"] == "review:brooks_structure:SC2603:review_manual_stop_entry:92"
+    assert not payload["operator_head_brief"].startswith("degraded:")
