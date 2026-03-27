@@ -111,11 +111,20 @@ def validate_workspace_routes_payload(payload: dict[str, Any]) -> str | None:
         return "invalid_orderflow_artifacts_filter_assertion"
     if str(actual.get("search") or "") != ORDERFLOW_ARTIFACTS_FILTER_ASSERTION["search"]:
         return "invalid_orderflow_artifacts_filter_assertion"
-    if str(actual.get("active_artifact") or "") != ORDERFLOW_ARTIFACTS_FILTER_ASSERTION["active_artifact"]:
-        return "invalid_orderflow_artifacts_filter_assertion"
 
     visible_artifacts = actual.get("visible_artifacts")
     if not isinstance(visible_artifacts, list):
+        return "invalid_orderflow_artifacts_filter_assertion"
+
+    source_available = actual.get("source_available")
+    if source_available is False:
+        if str(actual.get("active_artifact") or "") != "":
+            return "invalid_orderflow_artifacts_filter_assertion"
+        if visible_artifacts != []:
+            return "invalid_orderflow_artifacts_filter_assertion"
+        return None
+
+    if str(actual.get("active_artifact") or "") != ORDERFLOW_ARTIFACTS_FILTER_ASSERTION["active_artifact"]:
         return "invalid_orderflow_artifacts_filter_assertion"
     if visible_artifacts != ORDERFLOW_ARTIFACTS_FILTER_ASSERTION["visible_artifacts"]:
         return "invalid_orderflow_artifacts_filter_assertion"
