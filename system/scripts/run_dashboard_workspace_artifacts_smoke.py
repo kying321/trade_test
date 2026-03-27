@@ -687,7 +687,8 @@ def build_workspace_routes_smoke_spec(
                       group: 'research_cross_section',
                       search_scope: 'title',
                       search: 'orderflow',
-                      active_artifact: 'intraday_orderflow_blueprint',
+                      source_available: orderflowArtifacts.length > 0,
+                      active_artifact: orderflowActiveArtifact,
                       visible_artifacts: orderflowArtifacts,
                     }},
                     artifacts_exit_risk_review_assertion: {{
@@ -695,6 +696,7 @@ def build_workspace_routes_smoke_spec(
                       group: 'research_exit_risk',
                       search_scope: 'title',
                       search: '',
+                      source_available: exitRiskReviewArtifacts.length > 0,
                       section_label: exitRiskReviewSectionLabel,
                       active_artifact: exitRiskReviewActiveArtifact,
                       visible_artifacts: exitRiskReviewVisibleArtifacts,
@@ -1244,6 +1246,7 @@ def build_artifact_payload(
         "group": "research_cross_section",
         "search_scope": "title",
         "search": "orderflow",
+        "source_available": False,
         "active_artifact": "",
         "visible_artifacts": [],
     }
@@ -1252,6 +1255,7 @@ def build_artifact_payload(
         "group": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["group"],
         "search_scope": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["search_scope"],
         "search": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["search"],
+        "source_available": False,
         "section_label": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["section_label"],
         "active_artifact": "",
         "visible_artifacts": [],

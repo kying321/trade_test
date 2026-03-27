@@ -94,8 +94,12 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow" in spec
     assert "intraday_orderflow_blueprint" in spec
     assert "intraday_orderflow_research_gate_blocker" in spec
+    assert "source_available: orderflowArtifacts.length > 0" in spec
+    assert "active_artifact: orderflowActiveArtifact" in spec
     assert "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion" in spec
     assert "await expectStableMarker(page, exitRiskReviewActiveArtifact);" in spec
+    assert "source_available: exitRiskReviewArtifacts.length > 0" in spec
+    assert "active_artifact: exitRiskReviewActiveArtifact" in spec
     assert "const exitRiskReviewSectionState = await page.evaluate((sectionHint) => {" in spec
     assert "const normalizedSectionHint = String(sectionHint || '').replace(/\\s+/g, '').toLowerCase();" in spec
     assert "const sections = Array.from(document.querySelectorAll('.artifact-layer-section'));" in spec
@@ -414,6 +418,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
+                    "source_available": True,
                     "active_artifact": "intraday_orderflow_blueprint",
                     "visible_artifacts": [
                         "intraday_orderflow_blueprint",
@@ -425,6 +430,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     "group": "research_exit_risk",
                     "search_scope": "title",
                     "search": "",
+                    "source_available": True,
                     "section_label": "支撑证据",
                     "active_artifact": "price_action_exit_risk_break_even_review_conclusion",
                     "visible_artifacts": [
@@ -499,6 +505,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         "group": "research_cross_section",
         "search_scope": "title",
         "search": "orderflow",
+        "source_available": True,
         "active_artifact": "intraday_orderflow_blueprint",
         "visible_artifacts": [
             "intraday_orderflow_blueprint",
@@ -510,6 +517,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         "group": "research_exit_risk",
         "search_scope": "title",
         "search": "",
+        "source_available": True,
         "section_label": "支撑证据",
         "active_artifact": "price_action_exit_risk_break_even_review_conclusion",
         "visible_artifacts": [
