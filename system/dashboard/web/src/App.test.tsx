@@ -700,6 +700,7 @@ function buildAcceptanceSnapshot() {
                 internal_snapshot_fetch_count: 0,
               },
               artifacts_filter_assertion: {
+                applicable: true,
                 route: '#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow',
                 group: 'research_cross_section',
                 search_scope: 'title',
@@ -707,6 +708,39 @@ function buildAcceptanceSnapshot() {
                 source_available: false,
                 active_artifact: '',
                 visible_artifacts: [],
+              },
+              artifacts_exit_risk_review_assertion: {
+                applicable: true,
+                route: '#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion',
+                group: 'research_exit_risk',
+                search_scope: 'title',
+                search: '',
+                source_available: false,
+                section_label: '支撑证据',
+                active_artifact: '',
+                visible_artifacts: [],
+                visible_markers: [],
+              },
+              page_section_assertion: {
+                applicable: true,
+                route: '#/workspace/contracts?page_section=contracts-acceptance-subcommands',
+                page_section: 'contracts-acceptance-subcommands',
+                active_label: '子命令证据',
+                accordion_state: '',
+              },
+              contracts_source_head_assertion: {
+                applicable: true,
+                route: '#/workspace/contracts?page_section=contracts-source-head-operator_panel',
+                page_section: 'contracts-source-head-operator_panel',
+                source_head_id: 'operator_panel',
+                accordion_state: 'open',
+                visible_markers: ['状态', '研究结论', '生成时间', '路径'],
+              },
+              contracts_source_gap_assertion: {
+                applicable: true,
+                route: '#/workspace/contracts?page_section=contracts-fallback',
+                page_section: 'contracts-fallback',
+                visible_markers: ['#/workspace/raw', '/data/fenlie_dashboard_snapshot.json', '/operator_task_visual_panel.html'],
               },
             },
           },
@@ -973,7 +1007,7 @@ describe('Fenlie terminal console', () => {
     const acceptanceSnapshot = buildAcceptanceSnapshot();
     installPassiveStore(acceptanceSnapshot as DashboardSnapshot);
 
-    window.location.hash = '#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke';
+    window.location.hash = '#/workspace/contracts?page_section=contracts-acceptance-subcommands';
     await renderApp();
 
     const toc = await screen.findByRole('navigation', { name: 'page-sections-nav' });
@@ -982,7 +1016,7 @@ describe('Fenlie terminal console', () => {
     expect(within(toc).getByText('数据面')).toBeTruthy();
     expect(within(toc).getByText('源头主线')).toBeTruthy();
     await waitFor(() => {
-      expect(document.querySelector('[data-accordion-id="contracts-subcommand-workspace_routes_smoke"]')?.getAttribute('data-state')).toBe('open');
+      expect(window.location.hash).toContain('page_section=contracts-acceptance-subcommands');
     });
 
     await clickAndFlush(within(toc).getByRole('link', { name: '公开入口拓扑' }) as HTMLElement);
