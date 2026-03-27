@@ -119,21 +119,83 @@ def _serialize_utc(value: dt.datetime) -> str:
 
 
 def build_event_live_guard_overlay(
-    *, regime_snapshot: Dict[str, object], generated_at: dt.datetime | None = None
+    *,
+    regime_snapshot: Dict[str, object],
+    safety_margin_snapshot: Mapping[str, Any] | None = None,
+    transmission_chain_map: Mapping[str, Any] | None = None,
+    generated_at: dt.datetime | None = None,
 ) -> Dict[str, object]:
     regime_state = regime_snapshot.get("regime_state")
     if regime_state not in STATE_OVERLAY:
         regime_state = "watch"
     override = STATE_OVERLAY[regime_state]
     now = generated_at or dt.datetime.now(dt.timezone.utc)
+    risk_multiplier_override = float(override["risk_multiplier_override"])
+    gate_tightening_state = str(override["gate_tightening_state"])
+    canary_freeze = bool(override["canary_freeze"])
+    review_required = bool(override["review_required"])
+    override_reason_codes = [f"event_state:{regime_state}"]
+
+    dominant_chain = (
+        transmission_chain_map.get("dominant_chain") if transmission_chain_map else None
+    )
+    if dominant_chain:
+        override_reason_codes.append(f"event_chain:{dominant_chain}")
+
+    system_margin_score: float | None = None
+    if safety_margin_snapshot is not None and "system_margin_score" in safety_margin_snapshot:
+        system_margin_score = _clamp01(
+            float(safety_margin_snapshot.get("system_margin_score", 1.0))
+        )
+        if system_margin_score < risk_multiplier_override:
+            risk_multiplier_override = system_margin_score
+            override_reason_codes.append("event_margin:compressed")
+
+    hard_boundaries_raw = (
+        safety_margin_snapshot.get("hard_boundaries")
+        if safety_margin_snapshot is not None
+        else None
+    )
+    hard_boundaries = {
+        "canary_hard_block": False,
+        "new_risk_hard_block": False,
+        "shadow_only_boundary": False,
+    }
+    if isinstance(hard_boundaries_raw, Mapping):
+        hard_boundaries = {
+            "canary_hard_block": bool(hard_boundaries_raw.get("canary_hard_block")),
+            "new_risk_hard_block": bool(hard_boundaries_raw.get("new_risk_hard_block")),
+            "shadow_only_boundary": bool(hard_boundaries_raw.get("shadow_only_boundary")),
+        }
+
+    if hard_boundaries["shadow_only_boundary"] and gate_tightening_state == "normal":
+        gate_tightening_state = "moderate"
+        review_required = True
+        override_reason_codes.append("event_boundary:shadow_only_boundary")
+    if hard_boundaries["new_risk_hard_block"]:
+        canary_freeze = True
+        gate_tightening_state = "tight"
+        review_required = True
+        override_reason_codes.append("event_boundary:new_risk_hard_block")
+    if hard_boundaries["canary_hard_block"]:
+        canary_freeze = True
+        gate_tightening_state = "tight"
+        review_required = True
+        override_reason_codes.append("event_boundary:canary_hard_block")
+
     overlay: Dict[str, object] = {
-        "risk_multiplier_override": override["risk_multiplier_override"],
-        "gate_tightening_state": override["gate_tightening_state"],
-        "canary_freeze": override["canary_freeze"],
-        "review_required": override["review_required"],
-        "override_reason_codes": [f"event_state:{regime_state}"],
+        "risk_multiplier_override": risk_multiplier_override,
+        "gate_tightening_state": gate_tightening_state,
+        "canary_freeze": canary_freeze,
+        "review_required": review_required,
+        "override_reason_codes": override_reason_codes,
         "valid_until_utc": _serialize_utc(now + STATE_OVERLAY_TTL),
     }
+    if dominant_chain:
+        overlay["dominant_chain"] = dominant_chain
+    if system_margin_score is not None:
+        overlay["system_margin_score"] = system_margin_score
+        overlay["hard_boundaries"] = hard_boundaries
     return overlay
 
 

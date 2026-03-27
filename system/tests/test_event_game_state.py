@@ -18,7 +18,7 @@ def test_build_event_game_state_snapshot_includes_required_actors_and_state() ->
         actor for actor in snapshot["actors"] if actor["actor"] == "regional_conflict_nodes"
     )
     assert set(regional_actor.get("regional_nodes", [])) == set(REGIONAL_CONFLICT_NODES)
-    assert snapshot["game_state"] == DEFAULT_GAME_STATE
+    assert snapshot["game_state"] == "stable_competition"
     assert snapshot["game_state"] in GAME_STATES
     assert snapshot["generated_at_utc"] == timestamp
     snapshot["actors"][0]["primary_objectives"].append("leaked")
@@ -41,5 +41,6 @@ def test_event_game_state_snapshot_contract_fields_are_stable() -> None:
     custom_snapshot = build_event_game_state_snapshot(
         event_rows=[{"id": "event"}], market_inputs={"foo": 1}, generated_at="2026-01-01T00:00:00Z"
     )
+    assert custom_snapshot["game_state"] == DEFAULT_GAME_STATE
     assert custom_snapshot["context"]["event_row_count"] == 1
     assert custom_snapshot["context"]["market_input_keys"] == ["foo"]

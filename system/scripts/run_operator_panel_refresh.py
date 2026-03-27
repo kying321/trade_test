@@ -9,6 +9,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+EVENT_CRISIS_REQUIRED_SUMMARY_KEYS = (
+    "event_crisis_primary_theater_brief",
+    "event_crisis_dominant_chain_brief",
+    "event_crisis_safety_margin_brief",
+    "event_crisis_hard_boundary_brief",
+)
+
 
 def now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
@@ -52,6 +59,42 @@ def run_json(*, name: str, cmd: list[str]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError(f"{name}_invalid_payload")
     return payload
+
+
+def event_summary_has_geostrategy_fields(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return all(safe_text(payload.get(key)) for key in EVENT_CRISIS_REQUIRED_SUMMARY_KEYS)
+
+
+def ensure_event_crisis_summary_ready(
+    *,
+    system_root: Path,
+    review_dir: Path,
+    runtime_now: dt.datetime,
+) -> dict[str, Any] | None:
+    summary_path = review_dir / "latest_event_crisis_operator_summary.json"
+    if event_summary_has_geostrategy_fields(summary_path):
+        return None
+    return run_json(
+        name="run_event_crisis_pipeline",
+        cmd=[
+            "python3",
+            str(system_root / "scripts" / "run_event_crisis_pipeline.py"),
+            "--mode",
+            "snapshot",
+            "--output-root",
+            str(system_root / "output"),
+            "--now",
+            fmt_utc(runtime_now),
+        ],
+    )
 
 
 def sync_copy(src: Path, dst: Path) -> dict[str, Any]:
@@ -102,10 +145,10 @@ def build_summary(
         "crypto_refresh_reuse_brief": safe_text(summary.get("crypto_refresh_reuse_brief")),
         "remote_live_history_brief": safe_text(summary.get("remote_live_history_brief")),
         "brooks_refresh_brief": safe_text(summary.get("brooks_refresh_brief")),
-        "event_crisis_regime_brief": safe_text(summary.get("event_crisis_regime_brief")),
-        "event_crisis_top_analogue_brief": safe_text(summary.get("event_crisis_top_analogue_brief")),
-        "event_crisis_watch_assets_brief": safe_text(summary.get("event_crisis_watch_assets_brief")),
-        "event_crisis_guard_brief": safe_text(summary.get("event_crisis_guard_brief")),
+        "event_crisis_primary_theater_brief": safe_text(summary.get("event_crisis_primary_theater_brief")),
+        "event_crisis_dominant_chain_brief": safe_text(summary.get("event_crisis_dominant_chain_brief")),
+        "event_crisis_safety_margin_brief": safe_text(summary.get("event_crisis_safety_margin_brief")),
+        "event_crisis_hard_boundary_brief": safe_text(summary.get("event_crisis_hard_boundary_brief")),
         "feedback_projection_artifact": safe_text(feedback_payload.get("artifact")),
         "feedback_projection_latest_artifact": safe_text(feedback_payload.get("latest_artifact")),
         "snapshot_outputs": list(snapshot_payload.get("outputs") or []),
@@ -131,6 +174,12 @@ def main() -> None:
 
     public_dir.mkdir(parents=True, exist_ok=True)
     dist_dir.mkdir(parents=True, exist_ok=True)
+
+    ensure_event_crisis_summary_ready(
+        system_root=system_root,
+        review_dir=review_dir,
+        runtime_now=runtime_now,
+    )
 
     panel_payload = run_json(
         name="build_operator_task_visual_panel",

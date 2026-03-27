@@ -103,6 +103,24 @@ STANDARD_PRIMARY_THEATER_BY_STATE = {
     "systemic_repricing": "cross_asset_contagion",
 }
 
+GAME_STATE_CHAIN_INTENSITY_SCALE = {
+    "stable_competition": 0.45,
+    "financial_pressure": 0.65,
+    "commodity_weaponization": 0.8,
+    "bloc_fragmentation": 0.9,
+    "systemic_repricing": 1.0,
+}
+
+GAME_STATE_ACTIVE_SUPPORT_CHAINS = {
+    "stable_competition": frozenset(),
+    "financial_pressure": frozenset(),
+    "commodity_weaponization": frozenset({"shipping_supply_chain"}),
+    "bloc_fragmentation": frozenset({"financial_sanctions_chain", "energy_supply_chain"}),
+    "systemic_repricing": frozenset(
+        {"usd_liquidity_chain", "financial_sanctions_chain", "credit_intermediary_chain"}
+    ),
+}
+
 
 def _build_iso_utc_timestamp() -> str:
     return (
@@ -113,27 +131,23 @@ def _build_iso_utc_timestamp() -> str:
     )
 
 
-def _ensure_status(chain_id: str, dominant_chain: str) -> str:
+def _ensure_status(chain_id: str, dominant_chain: str, active_support_chains: frozenset[str]) -> str:
     if chain_id == dominant_chain:
         return "dominant"
-    if chain_id in {
-        "usd_liquidity_chain",
-        "financial_sanctions_chain",
-        "credit_intermediary_chain",
-    }:
+    if chain_id in active_support_chains:
         return "active"
     return "watch"
 
 
-def _chain_payload(chain_def: Mapping[str, Any], status: str) -> dict[str, Any]:
+def _chain_payload(chain_def: Mapping[str, Any], status: str, intensity_scale: float) -> dict[str, Any]:
     scores = chain_def["scores"]
     return {
         "chain_id": chain_def["chain_id"],
         "origin": chain_def["origin"],
         "intermediate_nodes": list(chain_def["intermediate_nodes"]),
         "terminal_assets": list(chain_def["terminal_assets"]),
-        "intensity_score": float(scores["intensity"]),
-        "velocity_score": float(scores["velocity"]),
+        "intensity_score": float(scores["intensity"]) * intensity_scale,
+        "velocity_score": float(scores["velocity"]) * intensity_scale,
         "confidence_score": float(scores["confidence"]),
         "status": status,
     }
@@ -146,6 +160,10 @@ def build_event_transmission_chain_map(
     snapshot = game_state_snapshot or {}
     game_state = str(snapshot.get("game_state", "financial_pressure"))
     dominant_chain = GAME_STATE_CHAIN_MAP.get(game_state, "credit_intermediary_chain")
+    intensity_scale = GAME_STATE_CHAIN_INTENSITY_SCALE.get(game_state, 0.65)
+    active_support_chains = GAME_STATE_ACTIVE_SUPPORT_CHAINS.get(
+        game_state, frozenset()
+    )
 
     primary_theater = STANDARD_PRIMARY_THEATER_BY_STATE.get(
         game_state, PRIMARY_THEATER_DEFAULT
@@ -153,8 +171,10 @@ def build_event_transmission_chain_map(
 
     chains: list[dict[str, Any]] = []
     for chain_def in CHAIN_DEFINITIONS:
-        status = _ensure_status(chain_def["chain_id"], dominant_chain)
-        chains.append(_chain_payload(chain_def, status))
+        status = _ensure_status(
+            chain_def["chain_id"], dominant_chain, active_support_chains
+        )
+        chains.append(_chain_payload(chain_def, status, intensity_scale))
 
     return {
         "generated_at_utc": _build_iso_utc_timestamp(),

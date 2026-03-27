@@ -459,9 +459,12 @@ def build_source_heads(artifact_payloads: dict[str, dict[str, Any]], source_head
 
 def ensure_event_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
     event_artifacts = [
+        ("event_game_state_snapshot", "research", "event_insight", "event_game_state_snapshot.json"),
+        ("event_transmission_chain_map", "research", "event_insight", "event_transmission_chain_map.json"),
         ("event_regime_snapshot", "research", "event_insight", "event_regime_snapshot.json"),
         ("event_crisis_analogy", "research", "event_insight", "event_crisis_analogy.json"),
         ("event_asset_shock_map", "research", "event_insight", "event_asset_shock_map.json"),
+        ("event_safety_margin_snapshot", "research", "event_insight", "event_safety_margin_snapshot.json"),
         ("event_crisis_operator_summary", "research", "event_insight", "event_crisis_operator_summary.json"),
     ]
     for artifact_id, category, artifact_group, suffix in event_artifacts:

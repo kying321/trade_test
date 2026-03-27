@@ -72,3 +72,14 @@ def test_normalize_market_inputs_rejects_non_finite() -> None:
     )
     assert result["credit_liquidity_stress_score"] == 0.45
     assert result["breadth_score"] == 0.3
+
+
+def test_normalize_market_inputs_supports_bootstrap_defaults() -> None:
+    result = event_crisis_sources.normalize_market_inputs(
+        {},
+        defaults=event_crisis_sources.BOOTSTRAP_MARKET_INPUTS,
+    )
+    assert result["credit_liquidity_stress_score"] == 0.08
+    assert result["energy_geopolitical_stress_score"] == 0.08
+    assert result["cross_asset_deleveraging_score"] == 0.06
+    assert result["breadth_score"] == 0.05

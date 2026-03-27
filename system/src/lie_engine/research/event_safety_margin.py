@@ -77,6 +77,10 @@ def _active_chain_threats(chains: Iterable[Mapping[str, Any]]) -> List[float]:
     return output
 
 
+def _margin_breach_count(margins: Sequence[float], threshold: float) -> int:
+    return sum(1 for margin in margins if margin < threshold)
+
+
 # Public API
 
 def build_event_safety_margin_snapshot(
@@ -136,11 +140,21 @@ def build_event_safety_margin_snapshot(
         )
     )
 
+    has_dominant = bool(dominant_chain_data and dominant_chain_data.get("status") == "dominant")
     multi_active = len(active_threats) >= 2
     low_system_margin = system_base < 0.35
-    new_risk_trigger = multi_active or low_system_margin
+    hard_low_system_margin = system_base < 0.22
+    resonant_pressure = _margin_breach_count(
+        (liquidity_margin, credit_margin, energy_margin), 0.4
+    ) >= 2
+    new_risk_trigger = has_dominant and (
+        (multi_active and (resonant_pressure or hard_low_system_margin))
+        or (hard_low_system_margin and resonant_pressure)
+    )
 
-    shadow_only = not (canary_trigger or new_risk_trigger) and min(margins) < 0.6
+    shadow_only = not (canary_trigger or new_risk_trigger) and (
+        min(margins) < 0.6 or low_system_margin or multi_active
+    )
 
     boundary_penalty = 0.12 if canary_trigger else 0.08 if new_risk_trigger else 0.0
     system_margin_score = _clamp01(system_base - boundary_penalty)
@@ -162,6 +176,8 @@ def build_event_safety_margin_snapshot(
         reasons.append("credit_margin_critical")
     if multi_active:
         reasons.append("multiple_active_chains")
+    if resonant_pressure:
+        reasons.append("multi_margin_resonance")
     if low_system_margin:
         reasons.append("system_margin_low")
     if shadow_only and not reasons:

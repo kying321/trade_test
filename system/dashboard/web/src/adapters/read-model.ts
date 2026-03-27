@@ -680,7 +680,10 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
 
   const eventRegime = eventArtifact(snapshot, 'event_regime_snapshot');
   const eventAnalogy = eventArtifact(snapshot, 'event_crisis_analogy');
+  const eventGameState = eventArtifact(snapshot, 'event_game_state_snapshot');
+  const eventTransmission = eventArtifact(snapshot, 'event_transmission_chain_map');
   const eventAssetShockMap = eventArtifact(snapshot, 'event_asset_shock_map');
+  const eventSafetyMargin = eventArtifact(snapshot, 'event_safety_margin_snapshot');
   const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
 
   const sourceConfidence: MetricItem[] = [
@@ -750,6 +753,35 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
       ),
     );
   }
+  const primaryTheater = normalizedString(
+    eventGameState.primary_theater ?? eventTransmission.primary_theater,
+  );
+  if (eventGameState.game_state) {
+    addEventMetric(
+      toMetric(
+        'event-game-state',
+        'event_game_state',
+        normalizedString(eventGameState.game_state),
+        primaryTheater,
+      ),
+    );
+  }
+  if (eventTransmission.dominant_chain) {
+    const hotChains = toArray<unknown>(eventTransmission.chains)
+      .map((entry) => toRecord<Dict>(entry))
+      .filter((row): row is Dict => Boolean(row))
+      .filter((row) => ['active', 'dominant'].includes(String(row.status || '')))
+      .map((row) => normalizedString(row.chain_id))
+      .filter((value): value is string => Boolean(value));
+    addEventMetric(
+      toMetric(
+        'event-dominant-chain',
+        'dominant_chain',
+        normalizedString(eventTransmission.dominant_chain),
+        hotChains.length ? `hot=${hotChains.join(',')}` : primaryTheater,
+      ),
+    );
+  }
   const analogyRows = toArray<unknown>(eventAnalogy.top_analogues ?? [])
     .map((analogy) => toRecord<Dict>(analogy))
     .filter((row): row is Dict => Boolean(row));
@@ -814,6 +846,7 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
   const operatorPanel = artifactPayload(snapshot, 'operator_panel');
   const summary = toRecord<Dict>(operatorPanel.summary) || {};
   const repairPlan = toRecord<Dict>(operatorPanel.priority_repair_plan) || {};
+  const eventSafetyMargin = eventArtifact(snapshot, 'event_safety_margin_snapshot');
   const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
 
   const gateScores: MetricItem[] = [
@@ -843,6 +876,32 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
         normalizedString(eventOperatorSummary.summary || eventOperatorSummary.status),
         normalizedString(eventOperatorSummary.takeaway),
         normalizedString(eventOperatorSummary.status),
+      ),
+    );
+  }
+  if (eventOperatorSummary.event_crisis_safety_margin_brief || eventSafetyMargin.system_margin_score !== undefined) {
+    repairMetrics.push(
+      toMetric(
+        'event-safety-margin',
+        'system_margin_score',
+        normalizedString(eventOperatorSummary.event_crisis_safety_margin_brief)
+          ?? eventSafetyMargin.system_margin_score,
+        normalizedString(eventOperatorSummary.event_crisis_primary_theater_brief),
+      ),
+    );
+  }
+  if (eventOperatorSummary.event_crisis_hard_boundary_brief || eventSafetyMargin.hard_boundaries) {
+    const hardBoundaries = toRecord<Dict>(eventSafetyMargin.hard_boundaries) || {};
+    const activeBoundaries = Object.entries(hardBoundaries)
+      .filter(([, value]) => Boolean(value))
+      .map(([key]) => key);
+    repairMetrics.push(
+      toMetric(
+        'event-hard-boundary',
+        'hard_boundaries',
+        normalizedString(eventOperatorSummary.event_crisis_hard_boundary_brief)
+          ?? (activeBoundaries.length ? activeBoundaries.join(',') : 'none'),
+        normalizedString(eventOperatorSummary.event_crisis_dominant_chain_brief),
       ),
     );
   }

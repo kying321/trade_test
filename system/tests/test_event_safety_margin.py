@@ -50,3 +50,22 @@ def test_event_safety_margin_snapshot_contract_fields_are_stable() -> None:
         "new_risk_hard_block",
         "shadow_only_boundary",
     }
+
+
+def test_event_safety_margin_financial_pressure_without_resonance_stays_shadow_only() -> None:
+    payload = build_event_safety_margin_snapshot(
+        game_state_snapshot={"game_state": "financial_pressure", "policy_relief_probability": 0.45},
+        transmission_chain_map={
+            "dominant_chain": "credit_intermediary_chain",
+            "chains": [
+                _dummy_chain("usd_liquidity_chain", status="watch"),
+                _dummy_chain("financial_sanctions_chain", status="watch"),
+                _dummy_chain("risk_off_deleveraging_chain", status="watch"),
+                _dummy_chain("credit_intermediary_chain", status="dominant"),
+            ],
+        },
+        regime_snapshot={"regime_state": "sector_stress"},
+    )
+    assert payload["hard_boundaries"]["canary_hard_block"] is False
+    assert payload["hard_boundaries"]["new_risk_hard_block"] is False
+    assert payload["hard_boundaries"]["shadow_only_boundary"] is True

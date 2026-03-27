@@ -112,6 +112,25 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             ],
         },
     )
+    event_game_state_path = review_dir / "latest_event_game_state_snapshot.json"
+    write_json(
+        event_game_state_path,
+        {
+            "game_state": "financial_pressure",
+            "primary_theater": "usd_liquidity_and_sanctions",
+        },
+    )
+    event_transmission_path = review_dir / "latest_event_transmission_chain_map.json"
+    write_json(
+        event_transmission_path,
+        {
+            "dominant_chain": "credit_intermediary_chain",
+            "primary_theater": "usd_liquidity_and_sanctions",
+            "chains": [
+                {"chain_id": "credit_intermediary_chain", "status": "dominant"},
+            ],
+        },
+    )
     event_shock_map_path = review_dir / "latest_event_asset_shock_map.json"
     write_json(
         event_shock_map_path,
@@ -130,6 +149,19 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             ],
         },
     )
+    event_safety_margin_path = review_dir / "latest_event_safety_margin_snapshot.json"
+    write_json(
+        event_safety_margin_path,
+        {
+            "system_margin_score": 0.42,
+            "hard_boundaries": {
+                "canary_hard_block": False,
+                "new_risk_hard_block": True,
+                "shadow_only_boundary": False,
+            },
+            "boundary_reasons": ["system_margin_low"],
+        },
+    )
     event_operator_summary_path = review_dir / "latest_event_crisis_operator_summary.json"
     write_json(
         event_operator_summary_path,
@@ -138,6 +170,10 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "change_class": "RESEARCH_ONLY",
             "summary": "event crisis watch",
             "takeaway": "monitor private credit flow",
+            "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+            "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+            "event_crisis_safety_margin_brief": "system_margin=0.42",
+            "event_crisis_hard_boundary_brief": "new_risk_hard_block",
         },
     )
 
@@ -269,14 +305,20 @@ def test_event_crisis_artifacts_exposed(tmp_path: Path) -> None:
     snapshot = build_public_snapshot(tmp_path)
 
     payloads = snapshot["artifact_payloads"]
+    assert "event_game_state_snapshot" in payloads
+    assert "event_transmission_chain_map" in payloads
     assert "event_regime_snapshot" in payloads
     assert "event_crisis_analogy" in payloads
     assert "event_asset_shock_map" in payloads
+    assert "event_safety_margin_snapshot" in payloads
     assert "event_crisis_operator_summary" in payloads
     for artifact_id, suffix in [
+        ("event_game_state_snapshot", "latest_event_game_state_snapshot.json"),
+        ("event_transmission_chain_map", "latest_event_transmission_chain_map.json"),
         ("event_regime_snapshot", "latest_event_regime_snapshot.json"),
         ("event_crisis_analogy", "latest_event_crisis_analogy.json"),
         ("event_asset_shock_map", "latest_event_asset_shock_map.json"),
+        ("event_safety_margin_snapshot", "latest_event_safety_margin_snapshot.json"),
         ("event_crisis_operator_summary", "latest_event_crisis_operator_summary.json"),
     ]:
         assert payloads[artifact_id]["path"].endswith(f"review/{suffix}")

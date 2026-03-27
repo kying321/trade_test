@@ -15,6 +15,17 @@ DEFAULT_MARKET_INPUTS: Mapping[str, float] = {
     "confidence_score": 0.5,
 }
 
+BOOTSTRAP_MARKET_INPUTS: Mapping[str, float] = {
+    "credit_liquidity_stress_score": 0.08,
+    "energy_geopolitical_stress_score": 0.08,
+    "cross_asset_deleveraging_score": 0.06,
+    "breadth_score": 0.05,
+    "contagion_score": 0.05,
+    "persistence_score": 0.05,
+    "policy_offset_score": 0.35,
+    "confidence_score": 0.35,
+}
+
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
@@ -140,11 +151,14 @@ def normalize_public_event_rows(
 
 
 def normalize_market_inputs(
-    inputs: Mapping[str, object] | None = None
+    inputs: Mapping[str, object] | None = None,
+    *,
+    defaults: Mapping[str, float] | None = None,
 ) -> Mapping[str, float]:
     inputs = inputs or {}
+    defaults = defaults or DEFAULT_MARKET_INPUTS
     normalized: dict[str, float] = {}
-    for key, default in DEFAULT_MARKET_INPUTS.items():
+    for key, default in defaults.items():
         raw_value = inputs.get(key, default)
         normalized[key] = _clamp01(_safe_float(raw_value, default))
     return normalized

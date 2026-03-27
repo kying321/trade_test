@@ -346,6 +346,24 @@ describe('buildTerminalReadModel', () => {
             ],
           },
         },
+        event_game_state_snapshot: {
+          payload: {
+            game_state: 'financial_pressure',
+            primary_theater: 'usd_liquidity_and_sanctions',
+          },
+        },
+        event_transmission_chain_map: {
+          payload: {
+            dominant_chain: 'credit_intermediary_chain',
+            primary_theater: 'usd_liquidity_and_sanctions',
+            chains: [
+              {
+                chain_id: 'credit_intermediary_chain',
+                status: 'dominant',
+              },
+            ],
+          },
+        },
         event_asset_shock_map: {
           payload: {
             assets: [
@@ -357,11 +375,25 @@ describe('buildTerminalReadModel', () => {
             ],
           },
         },
+        event_safety_margin_snapshot: {
+          payload: {
+            system_margin_score: 0.42,
+            hard_boundaries: {
+              canary_hard_block: false,
+              new_risk_hard_block: true,
+              shadow_only_boundary: false,
+            },
+          },
+        },
         event_crisis_operator_summary: {
           payload: {
             status: 'watch',
             summary: 'event crisis watch',
             takeaway: 'monitor private credit flow',
+            event_crisis_primary_theater_brief: 'usd_liquidity_and_sanctions',
+            event_crisis_dominant_chain_brief: 'credit_intermediary_chain',
+            event_crisis_safety_margin_brief: 'system_margin=0.42',
+            event_crisis_hard_boundary_brief: 'new_risk_hard_block',
           },
         },
       },
@@ -373,9 +405,13 @@ describe('buildTerminalReadModel', () => {
 
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-severity')).toBe(true);
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-regime-state')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-game-state')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-dominant-chain')).toBe(true);
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-analogy')).toBe(true);
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-shock-map')).toBe(true);
     expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-crisis-summary')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-safety-margin')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-hard-boundary')).toBe(true);
   });
 
   it('tolerates malformed event payloads without crashing', () => {

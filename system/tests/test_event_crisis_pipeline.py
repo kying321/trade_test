@@ -105,6 +105,27 @@ def test_build_event_live_guard_overlay_provides_valid_degraded_state() -> None:
     assert overlay["valid_until_utc"].endswith("Z")
 
 
+def test_live_guard_overlay_uses_margin_and_hard_boundaries() -> None:
+    overlay = build_event_live_guard_overlay(
+        regime_snapshot={"regime_state": "sector_stress"},
+        safety_margin_snapshot={
+            "system_margin_score": 0.32,
+            "hard_boundaries": {
+                "canary_hard_block": False,
+                "new_risk_hard_block": True,
+                "shadow_only_boundary": False,
+            },
+        },
+        transmission_chain_map={"dominant_chain": "risk_off_deleveraging_chain"},
+        generated_at=dt.datetime(2026, 3, 25, 12, 0, tzinfo=dt.timezone.utc),
+    )
+    assert overlay["canary_freeze"] is True
+    assert overlay["risk_multiplier_override"] == 0.32
+    assert "event_state:sector_stress" in overlay["override_reason_codes"]
+    assert "event_boundary:new_risk_hard_block" in overlay["override_reason_codes"]
+    assert "event_chain:risk_off_deleveraging_chain" in overlay["override_reason_codes"]
+
+
 def test_regime_snapshot_absorbs_game_state_and_transmission_inputs() -> None:
     base_snapshot = build_event_regime_snapshot(
         event_rows=_sample_event_rows(), market_inputs=_sample_market_inputs()

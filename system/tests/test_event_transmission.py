@@ -58,3 +58,14 @@ def test_event_transmission_chain_map_contract_fields_are_stable() -> None:
 
     assert all(row["status"] in STATUS_ENUM for row in payload["chains"])
     assert all(row["origin"] in DOMINANT_CONFLICT_AXES for row in payload["chains"])
+
+
+def test_financial_pressure_transmission_keeps_single_hot_chain() -> None:
+    payload = build_event_transmission_chain_map(
+        game_state_snapshot={"game_state": "financial_pressure"}
+    )
+
+    hot_chain_ids = [
+        row["chain_id"] for row in payload["chains"] if row["status"] in {"active", "dominant"}
+    ]
+    assert hot_chain_ids == ["credit_intermediary_chain"]

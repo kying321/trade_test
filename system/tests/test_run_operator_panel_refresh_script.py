@@ -34,6 +34,38 @@ def test_run_json_rejects_non_mapping_payload(monkeypatch) -> None:
         mod.run_json(name="demo", cmd=["python3", "fake.py"])
 
 
+def test_event_summary_has_geostrategy_fields_rejects_stale_payload(tmp_path: Path) -> None:
+    mod = load_module()
+    stale = tmp_path / "latest_event_crisis_operator_summary.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "event_crisis_primary_theater_brief": None,
+                "event_crisis_dominant_chain_brief": "",
+                "event_crisis_safety_margin_brief": None,
+                "event_crisis_hard_boundary_brief": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert mod.event_summary_has_geostrategy_fields(stale) is False
+
+    stale.write_text(
+        json.dumps(
+            {
+                "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+                "event_crisis_safety_margin_brief": "system_margin=0.42",
+                "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert mod.event_summary_has_geostrategy_fields(stale) is True
+
+
 def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp_path: Path, capsys) -> None:
     mod = load_module()
     workspace = tmp_path / "workspace"
@@ -51,6 +83,20 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
         public_dir.mkdir(parents=True, exist_ok=True)
         (public_dir / "data").mkdir(parents=True, exist_ok=True)
 
+        if name == "run_event_crisis_pipeline":
+            (review_dir / "latest_event_crisis_operator_summary.json").write_text(
+                json.dumps(
+                    {
+                        "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                        "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+                        "event_crisis_safety_margin_brief": "system_margin=0.42",
+                        "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return {"artifacts": {"operator_summary": str(review_dir / "latest_event_crisis_operator_summary.json")}}
         if name == "build_operator_task_visual_panel":
             (public_dir / "operator_task_visual_panel.html").write_text(
                 "<html><body>panel</body></html>\n",
@@ -74,10 +120,10 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
                 "crypto_refresh_reuse_brief": "crypto_refresh:reuse_ok",
                 "remote_live_history_brief": "remote_history:n/a",
                 "brooks_refresh_brief": "brooks:ok",
-                "event_crisis_regime_brief": "sector_stress watch",
-                "event_crisis_top_analogue_brief": "analogous to gfc",
-                "event_crisis_watch_assets_brief": "monitor BTC/ETH/BNB",
-                "event_crisis_guard_brief": "guarding live gate",
+                "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+                "event_crisis_safety_margin_brief": "system_margin=0.42",
+                "event_crisis_hard_boundary_brief": "new_risk_hard_block",
             },
             }
         if name == "build_conversation_feedback_projection_internal":
@@ -124,10 +170,17 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
     assert payload["operator_head_brief"] == "ETHUSDT:wait_for_pullback"
     assert payload["review_head_brief"] == "review:hold16_anchor"
     assert payload["lane_priority_order_brief"] == "ETHUSDT>BNBUSDT"
-    assert payload["event_crisis_regime_brief"] == "sector_stress watch"
-    assert payload["event_crisis_top_analogue_brief"] == "analogous to gfc"
-    assert payload["event_crisis_watch_assets_brief"] == "monitor BTC/ETH/BNB"
-    assert payload["event_crisis_guard_brief"] == "guarding live gate"
+    assert payload["event_crisis_primary_theater_brief"] == "usd_liquidity_and_sanctions"
+    assert payload["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
+    assert payload["event_crisis_safety_margin_brief"] == "system_margin=0.42"
+    assert payload["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    for removed_key in (
+        "event_crisis_regime_brief",
+        "event_crisis_top_analogue_brief",
+        "event_crisis_watch_assets_brief",
+        "event_crisis_guard_brief",
+    ):
+        assert removed_key not in payload
     assert payload["snapshot_outputs"] == [
         str(public_dir / "data" / "fenlie_dashboard_snapshot.json"),
         str(public_dir / "data" / "fenlie_dashboard_internal_snapshot.json"),
@@ -164,6 +217,16 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
         str(system_root / "scripts" / "build_conversation_feedback_projection_internal.py"),
         "--review-dir",
         str(review_dir),
+        "--now",
+        "2026-03-21T08:40:00Z",
+    ]
+    assert seen_cmds["run_event_crisis_pipeline"] == [
+        "python3",
+        str(system_root / "scripts" / "run_event_crisis_pipeline.py"),
+        "--mode",
+        "snapshot",
+        "--output-root",
+        str(system_root / "output"),
         "--now",
         "2026-03-21T08:40:00Z",
     ]

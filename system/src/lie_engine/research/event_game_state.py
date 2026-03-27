@@ -113,6 +113,34 @@ ACTOR_SPECIFICATIONS = [
     },
 ]
 
+GAME_STATE_PROFILES = {
+    "stable_competition": {
+        "confidence_score": 0.62,
+        "systemic_escalation_probability": 0.12,
+        "policy_relief_probability": 0.62,
+    },
+    "financial_pressure": {
+        "confidence_score": 0.68,
+        "systemic_escalation_probability": 0.32,
+        "policy_relief_probability": 0.41,
+    },
+    "commodity_weaponization": {
+        "confidence_score": 0.7,
+        "systemic_escalation_probability": 0.48,
+        "policy_relief_probability": 0.28,
+    },
+    "bloc_fragmentation": {
+        "confidence_score": 0.72,
+        "systemic_escalation_probability": 0.56,
+        "policy_relief_probability": 0.22,
+    },
+    "systemic_repricing": {
+        "confidence_score": 0.75,
+        "systemic_escalation_probability": 0.74,
+        "policy_relief_probability": 0.16,
+    },
+}
+
 
 # Public API
 
@@ -126,16 +154,18 @@ def build_event_game_state_snapshot(
     if generated_at is None:
         now = datetime.now(timezone.utc)
         generated_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    game_state = _infer_game_state(event_rows=event_rows, market_inputs=market_inputs)
+    profile = GAME_STATE_PROFILES[game_state]
 
     snapshot = {
         "generated_at_utc": generated_at,
         "primary_theater": PRIMARY_THEATER,
-        "game_state": DEFAULT_GAME_STATE,
-        "confidence_score": 0.68,
+        "game_state": game_state,
+        "confidence_score": profile["confidence_score"],
         "dominant_conflict_axes": list(DOMINANT_CONFLICT_AXES),
         "dominant_transmission_axes": list(DOMINANT_TRANSMISSION_AXES),
-        "systemic_escalation_probability": 0.32,
-        "policy_relief_probability": 0.41,
+        "systemic_escalation_probability": profile["systemic_escalation_probability"],
+        "policy_relief_probability": profile["policy_relief_probability"],
         "actors": [deepcopy(actor_spec) for actor_spec in ACTOR_SPECIFICATIONS],
         "context": {},
     }
@@ -144,6 +174,41 @@ def build_event_game_state_snapshot(
     snapshot["context"] = _inject_context(event_rows, market_inputs)
 
     return snapshot
+
+
+def _clamp01(value: float) -> float:
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
+def _market_score(market_inputs: Mapping[str, Any], key: str) -> float:
+    raw = market_inputs.get(key, 0.0)
+    try:
+        return _clamp01(float(raw))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _infer_game_state(
+    *, event_rows: Sequence[Mapping[str, Any]], market_inputs: Mapping[str, Any]
+) -> str:
+    credit = _market_score(market_inputs, "credit_liquidity_stress_score")
+    energy = _market_score(market_inputs, "energy_geopolitical_stress_score")
+    cross_asset = _market_score(market_inputs, "cross_asset_deleveraging_score")
+    breadth = _market_score(market_inputs, "breadth_score")
+
+    if len(event_rows) == 0 and max(credit, energy, cross_asset, breadth) < 0.35:
+        return "stable_competition"
+    if max(credit, cross_asset) >= 0.82:
+        return "systemic_repricing"
+    if energy >= 0.72:
+        return "commodity_weaponization"
+    if len(event_rows) >= 3 and max(credit, energy, breadth) >= 0.55:
+        return "bloc_fragmentation"
+    return DEFAULT_GAME_STATE
 
 
 def _normalize_actor_axes(actors: List[Dict[str, Any]]) -> None:

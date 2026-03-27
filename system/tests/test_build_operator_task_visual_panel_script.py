@@ -412,10 +412,10 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
         event_summary_path,
         {
             "status": "watch",
-            "event_crisis_regime_brief": "sector_stress watch",
-            "event_crisis_top_analogue_brief": "analogous to gfc",
-            "event_crisis_watch_assets_brief": "monitor BTC/ETH/BNB",
-            "event_crisis_guard_brief": "guarding live gate",
+            "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+            "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+            "event_crisis_safety_margin_brief": "system_margin=0.42",
+            "event_crisis_hard_boundary_brief": "new_risk_hard_block",
         },
     )
 
@@ -531,10 +531,17 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert payload["summary"]["openclaw_top_backlog_why"] == (
         "blocked:SC2603:probe_blocked+environment_blocked+review_head_time_sync_blocked"
     )
-    assert payload["summary"]["event_crisis_regime_brief"] == "sector_stress watch"
-    assert payload["summary"]["event_crisis_top_analogue_brief"] == "analogous to gfc"
-    assert payload["summary"]["event_crisis_watch_assets_brief"] == "monitor BTC/ETH/BNB"
-    assert payload["summary"]["event_crisis_guard_brief"] == "guarding live gate"
+    assert payload["summary"]["event_crisis_primary_theater_brief"] == "usd_liquidity_and_sanctions"
+    assert payload["summary"]["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
+    assert payload["summary"]["event_crisis_safety_margin_brief"] == "system_margin=0.42"
+    assert payload["summary"]["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    for removed_key in (
+        "event_crisis_regime_brief",
+        "event_crisis_top_analogue_brief",
+        "event_crisis_watch_assets_brief",
+        "event_crisis_guard_brief",
+    ):
+        assert removed_key not in payload["summary"]
     assert payload["priority_repair_plan"]["admin_required"] is True
     assert payload["priority_repair_verification"]["status"] == "blocked"
     assert payload["openclaw_orderflow_blueprint"]["status"] == "ok"
@@ -550,6 +557,11 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert "传导链图" in html_text
     assert "优先修复计划" in html_text
     assert "系统时间同步修复验证" in html_text
+    assert "事件危机地缘层" in html_text
+    assert "usd_liquidity_and_sanctions" in html_text
+    assert "credit_intermediary_chain" in html_text
+    assert "system_margin=0.42" in html_text
+    assert "new_risk_hard_block" in html_text
     assert "等待纸面执行平仓证据" in html_text
     assert "需要清障 / 运维实盘门禁 + 风控守护" in html_text
     assert "wait_for_paper_execution_close_evidence" in html_text
@@ -666,3 +678,40 @@ def test_build_panel_payload_prioritizes_promotion_unblock_when_time_sync_is_alr
     assert payload["summary"]["priority_repair_plan_artifact"] == "remote_ticket_actionability_state"
     assert payload["summary"]["priority_repair_plan_admin_required"] is False
     assert payload["priority_repair_plan"]["status"] == "shadow_ready_ticket_actionability_blocked"
+
+
+def test_build_panel_payload_degrades_when_hot_brief_missing_but_event_summary_exists(
+    tmp_path: Path,
+) -> None:
+    mod = load_module()
+    review_dir = tmp_path / "review"
+    dashboard_dist = tmp_path / "dashboard-dist"
+    review_dir.mkdir()
+    dashboard_dist.mkdir()
+
+    write_json(
+        review_dir / "latest_event_crisis_operator_summary.json",
+        {
+            "status": "watch",
+            "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+            "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+            "event_crisis_safety_margin_brief": "system_margin=0.42",
+            "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+        },
+    )
+
+    payload = mod.build_panel_payload(
+        review_dir=review_dir,
+        dashboard_dist=dashboard_dist,
+        reference_now=dt.datetime(2026, 3, 27, 12, 0, tzinfo=dt.timezone.utc),
+    )
+
+    assert payload["ok"] is True
+    assert payload["status"] == "degraded"
+    assert payload["summary"]["operator_head_brief"] == "degraded:missing_hot_brief"
+    assert payload["summary"]["event_crisis_primary_theater_brief"] == "usd_liquidity_and_sanctions"
+    assert payload["summary"]["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
+    assert payload["summary"]["event_crisis_safety_margin_brief"] == "system_margin=0.42"
+    assert payload["summary"]["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    assert payload["source_artifacts"]["hot_brief"] == ""
+    assert payload["source_artifacts"]["cross_market"] == ""
