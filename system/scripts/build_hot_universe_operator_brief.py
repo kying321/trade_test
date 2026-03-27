@@ -1513,6 +1513,75 @@ def _brooks_structure_operator_lane(
     }
 
 
+def _apply_domestic_futures_bridge_gate_to_brooks_lanes(
+    *,
+    capability_payload: dict[str, Any] | None,
+    review_lane: dict[str, Any] | None,
+    operator_lane: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    review = dict(review_lane or {})
+    operator = dict(operator_lane or {})
+    capability_rows = [
+        dict(row)
+        for row in list((capability_payload or {}).get("capabilities") or [])
+        if isinstance(row, dict)
+    ]
+    capability_by_symbol = {
+        str(row.get("symbol") or "").strip().upper(): row
+        for row in capability_rows
+        if str(row.get("symbol") or "").strip()
+    }
+
+    def _apply_to_lane(lane: dict[str, Any]) -> dict[str, Any]:
+        updated = dict(lane or {})
+        head = dict(updated.get("head") or {})
+        symbol = str(head.get("symbol") or "").strip().upper()
+        capability = capability_by_symbol.get(symbol, {})
+        if not capability:
+            return updated
+        stage = str(capability.get("bridge_stage") or "").strip()
+        if stage in {"guarded_canary", "executable"}:
+            return updated
+        blocker_parts = [
+            str(capability.get("blocker_detail") or "").strip(),
+            stage,
+            str(capability.get("blocker_code") or "").strip(),
+        ]
+        blocker_detail = " | ".join([part for part in blocker_parts if part]) or str(
+            head.get("blocker_detail") or ""
+        ).strip()
+        done_when = "automated execution bridge becomes explicit before promotion"
+        if head:
+            head["blocker_detail"] = blocker_detail
+            head["done_when"] = done_when
+            head["bridge_stage"] = stage
+            head["blocker_code"] = str(capability.get("blocker_code") or "").strip()
+            head["execution_truth_source"] = str(
+                capability.get("execution_truth_source") or ""
+            ).strip()
+            updated["head"] = head
+        queue = [dict(row) for row in list(updated.get("queue") or []) if isinstance(row, dict)]
+        if queue:
+            for idx, row in enumerate(queue):
+                if str(row.get("symbol") or "").strip().upper() != symbol:
+                    continue
+                row["blocker_detail"] = blocker_detail
+                row["done_when"] = done_when
+                row["bridge_stage"] = stage
+                row["blocker_code"] = str(capability.get("blocker_code") or "").strip()
+                row["execution_truth_source"] = str(
+                    capability.get("execution_truth_source") or ""
+                ).strip()
+                queue[idx] = row
+                break
+            updated["queue"] = queue
+        updated["blocker_detail"] = blocker_detail
+        updated["done_when"] = done_when
+        return updated
+
+    return _apply_to_lane(review), _apply_to_lane(operator)
+
+
 def _cross_market_review_head_lane(
     *,
     source_payload: dict[str, Any] | None,
@@ -6854,6 +6923,14 @@ def main(argv: list[str] | None = None) -> int:
     brooks_structure_operator_lane = _brooks_structure_operator_lane(
         queue_payload=brooks_structure_review_queue_source_payload,
         fallback_lane=brooks_structure_review_lane,
+    )
+    (
+        brooks_structure_review_lane,
+        brooks_structure_operator_lane,
+    ) = _apply_domestic_futures_bridge_gate_to_brooks_lanes(
+        capability_payload=domestic_futures_execution_bridge_capability_source_payload,
+        review_lane=brooks_structure_review_lane,
+        operator_lane=brooks_structure_operator_lane,
     )
     cross_market_review_head_lane = _cross_market_review_head_lane(
         source_payload=cross_market_operator_state_source_payload,
