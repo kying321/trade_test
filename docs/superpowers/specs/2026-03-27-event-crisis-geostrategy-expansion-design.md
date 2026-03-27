@@ -376,13 +376,16 @@ guard / runtime / execution 层继续只允许消费：
 ### 阶段 A：博弈层最小骨架
 
 - change class：`RESEARCH_ONLY`
-- 目标：生出 `game_state / transmission_chain / safety_margin` 三个新 artifacts
+- 目标：生出 `game_state / transmission_chain` 两个新解释层 artifacts
 - 不接 overlay / dashboard / operator
+- 不提前生成 `safety_margin_snapshot`
 
-### 阶段 B：让现有 regime / shock map 吸收博弈层
+### 阶段 B：生成 `safety_margin` 并让现有 regime / shock map 吸收博弈层
 
 - change class：`RESEARCH_ONLY`
-- 目标：让 `event_regime_snapshot` / `event_asset_shock_map` 读取新 artifacts
+- 目标：
+  - 先生成 `event_safety_margin_snapshot`
+  - 再让 `event_regime_snapshot` / `event_asset_shock_map` 读取新 artifacts
 
 ### 阶段 C：安全边际压缩进 overlay
 
@@ -403,6 +406,7 @@ guard / runtime / execution 层继续只允许消费：
 因为最安全的顺序是：
 
 - 先解释
+- 再补 safety margin
 - 再压缩
 - 再执行
 - 最后展示

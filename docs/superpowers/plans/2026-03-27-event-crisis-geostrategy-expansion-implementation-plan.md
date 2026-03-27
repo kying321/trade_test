@@ -111,6 +111,8 @@ def test_event_game_state_snapshot_contract_fields_are_stable() -> None:
     payload = build_event_game_state_snapshot(event_rows=[...], market_inputs={...})
     assert payload["generated_at_utc"].endswith("Z")
     assert 0.0 <= float(payload["confidence_score"]) <= 1.0
+    assert 0.0 <= float(payload["systemic_escalation_probability"]) <= 1.0
+    assert 0.0 <= float(payload["policy_relief_probability"]) <= 1.0
     assert isinstance(payload["dominant_conflict_axes"], list)
     assert isinstance(payload["dominant_transmission_axes"], list)
     assert payload["game_state"] in {
@@ -204,6 +206,8 @@ def test_event_transmission_chain_map_contract_fields_are_stable() -> None:
     }
     assert isinstance(payload["chains"], list)
     assert all(0.0 <= float(row["intensity_score"]) <= 1.0 for row in payload["chains"])
+    assert all(0.0 <= float(row["velocity_score"]) <= 1.0 for row in payload["chains"])
+    assert all(0.0 <= float(row["confidence_score"]) <= 1.0 for row in payload["chains"])
     assert all(row["status"] in {"watch", "active", "dominant"} for row in payload["chains"])
 ```
 
@@ -388,6 +392,21 @@ Expected: FAIL
 - 生成 `system_margin_score`
 - 生成三类 hard boundaries
 - `policy_margin` 需要显式吸收 `policy_relief_probability`
+- `liquidity_margin` 需要显式吸收：
+  - `usd_liquidity_chain`
+  - `financial_sanctions_chain`
+  - `risk_off_deleveraging_chain`
+- `credit_margin` 需要显式吸收：
+  - `credit_intermediary_chain`
+  - `usd_liquidity_chain`
+- `energy_margin` 需要显式吸收：
+  - `energy_supply_chain`
+  - `shipping_supply_chain`
+- `system_margin_score` 不能简单平均；必须对：
+  - `dominant_chain`
+  - 最危险 `active` chain
+  - 已触发 `hard_boundaries`
+  提高权重
 - `hard_boundaries` 至少显式考虑：
   - `game_state = systemic_repricing`
   - `regime_state = systemic_risk`
@@ -397,6 +416,7 @@ Expected: FAIL
   - 所有 score/margin 在 `[0.0, 1.0]`
   - `generated_at_utc` + ISO8601 `Z`
   - `boundary_reasons` 用列表，不用 `null`
+  - 其他未知列表字段也用空列表，不用 `null`
   - `hard_boundaries` 只用冻结字段名
 
 - [ ] **Step 5: 跑 tests 确认转绿**
