@@ -1,8 +1,24 @@
-from lie_engine.research.event_transmission import (
-    DOMINANT_TRANSMISSION_CHAIN_IDS,
-    STATUS_CHOICES,
-    build_event_transmission_chain_map,
-)
+from lie_engine.research.event_transmission import build_event_transmission_chain_map
+
+DOMINANT_TRANSMISSION_CHAIN_IDS = {
+    "usd_liquidity_chain",
+    "financial_sanctions_chain",
+    "energy_supply_chain",
+    "shipping_supply_chain",
+    "credit_intermediary_chain",
+    "risk_off_deleveraging_chain",
+}
+
+STATUS_ENUM = {"watch", "active", "dominant"}
+
+DOMINANT_CONFLICT_AXES = {
+    "usd_liquidity_pressure",
+    "sanctions_financial_fragmentation",
+    "energy_supply_pressure",
+    "shipping_chokepoint_pressure",
+    "technology_supply_chain_pressure",
+    "regional_conflict_escalation",
+}
 
 
 def _dummy_game_state_snapshot() -> dict[str, str]:
@@ -26,7 +42,19 @@ def test_event_transmission_chain_map_contract_fields_are_stable() -> None:
     assert payload["generated_at_utc"].endswith("Z")
     assert payload["dominant_chain"] in DOMINANT_TRANSMISSION_CHAIN_IDS
     assert isinstance(payload["chains"], list)
+
+    chain_ids = [row["chain_id"] for row in payload["chains"]]
+    assert len(chain_ids) == len(set(chain_ids)), "chain_id must be unique"
+
+    assert sum(1 for row in payload["chains"] if row["status"] == "dominant") == 1
+    assert any(
+        row["chain_id"] == payload["dominant_chain"] and row["status"] == "dominant"
+        for row in payload["chains"]
+    )
+
     assert all(0.0 <= float(row["intensity_score"]) <= 1.0 for row in payload["chains"])
     assert all(0.0 <= float(row["velocity_score"]) <= 1.0 for row in payload["chains"])
     assert all(0.0 <= float(row["confidence_score"]) <= 1.0 for row in payload["chains"])
-    assert all(row["status"] in STATUS_CHOICES for row in payload["chains"])
+
+    assert all(row["status"] in STATUS_ENUM for row in payload["chains"])
+    assert all(row["origin"] in DOMINANT_CONFLICT_AXES for row in payload["chains"])
