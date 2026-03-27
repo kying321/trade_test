@@ -86,7 +86,7 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "契约层" in spec
     assert "公开入口拓扑" in spec
     assert "公开面验收" in spec
-    assert "暂无公开面验收工件" in spec
+    assert "穿透层 1 / 验收总览" in spec
     assert "接口目录" in spec
     assert "源头主线" in spec
     assert "回退链" in spec

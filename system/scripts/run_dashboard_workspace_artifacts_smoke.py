@@ -52,7 +52,7 @@ PUBLIC_WORKSPACE_ROUTE_ASSERTIONS = [
         "headline": "公开入口拓扑",
         "markers": [
             "公开面验收",
-            "暂无公开面验收工件",
+            "穿透层 1 / 验收总览",
             "接口目录",
             "源头主线",
             "回退链",

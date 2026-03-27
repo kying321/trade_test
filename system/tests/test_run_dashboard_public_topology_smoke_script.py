@@ -9,9 +9,7 @@ import urllib.error
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_public_topology_smoke.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_dashboard_public_topology_smoke.py"
 
 
 def load_module():
@@ -99,7 +97,7 @@ def test_run_topology_smoke_reports_expected_public_entry(monkeypatch) -> None:
             name=name,
             root_url=root_url,
             route_path="overview",
-            markers=["研究主线摘要", "hold24_zero"],
+            markers=["研究主线摘要", "国内商品推理线"],
             timeout_seconds=timeout_seconds,
             screenshot_path=screenshot_path,
         ),
@@ -130,15 +128,13 @@ def test_run_topology_smoke_reports_expected_public_entry(monkeypatch) -> None:
     assert checks["pages_overview_browser"]["route"] == "https://fenlie.fuuu.fun/#/overview"
     assert checks["root_contracts_browser"]["route"] == "https://fuuu.fun/#/workspace/contracts"
     assert checks["pages_contracts_browser"]["route"] == "https://fenlie.fuuu.fun/#/workspace/contracts"
-    assert checks["root_overview_browser"]["markers"] == ["研究主线摘要", "hold24_zero"]
+    assert checks["root_overview_browser"]["markers"] == ["研究主线摘要", "国内商品推理线"]
     assert checks["root_contracts_browser"]["markers"] == [
         "公开面验收",
-        "root overview 截图",
-        "pages overview 截图",
-        "root contracts 截图",
-        "pages contracts 截图",
-        "公开快照拉取次数",
-        "内部快照拉取次数",
+        "穿透层 1 / 验收总览",
+        "接口目录",
+        "源头主线",
+        "回退链",
     ]
     assert checks["root_overview_browser"]["screenshot_path"].endswith(
         "20260321T095337Z_dashboard_public_topology_root_overview_browser.png"
@@ -178,7 +174,7 @@ def test_run_topology_smoke_reports_expected_public_entry(monkeypatch) -> None:
     )
     assert (
         screenshot_calls[2]["markers"]
-        == '["公开面验收", "root overview 截图", "pages overview 截图", "root contracts 截图", "pages contracts 截图", "公开快照拉取次数", "内部快照拉取次数"]'
+        == '["公开面验收", "穿透层 1 / 验收总览", "接口目录", "源头主线", "回退链"]'
     )
     assert screenshot_calls[2]["screenshot_path"].endswith(
         "fenlie-review/20260321T095337Z_dashboard_public_topology_root_contracts_browser.png"
@@ -199,12 +195,10 @@ def test_build_public_route_browser_spec_persists_screenshot(tmp_path: Path) -> 
         route_path="workspace/contracts",
         markers=[
             "公开面验收",
-            "root overview 截图",
-            "pages overview 截图",
-            "root contracts 截图",
-            "pages contracts 截图",
-            "公开快照拉取次数",
-            "内部快照拉取次数",
+            "穿透层 1 / 验收总览",
+            "接口目录",
+            "源头主线",
+            "回退链",
         ],
         navigation_timeout_ms=5000,
         render_timeout_ms=15000,
@@ -216,11 +210,54 @@ def test_build_public_route_browser_spec_persists_screenshot(tmp_path: Path) -> 
     assert str(screenshot_path) in spec
     assert str(result_path) in spec
     assert "workspace/contracts" in spec
-    assert "root overview 截图" in spec
-    assert "root contracts 截图" in spec
-    assert "公开快照拉取次数" in spec
+    assert "穿透层 1 / 验收总览" in spec
+    assert "接口目录" in spec
+    assert "源头主线" in spec
+    assert "回退链" in spec
     assert "NAVIGATION_TIMEOUT_MS = 5000" in spec
     assert "RENDER_TIMEOUT_MS = 15000" in spec
+
+
+def test_run_public_route_browser_smoke_uses_uncapped_navigation_timeout(monkeypatch, tmp_path: Path) -> None:
+    mod = load_module()
+    captured: dict[str, str] = {}
+
+    class DummyProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, cwd, text, capture_output, check):  # noqa: ANN001
+        spec_path = Path(cmd[3])
+        temp_dir = Path(cmd[5])
+        captured["spec"] = spec_path.read_text(encoding="utf-8")
+        (temp_dir / "public-overview.result.json").write_text(
+            json.dumps(
+              {
+                "route": "https://fuuu.fun/#/overview",
+                "final_url": "https://fuuu.fun/#/overview",
+                "markers": ["研究主线摘要", "国内商品推理线"],
+                "screenshot_path": str(tmp_path / "shot.png"),
+              },
+              ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return DummyProc()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    result = mod.run_public_route_browser_smoke(
+        name="root_overview_browser",
+        root_url="https://fuuu.fun",
+        route_path="overview",
+        markers=["研究主线摘要", "国内商品推理线"],
+        timeout_seconds=30.0,
+        screenshot_path=tmp_path / "shot.png",
+    )
+
+    assert result["ok"] is True
+    assert "NAVIGATION_TIMEOUT_MS = 30000" in captured["spec"]
 
 
 def test_probe_text_endpoint_can_retry_with_insecure_tls(monkeypatch) -> None:
