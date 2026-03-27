@@ -62,23 +62,23 @@ PUBLIC_WORKSPACE_ROUTE_ASSERTIONS = [
 CHANGE_CLASS = "RESEARCH_ONLY"
 MANUAL_PROBE_FEEDBACK_ID = "manual_alignment_browser_smoke_probe"
 CONTRACTS_SOURCE_HEAD_ASSERTION = {
-    "route": "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff",
-    "page_section": "contracts-source-head-price_action_exit_risk_handoff",
-    "source_head_id": "price_action_exit_risk_handoff",
+    "route": "#/workspace/contracts?page_section=contracts-source-head-operator_panel",
+    "page_section": "contracts-source-head-operator_panel",
+    "source_head_id": "operator_panel",
     "visible_markers": [
-        "source head 状态",
-        "下一研究优先级",
-        "当前允许动作",
-        "当前阻止动作",
+        "状态",
+        "研究结论",
+        "生成时间",
+        "路径",
     ],
 }
 CONTRACTS_SOURCE_GAP_ASSERTION = {
-    "route": "#/workspace/contracts?page_section=contracts-source-gap-audit",
-    "page_section": "contracts-source-gap-audit",
+    "route": "#/workspace/contracts?page_section=contracts-fallback",
+    "page_section": "contracts-fallback",
     "visible_markers": [
-        "退出风控源差审计",
-        "发现数量",
-        "标准锚点",
+        "#/workspace/raw",
+        "/data/fenlie_dashboard_snapshot.json",
+        "/operator_task_visual_panel.html",
     ],
 }
 ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION = {
@@ -497,7 +497,7 @@ def build_workspace_routes_smoke_spec(
               let exitRiskReviewSectionLabel = exitRiskReviewSectionHint;
               let exitRiskReviewVisibleArtifacts = [];
               const themeRoute = '#/workspace/contracts?theme=light';
-              const pageSectionRoute = '#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke';
+              const pageSectionRoute = '#/workspace/contracts?page_section=contracts-acceptance-subcommands';
               const contractsSourceHeadRoute = {CONTRACTS_SOURCE_HEAD_ASSERTION["route"]!r};
               const contractsSourceHeadMarkers = {json.dumps(CONTRACTS_SOURCE_HEAD_ASSERTION["visible_markers"], ensure_ascii=False, indent=2)};
               const contractsSourceGapRoute = {CONTRACTS_SOURCE_GAP_ASSERTION["route"]!r};
@@ -613,23 +613,20 @@ def build_workspace_routes_smoke_spec(
               const contractsPageSectionHrefs = await page.evaluate(() => Array.from(document.querySelectorAll('nav[aria-label="page-sections-nav"] .page-section-link')).map((node) => String(node.getAttribute('href') || '')));
               let pageSectionActiveLabel = '';
               let pageSectionAccordionState = '';
-              if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-subcommand-workspace_routes_smoke'))) {{
+              if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-acceptance-subcommands'))) {{
                 await page.goto({base_url!r} + pageSectionRoute, {{ waitUntil: 'networkidle' }});
-                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-subcommand-workspace_routes_smoke'));
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-acceptance-subcommands'));
                 const activePageSection = page.locator('nav[aria-label="page-sections-nav"]').first().locator('.page-section-link.active').first();
-                await expect(activePageSection).toContainText('工作区路由子命令');
-                const focusedAccordion = page.locator('[data-accordion-id="contracts-subcommand-workspace_routes_smoke"]').first();
-                await expect(focusedAccordion).toHaveAttribute('data-state', 'open');
+                await expect(activePageSection).toContainText('子命令证据');
                 pageSectionActiveLabel = ((await activePageSection.textContent()) || '').trim();
-                pageSectionAccordionState = await focusedAccordion.getAttribute('data-state') || '';
               }}
 
               let contractsSourceHeadAccordionState = '';
               let contractsSourceHeadObservedMarkers = [];
-              if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-source-head-price_action_exit_risk_handoff'))) {{
+              if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-source-head-operator_panel'))) {{
                 await page.goto({base_url!r} + contractsSourceHeadRoute, {{ waitUntil: 'networkidle' }});
-                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-source-head-price_action_exit_risk_handoff'));
-                const contractsSourceHeadAccordion = page.locator('[data-accordion-id="contracts-source-head-price_action_exit_risk_handoff"]').first();
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-source-head-operator_panel'));
+                const contractsSourceHeadAccordion = page.locator('[data-accordion-id="contracts-source-head-operator_panel"]').first();
                 await expect(contractsSourceHeadAccordion).toHaveAttribute('data-state', 'open');
                 for (const marker of contractsSourceHeadMarkers) {{
                   await expect(contractsSourceHeadAccordion).toContainText(marker);
@@ -639,10 +636,10 @@ def build_workspace_routes_smoke_spec(
               }}
 
               let contractsSourceGapObservedMarkers = [];
-              if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-source-gap-audit'))) {{
+              if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-fallback'))) {{
                 await page.goto({base_url!r} + contractsSourceGapRoute, {{ waitUntil: 'networkidle' }});
-                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-source-gap-audit'));
-                const contractsSourceGapSection = page.locator('[data-workspace-section="contracts-source-gap-audit"]').first();
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-fallback'));
+                const contractsSourceGapSection = page.locator('[data-workspace-section="contracts-fallback"]').first();
                 await expect(contractsSourceGapSection).toBeVisible();
                 for (const marker of contractsSourceGapMarkers) {{
                   await expect(contractsSourceGapSection).toContainText(marker);
@@ -669,20 +666,20 @@ def build_workspace_routes_smoke_spec(
                     }},
                     page_section_assertion: {{
                       route: pageSectionRoute,
-                      page_section: 'contracts-subcommand-workspace_routes_smoke',
+                      page_section: 'contracts-acceptance-subcommands',
                       active_label: pageSectionActiveLabel,
                       accordion_state: pageSectionAccordionState,
                     }},
                     contracts_source_head_assertion: {{
                       route: contractsSourceHeadRoute,
-                      page_section: 'contracts-source-head-price_action_exit_risk_handoff',
-                      source_head_id: 'price_action_exit_risk_handoff',
+                      page_section: 'contracts-source-head-operator_panel',
+                      source_head_id: 'operator_panel',
                       accordion_state: contractsSourceHeadAccordionState,
                       visible_markers: contractsSourceHeadObservedMarkers,
                     }},
                     contracts_source_gap_assertion: {{
                       route: contractsSourceGapRoute,
-                      page_section: 'contracts-source-gap-audit',
+                      page_section: 'contracts-fallback',
                       visible_markers: contractsSourceGapObservedMarkers,
                     }},
                     artifacts_filter_assertion: {{

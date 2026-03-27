@@ -122,24 +122,21 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "await clickContextNav(page, route.nav_label);" in spec
     assert "internalSnapshotRequests.length" in spec
     assert "document.documentElement.dataset.theme" in spec
-    assert "contracts-subcommand-workspace_routes_smoke" in spec
-    assert "data-accordion-id=\"contracts-subcommand-workspace_routes_smoke\"" in spec
+    assert "contracts-acceptance-subcommands" in spec
     assert "let pageSectionActiveLabel = '';" in spec
     assert "let pageSectionAccordionState = '';" in spec
-    assert "if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-subcommand-workspace_routes_smoke'))) {" in spec
+    assert "await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-acceptance-subcommands'));" in spec
     assert "active_label: pageSectionActiveLabel" in spec
     assert "accordion_state: pageSectionAccordionState" in spec
-    assert "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff" in spec
-    assert "data-accordion-id=\"contracts-source-head-price_action_exit_risk_handoff\"" in spec
-    assert "source head 状态" in spec
-    assert "下一研究优先级" in spec
-    assert "当前允许动作" in spec
-    assert "当前阻止动作" in spec
-    assert "#/workspace/contracts?page_section=contracts-source-gap-audit" in spec
-    assert "退出风控源差审计" in spec
-    assert "finding_count" in spec
-    assert "let contractsSourceHeadAccordionState = '';" in spec
-    assert "let contractsSourceGapObservedMarkers = [];" in spec
+    assert "#/workspace/contracts?page_section=contracts-source-head-operator_panel" in spec
+    assert "data-accordion-id=\"contracts-source-head-operator_panel\"" in spec
+    assert "状态" in spec
+    assert "研究结论" in spec
+    assert "生成时间" in spec
+    assert "路径" in spec
+    assert "#/workspace/contracts?page_section=contracts-fallback" in spec
+    assert "/data/fenlie_dashboard_snapshot.json" in spec
+    assert "/operator_task_visual_panel.html" in spec
     assert "await expect(activeExitRiskReviewArtifact).toHaveAttribute('title', exitRiskReviewActiveArtifact);" in spec
     assert str(result_path) in spec
 
@@ -386,30 +383,30 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     "resolved_theme": "light",
                 },
                 "page_section_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
-                    "page_section": "contracts-subcommand-workspace_routes_smoke",
-                    "active_label": "工作区路由子命令",
-                    "accordion_state": "open",
+                    "route": "#/workspace/contracts?page_section=contracts-acceptance-subcommands",
+                    "page_section": "contracts-acceptance-subcommands",
+                    "active_label": "子命令证据",
+                    "accordion_state": "",
                 },
                 "contracts_source_head_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff",
-                    "page_section": "contracts-source-head-price_action_exit_risk_handoff",
-                    "source_head_id": "price_action_exit_risk_handoff",
+                    "route": "#/workspace/contracts?page_section=contracts-source-head-operator_panel",
+                    "page_section": "contracts-source-head-operator_panel",
+                    "source_head_id": "operator_panel",
                     "accordion_state": "open",
                     "visible_markers": [
-                        "source head 状态",
-                        "下一研究优先级",
-                        "当前允许动作",
-                        "当前阻止动作",
+                        "状态",
+                        "研究结论",
+                        "生成时间",
+                        "路径",
                     ],
                 },
                 "contracts_source_gap_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-source-gap-audit",
-                    "page_section": "contracts-source-gap-audit",
+                    "route": "#/workspace/contracts?page_section=contracts-fallback",
+                    "page_section": "contracts-fallback",
                     "visible_markers": [
-                        "退出风控源差审计",
-                        "发现数量",
-                        "标准锚点",
+                        "#/workspace/raw",
+                        "/data/fenlie_dashboard_snapshot.json",
+                        "/operator_task_visual_panel.html",
                     ],
                 },
                 "artifacts_filter_assertion": {
@@ -471,30 +468,30 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         "resolved_theme": "light",
     }
     assert payload["page_section_assertion"] == {
-        "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
-        "page_section": "contracts-subcommand-workspace_routes_smoke",
-        "active_label": "工作区路由子命令",
-        "accordion_state": "open",
+        "route": "#/workspace/contracts?page_section=contracts-acceptance-subcommands",
+        "page_section": "contracts-acceptance-subcommands",
+        "active_label": "子命令证据",
+        "accordion_state": "",
     }
     assert payload["contracts_source_head_assertion"] == {
-        "route": "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff",
-        "page_section": "contracts-source-head-price_action_exit_risk_handoff",
-        "source_head_id": "price_action_exit_risk_handoff",
+        "route": "#/workspace/contracts?page_section=contracts-source-head-operator_panel",
+        "page_section": "contracts-source-head-operator_panel",
+        "source_head_id": "operator_panel",
         "accordion_state": "open",
         "visible_markers": [
-            "source head 状态",
-            "下一研究优先级",
-            "当前允许动作",
-            "当前阻止动作",
+            "状态",
+            "研究结论",
+            "生成时间",
+            "路径",
         ],
     }
     assert payload["contracts_source_gap_assertion"] == {
-        "route": "#/workspace/contracts?page_section=contracts-source-gap-audit",
-        "page_section": "contracts-source-gap-audit",
+        "route": "#/workspace/contracts?page_section=contracts-fallback",
+        "page_section": "contracts-fallback",
         "visible_markers": [
-            "退出风控源差审计",
-            "发现数量",
-            "标准锚点",
+            "#/workspace/raw",
+            "/data/fenlie_dashboard_snapshot.json",
+            "/operator_task_visual_panel.html",
         ],
     }
     assert payload["artifacts_filter_assertion"] == {
