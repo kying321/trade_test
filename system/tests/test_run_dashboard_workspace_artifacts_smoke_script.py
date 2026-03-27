@@ -474,12 +474,14 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         "resolved_theme": "light",
     }
     assert payload["page_section_assertion"] == {
+        "applicable": True,
         "route": "#/workspace/contracts?page_section=contracts-acceptance-subcommands",
         "page_section": "contracts-acceptance-subcommands",
         "active_label": "子命令证据",
         "accordion_state": "",
     }
     assert payload["contracts_source_head_assertion"] == {
+        "applicable": True,
         "route": "#/workspace/contracts?page_section=contracts-source-head-operator_panel",
         "page_section": "contracts-source-head-operator_panel",
         "source_head_id": "operator_panel",
@@ -492,6 +494,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         ],
     }
     assert payload["contracts_source_gap_assertion"] == {
+        "applicable": True,
         "route": "#/workspace/contracts?page_section=contracts-fallback",
         "page_section": "contracts-fallback",
         "visible_markers": [
@@ -501,6 +504,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         ],
     }
     assert payload["artifacts_filter_assertion"] == {
+        "applicable": True,
         "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
         "group": "research_cross_section",
         "search_scope": "title",
@@ -513,6 +517,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         ],
     }
     assert payload["artifacts_exit_risk_review_assertion"] == {
+        "applicable": True,
         "route": "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
         "group": "research_exit_risk",
         "search_scope": "title",
@@ -726,6 +731,49 @@ def test_build_artifact_payload_reports_internal_alignment_surface(tmp_path: Pat
         "top_event_headline": "拆分研究工作区左栏四控件",
         "top_action": "先刷新 internal snapshot 并验证对齐页，再收紧 internal fallback 语义。",
     }
+    assert payload["page_section_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "active_label": "",
+        "accordion_state": "",
+    }
+    assert payload["contracts_source_head_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "source_head_id": "",
+        "accordion_state": "",
+        "visible_markers": [],
+    }
+    assert payload["contracts_source_gap_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "visible_markers": [],
+    }
+    assert payload["artifacts_filter_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "group": "",
+        "search_scope": "",
+        "search": "",
+        "source_available": False,
+        "active_artifact": "",
+        "visible_artifacts": [],
+    }
+    assert payload["artifacts_exit_risk_review_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "group": "",
+        "search_scope": "",
+        "search": "",
+        "source_available": False,
+        "section_label": "",
+        "active_artifact": "",
+        "visible_artifacts": [],
+        "visible_markers": [],
+    }
     assert payload["expected_route_markers"] == [
         {
             "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
@@ -809,6 +857,49 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
     assert payload["network_observation"]["internal_snapshot_fetch_count"] == 1
     assert payload["expected_focus_panel"] == "signal-risk"
     assert payload["expected_focus_section"] == "focus-slots"
+    assert payload["page_section_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "active_label": "",
+        "accordion_state": "",
+    }
+    assert payload["contracts_source_head_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "source_head_id": "",
+        "accordion_state": "",
+        "visible_markers": [],
+    }
+    assert payload["contracts_source_gap_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "visible_markers": [],
+    }
+    assert payload["artifacts_filter_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "group": "",
+        "search_scope": "",
+        "search": "",
+        "source_available": False,
+        "active_artifact": "",
+        "visible_artifacts": [],
+    }
+    assert payload["artifacts_exit_risk_review_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "group": "",
+        "search_scope": "",
+        "search": "",
+        "source_available": False,
+        "section_label": "",
+        "active_artifact": "",
+        "visible_artifacts": [],
+        "visible_markers": [],
+    }
     assert payload["terminal_drilldown_assertion"] == {
         "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
         "panel": "signal-risk",

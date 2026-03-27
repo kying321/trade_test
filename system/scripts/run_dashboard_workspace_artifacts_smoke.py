@@ -1223,44 +1223,104 @@ def build_artifact_payload(
         "requested_theme": "light",
         "resolved_theme": "",
     }
-    page_section_assertion = playwright_result.get("page_section_assertion") or {
-        "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
-        "page_section": "contracts-subcommand-workspace_routes_smoke",
-        "active_label": "",
-        "accordion_state": "",
-    }
-    contracts_source_head_assertion = playwright_result.get("contracts_source_head_assertion") or {
-        "route": CONTRACTS_SOURCE_HEAD_ASSERTION["route"],
-        "page_section": CONTRACTS_SOURCE_HEAD_ASSERTION["page_section"],
-        "source_head_id": CONTRACTS_SOURCE_HEAD_ASSERTION["source_head_id"],
-        "accordion_state": "",
-        "visible_markers": [],
-    }
-    contracts_source_gap_assertion = playwright_result.get("contracts_source_gap_assertion") or {
-        "route": CONTRACTS_SOURCE_GAP_ASSERTION["route"],
-        "page_section": CONTRACTS_SOURCE_GAP_ASSERTION["page_section"],
-        "visible_markers": [],
-    }
-    artifacts_filter_assertion = playwright_result.get("artifacts_filter_assertion") or {
-        "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
-        "group": "research_cross_section",
-        "search_scope": "title",
-        "search": "orderflow",
-        "source_available": False,
-        "active_artifact": "",
-        "visible_artifacts": [],
-    }
-    artifacts_exit_risk_review_assertion = playwright_result.get("artifacts_exit_risk_review_assertion") or {
-        "route": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["route"],
-        "group": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["group"],
-        "search_scope": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["search_scope"],
-        "search": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["search"],
-        "source_available": False,
-        "section_label": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["section_label"],
-        "active_artifact": "",
-        "visible_artifacts": [],
-        "visible_markers": [],
-    }
+    if mode == "public_workspace":
+        page_section_assertion = {
+            "applicable": True,
+            **(playwright_result.get("page_section_assertion") or {
+                "route": "#/workspace/contracts?page_section=contracts-acceptance-subcommands",
+                "page_section": "contracts-acceptance-subcommands",
+                "active_label": "",
+                "accordion_state": "",
+            }),
+        }
+        contracts_source_head_assertion = {
+            "applicable": True,
+            **(playwright_result.get("contracts_source_head_assertion") or {
+                "route": CONTRACTS_SOURCE_HEAD_ASSERTION["route"],
+                "page_section": CONTRACTS_SOURCE_HEAD_ASSERTION["page_section"],
+                "source_head_id": CONTRACTS_SOURCE_HEAD_ASSERTION["source_head_id"],
+                "accordion_state": "",
+                "visible_markers": [],
+            }),
+        }
+        contracts_source_gap_assertion = {
+            "applicable": True,
+            **(playwright_result.get("contracts_source_gap_assertion") or {
+                "route": CONTRACTS_SOURCE_GAP_ASSERTION["route"],
+                "page_section": CONTRACTS_SOURCE_GAP_ASSERTION["page_section"],
+                "visible_markers": [],
+            }),
+        }
+        artifacts_filter_assertion = {
+            "applicable": True,
+            **(playwright_result.get("artifacts_filter_assertion") or {
+                "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                "group": "research_cross_section",
+                "search_scope": "title",
+                "search": "orderflow",
+                "source_available": False,
+                "active_artifact": "",
+                "visible_artifacts": [],
+            }),
+        }
+        artifacts_exit_risk_review_assertion = {
+            "applicable": True,
+            **(playwright_result.get("artifacts_exit_risk_review_assertion") or {
+                "route": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["route"],
+                "group": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["group"],
+                "search_scope": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["search_scope"],
+                "search": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["search"],
+                "source_available": False,
+                "section_label": ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["section_label"],
+                "active_artifact": "",
+                "visible_artifacts": [],
+                "visible_markers": [],
+            }),
+        }
+    else:
+        page_section_assertion = {
+            "applicable": False,
+            "route": "",
+            "page_section": "",
+            "active_label": "",
+            "accordion_state": "",
+        }
+        contracts_source_head_assertion = {
+            "applicable": False,
+            "route": "",
+            "page_section": "",
+            "source_head_id": "",
+            "accordion_state": "",
+            "visible_markers": [],
+        }
+        contracts_source_gap_assertion = {
+            "applicable": False,
+            "route": "",
+            "page_section": "",
+            "visible_markers": [],
+        }
+        artifacts_filter_assertion = {
+            "applicable": False,
+            "route": "",
+            "group": "",
+            "search_scope": "",
+            "search": "",
+            "source_available": False,
+            "active_artifact": "",
+            "visible_artifacts": [],
+        }
+        artifacts_exit_risk_review_assertion = {
+            "applicable": False,
+            "route": "",
+            "group": "",
+            "search_scope": "",
+            "search": "",
+            "source_available": False,
+            "section_label": "",
+            "active_artifact": "",
+            "visible_artifacts": [],
+            "visible_markers": [],
+        }
     terminal_drilldown_assertion = playwright_result.get("terminal_drilldown_assertion")
     if not visited_routes:
         visited_routes = [
