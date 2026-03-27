@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import sys
 from typing import Any
@@ -102,6 +103,131 @@ def write_hot_brief_snapshot(
         snapshot_text = json.dumps(dict(brief_payload), ensure_ascii=False, indent=2) + "\n"
     snapshot_path.write_text(snapshot_text, encoding="utf-8")
     return snapshot_path
+
+
+def default_paper_positions_path(output_root: Path) -> Path:
+    return output_root / "artifacts" / "paper_positions_open.json"
+
+
+def default_paper_db_path(output_root: Path) -> Path:
+    return output_root / "artifacts" / "lie_engine.db"
+
+
+def _load_json_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _has_closed_execution_evidence(output_root: Path, *, symbol: str) -> bool:
+    sqlite_path = default_paper_db_path(output_root)
+    if not sqlite_path.exists():
+        return False
+    try:
+        with sqlite3.connect(sqlite_path) as conn:
+            row = conn.execute(
+                'SELECT status FROM executed_plans WHERE symbol = ? ORDER BY rowid DESC LIMIT 1',
+                (str(symbol or "").strip().upper(),),
+            ).fetchone()
+    except sqlite3.Error:
+        return False
+    if not row:
+        return False
+    return str(row[0] or "").strip().upper() == "CLOSED"
+
+
+def rebuild_open_positions_from_bridge_payload(
+    *,
+    output_root: Path,
+    bridge_payload: dict[str, Any] | None,
+) -> Path:
+    positions_path = default_paper_positions_path(output_root)
+    existing_payload = _load_json_mapping(positions_path)
+    existing_positions_raw = [
+        dict(row)
+        for row in list(existing_payload.get("positions") or [])
+        if isinstance(row, dict)
+    ]
+    existing_positions = [
+        row
+        for row in existing_positions_raw
+        if not _has_closed_execution_evidence(
+            output_root,
+            symbol=str(row.get("symbol") or "").strip().upper(),
+        )
+    ]
+    existing_execution_ids = {
+        str(row.get("source_execution_id") or "").strip()
+        for row in existing_positions
+        if str(row.get("source_execution_id") or "").strip()
+    }
+    bridge_items = [
+        dict(row)
+        for row in list((bridge_payload or {}).get("bridge_items") or [])
+        if isinstance(row, dict)
+    ]
+    for row in bridge_items:
+        bridge_status = str(row.get("bridge_status") or "").strip()
+        if bridge_status not in {"bridge_ready", "already_bridged"}:
+            continue
+        execution_id = str(row.get("execution_id") or "").strip()
+        if not execution_id or execution_id in existing_execution_ids:
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        side = str(row.get("signal_source_side") or "").strip().upper()
+        if not symbol or not side:
+            continue
+        if _has_closed_execution_evidence(output_root, symbol=symbol):
+            continue
+        existing_positions.append(
+            {
+                "open_date": str(row.get("signal_date") or "").strip()
+                or str((bridge_payload or {}).get("as_of") or "").strip().split("T", 1)[0],
+                "symbol": symbol,
+                "side": side,
+                "size_pct": float(row.get("size_pct") or 0.0),
+                "risk_pct": float(row.get("risk_pct") or 0.0),
+                "entry_price": float(row.get("entry_price") or 0.0),
+                "stop_price": float(row.get("stop_price") or 0.0),
+                "target_price": float(row.get("target_price") or 0.0),
+                "runtime_mode": "commodity_queue_bridge",
+                "status": "OPEN",
+                "source_execution_id": execution_id,
+                "source_ticket_id": str(row.get("source_ticket_id") or "").strip(),
+                "bridge_idempotency_key": str(row.get("bridge_idempotency_key") or "").strip(),
+                "quote_usdt": float(row.get("quote_usdt") or 0.0),
+                "signal_date": str(row.get("signal_date") or "").strip(),
+                "regime_gate": str(row.get("regime_gate") or "").strip(),
+                "execution_price_normalization_mode": str(
+                    row.get("execution_price_normalization_mode") or ""
+                ).strip(),
+                "paper_proxy_price_normalized": bool(row.get("paper_proxy_price_normalized", False)),
+                "signal_price_reference_kind": str(
+                    row.get("signal_price_reference_kind") or ""
+                ).strip(),
+                "signal_price_reference_source": str(
+                    row.get("signal_price_reference_source") or ""
+                ).strip(),
+                "signal_price_reference_provider": str(
+                    row.get("signal_price_reference_provider") or ""
+                ).strip(),
+                "signal_price_reference_symbol": str(
+                    row.get("signal_price_reference_symbol") or ""
+                ).strip(),
+            }
+        )
+        existing_execution_ids.add(execution_id)
+    positions_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "as_of": str((bridge_payload or {}).get("as_of") or "").strip() or existing_payload.get("as_of") or "",
+        "positions": existing_positions,
+    }
+    positions_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return positions_path
 
 
 def latest_stamped_datetime(review_dir: Path, suffixes: list[str]) -> dt.datetime | None:
@@ -4099,6 +4225,10 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
     offset += 1
+    rebuild_open_positions_from_bridge_payload(
+        output_root=output_root,
+        bridge_payload=bridge_payload,
+    )
 
     review_now = step_now(runtime_now, offset)
     review_payload = run_json_step(

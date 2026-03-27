@@ -243,10 +243,24 @@ def _pick_detail_row(
         return {}
     execution_text = str(execution_id or "").strip()
     symbol_text = str(symbol or "").strip().upper()
-    if execution_text and execution_text in store["by_execution"]:
-        return dict(store["by_execution"][execution_text])
-    if symbol_text and symbol_text in store["by_symbol"]:
-        return dict(store["by_symbol"][symbol_text])
+    execution_row = (
+        dict(store["by_execution"][execution_text])
+        if execution_text and execution_text in store["by_execution"]
+        else {}
+    )
+    symbol_row = (
+        dict(store["by_symbol"][symbol_text])
+        if symbol_text and symbol_text in store["by_symbol"]
+        else {}
+    )
+    execution_status = str(execution_row.get("status") or "").strip().upper()
+    symbol_status = str(symbol_row.get("status") or "").strip().upper()
+    if execution_row and symbol_row and execution_status == "OPEN" and symbol_status == "CLOSED":
+        return symbol_row
+    if execution_row:
+        return execution_row
+    if symbol_row:
+        return symbol_row
     return {}
 
 
