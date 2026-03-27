@@ -117,7 +117,7 @@ def build_event_game_state_snapshot(
     market_inputs: Mapping[str, Any],
 ) -> Dict[str, Any]:
     """Build a minimal snapshot describing the headline game state."""
-    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     generated_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     snapshot = {
