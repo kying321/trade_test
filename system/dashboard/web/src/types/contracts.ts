@@ -160,6 +160,7 @@ export interface PublicAcceptanceSummary {
   root_contracts_screenshot_path?: string;
   pages_contracts_screenshot_path?: string;
   orderflow_filter_route?: string;
+  orderflow_source_available?: boolean;
   orderflow_active_artifact?: string;
   orderflow_visible_artifacts?: string;
 }
@@ -187,6 +188,7 @@ export interface PublicAcceptanceCheckRow {
   public_snapshot_fetch_count?: number;
   internal_snapshot_fetch_count?: number;
   orderflow_filter_route?: string;
+  orderflow_source_available?: boolean;
   orderflow_active_artifact?: string;
   orderflow_visible_artifacts?: string;
   stdout?: string;

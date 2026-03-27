@@ -977,6 +977,7 @@ describe('buildTerminalReadModel', () => {
                     group: 'research_cross_section',
                     search_scope: 'title',
                     search: 'orderflow',
+                    source_available: true,
                     active_artifact: 'intraday_orderflow_blueprint',
                     visible_artifacts: [
                       'intraday_orderflow_blueprint',
@@ -1021,6 +1022,7 @@ describe('buildTerminalReadModel', () => {
     expect(internalAcceptance.summary.public_snapshot_fetch_count).toBe(4);
     expect(internalAcceptance.summary.internal_snapshot_fetch_count).toBe(0);
     expect(internalAcceptance.summary.orderflow_filter_route).toBe('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(internalAcceptance.summary.orderflow_source_available).toBe(true);
     expect(internalAcceptance.summary.orderflow_active_artifact).toBe('intraday_orderflow_blueprint');
     expect(internalAcceptance.summary.orderflow_visible_artifacts).toBe('intraday_orderflow_blueprint ｜ intraday_orderflow_research_gate_blocker');
     expect(internalAcceptance.checks[0].frontend_public).toBe('https://fuuu.fun');
@@ -1029,6 +1031,7 @@ describe('buildTerminalReadModel', () => {
     expect(internalAcceptance.checks[0].pages_overview_screenshot_path).toBe('/tmp/pages_overview_browser.png');
     expect(internalAcceptance.checks[1].public_snapshot_fetch_count).toBe(4);
     expect(internalAcceptance.checks[1].orderflow_filter_route).toBe('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(internalAcceptance.checks[1].orderflow_source_available).toBe(true);
     expect(internalAcceptance.checks[1].orderflow_active_artifact).toBe('intraday_orderflow_blueprint');
     expect(internalAcceptance.checks[1].orderflow_visible_artifacts).toBe('intraday_orderflow_blueprint ｜ intraday_orderflow_research_gate_blocker');
     expect(internalAcceptance.subcommands[0].stdout).toBe('root_public timeout');
@@ -1076,8 +1079,10 @@ describe('buildTerminalReadModel', () => {
     const degradedModel = buildTerminalReadModel(degradedAcceptanceLoaded);
     const degradedAcceptance = (degradedModel.workspace as any).publicAcceptance;
     expect(degradedAcceptance.summary.orderflow_filter_route).toBe('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(degradedAcceptance.summary.orderflow_source_available).toBe(false);
     expect(degradedAcceptance.summary.orderflow_active_artifact).toBe('—');
     expect(degradedAcceptance.summary.orderflow_visible_artifacts).toBeUndefined();
+    expect(degradedAcceptance.checks[1].orderflow_source_available).toBe(false);
     expect(degradedAcceptance.checks[1].orderflow_active_artifact).toBe('—');
     expect(degradedAcceptance.checks[1].orderflow_visible_artifacts).toBeUndefined();
   });

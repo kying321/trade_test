@@ -1470,6 +1470,9 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
   const workspaceSurface = toRecord<Dict>(workspaceRoutes.surface_assertion) || {};
   const workspaceNetwork = toRecord<Dict>(workspaceRoutes.network_observation) || {};
   const workspaceArtifactsFilter = toRecord<Dict>(workspaceRoutes.artifacts_filter_assertion) || {};
+  const orderflowSourceAvailable = typeof workspaceArtifactsFilter.source_available === 'boolean'
+    ? workspaceArtifactsFilter.source_available
+    : undefined;
   const subcommands = toRecord<Dict>(payload.subcommands) || {};
   const orderflowVisibleArtifacts = toArray<string>(workspaceArtifactsFilter.visible_artifacts)
     .map((value) => safeDisplayValue(value))
@@ -1494,6 +1497,7 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     root_contracts_screenshot_path: safeDisplayValue(topologyRootContractsBrowser.screenshot_path),
     pages_contracts_screenshot_path: safeDisplayValue(topologyPagesContractsBrowser.screenshot_path),
     orderflow_filter_route: safeDisplayValue(workspaceArtifactsFilter.route),
+    orderflow_source_available: orderflowSourceAvailable,
     orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
     orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
   };
@@ -1535,6 +1539,7 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       public_snapshot_fetch_count: typeof workspaceNetwork.public_snapshot_fetch_count === 'number' ? workspaceNetwork.public_snapshot_fetch_count : undefined,
       internal_snapshot_fetch_count: typeof workspaceNetwork.internal_snapshot_fetch_count === 'number' ? workspaceNetwork.internal_snapshot_fetch_count : undefined,
       orderflow_filter_route: safeDisplayValue(workspaceArtifactsFilter.route),
+      orderflow_source_available: orderflowSourceAvailable,
       orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
       orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
       ...(surface.effective === 'internal' && typeof workspaceRoutes.stdout === 'string' ? { stdout: workspaceRoutes.stdout } : {}),

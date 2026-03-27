@@ -996,6 +996,8 @@ describe('Fenlie terminal console', () => {
     expect(summaryCard?.textContent || '').toContain('0');
     expect(summaryCard?.textContent || '').toContain('orderflow 过滤路由');
     expect(summaryCard?.textContent || '').toContain('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(summaryCard?.textContent || '').toContain('orderflow 源可用');
+    expect(summaryCard?.textContent || '').toContain('否');
     expect(summaryCard?.textContent || '').toContain('orderflow 激活工件');
     expect(summaryCard?.textContent || '').not.toContain('intraday_orderflow_blueprint');
     expect(summaryCard?.textContent || '').not.toContain('intraday_orderflow_research_gate_blocker');

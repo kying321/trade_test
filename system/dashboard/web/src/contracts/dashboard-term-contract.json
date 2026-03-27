@@ -712,6 +712,7 @@
     "workspace_contracts_acceptance_public_fetches": "公开快照拉取次数",
     "workspace_contracts_acceptance_internal_fetches": "内部快照拉取次数",
     "workspace_contracts_acceptance_orderflow_route": "orderflow 过滤路由",
+    "workspace_contracts_acceptance_orderflow_source_available": "orderflow 源可用",
     "workspace_contracts_acceptance_orderflow_active_artifact": "orderflow 激活工件",
     "workspace_contracts_acceptance_orderflow_visible_artifacts": "orderflow 可见工件",
     "workspace_contracts_acceptance_cmd": "子命令",
