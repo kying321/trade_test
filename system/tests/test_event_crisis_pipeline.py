@@ -103,3 +103,53 @@ def test_build_event_live_guard_overlay_provides_valid_degraded_state() -> None:
     assert isinstance(overlay["canary_freeze"], bool)
     assert overlay["override_reason_codes"] == ["event_state:sector_stress"]
     assert overlay["valid_until_utc"].endswith("Z")
+
+
+def test_regime_snapshot_absorbs_game_state_and_transmission_inputs() -> None:
+    base_snapshot = build_event_regime_snapshot(
+        event_rows=_sample_event_rows(), market_inputs=_sample_market_inputs()
+    )
+    game_state_snapshot = {"game_state": "financial_pressure"}
+    transmission_chain_map = {"dominant_chain": "credit_intermediary_chain"}
+    updated_snapshot = build_event_regime_snapshot(
+        event_rows=_sample_event_rows(),
+        market_inputs=_sample_market_inputs(),
+        game_state_snapshot=game_state_snapshot,
+        transmission_chain_map=transmission_chain_map,
+    )
+    assert updated_snapshot["game_state"] == "financial_pressure"
+    assert updated_snapshot["dominant_chain"] == "credit_intermediary_chain"
+    assert (
+        updated_snapshot["systemic_risk_score"] >= base_snapshot["systemic_risk_score"]
+    )
+    assert updated_snapshot["regime_state"] in {
+        "watch",
+        "sector_stress",
+        "cross_asset_contagion",
+        "systemic_risk",
+    }
+
+
+def test_regime_snapshot_without_geostrategy_inputs_stays_backwards_compatible() -> None:
+    snapshot = build_event_regime_snapshot(
+        event_rows=_sample_event_rows(), market_inputs=_sample_market_inputs()
+    )
+    assert snapshot["game_state"] is None
+    assert snapshot["dominant_chain"] is None
+
+
+def test_asset_shock_map_absorbs_dominant_chain_at_artifact_level() -> None:
+    transmission_chain_map = {"dominant_chain": "risk_off_deleveraging_chain"}
+    baseline = build_event_asset_shock_map(
+        event_rows=_sample_event_rows(), market_inputs=_sample_market_inputs()
+    )
+    updated = build_event_asset_shock_map(
+        event_rows=_sample_event_rows(),
+        market_inputs=_sample_market_inputs(),
+        transmission_chain_map=transmission_chain_map,
+    )
+    assert updated["dominant_chain"] == "risk_off_deleveraging_chain"
+    assert all("dominant_chain" not in asset for asset in updated["assets"])
+    baseline_btc = next(entry for entry in baseline["assets"] if entry["asset"] == "BTC")
+    updated_btc = next(entry for entry in updated["assets"] if entry["asset"] == "BTC")
+    assert updated_btc["risk_1d"] >= baseline_btc["risk_1d"]
