@@ -853,6 +853,10 @@ def build_panel_payload(
     }
     source_payloads = {key: load_optional_payload(path) for key, path in source_paths.items()}
     event_summary = load_optional_payload(event_summary_path)
+    commodity_reasoning_summary_path = latest_review_json_artifact(
+        review_dir, "commodity_reasoning_summary", reference_now
+    )
+    commodity_reasoning_summary = load_optional_payload(commodity_reasoning_summary_path)
 
     promotion_unblock_brief = safe_text(
         hot_brief.get("source_openclaw_orderflow_blueprint_remote_promotion_unblock_readiness_brief")
@@ -924,6 +928,7 @@ def build_panel_payload(
             "cross_market": str(cross_market_path),
             **{key: str(path or "") for key, path in source_paths.items()},
             "event_crisis_operator_summary": str(event_summary_path or ""),
+            "commodity_reasoning_summary": str(commodity_reasoning_summary_path or ""),
         },
         "summary": {
             "operator_head": safe_row(operator_head_lane.get("head")),
@@ -1292,6 +1297,21 @@ def build_panel_payload(
             "event_crisis_hard_boundary_brief": safe_text(
                 event_summary.get("event_crisis_hard_boundary_brief")
             ),
+            "commodity_reasoning_primary_scenario_brief": safe_text(
+                commodity_reasoning_summary.get("primary_scenario_brief")
+            ),
+            "commodity_reasoning_primary_chain_brief": safe_text(
+                commodity_reasoning_summary.get("primary_chain_brief")
+            ),
+            "commodity_reasoning_range_scope_brief": safe_text(
+                commodity_reasoning_summary.get("range_scope_brief")
+            ),
+            "commodity_reasoning_boundary_strength_brief": safe_text(
+                commodity_reasoning_summary.get("boundary_strength_brief")
+            ),
+            "commodity_reasoning_invalidator_brief": safe_text(
+                commodity_reasoning_summary.get("invalidator_brief")
+            ),
         },
         "lane_cards": build_lane_cards(cross_market),
         "focus_slots": operator_focus_slots,
@@ -1512,6 +1532,32 @@ def render_html(payload: dict[str, Any]) -> str:
         [
             card_html(title=title, brief=brief, meta=meta, state=state)
             for title, brief, meta, state in geostrategy_cards
+        ]
+    )
+    commodity_reasoning_cards = [
+        (
+            "主情景",
+            safe_text(summary.get("commodity_reasoning_primary_scenario_brief")) or "-",
+            [f"primary_chain={safe_text(summary.get('commodity_reasoning_primary_chain_brief')) or '-'}"],
+            "review",
+        ),
+        (
+            "主传导链",
+            safe_text(summary.get("commodity_reasoning_primary_chain_brief")) or "-",
+            [f"range_scope={safe_text(summary.get('commodity_reasoning_range_scope_brief')) or '-'}"],
+            "review",
+        ),
+        (
+            "边界强度",
+            safe_text(summary.get("commodity_reasoning_boundary_strength_brief")) or "-",
+            [f"invalidator={safe_text(summary.get('commodity_reasoning_invalidator_brief')) or '-'}"],
+            "watch",
+        ),
+    ]
+    commodity_reasoning_html = "".join(
+        [
+            card_html(title=title, brief=brief, meta=meta, state=state)
+            for title, brief, meta, state in commodity_reasoning_cards
         ]
     )
 
@@ -1959,6 +2005,14 @@ def render_html(payload: dict[str, Any]) -> str:
           这里只展示 event crisis summary 透传下来的主战场、主传导链、安全边际与硬边界，不在面板层重算任何 authority。
         </p>
         <div class="card-grid">{geostrategy_html}</div>
+      </section>
+
+      <section class="section">
+        <h2>国内商品推理线</h2>
+        <p class="section-lead">
+          这里只透传国内商品推理线的主情景、主传导链、范围与边界强度，不在面板层重算推理 authority。
+        </p>
+        <div class="card-grid">{commodity_reasoning_html}</div>
       </section>
 
       <section class="section">

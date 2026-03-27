@@ -418,6 +418,18 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
             "event_crisis_hard_boundary_brief": "new_risk_hard_block",
         },
     )
+    commodity_reasoning_summary_path = review_dir / "latest_commodity_reasoning_summary.json"
+    write_json(
+        commodity_reasoning_summary_path,
+        {
+            "primary_scenario_brief": "supply_chain_tightening",
+            "primary_chain_brief": "feedstock_cost_push_chain",
+            "range_scope_brief": "contract_focused",
+            "boundary_strength_brief": "tight",
+            "invalidator_brief": "basis_weak",
+            "contracts_in_focus": ["BU2606"],
+        },
+    )
 
     monkeypatch.setattr(
         "sys.argv",
@@ -535,6 +547,11 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert payload["summary"]["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
     assert payload["summary"]["event_crisis_safety_margin_brief"] == "system_margin=0.42"
     assert payload["summary"]["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    assert payload["summary"]["commodity_reasoning_primary_scenario_brief"] == "supply_chain_tightening"
+    assert payload["summary"]["commodity_reasoning_primary_chain_brief"] == "feedstock_cost_push_chain"
+    assert payload["summary"]["commodity_reasoning_range_scope_brief"] == "contract_focused"
+    assert payload["summary"]["commodity_reasoning_boundary_strength_brief"] == "tight"
+    assert payload["summary"]["commodity_reasoning_invalidator_brief"] == "basis_weak"
     for removed_key in (
         "event_crisis_regime_brief",
         "event_crisis_top_analogue_brief",
@@ -562,6 +579,10 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert "credit_intermediary_chain" in html_text
     assert "system_margin=0.42" in html_text
     assert "new_risk_hard_block" in html_text
+    assert "supply_chain_tightening" in html_text
+    assert "feedstock_cost_push_chain" in html_text
+    assert "contract_focused" in html_text
+    assert "basis_weak" in html_text
     assert "等待纸面执行平仓证据" in html_text
     assert "需要清障 / 运维实盘门禁 + 风控守护" in html_text
     assert "wait_for_paper_execution_close_evidence" in html_text

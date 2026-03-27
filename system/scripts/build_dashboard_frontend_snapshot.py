@@ -475,6 +475,21 @@ def ensure_event_artifacts(selected_paths: dict[str, tuple[Path | None, str, str
             selected_paths[artifact_id] = (candidate, category, artifact_group)
 
 
+def ensure_commodity_reasoning_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    commodity_artifacts = [
+        ("commodity_reasoning_scenario_tree", "research", "commodity_reasoning", "commodity_reasoning_scenario_tree.json"),
+        ("commodity_reasoning_transmission_map", "research", "commodity_reasoning", "commodity_reasoning_transmission_map.json"),
+        ("commodity_reasoning_boundary_strength", "research", "commodity_reasoning", "commodity_reasoning_boundary_strength.json"),
+        ("commodity_reasoning_summary", "research", "commodity_reasoning", "commodity_reasoning_summary.json"),
+    ]
+    for artifact_id, category, artifact_group, suffix in commodity_artifacts:
+        if artifact_id in selected_paths:
+            continue
+        candidate = latest_review_suffix(review_dir, suffix)
+        if candidate:
+            selected_paths[artifact_id] = (candidate, category, artifact_group)
+
+
 def build_backtests(
     artifacts_dir: Path,
     max_backtests: int,
@@ -605,6 +620,7 @@ def build_surface_snapshot(
     max_equity_points: int,
 ) -> dict[str, Any]:
     ensure_event_artifacts(selected_paths, review_dir)
+    ensure_commodity_reasoning_artifacts(selected_paths, review_dir)
     generated_at = utc_now()
     artifact_payloads: dict[str, dict[str, Any]] = {}
     for label, (path, category, artifact_group) in selected_paths.items():

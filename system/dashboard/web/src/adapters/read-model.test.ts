@@ -396,6 +396,46 @@ describe('buildTerminalReadModel', () => {
             event_crisis_hard_boundary_brief: 'new_risk_hard_block',
           },
         },
+        commodity_reasoning_scenario_tree: {
+          payload: {
+            primary_scenario: 'supply_chain_tightening',
+            contract_focus: 'BU2606',
+          },
+        },
+        commodity_reasoning_transmission_map: {
+          payload: {
+            primary_chain: 'feedstock_cost_push_chain',
+            chains: [
+              {
+                contract: 'BU2606',
+                sector: 'energy_chemicals',
+                commodity: 'asphalt',
+              },
+            ],
+          },
+        },
+        commodity_reasoning_boundary_strength: {
+          payload: {
+            range_summary: 'contract_focused',
+            boundary_rows: [
+              {
+                target_id: 'BU2606',
+                boundary_strength: 'tight',
+                fragility_flags: ['basis_weak'],
+              },
+            ],
+          },
+        },
+        commodity_reasoning_summary: {
+          payload: {
+            primary_scenario_brief: 'supply_chain_tightening',
+            primary_chain_brief: 'feedstock_cost_push_chain',
+            range_scope_brief: 'contract_focused',
+            boundary_strength_brief: 'tight',
+            invalidator_brief: 'basis_weak',
+            contracts_in_focus: ['BU2606'],
+          },
+        },
       },
     };
     const model = buildTerminalReadModel({
@@ -412,6 +452,59 @@ describe('buildTerminalReadModel', () => {
     expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-crisis-summary')).toBe(true);
     expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-safety-margin')).toBe(true);
     expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-hard-boundary')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'commodity-scenario')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'commodity-chain')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'commodity-boundary')).toBe(true);
+  });
+
+  it('maps commodity reasoning artifacts into terminal views', () => {
+    const commoditySnapshot = {
+      ...loaded.snapshot,
+      artifact_payloads: {
+        ...loaded.snapshot.artifact_payloads,
+        commodity_reasoning_scenario_tree: {
+          payload: {
+            primary_scenario: 'supply_chain_tightening',
+            contract_focus: 'BU2606',
+          },
+        },
+        commodity_reasoning_transmission_map: {
+          payload: {
+            primary_chain: 'feedstock_cost_push_chain',
+            chains: [
+              {
+                contract: 'BU2606',
+                commodity: 'asphalt',
+              },
+            ],
+          },
+        },
+        commodity_reasoning_boundary_strength: {
+          payload: {
+            range_summary: 'contract_focused',
+          },
+        },
+        commodity_reasoning_summary: {
+          payload: {
+            primary_scenario_brief: 'supply_chain_tightening',
+            primary_chain_brief: 'feedstock_cost_push_chain',
+            range_scope_brief: 'contract_focused',
+            boundary_strength_brief: 'tight',
+            invalidator_brief: 'basis_weak',
+            contracts_in_focus: ['BU2606'],
+          },
+        },
+      },
+    };
+    const model = buildTerminalReadModel({
+      ...loaded,
+      snapshot: commoditySnapshot,
+    });
+
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'commodity-scenario')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'commodity-chain')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'commodity-summary')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'commodity-boundary')).toBe(true);
   });
 
   it('tolerates malformed event payloads without crashing', () => {

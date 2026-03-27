@@ -685,6 +685,10 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
   const eventAssetShockMap = eventArtifact(snapshot, 'event_asset_shock_map');
   const eventSafetyMargin = eventArtifact(snapshot, 'event_safety_margin_snapshot');
   const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
+  const commodityScenario = eventArtifact(snapshot, 'commodity_reasoning_scenario_tree');
+  const commodityTransmission = eventArtifact(snapshot, 'commodity_reasoning_transmission_map');
+  const commodityBoundary = eventArtifact(snapshot, 'commodity_reasoning_boundary_strength');
+  const commoditySummary = eventArtifact(snapshot, 'commodity_reasoning_summary');
 
   const sourceConfidence: MetricItem[] = [
     toMetric('schema-ok-ratio', 'data_schema_ok_ratio', latestSummary.selected_schema_ok_ratio, t('selected_schema_ok_ratio')),
@@ -833,6 +837,37 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
       ),
     );
   }
+  if (commodityScenario.primary_scenario) {
+    addEventMetric(
+      toMetric(
+        'commodity-scenario',
+        'commodity_reasoning_scenario',
+        normalizedString(commodityScenario.primary_scenario),
+        normalizedString(commodityScenario.contract_focus),
+      ),
+    );
+  }
+  if (commodityTransmission.primary_chain) {
+    const firstCommodityChain = toRecord<Dict>(toArray<Dict>(commodityTransmission.chains)[0]) || {};
+    addEventMetric(
+      toMetric(
+        'commodity-chain',
+        'commodity_reasoning_chain',
+        normalizedString(commodityTransmission.primary_chain),
+        normalizedString(firstCommodityChain.contract || firstCommodityChain.commodity),
+      ),
+    );
+  }
+  if (commodityBoundary.range_summary) {
+    addEventMetric(
+      toMetric(
+        'commodity-range',
+        'commodity_reasoning_range',
+        normalizedString(commodityBoundary.range_summary),
+        normalizedString(commoditySummary.boundary_strength_brief),
+      ),
+    );
+  }
 
   return {
     sourceConfidence,
@@ -848,6 +883,7 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
   const repairPlan = toRecord<Dict>(operatorPanel.priority_repair_plan) || {};
   const eventSafetyMargin = eventArtifact(snapshot, 'event_safety_margin_snapshot');
   const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
+  const commoditySummary = eventArtifact(snapshot, 'commodity_reasoning_summary');
 
   const gateScores: MetricItem[] = [
     toMetric('guardian-clearance', 'signal_guardian_clearance', summary.openclaw_guardian_clearance_status, buildAssignmentHint('score', summary.openclaw_guardian_clearance_score)),
@@ -902,6 +938,26 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
         normalizedString(eventOperatorSummary.event_crisis_hard_boundary_brief)
           ?? (activeBoundaries.length ? activeBoundaries.join(',') : 'none'),
         normalizedString(eventOperatorSummary.event_crisis_dominant_chain_brief),
+      ),
+    );
+  }
+  if (commoditySummary.primary_scenario_brief || commoditySummary.primary_chain_brief) {
+    repairMetrics.push(
+      toMetric(
+        'commodity-summary',
+        'commodity_reasoning_summary',
+        normalizedString(commoditySummary.primary_scenario_brief),
+        normalizedString(commoditySummary.primary_chain_brief),
+      ),
+    );
+  }
+  if (commoditySummary.boundary_strength_brief || commoditySummary.range_scope_brief) {
+    repairMetrics.push(
+      toMetric(
+        'commodity-boundary',
+        'commodity_reasoning_boundary',
+        normalizedString(commoditySummary.boundary_strength_brief),
+        normalizedString(commoditySummary.range_scope_brief),
       ),
     );
   }

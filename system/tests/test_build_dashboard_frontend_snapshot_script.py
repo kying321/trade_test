@@ -176,6 +176,54 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "event_crisis_hard_boundary_brief": "new_risk_hard_block",
         },
     )
+    commodity_scenario_path = review_dir / "latest_commodity_reasoning_scenario_tree.json"
+    write_json(
+        commodity_scenario_path,
+        {
+            "primary_scenario": "supply_chain_tightening",
+            "contract_focus": "BU2606",
+        },
+    )
+    commodity_transmission_path = review_dir / "latest_commodity_reasoning_transmission_map.json"
+    write_json(
+        commodity_transmission_path,
+        {
+            "primary_chain": "feedstock_cost_push_chain",
+            "chains": [
+                {
+                    "contract": "BU2606",
+                    "sector": "energy_chemicals",
+                    "commodity": "asphalt",
+                }
+            ],
+        },
+    )
+    commodity_boundary_path = review_dir / "latest_commodity_reasoning_boundary_strength.json"
+    write_json(
+        commodity_boundary_path,
+        {
+            "range_summary": "contract_focused",
+            "boundary_rows": [
+                {
+                    "target_id": "BU2606",
+                    "boundary_strength": "tight",
+                    "fragility_flags": ["basis_weak"],
+                }
+            ],
+        },
+    )
+    commodity_summary_path = review_dir / "latest_commodity_reasoning_summary.json"
+    write_json(
+        commodity_summary_path,
+        {
+            "primary_scenario_brief": "supply_chain_tightening",
+            "primary_chain_brief": "feedstock_cost_push_chain",
+            "range_scope_brief": "contract_focused",
+            "boundary_strength_brief": "tight",
+            "invalidator_brief": "basis_weak",
+            "contracts_in_focus": ["BU2606"],
+        },
+    )
 
     mod.build_surface_snapshot(
         surface=mod.SurfaceSpec(
@@ -321,6 +369,20 @@ def test_event_crisis_artifacts_exposed(tmp_path: Path) -> None:
         ("event_safety_margin_snapshot", "latest_event_safety_margin_snapshot.json"),
         ("event_crisis_operator_summary", "latest_event_crisis_operator_summary.json"),
     ]:
+        assert payloads[artifact_id]["path"].endswith(f"review/{suffix}")
+
+
+def test_dashboard_snapshot_exposes_commodity_reasoning_artifacts(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    for artifact_id, suffix in [
+        ("commodity_reasoning_scenario_tree", "latest_commodity_reasoning_scenario_tree.json"),
+        ("commodity_reasoning_transmission_map", "latest_commodity_reasoning_transmission_map.json"),
+        ("commodity_reasoning_boundary_strength", "latest_commodity_reasoning_boundary_strength.json"),
+        ("commodity_reasoning_summary", "latest_commodity_reasoning_summary.json"),
+    ]:
+        assert artifact_id in payloads
         assert payloads[artifact_id]["path"].endswith(f"review/{suffix}")
 
 

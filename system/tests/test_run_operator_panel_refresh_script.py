@@ -124,6 +124,11 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
                 "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
                 "event_crisis_safety_margin_brief": "system_margin=0.42",
                 "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+                "commodity_reasoning_primary_scenario_brief": "supply_chain_tightening",
+                "commodity_reasoning_primary_chain_brief": "feedstock_cost_push_chain",
+                "commodity_reasoning_range_scope_brief": "contract_focused",
+                "commodity_reasoning_boundary_strength_brief": "tight",
+                "commodity_reasoning_invalidator_brief": "basis_weak",
             },
             }
         if name == "build_conversation_feedback_projection_internal":
@@ -174,6 +179,11 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
     assert payload["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
     assert payload["event_crisis_safety_margin_brief"] == "system_margin=0.42"
     assert payload["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    assert payload["commodity_reasoning_primary_scenario_brief"] == "supply_chain_tightening"
+    assert payload["commodity_reasoning_primary_chain_brief"] == "feedstock_cost_push_chain"
+    assert payload["commodity_reasoning_range_scope_brief"] == "contract_focused"
+    assert payload["commodity_reasoning_boundary_strength_brief"] == "tight"
+    assert payload["commodity_reasoning_invalidator_brief"] == "basis_weak"
     for removed_key in (
         "event_crisis_regime_brief",
         "event_crisis_top_analogue_brief",
