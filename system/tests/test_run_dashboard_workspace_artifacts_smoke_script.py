@@ -9,9 +9,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_workspace_artifacts_smoke.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_dashboard_workspace_artifacts_smoke.py"
 
 
 def load_module():
@@ -93,7 +91,7 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "支撑证据" in spec
     assert "expectStableMarker" in spec
     assert "toLowerCase().includes(text.toLowerCase())" in spec
-    assert "new RegExp(escapeRegExp(marker), 'i')" in spec
+    assert "await expect(page.locator('body')).toContainText(marker);" in spec
     assert "context-nav" in spec
     assert "async function clickContextNav(page, label)" in spec
     assert "const expandToggle = page.getByRole('button', { name: '展开侧边导航' });" in spec
@@ -133,6 +131,13 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
                         "payload": {
                             "active_baseline": "hold16_zero",
                         }
+                    },
+                    "commodity_reasoning_summary": {
+                        "payload": {
+                            "primary_scenario_brief": "supply_chain_tightening",
+                            "primary_chain_brief": "feedstock_cost_push_chain",
+                            "contracts_in_focus": ["BU2606"],
+                        }
                     }
                 }
             },
@@ -143,7 +148,168 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
 
     route_assertions = mod.load_public_workspace_route_assertions(dist_dir=dist_dir)
 
-    assert route_assertions[0]["markers"] == ["关键摘要", "系统运行", "调度心跳", "研究主线", "hold16_zero", "退出风控", "下一步去哪"]
+    assert route_assertions[0]["markers"] == [
+        "关键摘要",
+        "系统运行",
+        "调度心跳",
+        "研究主线",
+        "hold16_zero",
+        "国内商品推理线",
+        "supply_chain_tightening",
+        "feedstock_cost_push_chain",
+        "BU2606",
+        "退出风控",
+        "下一步去哪",
+    ]
+
+
+def test_load_commodity_visibility_route_assertions_reads_public_snapshot_markers(tmp_path: Path) -> None:
+    mod = load_module()
+    dist_dir = tmp_path / "dist"
+    data_dir = dist_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "fenlie_dashboard_snapshot.json").write_text(
+        json.dumps(
+            {
+                "artifact_payloads": {
+                    "commodity_reasoning_summary": {
+                        "payload": {
+                            "primary_scenario_brief": "policy_relief_watch",
+                            "primary_chain_brief": "policy_relief_chain",
+                            "contracts_in_focus": ["BU2606"],
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    route_assertions = mod.load_commodity_visibility_route_assertions(dist_dir=dist_dir)
+
+    assert route_assertions == [
+        {
+            "route": "#/overview",
+            "nav_label": "总览",
+            "headline": "总览",
+            "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+        },
+        {
+            "route": "#/terminal/public",
+            "nav_label": "操作终端",
+            "headline": "执行穿透 / 调度与门禁",
+            "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+        },
+    ]
+
+
+def test_build_commodity_visibility_smoke_spec_covers_overview_and_terminal_public(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "commodity-visibility-smoke.png"
+    result_path = tmp_path / "commodity-visibility-smoke.json"
+
+    spec = mod.build_commodity_visibility_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        route_assertions=[
+            {
+                "route": "#/overview",
+                "nav_label": "总览",
+                "headline": "总览",
+                "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+            },
+                {
+                    "route": "#/terminal/public",
+                    "nav_label": "操作终端",
+                    "headline": "执行穿透 / 调度与门禁",
+                    "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+                },
+            ],
+    )
+
+    assert "#/overview" in spec
+    assert "#/terminal/public" in spec
+    assert "国内商品推理线" in spec
+    assert "policy_relief_watch" in spec
+    assert "policy_relief_chain" in spec
+    assert "BU2606" in spec
+    assert "commodity visibility smoke" in spec
+    assert "visited_routes" in spec
+    assert "await expect(page.locator('body')).toContainText(marker);" in spec
+    assert "requested_surface: 'public'" in spec
+    assert str(result_path) in spec
+
+
+def test_build_artifact_payload_reports_commodity_visibility_surface(tmp_path: Path) -> None:
+    mod = load_module()
+    report_path = tmp_path / "report.json"
+    screenshot_path = tmp_path / "commodity-visibility-smoke.png"
+
+    payload = mod.build_artifact_payload(
+        workspace=tmp_path,
+        report_path=report_path,
+        screenshot_path=screenshot_path,
+        build_result={"returncode": 0},
+        server_ready_seconds=0.14,
+        smoke_result={
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "playwright_result": {
+                "requested_surface": "public",
+                "effective_surface": "public",
+                "visited_routes": [
+                    {"route": "#/overview", "headline": "总览"},
+                    {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+                ],
+                "snapshot_requests": [
+                    "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
+                ],
+                "internal_snapshot_requests": [],
+            },
+        },
+        base_url="http://127.0.0.1:4173/",
+        mode="commodity_visibility",
+        expected_route_markers=[
+            {
+                "route": "#/overview",
+                "nav_label": "总览",
+                "headline": "总览",
+                "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+            },
+                {
+                    "route": "#/terminal/public",
+                    "nav_label": "操作终端",
+                    "headline": "执行穿透 / 调度与门禁",
+                    "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+                },
+            ],
+    )
+
+    assert payload["action"] == "dashboard_commodity_visibility_browser_smoke"
+    assert payload["ok"] is True
+    assert payload["surface_assertion"]["requested_surface"] == "public"
+    assert payload["surface_assertion"]["effective_surface"] == "public"
+    assert payload["routes"] == [
+        {"route": "#/overview", "headline": "总览"},
+        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+    ]
+    assert payload["expected_route_markers"] == [
+        {
+            "route": "#/overview",
+            "nav_label": "总览",
+            "headline": "总览",
+            "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+        },
+        {
+            "route": "#/terminal/public",
+            "nav_label": "操作终端",
+            "headline": "执行穿透 / 调度与门禁",
+            "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+        },
+    ]
 
 
 def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -> None:
@@ -379,6 +545,13 @@ def test_load_internal_terminal_focus_expectations_reads_focus_slot_source_row(t
                                 }
                             ]
                         }
+                    },
+                    "commodity_reasoning_summary": {
+                        "payload": {
+                            "primary_scenario_brief": "supply_chain_tightening",
+                            "primary_chain_brief": "feedstock_cost_push_chain",
+                            "contracts_in_focus": ["BU2606"],
+                        }
                     }
                 }
             },
@@ -400,6 +573,10 @@ def test_load_internal_terminal_focus_expectations_reads_focus_slot_source_row(t
                 "信号发生器与风险节流阀",
                 "穿透层 3 / 焦点槽位",
                 "主槽位",
+                "国内商品推理线",
+                "supply_chain_tightening",
+                "feedstock_cost_push_chain",
+                "BU2606",
             ],
         }
     ]
@@ -416,12 +593,25 @@ def test_build_internal_terminal_focus_smoke_spec_asserts_drilldown_focus_link_o
         result_path=result_path,
         focus_row_id="primary",
         focus_row_label="主槽位",
+        visible_markers=[
+            "信号发生器与风险节流阀",
+            "穿透层 3 / 焦点槽位",
+            "主槽位",
+            "国内商品推理线",
+            "supply_chain_tightening",
+            "feedstock_cost_push_chain",
+            "BU2606",
+        ],
     )
 
     assert "#/terminal/internal?panel=signal-risk&section=focus-slots" in spec
     assert "信号发生器与风险节流阀" in spec
     assert "穿透层 3 / 焦点槽位" in spec
     assert "主槽位" in spec
+    assert "国内商品推理线" in spec
+    assert "supply_chain_tightening" in spec
+    assert "feedstock_cost_push_chain" in spec
+    assert "BU2606" in spec
     assert "summary.drill-card-summary .drill-card-link" in spec
     assert ".drill-card-actions .drill-card-link" in spec
     assert "expect(summaryLinkCount).toBe(0)" in spec
@@ -429,6 +619,7 @@ def test_build_internal_terminal_focus_smoke_spec_asserts_drilldown_focus_link_o
     assert "定位此项" in spec
     assert "当前焦点" in spec
     assert "row=primary" in spec
+    assert "for (const marker of VISIBLE_MARKERS)" in spec
     assert "expect(publicSnapshotRequests.length).toBe(0)" in spec
     assert "requested_surface: 'internal'" in spec
     assert "terminal_drilldown_assertion" in spec
@@ -563,6 +754,10 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                     "信号发生器与风险节流阀",
                     "穿透层 3 / 焦点槽位",
                     "主槽位",
+                    "国内商品推理线",
+                    "supply_chain_tightening",
+                    "feedstock_cost_push_chain",
+                    "BU2606",
                 ],
             }
         ],
@@ -598,6 +793,10 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                 "信号发生器与风险节流阀",
                 "穿透层 3 / 焦点槽位",
                 "主槽位",
+                "国内商品推理线",
+                "supply_chain_tightening",
+                "feedstock_cost_push_chain",
+                "BU2606",
             ],
         }
     ]

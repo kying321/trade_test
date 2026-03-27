@@ -113,6 +113,22 @@ TERMINAL_FOCUS_SLOT_LABELS = {
     "followup": "跟进槽位",
     "secondary": "次级槽位",
 }
+COMMODITY_VISIBILITY_OVERVIEW_ROUTE = "#/overview"
+COMMODITY_VISIBILITY_TERMINAL_ROUTE = "#/terminal/public"
+COMMODITY_REASONING_LINE_TITLE = "国内商品推理线"
+
+
+def commodity_visibility_markers_from_snapshot(snapshot: dict[str, Any]) -> list[str]:
+    commodity_summary_payload = (
+        ((snapshot.get("artifact_payloads") or {}).get("commodity_reasoning_summary") or {}).get("payload") or {}
+    )
+    markers = [
+        COMMODITY_REASONING_LINE_TITLE,
+        str(commodity_summary_payload.get("primary_scenario_brief") or "").strip(),
+        str(commodity_summary_payload.get("primary_chain_brief") or "").strip(),
+        str(((commodity_summary_payload.get("contracts_in_focus") or [None])[0]) or "").strip(),
+    ]
+    return [marker for marker in markers if marker]
 
 
 def load_public_workspace_route_assertions(*, dist_dir: Path) -> list[dict[str, Any]]:
@@ -134,6 +150,7 @@ def load_public_workspace_route_assertions(*, dist_dir: Path) -> list[dict[str, 
         ((snapshot.get("artifact_payloads") or {}).get("hold_selection_handoff") or {}).get("payload") or {}
     )
     active_baseline = str(hold_selection_payload.get("active_baseline") or "").strip()
+    commodity_markers = commodity_visibility_markers_from_snapshot(snapshot)
     if active_baseline:
         route_assertions[0]["markers"] = [
             "关键摘要",
@@ -141,10 +158,47 @@ def load_public_workspace_route_assertions(*, dist_dir: Path) -> list[dict[str, 
             "调度心跳",
             "研究主线",
             active_baseline,
+            *commodity_markers,
+            "退出风控",
+            "下一步去哪",
+        ]
+    elif commodity_markers:
+        route_assertions[0]["markers"] = [
+            "关键摘要",
+            "系统运行",
+            "调度心跳",
+            "研究主线",
+            *commodity_markers,
             "退出风控",
             "下一步去哪",
         ]
     return route_assertions
+
+
+def load_commodity_visibility_route_assertions(*, dist_dir: Path) -> list[dict[str, Any]]:
+    snapshot_path = dist_dir / "data" / "fenlie_dashboard_snapshot.json"
+    if not snapshot_path.exists():
+        markers = [COMMODITY_REASONING_LINE_TITLE]
+    else:
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            snapshot = {}
+        markers = commodity_visibility_markers_from_snapshot(snapshot) or [COMMODITY_REASONING_LINE_TITLE]
+    return [
+        {
+            "route": COMMODITY_VISIBILITY_OVERVIEW_ROUTE,
+            "nav_label": "总览",
+            "headline": "总览",
+            "markers": markers,
+        },
+        {
+            "route": COMMODITY_VISIBILITY_TERMINAL_ROUTE,
+            "nav_label": "操作终端",
+            "headline": "执行穿透 / 调度与门禁",
+            "markers": markers,
+        },
+    ]
 
 
 def now_utc() -> dt.datetime:
@@ -360,7 +414,7 @@ def build_workspace_routes_smoke_spec(
 
             async function expectStableMarker(page, marker) {{
               await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
-              await expect(page.getByText(new RegExp(escapeRegExp(marker), 'i')).first()).toBeVisible();
+              await expect(page.locator('body')).toContainText(marker);
             }}
 
             async function ensureSidebarPageSectionsVisible(page) {{
@@ -654,10 +708,21 @@ def load_internal_terminal_focus_expectations(*, dist_dir: Path) -> dict[str, An
     snapshot_path = dist_dir / "data" / "fenlie_dashboard_internal_snapshot.json"
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
     operator_panel = (((snapshot.get("artifact_payloads") or {}).get("operator_panel") or {}).get("payload") or {})
+    commodity_summary = (((snapshot.get("artifact_payloads") or {}).get("commodity_reasoning_summary") or {}).get("payload") or {})
     focus_slots = list(operator_panel.get("focus_slots") or [])
     focus_row = (focus_slots[0] if focus_slots else {}) or {}
     focus_row_id = str(focus_row.get("slot") or "primary").strip() or "primary"
     focus_row_label = focus_slot_label(focus_row_id)
+    visible_markers = [
+        TERMINAL_SIGNAL_RISK_TITLE,
+        TERMINAL_FOCUS_SLOTS_TITLE,
+        focus_row_label,
+        "国内商品推理线",
+        str(commodity_summary.get("primary_scenario_brief") or "").strip(),
+        str(commodity_summary.get("primary_chain_brief") or "").strip(),
+        str(((commodity_summary.get("contracts_in_focus") or [None])[0]) or "").strip(),
+    ]
+    visible_markers = [marker for marker in visible_markers if marker]
     return {
         "focus_row_id": focus_row_id,
         "focus_row_label": focus_row_label,
@@ -666,11 +731,7 @@ def load_internal_terminal_focus_expectations(*, dist_dir: Path) -> dict[str, An
                 "route": TERMINAL_SIGNAL_RISK_ROUTE,
                 "nav_label": TERMINAL_SIGNAL_RISK_TITLE,
                 "headline": TERMINAL_SIGNAL_RISK_TITLE,
-                "markers": [
-                    TERMINAL_SIGNAL_RISK_TITLE,
-                    TERMINAL_FOCUS_SLOTS_TITLE,
-                    focus_row_label,
-                ],
+                "markers": visible_markers,
             }
         ],
     }
@@ -716,7 +777,7 @@ def build_internal_alignment_smoke_spec(
 
             async function expectStableMarker(page, marker) {{
               await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
-              await expect(page.getByText(new RegExp(escapeRegExp(marker), 'i')).first()).toBeVisible();
+              await expect(page.locator('body')).toContainText(marker);
             }}
 
             test.use({{ browserName: 'chromium' }});
@@ -778,8 +839,10 @@ def build_internal_terminal_focus_smoke_spec(
     result_path: Path,
     focus_row_id: str,
     focus_row_label: str,
+    visible_markers: list[str],
 ) -> str:
     route = TERMINAL_SIGNAL_RISK_ROUTE
+    visible_markers_json = json.dumps(visible_markers, ensure_ascii=False, indent=2)
     return (
         textwrap.dedent(
             f"""
@@ -792,6 +855,7 @@ def build_internal_terminal_focus_smoke_spec(
             const FOCUS_ROW_ID = {focus_row_id!r};
             const FOCUS_ROW_LABEL = {focus_row_label!r};
             const EXPECTED_ROW_FRAGMENT = {'row=' + focus_row_id!r};
+            const VISIBLE_MARKERS = {visible_markers_json};
 
             function escapeRegExp(value) {{
               return value.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
@@ -799,7 +863,7 @@ def build_internal_terminal_focus_smoke_spec(
 
             async function expectStableMarker(page, marker) {{
               await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
-              await expect(page.getByText(new RegExp(escapeRegExp(marker), 'i')).first()).toBeVisible();
+              await expect(page.locator('body')).toContainText(marker);
             }}
 
             test.use({{ browserName: 'chromium' }});
@@ -817,8 +881,9 @@ def build_internal_terminal_focus_smoke_spec(
               await page.goto({base_url!r} + ROUTE, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction(() => window.location.hash.includes('panel=signal-risk') && window.location.hash.includes('section=focus-slots'));
               await expect(page.getByRole('heading', {{ name: PANEL_TITLE, exact: true }})).toBeVisible();
-              await expectStableMarker(page, SECTION_TITLE);
-              await expectStableMarker(page, FOCUS_ROW_LABEL);
+              for (const marker of VISIBLE_MARKERS) {{
+                await expectStableMarker(page, marker);
+              }}
 
               const drilldownState = await page.evaluate((sectionHint) => {{
                 const normalizedSectionHint = String(sectionHint || '').replace(/\\s+/g, '').toLowerCase();
@@ -928,6 +993,79 @@ def build_internal_terminal_focus_smoke_spec(
     )
 
 
+def build_commodity_visibility_smoke_spec(
+    *,
+    base_url: str,
+    screenshot_path: Path,
+    result_path: Path,
+    route_assertions: list[dict[str, Any]],
+) -> str:
+    routes_json = json.dumps(route_assertions, ensure_ascii=False, indent=2)
+    return (
+        textwrap.dedent(
+            f"""
+            const {{ test, expect }} = require('@playwright/test');
+            const fs = require('node:fs');
+
+            const ROUTES = {routes_json};
+
+            function escapeRegExp(value) {{
+              return value.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+            }}
+
+            async function expectStableMarker(page, marker) {{
+              await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
+              await expect(page.locator('body')).toContainText(marker);
+            }}
+
+            test.use({{ browserName: 'chromium' }});
+
+            test('commodity visibility smoke', async ({{ page }}) => {{
+              const snapshotRequests = [];
+              const visitedRoutes = [];
+
+              page.on('response', async (response) => {{
+                const url = response.url();
+                if (url.includes('fenlie_dashboard_snapshot.json')) snapshotRequests.push(url);
+              }});
+
+              for (const route of ROUTES) {{
+                await page.goto({base_url!r} + route.route, {{ waitUntil: 'networkidle' }});
+                await expect(page.getByRole('heading', {{ name: route.headline, exact: true }})).toBeVisible();
+                for (const marker of route.markers) {{
+                  await expectStableMarker(page, marker);
+                }}
+                visitedRoutes.push({{
+                  route: route.route,
+                  headline: route.headline,
+                  url: page.url(),
+                }});
+              }}
+
+              fs.writeFileSync(
+                {str(result_path)!r},
+                JSON.stringify(
+                  {{
+                    requested_surface: 'public',
+                    effective_surface: 'public',
+                    visited_routes: visitedRoutes,
+                    snapshot_requests: snapshotRequests,
+                    internal_snapshot_requests: [],
+                  }},
+                  null,
+                  2,
+                ),
+                'utf8',
+              );
+
+              await page.screenshot({{ path: {str(screenshot_path)!r}, fullPage: true }});
+            }});
+            """
+        ).strip()
+        + "\n"
+    )
+
+
 def run_playwright_smoke(
     *,
     web_root: Path,
@@ -961,6 +1099,14 @@ def run_playwright_smoke(
                 result_path=result_path,
                 focus_row_id=str(expectations.get("focus_row_id") or "primary"),
                 focus_row_label=str(expectations.get("focus_row_label") or focus_slot_label("primary")),
+                visible_markers=list(((route_assertions or [{}])[0] or {}).get("markers") or [TERMINAL_SIGNAL_RISK_TITLE, TERMINAL_FOCUS_SLOTS_TITLE]),
+            )
+        elif mode == "commodity_visibility":
+            spec = build_commodity_visibility_smoke_spec(
+                base_url=base_url,
+                screenshot_path=screenshot_path,
+                result_path=result_path,
+                route_assertions=route_assertions or [],
             )
         else:
             spec = build_workspace_routes_smoke_spec(
@@ -1078,6 +1224,8 @@ def build_artifact_payload(
         action_name = "dashboard_internal_alignment_browser_smoke"
     elif mode == "internal_terminal_focus":
         action_name = "dashboard_internal_terminal_focus_browser_smoke"
+    elif mode == "commodity_visibility":
+        action_name = "dashboard_commodity_visibility_browser_smoke"
     else:
         action_name = "dashboard_workspace_routes_browser_smoke"
     expected_focus_panel = "signal-risk" if mode == "internal_terminal_focus" else "lab-review"
@@ -1142,9 +1290,9 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true", help="Skip npm run build before smoke.")
     parser.add_argument(
         "--mode",
-        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus"],
+        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus", "commodity_visibility"],
         default="public_workspace",
-        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path.",
+        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path; commodity_visibility validates overview + terminal/public commodity reasoning visibility.",
     )
     args = parser.parse_args()
 
@@ -1165,6 +1313,9 @@ def main() -> None:
     elif args.mode == "internal_terminal_focus":
         report_path = review_dir / f"{timestamp}_dashboard_internal_terminal_focus_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_internal_terminal_focus_browser_smoke.png"
+    elif args.mode == "commodity_visibility":
+        report_path = review_dir / f"{timestamp}_dashboard_commodity_visibility_browser_smoke.json"
+        screenshot_path = review_dir / f"{timestamp}_dashboard_commodity_visibility_browser_smoke.png"
     else:
         report_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.png"
@@ -1189,6 +1340,21 @@ def main() -> None:
                 "headline": TERMINAL_SIGNAL_RISK_TITLE,
                 "markers": [TERMINAL_SIGNAL_RISK_TITLE, TERMINAL_FOCUS_SLOTS_TITLE],
             }
+        ]
+    elif args.mode == "commodity_visibility":
+        expected_route_markers = [
+            {
+                "route": COMMODITY_VISIBILITY_OVERVIEW_ROUTE,
+                "nav_label": "总览",
+                "headline": "总览",
+                "markers": [COMMODITY_REASONING_LINE_TITLE],
+            },
+            {
+                "route": COMMODITY_VISIBILITY_TERMINAL_ROUTE,
+                "nav_label": "操作终端",
+                "headline": "执行穿透 / 调度与门禁",
+                "markers": [COMMODITY_REASONING_LINE_TITLE],
+            },
         ]
     else:
         expected_route_markers = list(PUBLIC_WORKSPACE_ROUTE_ASSERTIONS)
@@ -1228,6 +1394,9 @@ def main() -> None:
             elif args.mode == "internal_terminal_focus":
                 internal_expectations = load_internal_terminal_focus_expectations(dist_dir=dist_dir)
                 expected_route_markers = list(internal_expectations["route_assertions"])
+            elif args.mode == "commodity_visibility":
+                internal_expectations = None
+                expected_route_markers = load_commodity_visibility_route_assertions(dist_dir=dist_dir)
             else:
                 internal_expectations = None
                 expected_route_markers = load_public_workspace_route_assertions(dist_dir=dist_dir)
