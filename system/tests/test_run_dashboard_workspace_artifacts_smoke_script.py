@@ -29,7 +29,23 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     ]
     route_assertions[0] = {
         **route_assertions[0],
-        "markers": ["关键摘要", "系统运行", "调度心跳", "研究主线", "hold16_zero", "退出风控", "下一步去哪"],
+        "markers": [
+            "系统状态 / 入口 / 路由总览",
+            "研究主线摘要",
+            "查看源头主线",
+            "契约验收",
+            "hold16_zero",
+            "国内商品推理线",
+            "policy_relief_watch",
+            "policy_relief_chain",
+            "BU2606",
+        ],
+    }
+    route_assertions[1] = {
+        **route_assertions[1],
+        "expected_default_artifact": "operator_panel",
+        "expected_focus_panel": "orchestration",
+        "expected_focus_section": "freshness",
     }
     screenshot_path = tmp_path / "workspace-routes-smoke.png"
     result_path = tmp_path / "workspace-routes-smoke.json"
@@ -42,14 +58,23 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     )
 
     assert "#/overview" in spec
-    assert "关键摘要" in spec
-    assert "系统运行" in spec
-    assert "调度心跳" in spec
-    assert "研究主线" in spec
+    assert "系统状态 / 入口 / 路由总览" in spec
+    assert "研究主线摘要" in spec
+    assert "查看源头主线" in spec
+    assert "契约验收" in spec
     assert "hold16_zero" in spec
-    assert "退出风控" in spec
-    assert "下一步去哪" in spec
+    assert "国内商品推理线" in spec
+    assert "policy_relief_watch" in spec
+    assert "policy_relief_chain" in spec
+    assert "BU2606" in spec
     assert "#/workspace/artifacts" in spec
+    assert "const defaultWorkspaceArtifact = String(workspaceStartRoute.expected_default_artifact || 'price_action_breakout_pullback');" in spec
+    assert "const defaultWorkspacePanel = String(workspaceStartRoute.expected_focus_panel || 'lab-review');" in spec
+    assert "const defaultWorkspaceSection = String(workspaceStartRoute.expected_focus_section || 'research-heads');" in spec
+    assert "await page.waitForFunction((artifactId) => window.location.hash.includes(`artifact=${artifactId}`), defaultWorkspaceArtifact);" in spec
+    assert "await page.waitForFunction((panelId) => window.location.hash.includes(`panel=${panelId}`), defaultWorkspacePanel);" in spec
+    assert "await page.waitForFunction((sectionId) => window.location.hash.includes(`section=${sectionId}`), defaultWorkspaceSection);" in spec
+    assert "await expect(activeArtifactValue).toHaveAttribute('title', defaultWorkspaceArtifact);" in spec
     assert "工件池" in spec
     assert "#/workspace/alignment" in spec
     assert "对齐页" in spec
@@ -61,12 +86,10 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "契约层" in spec
     assert "公开入口拓扑" in spec
     assert "公开面验收" in spec
-    assert "root overview 截图" in spec
-    assert "pages overview 截图" in spec
-    assert "root contracts 截图" in spec
-    assert "pages contracts 截图" in spec
-    assert "公开快照拉取次数" in spec
-    assert "内部快照拉取次数" in spec
+    assert "暂无公开面验收工件" in spec
+    assert "接口目录" in spec
+    assert "源头主线" in spec
+    assert "回退链" in spec
     assert "研究地图" in spec
     assert "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow" in spec
     assert "intraday_orderflow_blueprint" in spec
@@ -80,7 +103,7 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "target.open = true;" in spec
     assert "if (target instanceof HTMLDetailsElement) {" in spec
     assert "expect(exitRiskReviewSectionState.opened).toBeTruthy();" in spec
-    assert "const exitRiskReviewVisibleArtifacts = await page.evaluate(({ sectionHint, artifactIds }) => {" in spec
+    assert "exitRiskReviewVisibleArtifacts = await page.evaluate(({ sectionHint, artifactIds }) => {" in spec
     assert "const rawTitles = Array.from(target.querySelectorAll('.value-text[title]'))" in spec
     assert "expect(exitRiskReviewVisibleArtifacts).toEqual(exitRiskReviewArtifacts);" in spec
     assert "price_action_exit_risk_break_even_guarded_review" in spec
@@ -101,8 +124,9 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "document.documentElement.dataset.theme" in spec
     assert "contracts-subcommand-workspace_routes_smoke" in spec
     assert "data-accordion-id=\"contracts-subcommand-workspace_routes_smoke\"" in spec
-    assert "const pageSectionActiveLabel = ((await activePageSection.textContent()) || '').trim();" in spec
-    assert "const pageSectionAccordionState = await focusedAccordion.getAttribute('data-state');" in spec
+    assert "let pageSectionActiveLabel = '';" in spec
+    assert "let pageSectionAccordionState = '';" in spec
+    assert "if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-subcommand-workspace_routes_smoke'))) {" in spec
     assert "active_label: pageSectionActiveLabel" in spec
     assert "accordion_state: pageSectionAccordionState" in spec
     assert "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff" in spec
@@ -114,6 +138,8 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "#/workspace/contracts?page_section=contracts-source-gap-audit" in spec
     assert "退出风控源差审计" in spec
     assert "finding_count" in spec
+    assert "let contractsSourceHeadAccordionState = '';" in spec
+    assert "let contractsSourceGapObservedMarkers = [];" in spec
     assert "await expect(activeExitRiskReviewArtifact).toHaveAttribute('title', exitRiskReviewActiveArtifact);" in spec
     assert str(result_path) in spec
 
@@ -139,7 +165,14 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
                             "contracts_in_focus": ["BU2606"],
                         }
                     }
-                }
+                },
+                "workspace_default_focus": {
+                    "artifact": "operator_panel",
+                    "group": "system_anchor",
+                    "panel": "orchestration",
+                    "section": "freshness",
+                    "search_scope": "title",
+                },
             },
             ensure_ascii=False,
         ),
@@ -149,18 +182,19 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
     route_assertions = mod.load_public_workspace_route_assertions(dist_dir=dist_dir)
 
     assert route_assertions[0]["markers"] == [
-        "关键摘要",
-        "系统运行",
-        "调度心跳",
-        "研究主线",
+        "系统状态 / 入口 / 路由总览",
+        "研究主线摘要",
+        "查看源头主线",
+        "契约验收",
         "hold16_zero",
         "国内商品推理线",
         "supply_chain_tightening",
         "feedstock_cost_push_chain",
         "BU2606",
-        "退出风控",
-        "下一步去哪",
     ]
+    assert route_assertions[1]["expected_default_artifact"] == "operator_panel"
+    assert route_assertions[1]["expected_focus_panel"] == "orchestration"
+    assert route_assertions[1]["expected_focus_section"] == "freshness"
 
 
 def test_load_commodity_visibility_route_assertions_reads_public_snapshot_markers(tmp_path: Path) -> None:
@@ -613,9 +647,8 @@ def test_build_internal_terminal_focus_smoke_spec_asserts_drilldown_focus_link_o
     assert "feedstock_cost_push_chain" in spec
     assert "BU2606" in spec
     assert "summary.drill-card-summary .drill-card-link" in spec
-    assert ".drill-card-actions .drill-card-link" in spec
-    assert "expect(summaryLinkCount).toBe(0)" in spec
-    assert "expect(actionLinkCount).toBeGreaterThanOrEqual(1)" in spec
+    assert ".drill-card-summary .drill-card-link" in spec
+    assert "expect(summaryLinkCount).toBeGreaterThanOrEqual(1)" in spec
     assert "定位此项" in spec
     assert "当前焦点" in spec
     assert "row=primary" in spec
@@ -735,11 +768,10 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                     "section": "focus-slots",
                     "focus_row_id": "primary",
                     "focus_row_label": "主槽位",
-                    "summary_link_count": 0,
-                    "action_link_count": 1,
-                    "action_label_before_click": "定位此项",
-                    "action_label_after_click": "当前焦点",
-                    "action_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
+                    "summary_link_count": 1,
+                    "summary_label_before_click": "定位此项",
+                    "summary_label_after_click": "当前焦点",
+                    "summary_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
                 },
             },
         },
@@ -778,11 +810,10 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
         "section": "focus-slots",
         "focus_row_id": "primary",
         "focus_row_label": "主槽位",
-        "summary_link_count": 0,
-        "action_link_count": 1,
-        "action_label_before_click": "定位此项",
-        "action_label_after_click": "当前焦点",
-        "action_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
+        "summary_link_count": 1,
+        "summary_label_before_click": "定位此项",
+        "summary_label_after_click": "当前焦点",
+        "summary_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
     }
     assert payload["expected_route_markers"] == [
         {
