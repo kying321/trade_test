@@ -82,6 +82,17 @@ function buildFeedbackMetrics(projection: ConversationFeedbackProjection): Metri
   ];
 }
 
+function buildCommodityReasoningMetrics(model: TerminalReadModel | null): MetricItem[] {
+  if (!model) return [];
+  const micro = model.dataRegime.microCapture.filter((metric) =>
+    ['commodity-scenario', 'commodity-chain', 'commodity-range'].includes(metric.id),
+  );
+  const repair = model.signalRisk.repairPlan.filter((metric) =>
+    ['commodity-summary', 'commodity-boundary'].includes(metric.id),
+  );
+  return [...micro, ...repair];
+}
+
 export function OverviewPage({ model }: OverviewPageProps) {
   const holdSelectionHandoff = model?.workspace.sourceHeads.find((row) => row.id === 'hold_selection_handoff')
     || model?.workspace.sourceHeads[0]
@@ -100,6 +111,7 @@ export function OverviewPage({ model }: OverviewPageProps) {
     { view: 'internal' },
     'alignment-summary',
   );
+  const commodityReasoningMetrics = buildCommodityReasoningMetrics(model);
 
   return (
     <section className="overview-page">
@@ -138,6 +150,15 @@ export function OverviewPage({ model }: OverviewPageProps) {
           <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
         )}
       </PanelCard>
+      {commodityReasoningMetrics.length ? (
+        <PanelCard
+          title="国内商品推理线"
+          kicker="reasoning / visible-priority"
+          meta="首屏固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
+        >
+          <MetricStrip items={commodityReasoningMetrics} showRawValues />
+        </PanelCard>
+      ) : null}
       {requestedInternal ? (
         <PanelCard
           title="方向对齐投射"

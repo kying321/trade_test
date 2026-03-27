@@ -19,6 +19,7 @@ from typing import Any, Iterator
 CHANGE_CLASS = "RESEARCH_ONLY"
 PANEL_ROUTE = "operator_task_visual_panel.html"
 PANEL_SECTION_TITLE = "事件危机地缘层"
+COMMODITY_SECTION_TITLE = "国内商品推理线"
 
 
 def now_utc() -> dt.datetime:
@@ -119,6 +120,12 @@ def load_operator_panel_expectations(*, dist_dir: Path) -> dict[str, Any]:
         str(summary.get("event_crisis_dominant_chain_brief") or ""),
         str(summary.get("event_crisis_safety_margin_brief") or ""),
         str(summary.get("event_crisis_hard_boundary_brief") or ""),
+        COMMODITY_SECTION_TITLE,
+        str(summary.get("commodity_reasoning_primary_scenario_brief") or ""),
+        str(summary.get("commodity_reasoning_primary_chain_brief") or ""),
+        str(summary.get("commodity_reasoning_range_scope_brief") or ""),
+        str(summary.get("commodity_reasoning_boundary_strength_brief") or ""),
+        str(summary.get("commodity_reasoning_invalidator_brief") or ""),
     ]
     markers = [marker for marker in markers if marker.strip()]
     return {
@@ -285,7 +292,7 @@ def build_artifact_payload(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a browser-level smoke for the operator panel geostrategy section.")
+    parser = argparse.ArgumentParser(description="Run a browser-level smoke for the operator panel geostrategy + commodity reasoning sections.")
     parser.add_argument("--workspace", default=".", help="Fenlie workspace root or system directory.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host for temporary static server.")
     parser.add_argument("--port", type=int, default=0, help="Bind port for temporary static server. 0 = auto-pick.")

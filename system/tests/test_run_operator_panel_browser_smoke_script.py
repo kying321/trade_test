@@ -19,7 +19,7 @@ def load_module():
     return module
 
 
-def test_load_operator_panel_expectations_reads_geostrategy_briefs(tmp_path: Path) -> None:
+def test_load_operator_panel_expectations_reads_geostrategy_and_commodity_briefs(tmp_path: Path) -> None:
     mod = load_module()
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir(parents=True)
@@ -31,6 +31,11 @@ def test_load_operator_panel_expectations_reads_geostrategy_briefs(tmp_path: Pat
                     "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
                     "event_crisis_safety_margin_brief": "system_margin=0.42",
                     "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+                    "commodity_reasoning_primary_scenario_brief": "supply_chain_tightening",
+                    "commodity_reasoning_primary_chain_brief": "feedstock_cost_push_chain",
+                    "commodity_reasoning_range_scope_brief": "contract_focused",
+                    "commodity_reasoning_boundary_strength_brief": "tight",
+                    "commodity_reasoning_invalidator_brief": "basis_weak",
                 }
             },
             ensure_ascii=False,
@@ -47,10 +52,16 @@ def test_load_operator_panel_expectations_reads_geostrategy_briefs(tmp_path: Pat
         "credit_intermediary_chain",
         "system_margin=0.42",
         "new_risk_hard_block",
+        "国内商品推理线",
+        "supply_chain_tightening",
+        "feedstock_cost_push_chain",
+        "contract_focused",
+        "tight",
+        "basis_weak",
     ]
 
 
-def test_build_operator_panel_smoke_spec_includes_route_and_geostrategy_markers(tmp_path: Path) -> None:
+def test_build_operator_panel_smoke_spec_includes_route_and_reasoning_markers(tmp_path: Path) -> None:
     mod = load_module()
     screenshot_path = tmp_path / "operator-panel-smoke.png"
     result_path = tmp_path / "operator-panel-smoke.json"
@@ -66,6 +77,12 @@ def test_build_operator_panel_smoke_spec_includes_route_and_geostrategy_markers(
             "credit_intermediary_chain",
             "system_margin=0.42",
             "new_risk_hard_block",
+            "国内商品推理线",
+            "supply_chain_tightening",
+            "feedstock_cost_push_chain",
+            "contract_focused",
+            "tight",
+            "basis_weak",
         ],
     )
 
@@ -75,6 +92,12 @@ def test_build_operator_panel_smoke_spec_includes_route_and_geostrategy_markers(
     assert "credit_intermediary_chain" in spec
     assert "system_margin=0.42" in spec
     assert "new_risk_hard_block" in spec
+    assert "国内商品推理线" in spec
+    assert "supply_chain_tightening" in spec
+    assert "feedstock_cost_push_chain" in spec
+    assert "contract_focused" in spec
+    assert "tight" in spec
+    assert "basis_weak" in spec
     assert str(screenshot_path) in spec
     assert str(result_path) in spec
     assert "page.screenshot" in spec
@@ -104,6 +127,12 @@ def test_build_artifact_payload_reports_panel_assertion(tmp_path: Path) -> None:
                     "credit_intermediary_chain",
                     "system_margin=0.42",
                     "new_risk_hard_block",
+                    "国内商品推理线",
+                    "supply_chain_tightening",
+                    "feedstock_cost_push_chain",
+                    "contract_focused",
+                    "tight",
+                    "basis_weak",
                 ],
             },
         },
@@ -114,6 +143,12 @@ def test_build_artifact_payload_reports_panel_assertion(tmp_path: Path) -> None:
             "credit_intermediary_chain",
             "system_margin=0.42",
             "new_risk_hard_block",
+            "国内商品推理线",
+            "supply_chain_tightening",
+            "feedstock_cost_push_chain",
+            "contract_focused",
+            "tight",
+            "basis_weak",
         ],
     )
 
@@ -127,6 +162,12 @@ def test_build_artifact_payload_reports_panel_assertion(tmp_path: Path) -> None:
         "credit_intermediary_chain",
         "system_margin=0.42",
         "new_risk_hard_block",
+        "国内商品推理线",
+        "supply_chain_tightening",
+        "feedstock_cost_push_chain",
+        "contract_focused",
+        "tight",
+        "basis_weak",
     ]
     assert payload["final_url"] == "http://127.0.0.1:4173/operator_task_visual_panel.html"
     assert payload["server_ready_seconds"] == 0.33
@@ -150,6 +191,11 @@ def test_main_writes_operator_panel_browser_smoke_report(monkeypatch, tmp_path: 
                     "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
                     "event_crisis_safety_margin_brief": "system_margin=0.42",
                     "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+                    "commodity_reasoning_primary_scenario_brief": "supply_chain_tightening",
+                    "commodity_reasoning_primary_chain_brief": "feedstock_cost_push_chain",
+                    "commodity_reasoning_range_scope_brief": "contract_focused",
+                    "commodity_reasoning_boundary_strength_brief": "tight",
+                    "commodity_reasoning_invalidator_brief": "basis_weak",
                 }
             }
         )
@@ -203,6 +249,12 @@ def test_main_writes_operator_panel_browser_smoke_report(monkeypatch, tmp_path: 
         "credit_intermediary_chain",
         "system_margin=0.42",
         "new_risk_hard_block",
+        "国内商品推理线",
+        "supply_chain_tightening",
+        "feedstock_cost_push_chain",
+        "contract_focused",
+        "tight",
+        "basis_weak",
     ]
     assert seen["name"] == "operator_panel_refresh"
     assert seen["cmd"][:4] == [

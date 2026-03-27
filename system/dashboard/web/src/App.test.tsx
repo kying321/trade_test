@@ -344,6 +344,58 @@ const mockSnapshot = {
       summary: { status: 'warning', change_class: 'SIM_ONLY', research_decision: 'no_edge', takeaway: 'deprioritize cross section' },
       payload: {},
     },
+    commodity_reasoning_scenario_tree: {
+      label: 'commodity reasoning scenario tree',
+      path: '/tmp/commodity-scenario.json',
+      summary: { status: 'ok', change_class: 'RESEARCH_ONLY' },
+      payload: {
+        primary_scenario: 'supply_chain_tightening',
+        contract_focus: 'BU2606',
+      },
+    },
+    commodity_reasoning_transmission_map: {
+      label: 'commodity reasoning transmission map',
+      path: '/tmp/commodity-transmission.json',
+      summary: { status: 'ok', change_class: 'RESEARCH_ONLY' },
+      payload: {
+        primary_chain: 'feedstock_cost_push_chain',
+        chains: [
+          {
+            contract: 'BU2606',
+            sector: 'energy_chemicals',
+            commodity: 'asphalt',
+          },
+        ],
+      },
+    },
+    commodity_reasoning_boundary_strength: {
+      label: 'commodity reasoning boundary strength',
+      path: '/tmp/commodity-boundary.json',
+      summary: { status: 'ok', change_class: 'RESEARCH_ONLY' },
+      payload: {
+        range_summary: 'contract_focused',
+        boundary_rows: [
+          {
+            target_id: 'BU2606',
+            boundary_strength: 'tight',
+            fragility_flags: ['basis_weak'],
+          },
+        ],
+      },
+    },
+    commodity_reasoning_summary: {
+      label: 'commodity reasoning summary',
+      path: '/tmp/commodity-summary.json',
+      summary: { status: 'ok', change_class: 'RESEARCH_ONLY' },
+      payload: {
+        primary_scenario_brief: 'supply_chain_tightening',
+        primary_chain_brief: 'feedstock_cost_push_chain',
+        range_scope_brief: 'contract_focused',
+        boundary_strength_brief: 'tight',
+        invalidator_brief: 'basis_weak',
+        contracts_in_focus: ['BU2606'],
+      },
+    },
     hold_selection_handoff: {
       label: 'hold selection handoff',
       path: 'review/latest_price_action_breakout_pullback_hold_selection_handoff_sim_only.json',
@@ -748,6 +800,11 @@ describe('Fenlie terminal console', () => {
     const summaryLink = screen.getByRole('link', { name: '查看源头主线' });
     expect(summaryLink.getAttribute('href')).toContain('/workspace/contracts');
     expect(summaryLink.getAttribute('href')).toContain('page_section=contracts-source-heads');
+    expect(screen.getByRole('heading', { name: '国内商品推理线' })).toBeTruthy();
+    const commodityCard = screen.getByRole('heading', { name: '国内商品推理线' }).closest('section');
+    expect(commodityCard?.textContent || '').toContain('supply_chain_tightening');
+    expect(commodityCard?.textContent || '').toContain('feedstock_cost_push_chain');
+    expect(commodityCard?.textContent || '').toContain('BU2606');
     expect(textOf('.global-topbar-inner')).not.toContain('请求视图');
     expect(textOf('.global-topbar-inner')).not.toContain('实际视图');
     expect(textOf('.global-summary-strip')).toContain('变更级别：仅研究');
@@ -793,6 +850,7 @@ describe('Fenlie terminal console', () => {
   });
 
   it('renders terminal and workspace routes with the new TS shell', async () => {
+    window.location.hash = '#/terminal/public';
     await renderApp();
 
     expect(screen.getByText('Fenlie / 控制台')).toBeTruthy();
@@ -819,14 +877,15 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByText('运行摘要 / 调度总线')).toBeTruthy();
     expect(screen.getAllByText('总线调度与全局门禁').length).toBeGreaterThan(0);
     expect(screen.getAllByText('信号发生器与风险节流阀').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('国内商品推理线').length).toBeGreaterThan(0);
+    expect(document.body.textContent || '').toContain('feedstock_cost_push_chain');
+    expect(document.body.textContent || '').toContain('BU2606');
     expect(screen.getAllByText('策略实验室与回测复盘').length).toBeGreaterThan(0);
     expect(screen.getAllByText('查看终端层').length).toBeGreaterThan(0);
 
     await navigateHash('#/workspace/contracts');
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('workspace-context-strip')).toBeTruthy();
-    });
+    expect(await screen.findByLabelText('workspace-context-strip', undefined, { timeout: 3000 })).toBeTruthy();
     expect(textOf('.global-summary-strip')).toContain('当前页：契约层');
     expect(textOf('.context-header .panel-kicker')).toContain('契约层');
     expect(textOf('.context-header h2')).toContain('公开入口 / 数据契约 / 路由验收');

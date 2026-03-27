@@ -199,6 +199,15 @@ function buildPinnedArtifactWorkspaceHandoffs(model: TerminalReadModel, focus?: 
   return dedupeLinks(links);
 }
 
+function buildCommodityReasoningMetrics(model: TerminalReadModel) {
+  const microIds = new Set(['commodity-scenario', 'commodity-chain', 'commodity-range']);
+  const repairIds = new Set(['commodity-summary', 'commodity-boundary']);
+  return [
+    ...model.dataRegime.microCapture.filter((metric) => microIds.has(metric.id)),
+    ...model.signalRisk.repairPlan.filter((metric) => repairIds.has(metric.id)),
+  ];
+}
+
 function resolveTerminalTargetFocus(
   model: TerminalReadModel,
   current: TerminalFocus | undefined,
@@ -369,6 +378,7 @@ export function TerminalPanels({
   const focusSlotsRows = signalRisk.focusSlots as unknown as Array<Record<string, unknown>>;
   const controlChainRows = signalRisk.controlChain as unknown as Array<Record<string, unknown>>;
   const actionQueueRows = signalRisk.actionQueue as unknown as Array<Record<string, unknown>>;
+  const commodityReasoningMetrics = buildCommodityReasoningMetrics(model);
   const focusedRowLabel =
     focusedRowTitle(focus, 'signal-risk', 'focus-slots', focusSlotsRows, view.signalRisk.focusSlotsDrilldown)
     || focusedRowTitle(focus, 'signal-risk', 'control-chain', controlChainRows, view.signalRisk.controlChainDrilldown)
@@ -603,6 +613,17 @@ export function TerminalPanels({
             </div>
           </DrilldownSection>
         </PanelCard>
+
+        {commodityReasoningMetrics.length ? (
+          <PanelCard
+            title="国内商品推理线"
+            kicker="reasoning / visible-priority"
+            meta="终端固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
+            className={surfacePanelClass(isInternal, false)}
+          >
+            <MetricStrip items={commodityReasoningMetrics} showRawValues />
+          </PanelCard>
+        ) : null}
 
         <PanelCard
           title={t('terminal_panel_lab_review_title')}
