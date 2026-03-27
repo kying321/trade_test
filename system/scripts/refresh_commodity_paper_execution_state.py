@@ -3929,12 +3929,123 @@ def main(argv: list[str] | None = None) -> int:
     runtime_now = derive_runtime_now(review_dir, args.now)
     python_bin = "python3"
     signal_tickets_json = str(args.signal_tickets_json or "").strip()
-    queue_path = latest_stamped_artifact(review_dir, "commodity_paper_execution_queue")
 
     steps: list[dict[str, Any]] = []
+    offset = 0
+
+    ticket_lane_now = step_now(runtime_now, offset)
+    ticket_lane_payload = run_json_step(
+        step_name="ticket_lane_refresh",
+        cmd=[
+            python_bin,
+            str(script_path("build_commodity_paper_ticket_lane.py")),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            fmt_utc(ticket_lane_now),
+        ],
+    )
+    steps.append(
+        {
+            "name": "ticket_lane_refresh",
+            "now": fmt_utc(ticket_lane_now),
+            "artifact": str(ticket_lane_payload.get("artifact") or ""),
+            "status": str(ticket_lane_payload.get("ticket_status") or ""),
+        }
+    )
+    offset += 1
+
+    ticket_book_now = step_now(runtime_now, offset)
+    ticket_book_payload = run_json_step(
+        step_name="ticket_book_refresh",
+        cmd=[
+            python_bin,
+            str(script_path("build_commodity_paper_ticket_book.py")),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            fmt_utc(ticket_book_now),
+        ],
+    )
+    steps.append(
+        {
+            "name": "ticket_book_refresh",
+            "now": fmt_utc(ticket_book_now),
+            "artifact": str(ticket_book_payload.get("artifact") or ""),
+            "status": str(ticket_book_payload.get("ticket_book_status") or ""),
+        }
+    )
+    offset += 1
+
+    execution_preview_now = step_now(runtime_now, offset)
+    execution_preview_payload = run_json_step(
+        step_name="execution_preview_refresh",
+        cmd=[
+            python_bin,
+            str(script_path("build_commodity_paper_execution_preview.py")),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            fmt_utc(execution_preview_now),
+        ],
+    )
+    steps.append(
+        {
+            "name": "execution_preview_refresh",
+            "now": fmt_utc(execution_preview_now),
+            "artifact": str(execution_preview_payload.get("artifact") or ""),
+            "status": str(execution_preview_payload.get("execution_preview_status") or ""),
+        }
+    )
+    offset += 1
+
+    execution_artifact_now = step_now(runtime_now, offset)
+    execution_artifact_payload = run_json_step(
+        step_name="execution_artifact_refresh",
+        cmd=[
+            python_bin,
+            str(script_path("build_commodity_paper_execution_artifact.py")),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            fmt_utc(execution_artifact_now),
+        ],
+    )
+    steps.append(
+        {
+            "name": "execution_artifact_refresh",
+            "now": fmt_utc(execution_artifact_now),
+            "artifact": str(execution_artifact_payload.get("artifact") or ""),
+            "status": str(execution_artifact_payload.get("execution_artifact_status") or ""),
+        }
+    )
+    offset += 1
+
+    execution_queue_now = step_now(runtime_now, offset)
+    execution_queue_payload = run_json_step(
+        step_name="execution_queue_refresh",
+        cmd=[
+            python_bin,
+            str(script_path("build_commodity_paper_execution_queue.py")),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            fmt_utc(execution_queue_now),
+        ],
+    )
+    steps.append(
+        {
+            "name": "execution_queue_refresh",
+            "now": fmt_utc(execution_queue_now),
+            "artifact": str(execution_queue_payload.get("artifact") or ""),
+            "status": str(execution_queue_payload.get("execution_queue_status") or ""),
+        }
+    )
+    offset += 1
+
+    queue_path = Path(str(execution_queue_payload.get("artifact") or "")).expanduser().resolve()
 
     bridge_apply_payload: dict[str, Any] | None = None
-    offset = 0
     if bool(args.apply_bridge):
         bridge_apply_now = step_now(runtime_now, offset)
         bridge_apply_cmd = [
@@ -4127,6 +4238,11 @@ def main(argv: list[str] | None = None) -> int:
         "context_path": str(context_path),
         "context_sha256": sha256_file(context_path),
         "steps": steps,
+        "ticket_lane_artifact": str(ticket_lane_payload.get("artifact") or ""),
+        "ticket_book_artifact": str(ticket_book_payload.get("artifact") or ""),
+        "execution_preview_artifact": str(execution_preview_payload.get("artifact") or ""),
+        "execution_artifact": str(execution_artifact_payload.get("artifact") or ""),
+        "execution_queue_artifact": str(execution_queue_payload.get("artifact") or ""),
         "bridge_apply_artifact": str((bridge_apply_payload or {}).get("artifact") or ""),
         "bridge_artifact": str(bridge_payload.get("artifact") or ""),
         "review_artifact": str(review_payload.get("artifact") or ""),

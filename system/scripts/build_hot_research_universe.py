@@ -13,6 +13,7 @@ import time
 from typing import Any
 import urllib.error
 import urllib.request
+import yaml
 
 
 SYSTEM_ROOT = Path(
@@ -29,6 +30,7 @@ from lie_engine.data.storage import write_json, write_markdown
 
 DEFAULT_OUTPUT_ROOT = SYSTEM_ROOT / "output"
 DEFAULT_REVIEW_DIR = DEFAULT_OUTPUT_ROOT / "review"
+DEFAULT_CONFIG_PATH = SYSTEM_ROOT / "config.yaml"
 DEFAULT_ARTIFACT_TTL_HOURS = 168.0
 DEFAULT_KEEP_FILES = 40
 DEFAULT_RATE_LIMIT_PER_MINUTE = 30.0
@@ -384,9 +386,63 @@ def _unique_symbols(symbols: list[str]) -> list[str]:
     return ordered
 
 
-def build_batches(crypto: list[str], commodities: list[str]) -> dict[str, list[str]]:
+def _normalize_batch_name(raw: str) -> str:
+    text = str(raw or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_]+", "_", text)
+    return text.strip("_")
+
+
+def load_domestic_futures_paper_specs(config_path: str | Path | None) -> list[dict[str, Any]]:
+    text = str(config_path or "").strip()
+    if not text:
+        return []
+    path = Path(text).expanduser().resolve()
+    if not path.exists():
+        return []
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    universe = payload.get("universe") or {}
+    rows = universe.get("domestic_futures_paper") or []
+    if not isinstance(rows, list):
+        return []
+    specs: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = normalize_symbol(row.get("symbol") or "")
+        if not symbol:
+            continue
+        batch = _normalize_batch_name(row.get("batch") or "domestic_futures_cn") or "domestic_futures_cn"
+        specs.append(
+            {
+                "symbol": symbol,
+                "asset_class": str(row.get("asset_class") or "").strip().lower(),
+                "product": str(row.get("product") or "").strip().lower(),
+                "venue": str(row.get("venue") or "").strip().lower(),
+                "stage": str(row.get("stage") or "").strip().lower(),
+                "batch": batch,
+            }
+        )
+    return specs
+
+
+def build_batches(
+    crypto: list[str],
+    commodities: list[str],
+    domestic_futures_paper_specs: list[dict[str, Any]] | None = None,
+) -> dict[str, list[str]]:
     crypto_ranked = _unique_symbols(crypto)
     commodity_ranked = _unique_symbols(commodities)
+    domestic_futures_specs = [dict(row) for row in list(domestic_futures_paper_specs or []) if isinstance(row, dict)]
+    domestic_futures_ranked = _unique_symbols([str(row.get("symbol") or "") for row in domestic_futures_specs])
+    domestic_futures_batches: dict[str, list[str]] = {}
+    for row in domestic_futures_specs:
+        batch = _normalize_batch_name(row.get("batch") or "domestic_futures_cn") or "domestic_futures_cn"
+        symbol = normalize_symbol(row.get("symbol") or "")
+        if not symbol:
+            continue
+        domestic_futures_batches.setdefault(batch, [])
+        if symbol not in domestic_futures_batches[batch]:
+            domestic_futures_batches[batch].append(symbol)
     crypto_hot = crypto_ranked[: min(8, len(crypto_ranked))]
     crypto_majors = crypto_ranked[: min(6, len(crypto_ranked))]
     crypto_beta = crypto_ranked[len(crypto_majors) : len(crypto_majors) + min(6, max(0, len(crypto_ranked) - len(crypto_majors)))]
@@ -412,10 +468,15 @@ def build_batches(crypto: list[str], commodities: list[str]) -> dict[str, list[s
         ("metals_all", metals_all),
         ("metals_macro", metals_macro),
         ("commodities_benchmark", commodity_ranked),
+        ("domestic_futures_cn", domestic_futures_ranked),
         ("mixed_macro", mixed_macro),
         ("mixed_macro_expanded", mixed_macro_expanded),
     ]
-    return {name: symbols for name, symbols in candidates if symbols}
+    payload = {name: symbols for name, symbols in candidates if symbols}
+    for batch, symbols in domestic_futures_batches.items():
+        if symbols:
+            payload[batch] = symbols
+    return payload
 
 
 def build_universe_payload(
@@ -429,6 +490,7 @@ def build_universe_payload(
     timeout_ms: int,
     artifact_ttl_hours: float,
     keep_files: int,
+    domestic_futures_paper_specs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     bucket = TokenBucket(rate_per_minute=rate_limit_per_minute)
     statuses: dict[str, Any] = {}
@@ -458,8 +520,10 @@ def build_universe_payload(
         selected_crypto = DEFAULT_STATIC_CRYPTO[: max(1, crypto_limit)]
         source_tier = "static_fallback"
 
-    core_symbols = selected_crypto + commodity_symbols
-    batches = build_batches(selected_crypto, commodity_symbols)
+    domestic_futures_specs = [dict(row) for row in list(domestic_futures_paper_specs or []) if isinstance(row, dict)]
+    domestic_futures_symbols = _unique_symbols([str(row.get("symbol") or "") for row in domestic_futures_specs])
+    core_symbols = selected_crypto + commodity_symbols + domestic_futures_symbols
+    batches = build_batches(selected_crypto, commodity_symbols, domestic_futures_specs)
     built_at = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     expires_at = (now_dt + dt.timedelta(hours=max(1.0, artifact_ttl_hours))).strftime("%Y-%m-%dT%H:%M:%SZ")
     payload: dict[str, Any] = {
@@ -476,6 +540,11 @@ def build_universe_payload(
         "commodities": {
             "selected": commodity_symbols,
             "count": len(commodity_symbols),
+        },
+        "domestic_futures": {
+            "selected": domestic_futures_symbols,
+            "count": len(domestic_futures_symbols),
+            "batches": sorted({str(row.get("batch") or "") for row in domestic_futures_specs if str(row.get("batch") or "").strip()}),
         },
         "core_symbols": core_symbols,
         "batches": batches,
@@ -501,6 +570,7 @@ def build_universe_payload(
         f"- network_mode: `{network_mode}`",
         f"- crypto_selected: `{', '.join(selected_crypto)}`",
         f"- commodity_selected: `{', '.join(commodity_symbols)}`",
+        f"- domestic_futures_selected: `{', '.join(domestic_futures_symbols)}`",
         "",
         "## Batches",
     ]
@@ -529,6 +599,7 @@ def build_universe_payload(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a hot crypto + commodity research universe artifact.")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--review-dir", default=str(DEFAULT_REVIEW_DIR))
     parser.add_argument("--network-mode", choices=["online", "offline"], default="online")
@@ -555,6 +626,7 @@ def main() -> int:
         now_dt=now_dt,
         crypto_limit=max(1, int(args.crypto_limit)),
         commodity_symbols=[normalize_symbol(s) for s in args.commodity_symbols if normalize_symbol(s)],
+        domestic_futures_paper_specs=load_domestic_futures_paper_specs(args.config),
         network_mode=str(args.network_mode).strip().lower(),
         rate_limit_per_minute=max(1.0, float(args.rate_limit_per_minute)),
         timeout_ms=min(5000, max(100, int(args.timeout_ms))),

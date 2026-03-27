@@ -178,6 +178,18 @@ def latest_hot_universe_commodity_source(review_dir: Path, reference_now: dt.dat
     return max(ranked, key=lambda item: (item[0], item[1]))[2]
 
 
+def latest_hot_research_universe_source(review_dir: Path, reference_now: dt.datetime | None = None) -> Path | None:
+    candidates = list(review_dir.glob("*_hot_research_universe.json"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_commodity_reasoning_summary_source(review_dir: Path) -> Path | None:
+    path = review_dir / "latest_commodity_reasoning_summary.json"
+    return path if path.exists() else None
+
+
 def latest_live_gate_blocker_report(review_dir: Path, reference_now: dt.datetime | None = None) -> Path | None:
     candidates = list(review_dir.glob("*_live_gate_blocker_report.json"))
     if not candidates:
@@ -256,6 +268,68 @@ def derive_from_blocker_report(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def derive_from_hot_research_universe(
+    universe_payload: dict[str, Any],
+    reasoning_summary_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    batches = {
+        str(key).strip(): [str(v).strip().upper() for v in values if str(v).strip()]
+        for key, values in dict(universe_payload.get("batches") or {}).items()
+        if isinstance(values, list)
+    }
+    domestic_meta = dict(universe_payload.get("domestic_futures") or {})
+    domestic_batches = [
+        str(x).strip()
+        for x in list(domestic_meta.get("batches") or [])
+        if str(x).strip() and str(x).strip() in batches
+    ]
+    domestic_symbols = [str(x).strip().upper() for x in list(domestic_meta.get("selected") or []) if str(x).strip()]
+    contracts_in_focus = [
+        str(x).strip().upper()
+        for x in list((reasoning_summary_payload or {}).get("contracts_in_focus") or [])
+        if str(x).strip()
+    ]
+
+    preferred_batches: list[str] = []
+    preferred_symbols: list[str] = []
+    for batch in domestic_batches:
+        symbols = batches.get(batch, [])
+        if contracts_in_focus:
+            overlap = [symbol for symbol in contracts_in_focus if symbol in symbols]
+            if overlap:
+                preferred_batches = [batch]
+                preferred_symbols = overlap
+                break
+    if not preferred_batches and domestic_batches:
+        preferred_batches = [domestic_batches[0]]
+        preferred_symbols = [symbol for symbol in domestic_symbols if symbol in batches.get(domestic_batches[0], [])] or list(
+            batches.get(domestic_batches[0], [])
+        )
+
+    return {
+        "route_status": "paper-first",
+        "execution_mode": "paper_first",
+        "design_status": str(universe_payload.get("status") or "").strip() or "ok",
+        "focus_primary_batches": preferred_batches,
+        "focus_with_regime_filter_batches": [],
+        "shadow_only_batches": [],
+        "avoid_batches": [],
+        "leader_symbols_primary": preferred_symbols,
+        "leader_symbols_regime_filter": [],
+        "next_focus_batch": preferred_batches[0] if preferred_batches else "",
+        "next_focus_symbols": preferred_symbols,
+        "next_stage": "paper_ticket_lane",
+        "route_stack_brief": _route_stack(preferred_batches, [], []),
+        "stage_plan": [
+            {
+                "stage": "paper_ticket_lane",
+                "batches": preferred_batches,
+                "rule": "Route domestic futures paper sleeves into paper tickets only; keep live disabled.",
+            }
+        ],
+    }
+
+
 def render_markdown(payload: dict[str, Any]) -> str:
     lines = [
         "# Commodity Execution Lane",
@@ -304,7 +378,26 @@ def main(argv: list[str] | None = None) -> int:
     source_path = latest_hot_universe_commodity_source(review_dir, runtime_now)
     source_mode = "hot-universe-action-ladder"
     source_payload: dict[str, Any]
-    if source_path is not None:
+    domestic_source_path = latest_hot_research_universe_source(review_dir, runtime_now)
+    reasoning_summary_path = latest_commodity_reasoning_summary_source(review_dir)
+    domestic_source_payload = (
+        json.loads(domestic_source_path.read_text(encoding="utf-8"))
+        if domestic_source_path and domestic_source_path.exists()
+        else None
+    )
+    reasoning_summary_payload = (
+        json.loads(reasoning_summary_path.read_text(encoding="utf-8"))
+        if reasoning_summary_path and reasoning_summary_path.exists()
+        else None
+    )
+    domestic_selected = list((domestic_source_payload or {}).get("domestic_futures", {}).get("selected") or [])
+    contracts_in_focus = list((reasoning_summary_payload or {}).get("contracts_in_focus") or [])
+    if domestic_source_payload and domestic_selected and contracts_in_focus:
+        source_mode = "hot-research-universe-domestic-futures"
+        source_path = domestic_source_path
+        source_payload = domestic_source_payload
+        lane = derive_from_hot_research_universe(domestic_source_payload, reasoning_summary_payload)
+    elif source_path is not None:
         source_payload = json.loads(source_path.read_text(encoding="utf-8"))
         lane = derive_from_hot_universe(source_payload)
     else:

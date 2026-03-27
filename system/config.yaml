@@ -11,6 +11,8 @@ universe:
     - {symbol: "BNBUSDT", asset_class: "crypto", theme: "交易所生态"}
     - {symbol: "SOLUSDT", asset_class: "crypto", theme: "高Beta公链"}
     - {symbol: "XRPUSDT", asset_class: "crypto", theme: "支付"}
+  domestic_futures_paper:
+    - {symbol: "BU2606", asset_class: "future", venue: "shfe", product: "asphalt", batch: "asphalt_cn", stage: "paper_only", theme: "国内能化"}
   max_dynamic_additions: 5
 data:
   provider_profile: "dual_binance_bybit_public"

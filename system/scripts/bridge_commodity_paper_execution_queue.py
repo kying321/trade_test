@@ -468,7 +468,7 @@ def build_commodity_directional_signals(
     output_root: Path,
     as_of: dt.date,
     symbols: list[str],
-) -> Path:
+) -> tuple[Path, Path | None]:
     script_path = review_dir.parents[1] / "scripts" / "build_commodity_directional_signals.py"
     cmd = [
         "python3",
@@ -499,7 +499,11 @@ def build_commodity_directional_signals(
     json_path = Path(str(payload.get("json") or "")).expanduser().resolve()
     if not json_path.exists():
         raise FileNotFoundError("commodity_signal_build_output_missing")
-    return json_path
+    signal_tickets_json = str(payload.get("signal_tickets_json") or "").strip()
+    tickets_path = Path(signal_tickets_json).expanduser().resolve() if signal_tickets_json else None
+    if tickets_path is not None and not tickets_path.exists():
+        raise FileNotFoundError("signal_ticket_build_output_missing")
+    return json_path, tickets_path
 
 
 def build_signal_tickets(
@@ -509,12 +513,14 @@ def build_signal_tickets(
     as_of: dt.date,
     symbols: list[str],
 ) -> tuple[Path, Path]:
-    commodity_signal_path = build_commodity_directional_signals(
+    commodity_signal_path, direct_signal_tickets_path = build_commodity_directional_signals(
         review_dir=review_dir,
         output_root=output_root,
         as_of=as_of,
         symbols=symbols,
     )
+    if direct_signal_tickets_path is not None:
+        return direct_signal_tickets_path, commodity_signal_path
     script_path = review_dir.parents[1] / "scripts" / "build_order_ticket.py"
     cmd = [
         "python3",
@@ -595,12 +601,22 @@ def resolve_signal_ticket_artifact(
             as_of=queue_as_of.date() if queue_as_of else runtime_now.date(),
         ), None
     if build_tickets and execution_symbols:
-        return build_signal_tickets(
-            review_dir=review_dir,
-            output_root=output_root,
-            as_of=queue_as_of.date() if queue_as_of else runtime_now.date(),
-            symbols=execution_symbols,
-        )
+        try:
+            return build_signal_tickets(
+                review_dir=review_dir,
+                output_root=output_root,
+                as_of=queue_as_of.date() if queue_as_of else runtime_now.date(),
+                symbols=execution_symbols,
+            )
+        except (RuntimeError, FileNotFoundError) as exc:
+            error_text = str(exc)
+            if "build_commodity_directional_signals.py" in error_text or "commodity_signal_build_failed" in error_text:
+                return write_empty_signal_tickets(
+                    review_dir=review_dir,
+                    runtime_now=runtime_now,
+                    as_of=queue_as_of.date() if queue_as_of else runtime_now.date(),
+                ), None
+            raise
     return latest_signal_tickets_artifact(review_dir, runtime_now), None
 
 

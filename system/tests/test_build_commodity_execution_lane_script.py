@@ -106,3 +106,53 @@ def test_build_commodity_execution_lane_accepts_inactive_hot_universe_research(t
     assert payload["avoid_batches"] == ["metals_all"]
     assert payload["next_focus_batch"] == "metals_all"
     assert payload["next_focus_symbols"] == ["XAUUSD", "XAGUSD", "COPPER"]
+
+
+def test_build_commodity_execution_lane_prefers_domestic_futures_batch_for_bu2606(tmp_path: Path) -> None:
+    review_dir = tmp_path / "review"
+    _write_json(
+        review_dir / "20260328T021000Z_hot_research_universe.json",
+        {
+            "status": "ok",
+            "domestic_futures": {
+                "selected": ["BU2606"],
+                "count": 1,
+                "batches": ["asphalt_cn"],
+            },
+            "batches": {
+                "asphalt_cn": ["BU2606"],
+                "domestic_futures_cn": ["BU2606"],
+                "metals_all": ["XAUUSD", "XAGUSD", "COPPER"],
+            },
+        },
+    )
+    _write_json(
+        review_dir / "latest_commodity_reasoning_summary.json",
+        {
+            "contracts_in_focus": ["BU2606"],
+            "primary_scenario_brief": "policy_relief_watch",
+        },
+    )
+
+    proc = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT_PATH),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            "2026-03-28T10:30:00+08:00",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["source_mode"] == "hot-research-universe-domestic-futures"
+    assert payload["route_status"] == "paper-first"
+    assert payload["focus_primary_batches"] == ["asphalt_cn"]
+    assert payload["next_focus_batch"] == "asphalt_cn"
+    assert payload["next_focus_symbols"] == ["BU2606"]
+    assert payload["summary_text"].find("next-focus-batch: asphalt_cn") >= 0
