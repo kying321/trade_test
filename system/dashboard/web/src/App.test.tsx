@@ -704,11 +704,9 @@ function buildAcceptanceSnapshot() {
                 group: 'research_cross_section',
                 search_scope: 'title',
                 search: 'orderflow',
-                active_artifact: 'intraday_orderflow_blueprint',
-                visible_artifacts: [
-                  'intraday_orderflow_blueprint',
-                  'intraday_orderflow_research_gate_blocker',
-                ],
+                source_available: false,
+                active_artifact: '',
+                visible_artifacts: [],
               },
             },
           },
@@ -965,9 +963,8 @@ describe('Fenlie terminal console', () => {
     expect(summaryCard?.textContent || '').toContain('orderflow 过滤路由');
     expect(summaryCard?.textContent || '').toContain('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
     expect(summaryCard?.textContent || '').toContain('orderflow 激活工件');
-    expect(summaryCard?.textContent || '').toContain('intraday_orderflow_blueprint');
-    expect(summaryCard?.textContent || '').toContain('orderflow 可见工件');
-    expect(summaryCard?.textContent || '').toContain('intraday_orderflow_research_gate_blocker');
+    expect(summaryCard?.textContent || '').not.toContain('intraday_orderflow_blueprint');
+    expect(summaryCard?.textContent || '').not.toContain('intraday_orderflow_research_gate_blocker');
     expect(screen.queryByText('root_public timeout')).toBeNull();
     expect(screen.queryByText('timeout')).toBeNull();
   });
