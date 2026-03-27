@@ -221,10 +221,13 @@ def load_config_core_symbols(path: Path | None) -> tuple[list[str], list[str]]:
         return [], []
     core_rows = universe.get("core", [])
     if not isinstance(core_rows, list):
-        return [], []
+        core_rows = []
+    domestic_rows = universe.get("domestic_futures_paper", [])
+    if not isinstance(domestic_rows, list):
+        domestic_rows = []
     symbols: list[str] = []
     asset_classes: list[str] = []
-    for row in core_rows:
+    for row in [*core_rows, *domestic_rows]:
         if not isinstance(row, dict):
             continue
         symbol = str(row.get("symbol") or "").strip().upper()
