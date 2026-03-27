@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+from copy import deepcopy
 
 GAME_STATES = (
     "stable_competition",
@@ -135,11 +136,12 @@ def build_event_game_state_snapshot(
         "dominant_transmission_axes": list(DOMINANT_TRANSMISSION_AXES),
         "systemic_escalation_probability": 0.32,
         "policy_relief_probability": 0.41,
-        "actors": [dict(actor_spec) for actor_spec in ACTOR_SPECIFICATIONS],
+        "actors": [deepcopy(actor_spec) for actor_spec in ACTOR_SPECIFICATIONS],
+        "context": {},
     }
 
     _normalize_actor_axes(snapshot["actors"])
-    _inject_context(event_rows, market_inputs)
+    snapshot["context"] = _inject_context(event_rows, market_inputs)
 
     return snapshot
 
@@ -155,12 +157,9 @@ def _normalize_actor_axes(actors: List[Dict[str, Any]]) -> None:
 
 def _inject_context(
     event_rows: Sequence[Mapping[str, Any]], market_inputs: Mapping[str, Any]
-) -> None:
-    # Minimal stub: keep the deterministic defaults, but record counts for traceability
+) -> Dict[str, Any]:
     summary = {
         "event_row_count": len(event_rows),
         "market_input_keys": sorted(market_inputs.keys()),
     }
-    # We purposely avoid network I/O or deep inference for this research-only skeleton.
-    # The summary can be extended later when more data becomes available.
     return summary
