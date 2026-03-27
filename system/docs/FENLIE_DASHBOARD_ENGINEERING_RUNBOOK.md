@@ -576,8 +576,8 @@ npm run smoke:workspace-routes
 - 是否错误拉取内部快照
 - contracts 页 section deep-link 是否还能展开子命令证据
 - `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow` 是否仍能命中：
-  - `intraday_orderflow_blueprint`
-  - `intraday_orderflow_research_gate_blocker`
+  - `artifacts_filter_assertion.source_available=true|false`
+  - 当 `source_available=true` 时再校验 active artifact / visible artifacts
 
 ### 10.2 常用可选参数
 
@@ -673,7 +673,7 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 - `内部快照拉取次数`
 
 其中 contracts/source-head 深链
-`#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff`
+`#/workspace/contracts?page_section=contracts-source-head-operator_panel`
 要求真实浏览器同时看到：
 
 - `source head 状态`
@@ -725,13 +725,13 @@ node ./scripts/run-python.mjs ../../scripts/run_dashboard_public_acceptance.py \
 
 - `artifacts_filter_assertion.route`
   - `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
-- `artifacts_filter_assertion.active_artifact`
-  - `intraday_orderflow_blueprint`
-- `artifacts_filter_assertion.visible_artifacts`
-  - `intraday_orderflow_blueprint`
-  - `intraday_orderflow_research_gate_blocker`
+- `artifacts_filter_assertion.source_available`
+  - `true` 或 `false`
+- 当 `source_available=true` 时，再校验：
+  - `artifacts_filter_assertion.active_artifact`
+  - `artifacts_filter_assertion.visible_artifacts`
 
-如果这组 orderflow research-only 断言缺失或值漂移，`verify:public-surface` 会直接失败，而不是继续报 `ok=true`。
+如果这组 orderflow research-only 断言缺失，`verify:public-surface` 会直接失败；如果 source snapshot 明确给出 `source_available=false`，则聚合验收接受显式降级。
 
 ---
 

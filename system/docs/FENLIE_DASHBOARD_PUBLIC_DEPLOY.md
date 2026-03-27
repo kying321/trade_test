@@ -179,14 +179,14 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 - `http://43.153.148.242:8787` 返回 `404 Not Found`
 - `https://fuuu.fun/#/overview` 与 `https://fenlie.fuuu.fun/#/overview` 都能看到 `研究主线摘要 / hold24_zero`
 - `https://fuuu.fun/#/workspace/contracts` 与 `https://fenlie.fuuu.fun/#/workspace/contracts` 都能看到 `公开面验收 / root overview 截图 / pages overview 截图 / root contracts 截图 / pages contracts 截图 / 公开快照拉取次数 / 内部快照拉取次数`
-- `https://fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff`
+- `https://fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-operator_panel`
   与
-  `https://fenlie.fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff`
+  `https://fenlie.fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-operator_panel`
   都能看到：
-  - `source head 状态`
-  - `下一研究优先级`
-  - `当前允许动作`
-  - `当前阻止动作`
+  - `状态`
+  - `研究结论`
+  - `生成时间`
+  - `路径`
 - 会落 root/pages 双路由截图证据：
   - `*_dashboard_public_topology_root_overview_browser.png`
   - `*_dashboard_public_topology_pages_overview_browser.png`
@@ -209,15 +209,15 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 
 本轮额外确认：
 
-- `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow` 公开面已能直接看到：
-  - `intraday_orderflow_blueprint`
-  - `intraday_orderflow_research_gate_blocker`
-- 说明当前 public snapshot 已纳入最新 research-only orderflow 主证据，而不是继续停留在 2026-03-18 的旧 latest 链。
 - `workspace_routes_smoke` 现已把这条 orderflow 过滤路由纳入真实浏览器回归断言，并在 smoke payload 中固化：
   - `artifacts_filter_assertion.route=#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
-  - `artifacts_filter_assertion.active_artifact=intraday_orderflow_blueprint`
-  - `artifacts_filter_assertion.visible_artifacts=[intraday_orderflow_blueprint, intraday_orderflow_research_gate_blocker]`
-- `dashboard_public_acceptance` 现已把 `artifacts_filter_assertion` 升级为聚合验收硬门槛；若 workspace smoke 缺失该字段或值不匹配，公开验收会直接失败，而不是继续误报 `ok=true`。
+  - `artifacts_filter_assertion.source_available=true|false`
+  - `artifacts_filter_assertion.active_artifact`
+  - `artifacts_filter_assertion.visible_artifacts`
+- 当当前 source snapshot 缺失 orderflow canonical 工件时，公开验收接受：
+  - `source_available=false`
+  - `active_artifact=""`
+  - `visible_artifacts=[]`
 
 ## 工作区多路由烟测
 
@@ -238,7 +238,7 @@ npm run smoke:workspace-routes
 
 并断言：
 
-- 默认仍锚定 `price_action_breakout_pullback`
+- workspace 默认焦点跟随 source-owned `workspace_default_focus`
 - route change 每次都会触发新的 public snapshot GET
 - 不会请求 `/data/fenlie_dashboard_internal_snapshot.json`
 
