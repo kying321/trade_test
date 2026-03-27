@@ -177,8 +177,8 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 - 两侧快照 JSON 的 `frontend_public` 都等于 `https://fuuu.fun`
 - `http://43.153.148.242:3001` 返回 `OpenClaw Control`
 - `http://43.153.148.242:8787` 返回 `404 Not Found`
-- `https://fuuu.fun/#/overview` 与 `https://fenlie.fuuu.fun/#/overview` 都能看到 `研究主线摘要 / hold24_zero`
-- `https://fuuu.fun/#/workspace/contracts` 与 `https://fenlie.fuuu.fun/#/workspace/contracts` 都能看到 `公开面验收 / root overview 截图 / pages overview 截图 / root contracts 截图 / pages contracts 截图 / 公开快照拉取次数 / 内部快照拉取次数`
+- `https://fuuu.fun/#/overview` 与 `https://fenlie.fuuu.fun/#/overview` 都能看到 `研究主线摘要 / 国内商品推理线`
+- `https://fuuu.fun/#/workspace/contracts` 与 `https://fenlie.fuuu.fun/#/workspace/contracts` 都能看到 `公开面验收 / 穿透层 1 / 验收总览 / 接口目录 / 源头主线 / 回退链`
 - `https://fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-operator_panel`
   与
   `https://fenlie.fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-operator_panel`

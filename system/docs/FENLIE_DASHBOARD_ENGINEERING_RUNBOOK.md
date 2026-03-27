@@ -570,7 +570,7 @@ npm run smoke:workspace-routes
 
 ### 10.1 它重点验证什么
 
-- `#/overview` 是否仍能看到 `研究主线摘要 / hold24_zero`
+- `#/overview` 是否仍能看到 `研究主线摘要 / 国内商品推理线`
 - 默认是否仍锚定 `price_action_breakout_pullback`
 - 路由切换是否触发新的 public snapshot GET
 - 是否错误拉取内部快照
@@ -665,23 +665,19 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 其中 contracts 路由要求真实浏览器同时看到：
 
 - `公开面验收`
-- `root overview 截图`
-- `pages overview 截图`
-- `root contracts 截图`
-- `pages contracts 截图`
-- `公开快照拉取次数`
-- `内部快照拉取次数`
+- `穿透层 1 / 验收总览`
+- `接口目录`
+- `源头主线`
+- `回退链`
 
 其中 contracts/source-head 深链
 `#/workspace/contracts?page_section=contracts-source-head-operator_panel`
 要求真实浏览器同时看到：
 
-- `source head 状态`
-- `下一研究优先级`
-- `当前允许动作`
-- `当前阻止动作`
-- `公开快照拉取次数`
-- `内部快照拉取次数`
+- `状态`
+- `研究结论`
+- `生成时间`
+- `路径`
 
 ---
 
