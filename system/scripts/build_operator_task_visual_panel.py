@@ -576,6 +576,22 @@ def build_source_rows(
             safe_text(hot_brief.get("source_brooks_structure_review_queue_brief")),
         ),
         (
+            "domestic_futures_bridge",
+            "Domestic Futures Bridge",
+            safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_artifact")),
+            safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_status")),
+            safe_text(source_payloads.get("domestic_futures_bridge", {}).get("as_of")),
+            safe_text(
+                ":".join(
+                    [
+                        safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_head_symbol")) or "-",
+                        safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_head_stage")) or "-",
+                        safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_head_blocker_code")) or "-",
+                    ]
+                )
+            ),
+        ),
+        (
             "time_sync_repair_plan",
             "System Time Sync Repair Plan",
             safe_text(hot_brief.get("source_system_time_sync_repair_plan_artifact")),
@@ -827,6 +843,13 @@ def build_panel_payload(
             artifact_key="source_brooks_execution_plan_artifact",
             review_dir=review_dir,
             suffix="brooks_price_action_execution_plan",
+            reference_now=reference_now,
+        ),
+        "domestic_futures_bridge": resolve_source_path(
+            source_payload=hot_brief,
+            artifact_key="source_domestic_futures_execution_bridge_capability_artifact",
+            review_dir=review_dir,
+            suffix="domestic_futures_execution_bridge_capability",
             reference_now=reference_now,
         ),
         "time_sync_repair_plan": resolve_source_path(

@@ -61,3 +61,57 @@ def test_build_review_head_lane_marks_non_promotable_head_as_refresh_required() 
     assert lane["brief"] == "refresh_required:brooks_structure:SC2603:consider_refresh_before_promotion:96"
     assert lane["head"]["action"] == "consider_refresh_before_promotion"
     assert lane["head"]["review_action"] == "review_manual_stop_entry"
+
+
+def test_build_brooks_review_rows_uses_domestic_futures_bridge_capability_as_source_gate() -> None:
+    mod = _load_module()
+    rows = mod._build_brooks_review_rows(
+        reference_now=mod.parse_now("2026-03-28T01:20:00Z"),
+        refresh_payload={
+            "artifact": "/tmp/20260328T011500Z_brooks_structure_refresh.json",
+            "as_of": "2026-03-28T01:15:00Z",
+            "head": {"symbol": "SC2603", "execution_action": "review_manual_stop_entry"},
+        },
+        review_queue_payload={
+            "artifact": "/tmp/20260328T011600Z_brooks_structure_review_queue.json",
+            "status": "ok",
+            "as_of": "2026-03-28T01:16:00Z",
+            "queue": [
+                {
+                    "symbol": "SC2603",
+                    "execution_action": "review_manual_stop_entry",
+                    "strategy_id": "brooks_structure",
+                    "priority_score": 96,
+                    "priority_tier": "review_queue_now",
+                    "plan_status": "manual_structure_review_now",
+                    "blocker_detail": "manual bridge missing",
+                    "done_when": "manual trader confirms trigger",
+                }
+            ],
+        },
+        capability_payload={
+            "artifact": "/tmp/20260328T011700Z_domestic_futures_execution_bridge_capability.json",
+            "status": "ok",
+            "as_of": "2026-03-28T01:17:00Z",
+            "capabilities": [
+                {
+                    "symbol": "SC2603",
+                    "bridge_stage": "manual_only",
+                    "blocker_code": "no_automated_execution_bridge",
+                    "blocker_detail": "Structure route is valid, but this asset class has no automated execution bridge in-system.",
+                    "execution_truth_source": "manual_confirmation",
+                }
+            ],
+        },
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["symbol"] == "SC2603"
+    assert row["action"] == "review_manual_stop_entry"
+    assert row["promotion_ready"] is False
+    assert row["source_kind"] == "domestic_futures_execution_bridge_capability"
+    assert row["source_artifact"] == "/tmp/20260328T011700Z_domestic_futures_execution_bridge_capability.json"
+    assert "manual_only" in row["blocker_detail"]
+    assert "no_automated_execution_bridge" in row["blocker_detail"]
+    assert row["done_when"] == "automated execution bridge becomes explicit before promotion"

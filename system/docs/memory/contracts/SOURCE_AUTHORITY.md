@@ -37,5 +37,6 @@
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/memory/MEMORY_INDEX.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/memory/DURABLE_RULES.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_CODEX_MEMORY.md`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/memory/contracts/DOMESTIC_FUTURES_EXECUTION_BRIDGE.md`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/OPENCLAW_CLOUD_BRIDGE.md`
 - `system/output/review/*_handoff*.json`（source-owned handoff/control 字段）

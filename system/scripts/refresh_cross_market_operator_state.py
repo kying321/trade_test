@@ -417,6 +417,8 @@ def _crypto_refresh_dependency_health(refresh_payload: dict[str, Any]) -> str:
 
 
 def _review_row_promotion_ready(row: dict[str, Any]) -> bool:
+    if "promotion_ready" in row and row.get("promotion_ready") is not None:
+        return bool(row.get("promotion_ready"))
     refresh_action = str(row.get("source_refresh_action") or "").strip()
     if refresh_action in {
         "consider_refresh_before_promotion",
@@ -841,6 +843,7 @@ def _build_brooks_review_rows(
     reference_now: dt.datetime,
     refresh_payload: dict[str, Any],
     review_queue_payload: dict[str, Any],
+    capability_payload: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     source_rows = [
         dict(row)
@@ -859,12 +862,64 @@ def _build_brooks_review_rows(
     source_recency = _review_source_recency(source_age_minutes=source_age_minutes)
     source_health = _review_source_health(source_status=source_status, source_recency=source_recency)
     source_refresh_action = _review_source_refresh_action(source_health=source_health)
+    capability_rows = [
+        dict(row)
+        for row in list((capability_payload or {}).get("capabilities") or [])
+        if isinstance(row, dict)
+    ]
+    capability_by_symbol = {
+        str(row.get("symbol") or "").strip().upper(): row
+        for row in capability_rows
+        if str(row.get("symbol") or "").strip()
+    }
 
     for row in source_rows:
         symbol = str(row.get("symbol") or "").strip().upper()
         action = str(row.get("execution_action") or row.get("action") or "").strip()
         if not symbol or not action:
             continue
+        row_source_as_of = source_as_of
+        row_source_age_minutes = source_age_minutes
+        row_source_recency = source_recency
+        row_source_status = source_status
+        row_source_health = source_health
+        row_source_kind = "brooks_structure_review_queue"
+        row_source_artifact = source_artifact
+        row_source_refresh_action = source_refresh_action
+        row_promotion_ready = source_refresh_action == "read_current_artifact"
+        blocker_detail = str(row.get("blocker_detail") or "").strip()
+        done_when = str(row.get("done_when") or "").strip()
+
+        capability_row = capability_by_symbol.get(symbol, {})
+        capability_stage = str(capability_row.get("bridge_stage") or "").strip()
+        capability_blocker_code = str(capability_row.get("blocker_code") or "").strip()
+        capability_blocker_detail = str(capability_row.get("blocker_detail") or "").strip()
+        capability_promotable = capability_stage in {"guarded_canary", "executable"}
+        if capability_row and row_promotion_ready:
+            row_source_as_of = payload_or_artifact_as_of(capability_payload or {}) or row_source_as_of
+            row_source_age_minutes = _review_source_age_minutes(
+                reference_now=reference_now,
+                source_as_of=row_source_as_of,
+            )
+            row_source_recency = _review_source_recency(source_age_minutes=row_source_age_minutes)
+            row_source_status = str((capability_payload or {}).get("status") or "").strip()
+            row_source_health = _review_source_health(
+                source_status=row_source_status,
+                source_recency=row_source_recency,
+            )
+            row_source_kind = "domestic_futures_execution_bridge_capability"
+            row_source_artifact = str((capability_payload or {}).get("artifact") or "").strip()
+            if not capability_promotable:
+                row_promotion_ready = False
+                row_source_refresh_action = ""
+                blocker_parts = [
+                    capability_blocker_detail or blocker_detail,
+                    capability_stage,
+                    capability_blocker_code,
+                ]
+                blocker_detail = " | ".join([part for part in blocker_parts if part])
+                done_when = "automated execution bridge becomes explicit before promotion"
+
         state = _normalize_operator_state(
             state="",
             priority_tier=str(row.get("priority_tier") or ""),
@@ -883,31 +938,31 @@ def _build_brooks_review_rows(
                 "priority_tier": str(row.get("priority_tier") or "").strip() or state,
                 "blocker_detail": (
                     (
-                        str(row.get("blocker_detail") or "").strip()
+                        blocker_detail
                         + " | "
                         + f"source freshness guard: brooks_structure_review_queue artifact is {source_status or '-'} "
                         + f"and {source_recency or '-'}"
                         + (f", age={source_age_minutes}m" if source_age_minutes is not None else "")
                     )
                     if source_refresh_action != "read_current_artifact"
-                    else str(row.get("blocker_detail") or "").strip()
+                    else blocker_detail
                 ),
                 "done_when": (
                     f"{symbol} receives a fresh brooks_structure_review_queue artifact before promotion"
                     if source_refresh_action != "read_current_artifact"
-                    else str(row.get("done_when") or "").strip()
+                    else done_when
                 ),
                 "command": "",
                 "clear_when": "",
-                "source_as_of": source_as_of,
-                "source_age_minutes": source_age_minutes,
-                "source_recency": source_recency,
-                "source_status": source_status,
-                "source_health": source_health,
-                "source_kind": "brooks_structure_review_queue",
-                "source_artifact": source_artifact,
-                "source_refresh_action": source_refresh_action,
-                "promotion_ready": source_refresh_action == "read_current_artifact",
+                "source_as_of": row_source_as_of,
+                "source_age_minutes": row_source_age_minutes,
+                "source_recency": row_source_recency,
+                "source_status": row_source_status,
+                "source_health": row_source_health,
+                "source_kind": row_source_kind,
+                "source_artifact": row_source_artifact,
+                "source_refresh_action": row_source_refresh_action,
+                "promotion_ready": row_promotion_ready,
             }
         )
     return rows
@@ -2178,12 +2233,22 @@ def main(argv: list[str] | None = None) -> int:
         suffix="brooks_structure_review_queue",
         reference_now=runtime_now,
     )
+    brooks_domestic_futures_bridge_capability_path = resolve_embedded_artifact_source(
+        payload=brooks_refresh,
+        key="domestic_futures_execution_bridge_capability_artifact",
+        review_dir=review_dir,
+        suffix="domestic_futures_execution_bridge_capability",
+        reference_now=runtime_now,
+    )
     live_gate_blocker_path = latest_review_json_artifact(review_dir, "live_gate_blocker_report", runtime_now)
 
     commodity_review_payload = load_optional_payload(commodity_review_path)
     commodity_gap_payload = load_optional_payload(commodity_gap_path)
     crypto_route_refresh_payload = load_optional_payload(crypto_route_refresh_path)
     brooks_review_queue_payload = load_optional_payload(brooks_review_queue_path)
+    brooks_domestic_futures_bridge_capability_payload = load_optional_payload(
+        brooks_domestic_futures_bridge_capability_path
+    )
     live_gate_blocker_payload = load_optional_payload(live_gate_blocker_path)
 
     reused_downstream_count = 2 if bool(args.skip_downstream_refresh) else 0
@@ -2205,6 +2270,7 @@ def main(argv: list[str] | None = None) -> int:
         reference_now=runtime_now,
         refresh_payload=brooks_refresh,
         review_queue_payload=brooks_review_queue_payload,
+        capability_payload=brooks_domestic_futures_bridge_capability_payload,
     )
 
     remote_live_takeover_repair_queue = _derive_remote_live_takeover_repair_queue(live_gate_blocker_payload)
@@ -2317,6 +2383,9 @@ def main(argv: list[str] | None = None) -> int:
         "brooks_refresh_artifact": str(brooks_refresh.get("artifact") or ""),
         "brooks_refresh_status": str(brooks_refresh.get("status") or ""),
         "brooks_review_queue_artifact": str(brooks_review_queue_path or ""),
+        "brooks_domestic_futures_bridge_capability_artifact": str(
+            brooks_domestic_futures_bridge_capability_path or ""
+        ),
         "commodity_refresh_artifact": str(commodity_refresh.get("artifact") or ""),
         "commodity_refresh_status": str(commodity_refresh.get("status") or ""),
         "commodity_review_artifact": str(commodity_review_path or ""),

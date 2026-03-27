@@ -46,6 +46,7 @@ def test_main_runs_brooks_refresh_chain_and_writes_refresh_artifact(
             "build_brooks_price_action_market_study": "brooks_price_action_market_study.json",
             "build_brooks_price_action_route_report": "brooks_price_action_route_report.json",
             "build_brooks_price_action_execution_plan": "brooks_price_action_execution_plan.json",
+            "build_domestic_futures_execution_bridge_capability": "domestic_futures_execution_bridge_capability.json",
             "build_brooks_structure_review_queue": "brooks_structure_review_queue.json",
         }[step_name]
         payload = {
@@ -91,6 +92,9 @@ def test_main_runs_brooks_refresh_chain_and_writes_refresh_artifact(
     assert payload["study_artifact"] == str(review_dir / "brooks_price_action_market_study.json")
     assert payload["route_report_artifact"] == str(review_dir / "brooks_price_action_route_report.json")
     assert payload["execution_plan_artifact"] == str(review_dir / "brooks_price_action_execution_plan.json")
+    assert payload["domestic_futures_execution_bridge_capability_artifact"] == str(
+        review_dir / "domestic_futures_execution_bridge_capability.json"
+    )
     assert payload["review_queue_artifact"] == str(review_dir / "brooks_structure_review_queue.json")
     assert payload["head_symbol"] == "SC2603"
     assert payload["head_action"] == "review_manual_stop_entry"
@@ -102,6 +106,7 @@ def test_main_runs_brooks_refresh_chain_and_writes_refresh_artifact(
         "build_brooks_price_action_market_study",
         "build_brooks_price_action_route_report",
         "build_brooks_price_action_execution_plan",
+        "build_domestic_futures_execution_bridge_capability",
         "build_brooks_structure_review_queue",
     ]
     assert calls[0][0] == "build_brooks_price_action_market_study"

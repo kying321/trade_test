@@ -482,6 +482,27 @@ def latest_brooks_price_action_execution_plan_source(
             for path in candidates
             if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
         ]
+    if nonfuture_candidates:
+        candidates = nonfuture_candidates
+    return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
+
+
+def latest_domestic_futures_execution_bridge_capability_source(
+    review_dir: Path, reference_now: dt.datetime | None = None
+) -> Path | None:
+    candidates = [
+        path
+        for path in review_dir.glob("*_domestic_futures_execution_bridge_capability.json")
+        if artifact_stamp(path)
+    ]
+    if not candidates:
+        return None
+    if reference_now is not None:
+        nonfuture_candidates = [
+            path
+            for path in candidates
+            if (stamp_dt := parsed_artifact_stamp(path)) is None or stamp_dt <= reference_now
+        ]
         if nonfuture_candidates:
             candidates = nonfuture_candidates
     return max(candidates, key=lambda path: artifact_sort_key(path, reference_now))
@@ -6621,6 +6642,9 @@ def main(argv: list[str] | None = None) -> int:
     live_gate_blocker_source_path = latest_live_gate_blocker_report_source(review_dir, runtime_now)
     brooks_route_report_source_path = latest_brooks_price_action_route_report_source(review_dir, runtime_now)
     brooks_execution_plan_source_path = latest_brooks_price_action_execution_plan_source(review_dir, runtime_now)
+    domestic_futures_execution_bridge_capability_source_path = latest_domestic_futures_execution_bridge_capability_source(
+        review_dir, runtime_now
+    )
     brooks_structure_review_queue_source_path = latest_brooks_structure_review_queue_source(review_dir, runtime_now)
     brooks_structure_refresh_source_path = latest_brooks_structure_refresh_source(review_dir, runtime_now)
     cross_market_operator_state_source_path = latest_cross_market_operator_state_source(review_dir, runtime_now)
@@ -6676,6 +6700,12 @@ def main(argv: list[str] | None = None) -> int:
     brooks_execution_plan_source_payload = (
         json.loads(brooks_execution_plan_source_path.read_text(encoding="utf-8"))
         if brooks_execution_plan_source_path and brooks_execution_plan_source_path.exists()
+        else None
+    )
+    domestic_futures_execution_bridge_capability_source_payload = (
+        json.loads(domestic_futures_execution_bridge_capability_source_path.read_text(encoding="utf-8"))
+        if domestic_futures_execution_bridge_capability_source_path
+        and domestic_futures_execution_bridge_capability_source_path.exists()
         else None
     )
     brooks_structure_review_queue_source_payload = (
@@ -6900,6 +6930,8 @@ def main(argv: list[str] | None = None) -> int:
         unique_sources.add(str(brooks_route_report_source_path))
     if brooks_execution_plan_source_path:
         unique_sources.add(str(brooks_execution_plan_source_path))
+    if domestic_futures_execution_bridge_capability_source_path:
+        unique_sources.add(str(domestic_futures_execution_bridge_capability_source_path))
     if brooks_structure_review_queue_source_path:
         unique_sources.add(str(brooks_structure_review_queue_source_path))
     if brooks_structure_refresh_source_path:
@@ -6968,6 +7000,16 @@ def main(argv: list[str] | None = None) -> int:
     openclaw_orderflow_blueprint_current = dict(
         (openclaw_orderflow_blueprint_source_payload or {}).get("current_status") or {}
     )
+    domestic_futures_execution_bridge_capabilities = [
+        dict(row)
+        for row in list((domestic_futures_execution_bridge_capability_source_payload or {}).get("capabilities") or [])
+        if isinstance(row, dict)
+    ]
+    domestic_futures_execution_bridge_head = (
+        dict(domestic_futures_execution_bridge_capabilities[0])
+        if domestic_futures_execution_bridge_capabilities
+        else {}
+    )
     openclaw_orderflow_blueprint_backlog = list(
         (openclaw_orderflow_blueprint_source_payload or {}).get("immediate_backlog") or []
     )
@@ -7024,6 +7066,29 @@ def main(argv: list[str] | None = None) -> int:
         "source_commodity_execution_gap_status": str((commodity_execution_gap_source_payload or {}).get("status") or ""),
         "source_commodity_execution_bridge_artifact": str(commodity_execution_bridge_source_path) if commodity_execution_bridge_source_path else "",
         "source_commodity_execution_bridge_status": str((commodity_execution_bridge_source_payload or {}).get("status") or ""),
+        "source_domestic_futures_execution_bridge_capability_artifact": str(domestic_futures_execution_bridge_capability_source_path)
+        if domestic_futures_execution_bridge_capability_source_path
+        else "",
+        "source_domestic_futures_execution_bridge_capability_status": str(
+            (domestic_futures_execution_bridge_capability_source_payload or {}).get("status") or ""
+        ),
+        "source_domestic_futures_execution_bridge_capability_head_symbol": str(
+            (domestic_futures_execution_bridge_capability_source_payload or {}).get("head_symbol")
+            or domestic_futures_execution_bridge_head.get("symbol")
+            or ""
+        ),
+        "source_domestic_futures_execution_bridge_capability_head_stage": str(
+            domestic_futures_execution_bridge_head.get("bridge_stage") or ""
+        ),
+        "source_domestic_futures_execution_bridge_capability_head_blocker_code": str(
+            domestic_futures_execution_bridge_head.get("blocker_code") or ""
+        ),
+        "source_domestic_futures_execution_bridge_capability_head_blocker_detail": str(
+            domestic_futures_execution_bridge_head.get("blocker_detail") or ""
+        ),
+        "source_domestic_futures_execution_bridge_capability_head_truth_source": str(
+            domestic_futures_execution_bridge_head.get("execution_truth_source") or ""
+        ),
         "source_crypto_artifact": str(crypto_source_path),
         "source_crypto_status": str(crypto_source_payload.get("status") or ""),
         **crypto_route_source_chunk,

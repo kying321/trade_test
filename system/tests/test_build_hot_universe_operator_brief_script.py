@@ -113,3 +113,67 @@ def test_build_hot_universe_operator_brief_falls_back_to_rich_dry_run(tmp_path: 
     assert payload["focus_primary_batches"] == ["metals_all"]
     assert payload["research_queue_batches"] == ["crypto_majors"]
     assert payload["crypto_focus_symbol"] == "BNBUSDT"
+
+
+def test_build_hot_universe_operator_brief_surfaces_domestic_futures_bridge_capability(tmp_path: Path) -> None:
+    review_dir = tmp_path / "review"
+    _write_json(
+        review_dir / "20260328T010000Z_hot_universe_research.json",
+        {
+            "status": "ok",
+            "research_action_ladder": {"focus_primary_batches": ["metals_all"]},
+            "crypto_route_brief": {},
+        },
+    )
+    _write_json(
+        review_dir / "20260328T011000Z_domestic_futures_execution_bridge_capability.json",
+        {
+            "status": "ok",
+            "as_of": "2026-03-28T01:10:00Z",
+            "head_symbol": "SC2603",
+            "bridge_stage_counts": {
+                "research_only": 0,
+                "paper_only": 0,
+                "manual_only": 1,
+                "guarded_canary": 0,
+                "executable": 0,
+            },
+            "capabilities": [
+                {
+                    "symbol": "SC2603",
+                    "bridge_stage": "manual_only",
+                    "blocker_code": "no_automated_execution_bridge",
+                    "blocker_detail": "Structure route is valid, but this asset class has no automated execution bridge in-system.",
+                    "execution_truth_source": "manual_confirmation",
+                }
+            ],
+        },
+    )
+
+    proc = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT_PATH),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            "2026-03-28T01:20:00Z",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["source_domestic_futures_execution_bridge_capability_artifact"].endswith(
+        "_domestic_futures_execution_bridge_capability.json"
+    )
+    assert payload["source_domestic_futures_execution_bridge_capability_status"] == "ok"
+    assert payload["source_domestic_futures_execution_bridge_capability_head_symbol"] == "SC2603"
+    assert payload["source_domestic_futures_execution_bridge_capability_head_stage"] == "manual_only"
+    assert (
+        payload["source_domestic_futures_execution_bridge_capability_head_blocker_code"]
+        == "no_automated_execution_bridge"
+    )
+    assert payload["source_domestic_futures_execution_bridge_capability_head_truth_source"] == "manual_confirmation"

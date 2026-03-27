@@ -98,6 +98,7 @@ def derive_runtime_now(review_dir: Path, requested_now: str | None) -> dt.dateti
             "brooks_price_action_market_study",
             "brooks_price_action_route_report",
             "brooks_price_action_execution_plan",
+            "domestic_futures_execution_bridge_capability",
             "brooks_structure_review_queue",
             "brooks_structure_refresh",
         ],
@@ -240,6 +241,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- study: `{payload.get('study_artifact') or '-'}`",
         f"- route_report: `{payload.get('route_report_artifact') or '-'}`",
         f"- execution_plan: `{payload.get('execution_plan_artifact') or '-'}`",
+        f"- domestic_futures_bridge_capability: `{payload.get('domestic_futures_execution_bridge_capability_artifact') or '-'}`",
         f"- review_queue: `{payload.get('review_queue_artifact') or '-'}`",
         "",
         "## Steps",
@@ -349,7 +351,20 @@ def main(argv: list[str] | None = None) -> int:
         ],
     )
 
-    queue_now = step_now(runtime_now, 3)
+    capability_now = step_now(runtime_now, 3)
+    domestic_futures_execution_bridge_capability_payload = run_json_step(
+        step_name="build_domestic_futures_execution_bridge_capability",
+        cmd=[
+            "python3",
+            str(script_path("build_domestic_futures_execution_bridge_capability.py")),
+            "--review-dir",
+            str(review_dir),
+            "--now",
+            fmt_utc(capability_now),
+        ],
+    )
+
+    queue_now = step_now(runtime_now, 4)
     review_queue_payload = run_json_step(
         step_name="build_brooks_structure_review_queue",
         cmd=[
@@ -385,6 +400,17 @@ def main(argv: list[str] | None = None) -> int:
             "artifact": str(execution_plan_payload.get("artifact") or ""),
         },
         {
+            "name": "build_domestic_futures_execution_bridge_capability",
+            "now": fmt_utc(capability_now),
+            "status": str(
+                domestic_futures_execution_bridge_capability_payload.get("status")
+                or domestic_futures_execution_bridge_capability_payload.get("ok")
+                or ""
+            ),
+            "as_of": payload_or_artifact_as_of(domestic_futures_execution_bridge_capability_payload),
+            "artifact": str(domestic_futures_execution_bridge_capability_payload.get("artifact") or ""),
+        },
+        {
             "name": "build_brooks_structure_review_queue",
             "now": fmt_utc(queue_now),
             "status": str(review_queue_payload.get("status") or review_queue_payload.get("ok") or ""),
@@ -401,6 +427,9 @@ def main(argv: list[str] | None = None) -> int:
         "study_artifact": str(study_payload.get("artifact") or ""),
         "route_report_artifact": str(route_payload.get("artifact") or ""),
         "execution_plan_artifact": str(execution_plan_payload.get("artifact") or ""),
+        "domestic_futures_execution_bridge_capability_artifact": str(
+            domestic_futures_execution_bridge_capability_payload.get("artifact") or ""
+        ),
         "review_queue_artifact": str(review_queue_payload.get("artifact") or ""),
         "review_status": str(review_queue_payload.get("review_status") or ""),
         "review_brief": str(review_queue_payload.get("review_brief") or ""),

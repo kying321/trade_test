@@ -40,6 +40,7 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     time_sync_repair_plan = review_dir / "20260314T000908Z_system_time_sync_repair_plan.json"
     time_sync_repair_verification = review_dir / "20260314T000909Z_system_time_sync_repair_verification_report.json"
     openclaw_blueprint = review_dir / "20260314T000910Z_openclaw_orderflow_blueprint.json"
+    domestic_futures_bridge = review_dir / "20260314T000911Z_domestic_futures_execution_bridge_capability.json"
     hot_brief = review_dir / "20260314T001100Z_hot_universe_operator_brief.json"
 
     write_json(
@@ -246,6 +247,30 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
                 ],
             },
         ),
+        (
+            domestic_futures_bridge,
+            {
+                "status": "ok",
+                "as_of": "2026-03-14T00:09:11Z",
+                "head_symbol": "SC2603",
+                "bridge_stage_counts": {
+                    "research_only": 0,
+                    "paper_only": 0,
+                    "manual_only": 1,
+                    "guarded_canary": 0,
+                    "executable": 0,
+                },
+                "capabilities": [
+                    {
+                        "symbol": "SC2603",
+                        "bridge_stage": "manual_only",
+                        "blocker_code": "no_automated_execution_bridge",
+                        "blocker_detail": "Structure route is valid, but this asset class has no automated execution bridge in-system.",
+                        "execution_truth_source": "manual_confirmation",
+                    }
+                ],
+            },
+        ),
     ]:
         write_json(path, payload)
 
@@ -283,6 +308,15 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
             "source_brooks_structure_review_queue_brief": "ready:SC2603:96:review_queue_now",
             "source_brooks_route_report_artifact": str(brooks_route),
             "source_brooks_execution_plan_artifact": str(brooks_plan),
+            "source_domestic_futures_execution_bridge_capability_artifact": str(domestic_futures_bridge),
+            "source_domestic_futures_execution_bridge_capability_status": "ok",
+            "source_domestic_futures_execution_bridge_capability_head_symbol": "SC2603",
+            "source_domestic_futures_execution_bridge_capability_head_stage": "manual_only",
+            "source_domestic_futures_execution_bridge_capability_head_blocker_code": "no_automated_execution_bridge",
+            "source_domestic_futures_execution_bridge_capability_head_truth_source": "manual_confirmation",
+            "source_domestic_futures_execution_bridge_capability_head_blocker_detail": (
+                "Structure route is valid, but this asset class has no automated execution bridge in-system."
+            ),
             "source_system_time_sync_repair_plan_artifact": str(time_sync_repair_plan),
             "source_system_time_sync_repair_plan_status": "run_now",
             "source_system_time_sync_repair_plan_brief": "manual_time_repair_required:SC2603:timed_apns_fallback",
@@ -589,6 +623,8 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert "持续优化执行传导链" in html_text
     assert "SC2603" in html_text
     assert "ROLLBACK_HARD" in html_text
+    assert "Domestic Futures Bridge" in html_text
+    assert "no_automated_execution_bridge" in html_text
 
 
 def test_build_panel_payload_prioritizes_promotion_unblock_when_time_sync_is_already_clear(
