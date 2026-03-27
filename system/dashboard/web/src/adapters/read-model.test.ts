@@ -1042,5 +1042,43 @@ describe('buildTerminalReadModel', () => {
     const publicAcceptance = (publicModel.workspace as any).publicAcceptance;
     expect(publicAcceptance.subcommands[0].stdout).toBeUndefined();
     expect(publicAcceptance.subcommands[0].stderr).toBeUndefined();
+
+    const degradedAcceptanceLoaded: LoadedSurface = {
+      ...acceptanceLoaded,
+      snapshot: {
+        ...acceptanceLoaded.snapshot,
+        artifact_payloads: {
+          ...acceptanceLoaded.snapshot.artifact_payloads,
+          dashboard_public_acceptance: {
+            ...((acceptanceLoaded.snapshot.artifact_payloads || {}).dashboard_public_acceptance as Record<string, unknown>),
+            payload: {
+              ...((((acceptanceLoaded.snapshot.artifact_payloads || {}).dashboard_public_acceptance as any)?.payload) || {}),
+              checks: {
+                ...(((((acceptanceLoaded.snapshot.artifact_payloads || {}).dashboard_public_acceptance as any)?.payload) || {}).checks || {}),
+                workspace_routes_smoke: {
+                  ...((((((acceptanceLoaded.snapshot.artifact_payloads || {}).dashboard_public_acceptance as any)?.payload) || {}).checks || {}).workspace_routes_smoke || {}),
+                  artifacts_filter_assertion: {
+                    route: '#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow',
+                    group: 'research_cross_section',
+                    search_scope: 'title',
+                    search: 'orderflow',
+                    source_available: false,
+                    active_artifact: '',
+                    visible_artifacts: [],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const degradedModel = buildTerminalReadModel(degradedAcceptanceLoaded);
+    const degradedAcceptance = (degradedModel.workspace as any).publicAcceptance;
+    expect(degradedAcceptance.summary.orderflow_filter_route).toBe('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(degradedAcceptance.summary.orderflow_active_artifact).toBe('—');
+    expect(degradedAcceptance.summary.orderflow_visible_artifacts).toBeUndefined();
+    expect(degradedAcceptance.checks[1].orderflow_active_artifact).toBe('—');
+    expect(degradedAcceptance.checks[1].orderflow_visible_artifacts).toBeUndefined();
   });
 });
