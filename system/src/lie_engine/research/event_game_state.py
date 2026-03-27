@@ -2,29 +2,39 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-GAME_STATES = [
+GAME_STATES = (
     "stable_competition",
     "financial_pressure",
     "commodity_weaponization",
     "bloc_fragmentation",
     "systemic_repricing",
-]
+)
+
+DEFAULT_GAME_STATE = GAME_STATES[1]
 
 PRIMARY_THEATER = "usd_liquidity_and_sanctions"
 
-DOMINANT_CONFLICT_AXES = [
+DOMINANT_CONFLICT_AXES = (
     "usd_liquidity_pressure",
     "sanctions_financial_fragmentation",
     "energy_supply_pressure",
-]
+)
 
-DOMINANT_TRANSMISSION_AXES = [
+DOMINANT_TRANSMISSION_AXES = (
     "usd_liquidity_chain",
     "financial_sanctions_chain",
     "risk_off_deleveraging_chain",
-]
+)
+
+REGIONAL_CONFLICT_NODES = (
+    "iran",
+    "israel",
+    "ukraine",
+    "red_sea_shipping",
+    "hormuz_shipping",
+)
 
 ACTOR_SPECIFICATIONS = [
     {
@@ -98,13 +108,7 @@ ACTOR_SPECIFICATIONS = [
         "escalation_level": 0.55,
         "deescalation_probability": 0.22,
         "market_impact_channels": ["shipping_supply_chain", "energy_supply_chain"],
-        "regional_nodes": [
-            "iran",
-            "israel",
-            "ukraine",
-            "red_sea_shipping",
-            "hormuz_shipping",
-        ],
+        "regional_nodes": list(REGIONAL_CONFLICT_NODES),
     },
 ]
 
@@ -115,15 +119,17 @@ def build_event_game_state_snapshot(
     *,
     event_rows: Sequence[Mapping[str, Any]],
     market_inputs: Mapping[str, Any],
+    generated_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a minimal snapshot describing the headline game state."""
-    now = datetime.now(timezone.utc)
-    generated_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if generated_at is None:
+        now = datetime.now(timezone.utc)
+        generated_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     snapshot = {
         "generated_at_utc": generated_at,
         "primary_theater": PRIMARY_THEATER,
-        "game_state": "financial_pressure",
+        "game_state": DEFAULT_GAME_STATE,
         "confidence_score": 0.68,
         "dominant_conflict_axes": list(DOMINANT_CONFLICT_AXES),
         "dominant_transmission_axes": list(DOMINANT_TRANSMISSION_AXES),
