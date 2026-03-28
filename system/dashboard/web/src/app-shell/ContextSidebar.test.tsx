@@ -13,8 +13,8 @@ function renderSidebar({ collapsed = false }: { collapsed?: boolean } = {}) {
         collapsed={collapsed}
         onToggleCollapse={onToggleCollapse}
         items={[
-          { id: 'artifacts', label: '工件池', to: '/workspace/artifacts', description: '主线与归档入口' },
-          { id: 'alignment', label: '对齐页', to: '/workspace/alignment?view=internal', description: '内部方向对齐投射' },
+          { id: 'artifacts', label: '工件池', to: '/workspace/artifacts' },
+          { id: 'alignment', label: '对齐页', to: '/workspace/alignment?view=internal' },
         ]}
         pageSections={[
           { id: 'summary', label: '当前摘要', to: '/workspace/artifacts?page_section=summary', level: 1, groupId: 'main', groupLabel: '研究主线' },
@@ -41,8 +41,8 @@ describe('ContextSidebar', () => {
     const navRegion = screen.getByRole('region', { name: 'sidebar-task-nav' });
     const nav = within(navRegion).getByRole('navigation', { name: 'context-nav' });
     expect(within(nav).getAllByRole('link').length).toBeGreaterThan(0);
-    expect(within(nav).getByRole('link', { name: '工件池 主线与归档入口' })).toBeTruthy();
-    expect(within(nav).getByRole('link', { name: '对齐页 内部方向对齐投射' })).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: '工件池' })).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: '对齐页' })).toBeTruthy();
 
     const toc = screen.getByRole('navigation', { name: 'page-sections-nav' });
     expect(within(toc).getByText('阶段内目录')).toBeTruthy();

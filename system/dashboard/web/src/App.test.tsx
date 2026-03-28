@@ -890,7 +890,7 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByText('Fenlie / 控制台')).toBeTruthy();
     expect(screen.getAllByText('操作终端').length).toBeGreaterThan(0);
     expect(screen.getAllByText('公开面').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('安全摘要').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('终端路由').length).toBeGreaterThan(0);
     await screen.findByLabelText('ops-context-strip');
     expect(textOf('.global-summary-strip')).toContain('模式：只读快照');
     expect(textOf('.global-summary-strip')).toContain('快照：');
@@ -1269,18 +1269,18 @@ describe('Fenlie terminal console', () => {
     await renderApp();
 
     const contextNav = await screen.findByRole('navigation', { name: 'context-nav' });
-    expect(within(contextNav).getByRole('link', { name: /回测池\s*回测主池/ }).getAttribute('href')).toContain('page_section=backtests-overview');
-    expect(within(contextNav).getByRole('link', { name: /契约层\s*公开入口拓扑/ }).getAttribute('href')).toContain('page_section=contracts-topology');
-    expect(within(contextNav).getByRole('link', { name: /原始层\s*原始快照/ }).getAttribute('href')).toContain('page_section=raw-summary');
+    expect(within(contextNav).getByRole('link', { name: '回测池' }).getAttribute('href')).toContain('page_section=backtests-overview');
+    expect(within(contextNav).getByRole('link', { name: '契约层' }).getAttribute('href')).toContain('page_section=contracts-topology');
+    expect(within(contextNav).getByRole('link', { name: '原始层' }).getAttribute('href')).toContain('page_section=raw-summary');
 
-    await clickAndFlush(within(contextNav).getByRole('link', { name: /回测池\s*回测主池/ }) as HTMLElement);
+    await clickAndFlush(within(contextNav).getByRole('link', { name: '回测池' }) as HTMLElement);
 
     await screen.findByRole('heading', { name: /^回测主池$/ });
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: /^回测主池$/ })).toHaveLength(1);
     });
 
-    await clickAndFlush(within(contextNav).getByRole('link', { name: /原始层\s*原始快照/ }) as HTMLElement);
+    await clickAndFlush(within(contextNav).getByRole('link', { name: '原始层' }) as HTMLElement);
 
     await screen.findByRole('heading', { name: /^原始快照$/ });
     await waitFor(() => {
@@ -1452,9 +1452,9 @@ describe('Fenlie terminal console', () => {
     await renderApp();
 
     const contextNav = await screen.findByRole('navigation', { name: 'context-nav' });
-    const backtestsHref = within(contextNav).getByRole('link', { name: /回测池\s*回测主池/ }).getAttribute('href') || '';
-    const contractsHref = within(contextNav).getByRole('link', { name: /契约层\s*公开入口拓扑/ }).getAttribute('href') || '';
-    const rawHref = within(contextNav).getByRole('link', { name: /原始层\s*原始快照/ }).getAttribute('href') || '';
+    const backtestsHref = within(contextNav).getByRole('link', { name: '回测池' }).getAttribute('href') || '';
+    const contractsHref = within(contextNav).getByRole('link', { name: '契约层' }).getAttribute('href') || '';
+    const rawHref = within(contextNav).getByRole('link', { name: '原始层' }).getAttribute('href') || '';
 
     expect(backtestsHref).toContain('artifact=price_action_breakout_pullback');
     expect(backtestsHref).toContain('group=research_mainline');
@@ -1481,7 +1481,7 @@ describe('Fenlie terminal console', () => {
     await renderApp();
 
     const contextNav = await screen.findByRole('navigation', { name: 'context-nav' });
-    const backtestsHref = within(contextNav).getByRole('link', { name: /回测池\s*回测主池/ }).getAttribute('href') || '';
+    const backtestsHref = within(contextNav).getByRole('link', { name: '回测池' }).getAttribute('href') || '';
 
     await waitFor(() => {
       expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/price_action_exit_risk|退出\/风控/);

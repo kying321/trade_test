@@ -67,7 +67,7 @@ function SidebarTaskNav({ items, pageSections, activeSectionId }: SidebarTaskNav
         {items.map((item) => (
           <NavLink
             key={item.id}
-            aria-label={item.description ? `${item.label} ${item.description}` : item.label}
+            aria-label={item.label}
             className={({ isActive }) => `nav-link control-entity-row ${isActive ? 'active' : ''}`.trim()}
             to={item.to}
           >
@@ -75,11 +75,6 @@ function SidebarTaskNav({ items, pageSections, activeSectionId }: SidebarTaskNav
               <strong>
                 <ClampText raw={item.label} expandable={false}>{item.label}</ClampText>
               </strong>
-              {item.description ? (
-                <small>
-                  <ClampText raw={item.description} expandable={false}>{item.description}</ClampText>
-                </small>
-              ) : null}
             </span>
           </NavLink>
         ))}
