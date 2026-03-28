@@ -51,3 +51,7 @@ export function buildResearchLegacyLink(
 export function buildOverviewLink(focus: SharedQueryState = {}): string {
   return buildPreservedLink('/overview', focus);
 }
+
+export function buildGraphHomeLink(focus: SharedQueryState = {}): string {
+  return buildPreservedLink('/graph-home', focus);
+}

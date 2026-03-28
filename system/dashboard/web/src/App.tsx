@@ -17,8 +17,9 @@ import { InspectorRail } from './app-shell/InspectorRail';
 import { useSidebarCollapse } from './hooks/use-sidebar-collapse';
 import { useUiTheme } from './hooks/use-ui-theme';
 import { PRIMARY_NAV, OPS_SURFACE_NAV, RESEARCH_LEGACY_NAV } from './navigation/nav-config';
-import { buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from './navigation/route-contract';
+import { buildGraphHomeLink, buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from './navigation/route-contract';
 import { getWorkspacePageSections } from './navigation/workspace-sections';
+import { GraphHomePage } from './pages/GraphHomePage';
 import { OverviewPage } from './pages/OverviewPage';
 import { OpsPage } from './pages/OpsPage';
 import { ResearchPage } from './pages/ResearchPage';
@@ -152,6 +153,7 @@ function useSurfaceRefresh(requested: SurfaceKey, refreshKey?: string, allowFall
 function buildPrimaryNav(focus: SharedFocusState, currentSurface: SurfaceKey) {
   return PRIMARY_NAV.map((item) => {
     if (item.id === 'overview') return { ...item, to: buildOverviewLink(focus) };
+    if (item.id === 'graph') return { ...item, to: buildGraphHomeLink(focus) };
     if (item.id === 'ops') return { ...item, to: buildOpsLegacyLink(currentSurface, focus) };
     return { ...item, to: buildResearchLegacyLink('artifacts', focus) };
   });
@@ -428,6 +430,29 @@ function buildSearchHeaderRhythm(query: string, scope: SearchScope, resultCount:
       title: '证据',
       items: [
         { type: 'fact' as const, label: '命中解释', value: '标题 / 说明 / 路径 / 关键词', detail: '结果列表会显示匹配字段。', tone: 'neutral' as const },
+      ],
+    },
+  };
+}
+
+function buildGraphHomeHeaderRhythm() {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '中心模式', value: '交易中枢 + 自定义管道', detail: '点击节点后重新居中并展开影响链。', tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: [
+        { type: 'fact' as const, label: '第一圈节点', value: '管道阶段', detail: '市场输入 / 研究判断 / 交易逻辑 / 执行风控 / 复盘反馈。', tone: 'neutral' as const },
+      ],
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'fact' as const, label: '默认交互', value: '点击节点后重新居中', detail: '右侧详情板展开上游 / 下游 / 深跳入口。', tone: 'neutral' as const },
       ],
     },
   };
@@ -1232,6 +1257,43 @@ function SearchRoute({
   );
 }
 
+function GraphHomeRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const { model, loading, error } = useTerminalStore();
+  const requestedSurface = model?.surface.requested || 'public';
+  useSurfaceRefresh(requestedSurface, 'graph-home', requestedSurface !== 'internal');
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav({}, requestedSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title="图谱主页"
+          subtitle="交易关系图谱"
+          items={[]}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader compact title="图谱化主页" subtitle="交易中枢 + 自定义管道的 2.5D 动态辐射图" breadcrumbs={[{ label: '总览' }, { label: '图谱主页', current: true }]} {...buildGraphHomeHeaderRhythm()} />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+    >
+      {loading && !model ? <div className="loading-panel">加载图谱主页中…</div> : null}
+      <GraphHomePage model={model || null} />
+    </AppShell>
+  );
+}
+
 function AppRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1295,6 +1357,19 @@ function AppRoutes() {
           path="/overview"
           element={(
             <OverviewRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/graph-home"
+          element={(
+            <GraphHomeRoute
               themePreference={preference}
               resolvedTheme={resolvedTheme}
               onThemeChange={handleThemeChange}

@@ -2168,6 +2168,38 @@ button { cursor: pointer; }
   gap: 14px;
 }
 
+.graph-home-layout {
+  align-items: start;
+}
+
+.graph-home-toolbar,
+.graph-home-side,
+.graph-pipeline-create,
+.graph-pipeline-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.graph-pipeline-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.graph-pipeline-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: var(--bg-panel-soft);
+}
+
 .subhead {
   margin: 0 0 10px;
   font-size: 13px;

@@ -30,6 +30,7 @@ function resolvedThemeLabel(theme: ResolvedTheme): string {
 
 function isPrimaryNavActive(item: NavItem, currentPath: string): boolean {
   if (item.id === 'overview') return currentPath === '/overview' || currentPath === '/';
+  if (item.id === 'graph' || item.to.startsWith('/graph-home')) return currentPath.startsWith('/graph-home');
   if (item.id === 'ops' || item.to.startsWith('/terminal/')) return currentPath.startsWith('/terminal/');
   if (item.id === 'research' || item.to.startsWith('/workspace/')) return currentPath.startsWith('/workspace/');
   return currentPath === item.to;

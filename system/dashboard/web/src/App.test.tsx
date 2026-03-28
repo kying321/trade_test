@@ -852,6 +852,18 @@ describe('Fenlie terminal console', () => {
     expect(textOf('.global-summary-strip')).toContain('变更级别：仅研究');
   });
 
+  it('renders graph home as a parallel top-level route with primary navigation entry', async () => {
+    window.location.hash = '#/graph-home';
+    await renderApp();
+
+    expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
+    const nav = screen.getByRole('navigation', { name: 'primary-domains' });
+    expect(within(nav).getByRole('link', { name: '图谱主页' })).toBeTruthy();
+    expect(textOf('.global-topbar-inner')).toContain('图谱主页');
+    expect(screen.getByText('交易中枢')).toBeTruthy();
+    expect(screen.getByText('自定义管道')).toBeTruthy();
+  });
+
   it('renders internal feedback summary on overview when view=internal', async () => {
     installPassiveStoreForSurface('internal', {
       snapshot: buildFeedbackSnapshot(),
