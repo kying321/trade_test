@@ -1,5 +1,5 @@
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
-import { NavLink, type NavLinkProps } from 'react-router-dom';
+import { NavLink, type NavLinkProps, useMatch, useResolvedPath } from 'react-router-dom';
 
 function joinControlClass(base: string, extra?: string) {
   return [base, extra].filter(Boolean).join(' ');
@@ -32,11 +32,19 @@ function normalizeNavClassName(
 }
 
 export function DomainTab({ className, active, ...props }: NavLinkProps & { active?: boolean }) {
+  const resolvedPath = useResolvedPath(props.to);
+  const routeActive = Boolean(useMatch({
+    path: resolvedPath.pathname,
+    end: props.end ?? false,
+    caseSensitive: props.caseSensitive,
+  }));
+  const selected = routeActive || Boolean(active);
+
   return (
     <NavLink
       {...props}
       role="tab"
-      aria-selected={active ? true : undefined}
+      aria-selected={selected}
       className={normalizeNavClassName('control-domain-tab', className, active)}
     />
   );

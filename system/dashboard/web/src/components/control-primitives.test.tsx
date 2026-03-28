@@ -95,6 +95,20 @@ it('merges route-active state with callback className for nav primitives', () =>
   expect(actionLink.className).toContain('route-active-extra');
 });
 
+it('exposes selected tab semantics on the normal route-active path', () => {
+  render(
+    <MemoryRouter initialEntries={['/overview']}>
+      <DomainTab to="/overview">总览</DomainTab>
+    </MemoryRouter>,
+  );
+
+  const domainTab = screen.getByRole('tab', { name: '总览' });
+  expect(domainTab.className).toContain('control-domain-tab');
+  expect(domainTab.className).toContain('active');
+  expect(domainTab.getAttribute('aria-selected')).toBe('true');
+  expect(domainTab.getAttribute('aria-current')).toBe('page');
+});
+
 it('normalizes forced active state for DomainTab callback classes and semantics', () => {
   render(
     <MemoryRouter initialEntries={['/outside']}>
