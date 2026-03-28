@@ -1,5 +1,5 @@
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
-import { Link, NavLink, type NavLinkProps, type NavLinkRenderProps, useMatch, useResolvedPath } from 'react-router-dom';
+import { NavLink, type NavLinkProps } from 'react-router-dom';
 
 function joinControlClass(base: string, extra?: string) {
   return [base, extra].filter(Boolean).join(' ');
@@ -31,64 +31,14 @@ function normalizeNavClassName(
     );
 }
 
-function resolveNavClassName(
-  base: string,
-  className: NavLinkProps['className'] | undefined,
-  renderState: NavLinkRenderProps,
-) {
-  if (typeof className === 'function') {
-    return joinControlClass(
-      joinControlClass(base, renderState.isActive ? 'active' : undefined),
-      className(renderState),
-    );
-  }
-
-  return joinControlClass(
-    joinControlClass(base, renderState.isActive ? 'active' : undefined),
-    className,
-  );
-}
-
-function resolveNavStyle(
-  style: NavLinkProps['style'] | undefined,
-  renderState: NavLinkRenderProps,
-) {
-  if (typeof style === 'function') return style(renderState);
-  return style;
-}
-
-export function DomainTab({
-  className,
-  active,
-  children,
-  style,
-  to,
-  end,
-  caseSensitive,
-  ...props
-}: NavLinkProps & { active?: boolean }) {
-  const resolvedPath = useResolvedPath(to);
-  const routeMatch = useMatch({
-    path: resolvedPath.pathname,
-    end,
-    caseSensitive,
-  });
-  const renderState: NavLinkRenderProps = {
-    isActive: Boolean(active || routeMatch),
-    isPending: false,
-    isTransitioning: false,
-  };
-
+export function DomainTab({ className, active, ...props }: NavLinkProps & { active?: boolean }) {
   return (
-    <Link
+    <NavLink
       {...props}
-      to={to}
-      aria-current={renderState.isActive ? 'page' : undefined}
-      className={resolveNavClassName('control-domain-tab', className, renderState)}
-      style={resolveNavStyle(style, renderState)}
-    >
-      {typeof children === 'function' ? children(renderState) : children}
-    </Link>
+      role="tab"
+      aria-selected={active ? true : undefined}
+      className={normalizeNavClassName('control-domain-tab', className, active)}
+    />
   );
 }
 

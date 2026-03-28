@@ -33,7 +33,7 @@ it('renders domain tabs separately from action buttons and filter chips', () => 
     </MemoryRouter>
   );
 
-  const domainTab = screen.getByRole('link', { name: '总览' });
+  const domainTab = screen.getByRole('tab', { name: '总览' });
   const segmentedOption = screen.getByRole('button', { name: 'public' });
   const actionLink = screen.getByRole('link', { name: '查看详情' });
   const actionButton = screen.getByRole('button', { name: '打开搜索' });
@@ -108,12 +108,13 @@ it('normalizes forced active state for DomainTab callback classes and semantics'
     </MemoryRouter>,
   );
 
-  const domainTab = screen.getByRole('link', { name: '总览' });
+  const domainTab = screen.getByRole('tab', { name: '总览' });
   expect(domainTab.className).toContain('control-domain-tab');
   expect(domainTab.className).toContain('active');
   expect(domainTab.className).toContain('forced-active-extra');
   expect(domainTab.className).not.toContain('forced-idle-extra');
-  expect(domainTab.getAttribute('aria-current')).toBe('page');
+  expect(domainTab.getAttribute('role')).toBe('tab');
+  expect(domainTab.getAttribute('aria-selected')).toBe('true');
 });
 
 it('passes through standard button props on EntityRowButton', () => {
