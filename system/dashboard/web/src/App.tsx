@@ -407,6 +407,24 @@ function buildSearchHeaderRhythm() {
         { type: 'fact' as const, label: '覆盖', value: '模块 / 路由 / 工件', detail: '只搜索前端本地索引，不查 docs/code/tests。', tone: 'neutral' as const },
       ],
     },
+    focusSection: {
+      title: '当前焦点',
+      items: [
+        { type: 'fact' as const, label: '定位方式', value: '关键词 / scope / 深链', detail: '优先把人带到正确 section 或 artifact。', tone: 'neutral' as const },
+      ],
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'fact' as const, label: '动作', value: '输入关键词并跳转', detail: '支持模块、路由、artifact/source head 检索。', tone: 'neutral' as const },
+      ],
+    },
+    evidenceSection: {
+      title: '证据',
+      items: [
+        { type: 'fact' as const, label: '命中解释', value: '标题 / 说明 / 路径 / 关键词', detail: '结果列表会显示匹配字段。', tone: 'neutral' as const },
+      ],
+    },
   };
 }
 

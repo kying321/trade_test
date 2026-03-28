@@ -119,31 +119,30 @@ export function OverviewPage({ model }: OverviewPageProps) {
         <h2>总览</h2>
         <p>先看系统态势，再分流进入操作终端或研究工作区。</p>
       </div>
-      <div className="overview-rhythm-band" aria-label="overview-rhythm-state">
+      <section className="overview-rhythm-band" aria-label="overview-rhythm-state">
         <h3>当前状态</h3>
         <p>系统状态 / 入口 / 路由总览</p>
-      </div>
-      <div data-search-anchor="overview-mainline-summary" id="overview-mainline-summary">
-        <PanelCard
-          title="当前焦点"
-          kicker="研究主线摘要"
-          meta={holdSelectionHandoff
-            ? `${safeDisplayValue(holdSelectionHandoff.label || holdSelectionHandoff.id)} ｜ ${compactPath(holdSelectionHandoff.path, 4)}`
-            : '当前快照未暴露 hold_selection_handoff 主头'}
-          actions={<Link className="button" to={sourceHeadLink}>查看源头主线</Link>}
-        >
-          {holdSelectionHandoff ? (
-            <MetricStrip items={buildHoldSelectionMetrics(holdSelectionHandoff)} />
-          ) : (
-            <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
-          )}
-        </PanelCard>
-      </div>
-      <div className="overview-rhythm-band" aria-label="overview-rhythm-focus">
+      </section>
+      <section className="overview-rhythm-band" aria-label="overview-rhythm-focus">
         <h3>当前焦点</h3>
         <p>国内商品推理线和主线冲突统一在同一焦点带，避免首屏并列抢占。</p>
-      </div>
-      {commodityReasoningMetrics.length ? (
+        <div data-search-anchor="overview-mainline-summary" id="overview-mainline-summary">
+          <PanelCard
+            title="当前焦点"
+            kicker="研究主线摘要"
+            meta={holdSelectionHandoff
+              ? `${safeDisplayValue(holdSelectionHandoff.label || holdSelectionHandoff.id)} ｜ ${compactPath(holdSelectionHandoff.path, 4)}`
+              : '当前快照未暴露 hold_selection_handoff 主头'}
+            actions={<Link className="button" to={sourceHeadLink}>查看源头主线</Link>}
+          >
+            {holdSelectionHandoff ? (
+              <MetricStrip items={buildHoldSelectionMetrics(holdSelectionHandoff)} />
+            ) : (
+              <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
+            )}
+          </PanelCard>
+        </div>
+        {commodityReasoningMetrics.length ? (
         <div data-search-anchor="overview-commodity-reasoning" id="overview-commodity-reasoning">
           <PanelCard
             title="国内商品推理线"
@@ -153,32 +152,32 @@ export function OverviewPage({ model }: OverviewPageProps) {
             <MetricStrip items={commodityReasoningMetrics} showRawValues />
           </PanelCard>
         </div>
-      ) : null}
-      <div className="overview-rhythm-band" aria-label="overview-rhythm-action">
+        ) : null}
+      </section>
+      <section className="overview-rhythm-band" aria-label="overview-rhythm-action">
         <h3>下一步</h3>
         <p>选择入口进入操作终端、研究工作区或契约验收。</p>
-      </div>
-      <div className="overview-entry-grid">
-        <Link className="panel-card overview-entry-card" to="/terminal/public">
-          <p className="panel-kicker">一级域</p>
-          <strong>操作终端</strong>
-          <span>{model?.orchestration.topMetrics[3]?.value ? `当前值：${String(model.orchestration.topMetrics[3].value)}` : '进入调度 / 门禁 / 风险链路'}</span>
-        </Link>
-        <Link className="panel-card overview-entry-card" to="/workspace/artifacts">
-          <p className="panel-kicker">一级域</p>
-          <strong>研究工作区</strong>
-          <span>{model?.workspace.artifactRows.length ? `工件数：${model.workspace.artifactRows.length}` : '进入工件 / 回测 / 比较'}</span>
-        </Link>
-        <Link className="panel-card overview-entry-card" to="/workspace/contracts">
-          <p className="panel-kicker">入口</p>
-          <strong>契约验收</strong>
-          <span>查看公开面验收与入口拓扑</span>
-        </Link>
-      </div>
-      <div className="overview-rhythm-band" aria-label="overview-rhythm-evidence">
-        <h3>证据</h3>
-      </div>
+        <div className="overview-entry-grid">
+          <Link className="panel-card overview-entry-card" to="/terminal/public">
+            <p className="panel-kicker">一级域</p>
+            <strong>操作终端</strong>
+            <span>{model?.orchestration.topMetrics[3]?.value ? `当前值：${String(model.orchestration.topMetrics[3].value)}` : '进入调度 / 门禁 / 风险链路'}</span>
+          </Link>
+          <Link className="panel-card overview-entry-card" to="/workspace/artifacts">
+            <p className="panel-kicker">一级域</p>
+            <strong>研究工作区</strong>
+            <span>{model?.workspace.artifactRows.length ? `工件数：${model.workspace.artifactRows.length}` : '进入工件 / 回测 / 比较'}</span>
+          </Link>
+          <Link className="panel-card overview-entry-card" to="/workspace/contracts">
+            <p className="panel-kicker">入口</p>
+            <strong>契约验收</strong>
+            <span>查看公开面验收与入口拓扑</span>
+          </Link>
+        </div>
+      </section>
       {requestedInternal ? (
+        <section className="overview-rhythm-band" aria-label="overview-rhythm-evidence">
+          <h3>证据</h3>
         <div data-search-anchor="overview-alignment-projection" id="overview-alignment-projection">
           <PanelCard
             title="方向对齐投射"
@@ -196,6 +195,7 @@ export function OverviewPage({ model }: OverviewPageProps) {
             )}
           </PanelCard>
         </div>
+        </section>
       ) : null}
     </section>
   );

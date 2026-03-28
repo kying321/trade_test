@@ -34,7 +34,6 @@ type ContextHeaderProps = {
   subtitle: string;
   breadcrumbs?: Array<{ label: string; current?: boolean }>;
   actions?: ReactNode;
-  sections?: ContextHeaderSection[];
   stateSection?: ContextHeaderRhythmSection;
   focusSection?: ContextHeaderRhythmSection;
   actionSection?: ContextHeaderRhythmSection;
@@ -42,51 +41,23 @@ type ContextHeaderProps = {
   compact?: boolean;
 };
 
-function normalizeRhythmSections({
-  stateSection,
-  focusSection,
-  actionSection,
-  evidenceSection,
-  sections,
-}: {
-  stateSection?: ContextHeaderRhythmSection;
-  focusSection?: ContextHeaderRhythmSection;
-  actionSection?: ContextHeaderRhythmSection;
-  evidenceSection?: ContextHeaderRhythmSection;
-  sections: ContextHeaderSection[];
-}): ContextHeaderSection[] {
-  const explicitSlots = [stateSection, focusSection, actionSection, evidenceSection];
-  const hasExplicitSlots = explicitSlots.some(Boolean);
-  if (hasExplicitSlots) {
-    return [
-      stateSection ? { id: 'state', title: stateSection.title || '当前状态', items: stateSection.items } : null,
-      focusSection ? { id: 'focus', title: focusSection.title || '当前焦点', items: focusSection.items } : null,
-      actionSection ? { id: 'action', title: actionSection.title || '下一步', items: actionSection.items } : null,
-      evidenceSection ? { id: 'evidence', title: evidenceSection.title || '证据', items: evidenceSection.items } : null,
-    ].filter((section): section is ContextHeaderSection => Boolean(section));
-  }
-  return sections;
-}
-
 export function ContextHeader({
   title,
   subtitle,
   breadcrumbs = [],
   actions,
-  sections = [],
   stateSection,
   focusSection,
   actionSection,
   evidenceSection,
   compact = false,
 }: ContextHeaderProps) {
-  const normalizedSections = normalizeRhythmSections({
-    stateSection,
-    focusSection,
-    actionSection,
-    evidenceSection,
-    sections,
-  });
+  const normalizedSections = [
+    stateSection ? { id: 'state', title: stateSection.title || '当前状态', items: stateSection.items } : null,
+    focusSection ? { id: 'focus', title: focusSection.title || '当前焦点', items: focusSection.items } : null,
+    actionSection ? { id: 'action', title: actionSection.title || '下一步', items: actionSection.items } : null,
+    evidenceSection ? { id: 'evidence', title: evidenceSection.title || '证据', items: evidenceSection.items } : null,
+  ].filter((section): section is ContextHeaderSection => Boolean(section));
   return (
     <section className={`context-header ${compact ? 'compact' : ''}`.trim()}>
       <div className="context-header-head">

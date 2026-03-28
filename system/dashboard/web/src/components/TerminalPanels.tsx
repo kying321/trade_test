@@ -402,22 +402,21 @@ export function TerminalPanels({
     || [];
   return (
     <section className="terminal-rhythm-layout" aria-label="terminal-rhythm-layout">
-      <div className="terminal-rhythm-band terminal-rhythm-state" aria-label="terminal-rhythm-state">
+      <section className="terminal-rhythm-band terminal-rhythm-state" aria-label="terminal-rhythm-state">
         <h3>当前状态</h3>
         <TerminalFocusRail model={model} surface={surface.effective} focus={focus} />
-      </div>
-      <div className="terminal-rhythm-band terminal-rhythm-focus" aria-label="terminal-rhythm-focus">
+      </section>
+      <section className="terminal-rhythm-band terminal-rhythm-focus" aria-label="terminal-rhythm-focus">
         <h3>当前焦点</h3>
         <TerminalBreadcrumbs model={model} surface={surface.effective} focus={focus} rowLabel={focusedRowLabel} />
-      </div>
-      <div className="terminal-rhythm-band terminal-rhythm-action" aria-label="terminal-rhythm-action">
+      </section>
+      <section className="terminal-rhythm-band terminal-rhythm-action" aria-label="terminal-rhythm-action">
         <h3>下一步</h3>
         <TerminalWorkspaceHandoffs links={focusedHandoffs} />
-      </div>
-      <div className="terminal-rhythm-band terminal-rhythm-evidence" aria-label="terminal-rhythm-evidence">
+      </section>
+      <section className="terminal-rhythm-band terminal-rhythm-evidence" aria-label="terminal-rhythm-evidence">
         <h3>证据</h3>
-      </div>
-      <TerminalPanelsGrid isInternal={isInternal}>
+        <TerminalPanelsGrid isInternal={isInternal}>
         <div data-search-anchor="terminal-orchestration" id="terminal-orchestration">
         <PanelCard
           title={t('terminal_panel_orchestration_title')}
@@ -717,7 +716,8 @@ export function TerminalPanels({
           </DrilldownSection>
         </PanelCard>
         </div>
-      </TerminalPanelsGrid>
+        </TerminalPanelsGrid>
+      </section>
     </section>
   );
 }

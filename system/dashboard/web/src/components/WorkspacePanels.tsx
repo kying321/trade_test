@@ -492,10 +492,8 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
 
   return (
     <div className="workspace-grid artifacts-grid">
-      <div className="workspace-left-rail">
-        <div className="workspace-rhythm-band workspace-rhythm-state" aria-label="workspace-rhythm-state">
+      <section className="workspace-left-rail workspace-rhythm-band workspace-rhythm-state" aria-label="workspace-rhythm-state">
           <h3>当前状态</h3>
-        </div>
         <div data-search-anchor="workspace-artifacts-map-panel" id="workspace-artifacts-map-panel">
         <PanelCard title={t('workspace_artifacts_map_title')} kicker={t('workspace_artifacts_map_kicker')} meta={t('workspace_artifacts_map_meta')}>
           <div className="stack-list">
@@ -561,12 +559,11 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
           />
         </PanelCard>
         </div>
-      </div>
+      </section>
 
       <div className="workspace-rhythm-main">
-        <div className="workspace-rhythm-band workspace-rhythm-focus" aria-label="workspace-rhythm-focus">
+        <section className="workspace-rhythm-band workspace-rhythm-focus" aria-label="workspace-rhythm-focus">
           <h3>当前焦点</h3>
-        </div>
         <div data-search-anchor="workspace-artifacts-focus-panel" id="workspace-artifacts-focus-panel">
         <PanelCard title={t('workspace_artifacts_focus_title')} kicker={t('workspace_artifacts_focus_kicker')} meta={t('workspace_artifacts_focus_meta')}>
           {selectedRow ? (
@@ -587,10 +584,10 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
           )}
         </PanelCard>
         </div>
+        </section>
 
-        <div className="workspace-rhythm-band workspace-rhythm-action" aria-label="workspace-rhythm-action">
+        <section className="workspace-rhythm-band workspace-rhythm-action" aria-label="workspace-rhythm-action">
           <h3>下一步</h3>
-        </div>
         <PanelCard title="下一步动作" kicker="handoff / action" meta={selectedRow ? artifactTitle(selectedRow) : t('workspace_artifacts_focus_empty')}>
           {selectedRow ? (
             <div className="button-row workspace-handoff-links">
@@ -604,10 +601,10 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             <div className="empty-block">{t('workspace_artifacts_focus_empty')}</div>
           )}
         </PanelCard>
+        </section>
 
-        <div className="workspace-rhythm-band workspace-rhythm-evidence" aria-label="workspace-rhythm-evidence">
+        <section className="workspace-rhythm-band workspace-rhythm-evidence" aria-label="workspace-rhythm-evidence">
           <h3>证据</h3>
-        </div>
         <div data-search-anchor="workspace-artifacts-target-pool" id="workspace-artifacts-target-pool">
         <PanelCard
           title={t('workspace_artifacts_target_pool_title')}
@@ -698,6 +695,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             <div className="empty-block">{t('workspace_artifacts_no_matches')}</div>
           )}
         </PanelCard>
+        </section>
       </div>
     </div>
   );
