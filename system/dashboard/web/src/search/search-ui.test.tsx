@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
 import { buildTerminalReadModel } from '../adapters/read-model';
@@ -112,6 +112,20 @@ afterEach(() => {
 });
 
 describe('global search ui', () => {
+  it('topbar 仅暴露全局契约，不再混入页面职责芯片', async () => {
+    await renderApp();
+    const topbar = document.querySelector('header.global-topbar');
+    expect(topbar).toBeTruthy();
+    if (!topbar) throw new Error('global topbar not found');
+    const summaryStrip = within(topbar).getByLabelText('global-summary');
+
+    expect(within(topbar).queryByText('职责')).toBeNull();
+    expect(within(topbar).queryByText(/职责/)).toBeNull();
+    expect(within(topbar).getByRole('navigation', { name: 'primary-domains' })).toBeTruthy();
+    expect(within(topbar).getByRole('button', { name: '打开全局搜索' })).toBeTruthy();
+    expect(within(summaryStrip).getByText(/快照|只读|generated/i)).toBeTruthy();
+  });
+
   it('toggles overlay visibility when the topbar search trigger is clicked twice', async () => {
     await renderApp();
 

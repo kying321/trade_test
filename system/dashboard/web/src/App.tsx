@@ -12,7 +12,7 @@ import { AppShell } from './app-shell/AppShell';
 import { ContextHeader, type ContextHeaderSection } from './app-shell/ContextHeader';
 import { ContextSidebar } from './app-shell/ContextSidebar';
 import { GlobalNoticeLayer } from './app-shell/GlobalNoticeLayer';
-import { GlobalTopbar, type GlobalTopbarDomainContext, type ResolvedTheme, type ThemePreference } from './app-shell/GlobalTopbar';
+import { GlobalTopbar, type ResolvedTheme, type ThemePreference } from './app-shell/GlobalTopbar';
 import { InspectorRail } from './app-shell/InspectorRail';
 import { useSidebarCollapse } from './hooks/use-sidebar-collapse';
 import { useUiTheme } from './hooks/use-ui-theme';
@@ -156,28 +156,13 @@ function buildPrimaryNav(focus: SharedFocusState, currentSurface: SurfaceKey) {
   });
 }
 
-function buildTopbarDomainContext(domain: 'overview' | 'ops' | 'research'): GlobalTopbarDomainContext {
-  if (domain === 'overview') {
-    return {
-      kicker: '一级域',
-      title: '全局导航',
-      detail: '入口 / 路由',
-      tone: 'overview',
-    };
-  }
-  if (domain === 'ops') {
-    return {
-      kicker: '当前域',
-      title: '操作终端',
-      detail: '公开 / 内部 / 执行链',
-      tone: 'ops',
-    };
-  }
+function buildTopbarGlobalSummary(model: TerminalReadModel | null | undefined) {
   return {
-    kicker: '当前域',
-    title: '研究工作区',
-    detail: '工件 / 回测 / 契约 / 原始',
-    tone: 'research',
+    changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
+    chips: [
+      { label: '模式', value: String(model?.experienceContract.mode || 'read_only_snapshot') },
+      { label: '快照', value: formatDateTime(model?.meta.generated_at_utc) },
+    ],
   };
 }
 
@@ -939,10 +924,7 @@ function OverviewRoute({
   return (
     <AppShell
       sidebarCollapsed={sidebarCollapsed}
-      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, effectiveSurface)} globalSummary={{
-        changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
-        chips: pageMeta.topbarChips,
-      }} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} domainContext={buildTopbarDomainContext('overview')} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, effectiveSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
       sidebar={(
         <ContextSidebar
           title={pageMeta.sidebarTitle}
@@ -1003,10 +985,7 @@ function TerminalRoute({
   return (
     <AppShell
       sidebarCollapsed={sidebarCollapsed}
-      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, requested)} globalSummary={{
-        changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
-        chips: pageMeta.topbarChips,
-      }} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} domainContext={buildTopbarDomainContext('ops')} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, requested)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
       sidebar={(
         <ContextSidebar
           title={pageMeta.sidebarTitle}
@@ -1088,10 +1067,7 @@ function WorkspaceRoute({
   return (
     <AppShell
       sidebarCollapsed={sidebarCollapsed}
-      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(navigationFocus, requestedSurface)} globalSummary={{
-        changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
-        chips: pageMeta.topbarChips,
-      }} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} domainContext={buildTopbarDomainContext('research')} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(navigationFocus, requestedSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
       sidebar={<ContextSidebar
         title={pageMeta.sidebarTitle}
         subtitle={pageMeta.sidebarSubtitle}
@@ -1166,13 +1142,7 @@ function SearchRoute({
   return (
     <AppShell
       sidebarCollapsed={sidebarCollapsed}
-      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav({}, requestedSurface)} globalSummary={{
-        changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
-        chips: [
-          { label: '当前页', value: '搜索' },
-          { label: '职责', value: '模块 / 路由 / 工件' },
-        ],
-      }} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} domainContext={buildTopbarDomainContext('overview')} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav({}, requestedSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
       sidebar={(
         <ContextSidebar
           title="全局搜索"

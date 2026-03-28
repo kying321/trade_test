@@ -821,7 +821,7 @@ describe('Fenlie terminal console', () => {
     expect(await screen.findByRole('heading', { name: '总览' })).toBeTruthy();
     expect(screen.getAllByText('操作终端').length).toBeGreaterThan(0);
     expect(screen.getAllByText('研究工作区').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('全局导航').length).toBeGreaterThan(0);
+    expect(screen.getByRole('navigation', { name: 'primary-domains' })).toBeTruthy();
     expect(screen.getAllByText('系统状态 / 入口 / 路由总览').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: '研究主线摘要' })).toBeTruthy();
     const summaryCard = screen.getByRole('heading', { name: '研究主线摘要' }).closest('section');
@@ -839,6 +839,8 @@ describe('Fenlie terminal console', () => {
     expect(commodityCard?.textContent || '').toContain('BU2606');
     expect(textOf('.global-topbar-inner')).not.toContain('请求视图');
     expect(textOf('.global-topbar-inner')).not.toContain('实际视图');
+    expect(textOf('.global-summary-strip')).toContain('模式：read_only_snapshot');
+    expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.global-summary-strip')).toContain('变更级别：仅研究');
   });
 
@@ -887,11 +889,11 @@ describe('Fenlie terminal console', () => {
 
     expect(screen.getByText('Fenlie / 控制台')).toBeTruthy();
     expect(screen.getAllByText('操作终端').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('公开 / 内部 / 执行链').length).toBeGreaterThan(0);
     expect(screen.getAllByText('公开面').length).toBeGreaterThan(0);
     expect(screen.getAllByText('安全摘要').length).toBeGreaterThan(0);
     await screen.findByLabelText('ops-context-strip');
-    expect(textOf('.global-summary-strip')).toContain('当前页：公开面');
+    expect(textOf('.global-summary-strip')).toContain('模式：read_only_snapshot');
+    expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.context-header .panel-kicker')).toContain('公开面');
     expect(textOf('.context-header h2')).toContain('执行穿透 / 调度与门禁');
     expect(textOf('.context-header')).not.toContain('穿透焦点');
@@ -899,7 +901,6 @@ describe('Fenlie terminal console', () => {
     expect(document.querySelector('.context-header-controls')).toBeNull();
     expect(textOf('.ops-context-strip')).toContain('运行上下文');
     expect(textOf('.ops-context-strip')).toContain('视图断言');
-    expect(screen.getAllByText('当前域').length).toBeGreaterThan(0);
     expect(screen.queryByText('数据面切换')).toBeNull();
     expect(textOf('.global-topbar-inner')).not.toContain('请求视图');
     expect(textOf('.global-topbar-inner')).not.toContain('实际视图');
@@ -918,7 +919,8 @@ describe('Fenlie terminal console', () => {
     await navigateHash('#/workspace/contracts');
 
     expect(await screen.findByLabelText('workspace-context-strip', undefined, { timeout: 3000 })).toBeTruthy();
-    expect(textOf('.global-summary-strip')).toContain('当前页：契约层');
+    expect(textOf('.global-summary-strip')).toContain('模式：read_only_snapshot');
+    expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.context-header .panel-kicker')).toContain('契约层');
     expect(textOf('.context-header h2')).toContain('公开入口 / 数据契约 / 路由验收');
     expect(textOf('.context-header')).not.toContain('穿透焦点');
@@ -926,7 +928,6 @@ describe('Fenlie terminal console', () => {
     expect(document.querySelector('.context-header-controls')).toBeNull();
     expect(textOf('.context-header-route-badges')).toContain('当前阶段：');
     expect(screen.getAllByText('研究工作区').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('工件 / 回测 / 契约 / 原始').length).toBeGreaterThan(0);
     expect(screen.getByText('接口分层 / 可见边界')).toBeTruthy();
     expect(screen.getAllByText('源头主线').length).toBeGreaterThan(0);
     expect(screen.getAllByText('接口目录').length).toBeGreaterThan(0);
