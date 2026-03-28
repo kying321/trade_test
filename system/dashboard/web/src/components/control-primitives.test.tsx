@@ -113,7 +113,7 @@ it('normalizes forced active state for DomainTab callback classes and semantics'
   expect(domainTab.className).toContain('active');
   expect(domainTab.className).toContain('forced-active-extra');
   expect(domainTab.className).not.toContain('forced-idle-extra');
-  expect(domainTab.getAttribute('aria-selected')).toBe('true');
+  expect(domainTab.getAttribute('aria-current')).toBe('page');
 });
 
 it('passes through standard button props on EntityRowButton', () => {
@@ -135,5 +135,8 @@ it('passes through standard button props on EntityRowButton', () => {
   expect(row.className).toContain('control-entity-row');
   expect(row.className).toContain('custom-row');
   expect(row.getAttribute('disabled')).not.toBeNull();
+  expect(screen.getByText('持有选择主头').className).toContain('control-entity-row-title');
+  expect(screen.getByText('research_hold_transfer').className).toContain('control-entity-row-subtitle');
+  expect(screen.getByText('附加信息').className).not.toContain('control-entity-row-title');
   expect(screen.getByText('附加信息')).toBeTruthy();
 });

@@ -325,12 +325,12 @@ button { cursor: pointer; }
   text-align: left;
 }
 
-.control-entity-row span {
+.control-entity-row-title {
   font-size: 13px;
   font-weight: 600;
 }
 
-.control-entity-row small {
+.control-entity-row-subtitle {
   color: var(--text-2);
   font-size: 11px;
 }
