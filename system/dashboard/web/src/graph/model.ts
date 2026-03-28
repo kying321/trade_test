@@ -163,7 +163,7 @@ export function buildGraphLayout(model: GraphHomeModel, centerId: string): Graph
         y: Math.sin(angle) * radius,
         z: depth === 1 ? 16 : -8,
         depth,
-        emphasis: depth === 1 ? 1 : 0.55,
+        intensity: depth === 1 ? 1 : 0.55,
       };
     });
 
@@ -174,7 +174,7 @@ export function buildGraphLayout(model: GraphHomeModel, centerId: string): Graph
       y: 0,
       z: 32,
       depth: 0,
-      emphasis: 1.3,
+      intensity: 1.3,
     },
     ...placeRing(depthOne, 220, 1),
     ...placeRing(depthTwo, 400, 2),

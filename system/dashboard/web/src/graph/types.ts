@@ -59,5 +59,5 @@ export type GraphLayoutNode = GraphNode & {
   y: number;
   z: number;
   depth: 0 | 1 | 2;
-  emphasis: number;
+  intensity: number;
 };

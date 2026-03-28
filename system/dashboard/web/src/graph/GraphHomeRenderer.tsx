@@ -53,7 +53,7 @@ export function GraphHomeRenderer({
           symbolSize: 46 + node.importance * 4,
           itemStyle: {
             color: nodeColor(node.kind),
-            opacity: node.id === centerId ? 1 : node.emphasis,
+            opacity: node.id === centerId ? 1 : node.intensity,
             shadowBlur: node.id === centerId ? 28 : 12,
             shadowColor: 'rgba(15,23,42,0.28)',
           },

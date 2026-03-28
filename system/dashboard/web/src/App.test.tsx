@@ -26,6 +26,12 @@ vi.mock('./hooks/use-ui-theme', () => ({
   }),
 }));
 
+vi.mock('./graph/GraphHomeRenderer', () => ({
+  GraphHomeRenderer: () => (
+    <div data-testid="graph-home-renderer-mock">graph-home-renderer-mock</div>
+  ),
+}));
+
 function textOf(selector: string): string {
   return document.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim() || '';
 }
@@ -869,11 +875,15 @@ describe('Fenlie terminal console', () => {
     await renderApp();
 
     expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
-    expect(window.location.hash).toContain('/graph-home');
+    await waitFor(() => {
+      expect(window.location.hash).toContain('/graph-home');
+    });
 
     await navigateHash('#/unknown-route');
     expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
-    expect(window.location.hash).toContain('/graph-home');
+    await waitFor(() => {
+      expect(window.location.hash).toContain('/graph-home');
+    });
   });
 
   it('renders internal feedback summary on overview when view=internal', async () => {
