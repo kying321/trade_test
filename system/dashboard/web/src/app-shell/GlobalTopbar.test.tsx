@@ -36,6 +36,7 @@ function renderTopbar({
         resolvedTheme="dark"
         onThemeChange={vi.fn()}
         domainContext={domainContext}
+        onOpenSearch={vi.fn()}
       />,
     </MemoryRouter>,
   );
@@ -51,6 +52,7 @@ describe('GlobalTopbar', () => {
 
     const controlDeck = screen.getByRole('region', { name: 'global-control-deck' });
     expect(within(controlDeck).getByRole('group', { name: 'theme-switcher' })).toBeTruthy();
+    expect(within(controlDeck).getByRole('button', { name: '打开全局搜索' })).toBeTruthy();
     expect(within(controlDeck).getByText('变更级别：RESEARCH_ONLY')).toBeTruthy();
     expect(within(controlDeck).getByText('公开面：fuuu.fun')).toBeTruthy();
 

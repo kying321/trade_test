@@ -493,6 +493,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
   return (
     <div className="workspace-grid artifacts-grid">
       <div className="workspace-left-rail">
+        <div data-search-anchor="workspace-artifacts-map-panel" id="workspace-artifacts-map-panel">
         <PanelCard title={t('workspace_artifacts_map_title')} kicker={t('workspace_artifacts_map_kicker')} meta={t('workspace_artifacts_map_meta')}>
           <div className="stack-list">
             {ARTIFACT_GROUP_ORDER.map((group) => {
@@ -513,7 +514,9 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             })}
           </div>
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="workspace-artifacts-status-panel" id="workspace-artifacts-status-panel">
         <PanelCard title={t('workspace_artifacts_status_title')} kicker={t('workspace_artifacts_status_kicker')} meta={`${artifactGroupLabel(activeGroup)} ｜ ${t('workspace_artifacts_status_meta')}`}>
           <div className="stack-list">
             <button className={`stack-button artifact-status-button ${toneFilter === 'all' ? 'active' : ''}`.trim()} onClick={() => setArtifactQuery(selectedId || undefined, { tone: undefined })}>
@@ -532,7 +535,9 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             ))}
           </div>
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="workspace-artifacts-search-panel" id="workspace-artifacts-search-panel">
         <PanelCard title={t('workspace_artifacts_search_panel_title')} kicker={t('workspace_artifacts_search_panel_kicker')} meta={t('workspace_artifacts_search_panel_meta')}>
           <div className="chip-row artifact-search-scope-row">
             {(['title', 'artifact', 'path'] as ArtifactSearchScope[]).map((scope) => (
@@ -552,7 +557,9 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             placeholder={t('workspace_artifacts_search_placeholder')}
           />
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="workspace-artifacts-focus-panel" id="workspace-artifacts-focus-panel">
         <PanelCard title={t('workspace_artifacts_focus_title')} kicker={t('workspace_artifacts_focus_kicker')} meta={t('workspace_artifacts_focus_meta')}>
           {selectedRow ? (
             <>
@@ -580,8 +587,10 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             <div className="empty-block">{t('workspace_artifacts_focus_empty')}</div>
           )}
         </PanelCard>
+        </div>
       </div>
 
+      <div data-search-anchor="workspace-artifacts-target-pool" id="workspace-artifacts-target-pool">
       <PanelCard
         title={t('workspace_artifacts_target_pool_title')}
         kicker={t('workspace_artifacts_target_pool_kicker')}
@@ -607,6 +616,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
           </DrilldownSection>
         </div>
       </PanelCard>
+      </div>
 
       <PanelCard
         title={(

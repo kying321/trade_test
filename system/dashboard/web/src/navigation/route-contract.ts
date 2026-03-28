@@ -4,6 +4,7 @@ export const SHARED_QUERY_KEYS = [
   'artifact',
   'domain',
   'tone',
+  'anchor',
   'search',
   'search_scope',
   'panel',

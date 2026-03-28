@@ -136,45 +136,51 @@ export function OverviewPage({ model }: OverviewPageProps) {
           <span>查看公开面验收与入口拓扑</span>
         </Link>
       </div>
-      <PanelCard
-        title="研究主线摘要"
-        kicker="source-owned / canonical"
-        meta={holdSelectionHandoff
-          ? `${safeDisplayValue(holdSelectionHandoff.label || holdSelectionHandoff.id)} ｜ ${compactPath(holdSelectionHandoff.path, 4)}`
-          : '当前快照未暴露 hold_selection_handoff 主头'}
-        actions={<Link className="button" to={sourceHeadLink}>查看源头主线</Link>}
-      >
-        {holdSelectionHandoff ? (
-          <MetricStrip items={buildHoldSelectionMetrics(holdSelectionHandoff)} />
-        ) : (
-          <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
-        )}
-      </PanelCard>
-      {commodityReasoningMetrics.length ? (
+      <div data-search-anchor="overview-mainline-summary" id="overview-mainline-summary">
         <PanelCard
-          title="国内商品推理线"
-          kicker="reasoning / visible-priority"
-          meta="首屏固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
+          title="研究主线摘要"
+          kicker="source-owned / canonical"
+          meta={holdSelectionHandoff
+            ? `${safeDisplayValue(holdSelectionHandoff.label || holdSelectionHandoff.id)} ｜ ${compactPath(holdSelectionHandoff.path, 4)}`
+            : '当前快照未暴露 hold_selection_handoff 主头'}
+          actions={<Link className="button" to={sourceHeadLink}>查看源头主线</Link>}
         >
-          <MetricStrip items={commodityReasoningMetrics} showRawValues />
-        </PanelCard>
-      ) : null}
-      {requestedInternal ? (
-        <PanelCard
-          title="方向对齐投射"
-          kicker="internal_only / feedback_projection"
-          meta={model.surface.effective === 'internal' ? '内部高价值反馈摘要' : '仅内部可见'}
-          actions={<Link className="button" to={feedbackLink}>进入对齐页</Link>}
-        >
-          {model.surface.effective === 'internal' && feedbackProjection ? (
-            <>
-              <MetricStrip items={buildFeedbackMetrics(feedbackProjection)} />
-              <div className="empty-block">{safeDisplayValue(feedbackProjection.summary.headline || '暂无高价值反馈')}</div>
-            </>
+          {holdSelectionHandoff ? (
+            <MetricStrip items={buildHoldSelectionMetrics(holdSelectionHandoff)} />
           ) : (
-            <div className="empty-block">内部对齐投射暂不可用</div>
+            <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
           )}
         </PanelCard>
+      </div>
+      {commodityReasoningMetrics.length ? (
+        <div data-search-anchor="overview-commodity-reasoning" id="overview-commodity-reasoning">
+          <PanelCard
+            title="国内商品推理线"
+            kicker="reasoning / visible-priority"
+            meta="首屏固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
+          >
+            <MetricStrip items={commodityReasoningMetrics} showRawValues />
+          </PanelCard>
+        </div>
+      ) : null}
+      {requestedInternal ? (
+        <div data-search-anchor="overview-alignment-projection" id="overview-alignment-projection">
+          <PanelCard
+            title="方向对齐投射"
+            kicker="internal_only / feedback_projection"
+            meta={model.surface.effective === 'internal' ? '内部高价值反馈摘要' : '仅内部可见'}
+            actions={<Link className="button" to={feedbackLink}>进入对齐页</Link>}
+          >
+            {model.surface.effective === 'internal' && feedbackProjection ? (
+              <>
+                <MetricStrip items={buildFeedbackMetrics(feedbackProjection)} />
+                <div className="empty-block">{safeDisplayValue(feedbackProjection.summary.headline || '暂无高价值反馈')}</div>
+              </>
+            ) : (
+              <div className="empty-block">内部对齐投射暂不可用</div>
+            )}
+          </PanelCard>
+        </div>
       ) : null}
     </section>
   );

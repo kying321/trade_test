@@ -22,6 +22,7 @@ function renderSidebar({ collapsed = false }: { collapsed?: boolean } = {}) {
           { id: 'events', label: '事件列表', to: '/workspace/artifacts?page_section=events', level: 2, groupId: 'main', groupLabel: '研究主线' },
           { id: 'actions', label: '动作栈', to: '/workspace/artifacts?page_section=actions', level: 1, groupId: 'ops', groupLabel: '动作追踪' },
         ]}
+        utilityLinks={[{ label: '搜索 / Search', to: '/search' }]}
         activeSectionId="summary"
       />
     </MemoryRouter>,
@@ -48,6 +49,7 @@ describe('ContextSidebar', () => {
     expect(within(toc).getByText('动作追踪')).toBeTruthy();
 
     const utilities = screen.getByRole('region', { name: 'sidebar-utilities' });
+    expect(within(utilities).getByRole('link', { name: '搜索 / Search' })).toBeTruthy();
     expect(within(utilities).getByRole('link', { name: '公开快照' })).toBeTruthy();
     expect(within(utilities).getByRole('link', { name: '运维面板' })).toBeTruthy();
   });

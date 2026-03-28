@@ -21,6 +21,7 @@ type ContextSidebarProps = {
   collapsed: boolean;
   onToggleCollapse: () => void;
   canCollapse?: boolean;
+  utilityLinks?: Array<{ label: string; to: string }>;
 };
 
 export function ContextSidebar({
@@ -33,6 +34,7 @@ export function ContextSidebar({
   collapsed,
   onToggleCollapse,
   canCollapse = true,
+  utilityLinks = [],
 }: ContextSidebarProps) {
   const toggleLabel = collapsed ? '展开侧边导航' : '收起侧边导航';
   const sectionGroups = pageSections.reduce<Array<{ id: string; label: string; items: PageSectionNavItem[] }>>((groups, item) => {
@@ -155,6 +157,9 @@ export function ContextSidebar({
           ) : null}
           <section className="sidebar-section sidebar-section-utilities" aria-label="sidebar-utilities">
             <div className="rail-footnote">
+              {utilityLinks.map((item) => (
+                <Link key={item.to} to={item.to}>{item.label}</Link>
+              ))}
               <a href="/data/fenlie_dashboard_snapshot.json" target="_blank" rel="noreferrer">公开快照</a>
               <a href="/operator_task_visual_panel.html" target="_blank" rel="noreferrer">运维面板</a>
             </div>

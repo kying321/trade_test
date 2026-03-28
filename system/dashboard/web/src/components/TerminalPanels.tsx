@@ -395,6 +395,7 @@ export function TerminalPanels({
       <TerminalBreadcrumbs model={model} surface={surface.effective} focus={focus} rowLabel={focusedRowLabel} />
       <TerminalWorkspaceHandoffs links={focusedHandoffs} />
       <div className={`terminal-grid ${isInternal ? 'terminal-grid-internal' : 'terminal-grid-public'}`}>
+        <div data-search-anchor="terminal-orchestration" id="terminal-orchestration">
         <PanelCard
           title={t('terminal_panel_orchestration_title')}
           kicker="运行摘要 / 调度总线"
@@ -451,7 +452,9 @@ export function TerminalPanels({
             />
           </DrilldownSection>
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="terminal-data-regime" id="terminal-data-regime">
         <PanelCard
           title={t('terminal_panel_data_regime_title')}
           kicker={t('terminal_panel_data_regime_kicker')}
@@ -498,7 +501,9 @@ export function TerminalPanels({
             <DenseTable columns={view.dataRegime.regimeMatrixColumns} rows={dataRegime.regimeMatrix} />
           </DrilldownSection>
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="terminal-signal-risk" id="terminal-signal-risk">
         <PanelCard
           title={t('terminal_panel_signal_risk_title')}
           kicker={t('terminal_panel_signal_risk_kicker')}
@@ -613,18 +618,22 @@ export function TerminalPanels({
             </div>
           </DrilldownSection>
         </PanelCard>
+        </div>
 
         {commodityReasoningMetrics.length ? (
-          <PanelCard
-            title="国内商品推理线"
-            kicker="reasoning / visible-priority"
-            meta="终端固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
-            className={surfacePanelClass(isInternal, false)}
-          >
-            <MetricStrip items={commodityReasoningMetrics} showRawValues />
-          </PanelCard>
+          <div data-search-anchor="terminal-commodity-reasoning" id="terminal-commodity-reasoning">
+            <PanelCard
+              title="国内商品推理线"
+              kicker="reasoning / visible-priority"
+              meta="终端固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
+              className={surfacePanelClass(isInternal, false)}
+            >
+              <MetricStrip items={commodityReasoningMetrics} showRawValues />
+            </PanelCard>
+          </div>
         ) : null}
 
+        <div data-search-anchor="terminal-lab-review" id="terminal-lab-review">
         <PanelCard
           title={t('terminal_panel_lab_review_title')}
           kicker={t('terminal_panel_lab_review_kicker')}
@@ -684,6 +693,7 @@ export function TerminalPanels({
             <DenseTable columns={view.labReview.stressSummaryColumns} rows={labReview.stressSummary} />
           </DrilldownSection>
         </PanelCard>
+        </div>
       </div>
     </>
   );

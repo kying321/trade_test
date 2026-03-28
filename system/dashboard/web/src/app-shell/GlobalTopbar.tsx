@@ -24,6 +24,7 @@ type GlobalTopbarProps = {
   resolvedTheme: ResolvedTheme;
   onThemeChange: (next: ThemePreference) => void;
   domainContext: GlobalTopbarDomainContext;
+  onOpenSearch?: () => void;
 };
 
 const THEME_OPTIONS: Array<{ id: ThemePreference; label: string; ariaLabel: string }> = [
@@ -44,6 +45,7 @@ export function GlobalTopbar({
   resolvedTheme,
   onThemeChange,
   domainContext,
+  onOpenSearch,
 }: GlobalTopbarProps) {
   return (
     <div className="global-topbar-inner">
@@ -71,6 +73,16 @@ export function GlobalTopbar({
             </div>
             <span className="theme-switcher-state">当前：{resolvedThemeLabel(resolvedTheme)}</span>
           </div>
+          {onOpenSearch ? (
+            <button
+              type="button"
+              className="chip-button global-search-trigger"
+              aria-label="打开全局搜索"
+              onClick={onOpenSearch}
+            >
+              搜索 / ⌘K
+            </button>
+          ) : null}
           <div className="global-summary-strip" aria-label="global-summary">
             {globalSummary.chips?.map((chip) => (
               <span className="summary-chip" key={`${chip.label}-${chip.value}`}>{chip.label}：{chip.value}</span>

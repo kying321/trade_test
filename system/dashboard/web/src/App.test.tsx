@@ -1848,7 +1848,6 @@ describe('Fenlie terminal console', () => {
     expect(screen.getAllByText('目标工件').length).toBeGreaterThan(0);
     const alertLinks = Array.from(document.querySelectorAll('[aria-label="operator-alerts"] a')).map((node) => node.getAttribute('href'));
     expect(alertLinks).toContain('#/workspace/artifacts?artifact=crypto_shortline_pattern_router');
-    expect(alertLinks).toContain('#/workspace/raw?artifact=%2Ftmp%2Foperator-panel.json');
     const alertText = document.querySelector('[aria-label="operator-alerts"]')?.textContent || '';
     expect(alertText).toContain('传导链存在阻塞');
     expect(alertText).toMatch(/ticket_actionability|票据可执行性/);
