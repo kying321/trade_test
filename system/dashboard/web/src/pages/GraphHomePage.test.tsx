@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { HashRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalReadModel } from '../types/contracts';
 import { GraphHomePage } from './GraphHomePage';
@@ -120,7 +121,11 @@ describe('GraphHomePage', () => {
   });
 
   it('recenters detail on node selection and persists default pipeline locally', async () => {
-    render(<GraphHomePage model={createModel()} />);
+    render(
+      <HashRouter>
+        <GraphHomePage model={createModel()} />
+      </HashRouter>,
+    );
 
     expect(screen.getByRole('heading', { name: '图谱化主页' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '自定义管道' })).toBeTruthy();
@@ -131,5 +136,30 @@ describe('GraphHomePage', () => {
     await waitFor(() => {
       expect(window.localStorage.getItem('graph_home_pipelines_v1')).toContain('pipeline-market-input');
     });
+  });
+
+  it('shows localized filters, explicit quick-entry links, and a recenter action for the current node', () => {
+    render(
+      <HashRouter>
+        <GraphHomePage model={createModel()} />
+      </HashRouter>,
+    );
+
+    expect(screen.getByRole('button', { name: '管道阶段' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '市场输入域' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '子页面' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '研究工件' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '自定义管道' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '去操作终端' }).getAttribute('href')).toBe('#/terminal/public');
+    expect(screen.getByRole('link', { name: '去研究工作区' }).getAttribute('href')).toBe('#/workspace/artifacts');
+    expect(screen.getByRole('link', { name: '打开全局搜索' }).getAttribute('href')).toBe('#/search');
+    expect(screen.getByText('为什么现在看它')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '市场输入' }));
+    expect(screen.getByRole('heading', { name: '市场输入' })).toBeTruthy();
+    expect(screen.getByText('它是一等阶段节点')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '回到交易中枢' }));
+    expect(screen.getByRole('heading', { name: '交易中枢' })).toBeTruthy();
   });
 });

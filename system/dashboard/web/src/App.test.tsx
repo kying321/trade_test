@@ -864,10 +864,16 @@ describe('Fenlie terminal console', () => {
 
     expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
     const nav = screen.getByRole('navigation', { name: 'primary-domains' });
+    expect(within(nav).getAllByRole('link').map((item) => item.textContent?.trim())).toEqual([
+      '图谱主页',
+      '总览',
+      '操作终端',
+      '研究工作区',
+    ]);
     expect(within(nav).getByRole('link', { name: '图谱主页' })).toBeTruthy();
     expect(textOf('.global-topbar-inner')).toContain('图谱主页');
-    expect(screen.getByText('交易中枢')).toBeTruthy();
-    expect(screen.getByText('自定义管道')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '回到交易中枢' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '去操作终端' })).toBeTruthy();
   });
 
   it('uses graph home as the default root route and fallback route', async () => {

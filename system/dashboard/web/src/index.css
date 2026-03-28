@@ -2200,6 +2200,32 @@ button { cursor: pointer; }
   background: var(--bg-panel-soft);
 }
 
+.graph-home-quicklinks {
+  flex-wrap: wrap;
+}
+
+.graph-home-explanation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: var(--bg-panel-soft);
+}
+
+.graph-home-explanation-kicker {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.graph-home-explanation-copy {
+  margin: 0;
+  color: var(--text-2);
+}
+
 .subhead {
   margin: 0 0 10px;
   font-size: 13px;
