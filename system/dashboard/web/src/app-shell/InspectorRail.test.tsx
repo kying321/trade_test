@@ -300,4 +300,19 @@ describe('InspectorRail', () => {
     expect(screen.getByRole('link', { name: '查看工件池' }).getAttribute('href')).toBe('/workspace/artifacts?artifact=price_action_breakout_pullback');
     expect(screen.queryByRole('link', { name: /conflict\\.json/ })).toBeNull();
   });
+
+  it('renders explicit empty state and mode metadata when model is absent', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <InspectorRail
+          title="对象检查器"
+          model={null}
+          mode="inline"
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('暂无可检查对象，先在主舞台选择工件或终端焦点。')).toBeTruthy();
+    expect(container.querySelector('.inspector-rail-inner')?.getAttribute('data-mode')).toBe('inline');
+  });
 });
