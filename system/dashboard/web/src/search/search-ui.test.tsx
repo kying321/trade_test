@@ -241,6 +241,7 @@ describe('global search ui', () => {
     const viewAll = screen.getByRole('link', { name: /查看全部结果/i });
     expect(viewAll.className).toContain('control-action-link');
     expect(screen.getAllByText(/标题命中|说明命中|路径命中|关键词命中/).length).toBeGreaterThan(0);
+    expect(document.querySelector('.search-result-button .clamp-toggle')).toBeNull();
   });
 
   it('keeps scope switching explicit between all/module/route/artifact', async () => {
