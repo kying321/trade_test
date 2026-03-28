@@ -2667,14 +2667,9 @@ button { cursor: pointer; }
 @media (max-width: 1380px) {
   .app-shell-grid,
   .overview-entry-grid,
-  .terminal-grid,
-  .panel-split.two-up,
-  .workspace-grid.two-column,
-  .artifacts-grid,
   .surface-strata-grid,
   .ops-context-grid,
-  .workspace-context-grid,
-  .context-header-controls {
+  .workspace-context-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2778,6 +2773,20 @@ button { cursor: pointer; }
   min-height: calc(100vh - 88px);
 }
 
+.app-shell-grid[data-shell-tier='m'] .terminal-grid,
+.app-shell-grid[data-shell-tier='m'] .panel-split.two-up,
+.app-shell-grid[data-shell-tier='m'] .workspace-grid.two-column {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.app-shell-grid[data-shell-tier='m'] .artifacts-grid {
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+}
+
+.app-shell-grid[data-shell-tier='m'] .context-header-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .app-shell-grid[data-shell-tier='m'] .context-sidebar-inner {
   max-height: calc(100vh - 88px);
   overflow-y: auto;
@@ -2794,6 +2803,14 @@ button { cursor: pointer; }
   width: auto;
   min-width: 0;
   min-height: auto;
+}
+
+.app-shell-grid[data-shell-tier='s'] .terminal-grid,
+.app-shell-grid[data-shell-tier='s'] .panel-split.two-up,
+.app-shell-grid[data-shell-tier='s'] .workspace-grid.two-column,
+.app-shell-grid[data-shell-tier='s'] .artifacts-grid,
+.app-shell-grid[data-shell-tier='s'] .context-header-controls {
+  grid-template-columns: 1fr;
 }
 
 .global-search-trigger {

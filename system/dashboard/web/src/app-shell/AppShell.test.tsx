@@ -78,4 +78,25 @@ describe('AppShell', () => {
     fireEvent.click(toggle);
     expect(screen.getByRole('button', { name: /收起对象检查器/i })).toBeTruthy();
   });
+
+  it('renders inspector as collapsible inline module on small screens', () => {
+    mockWindowWidth(800);
+    const { container } = render(
+      <AppShell
+        topbar={<div>顶栏</div>}
+        sidebar={<nav aria-label="context-nav">侧栏</nav>}
+        header={<div>上下文头</div>}
+        inspector={<div>对象检查器</div>}
+      >
+        <div>主舞台内容</div>
+      </AppShell>,
+    );
+
+    const toggle = screen.getByRole('button', { name: /展开对象检查器/i });
+    expect(container.querySelector('.app-shell-grid')?.getAttribute('data-shell-tier')).toBe('s');
+    expect(container.querySelector('.inspector-embedded')?.getAttribute('data-mode')).toBe('inline');
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: /收起对象检查器/i })).toBeTruthy();
+  });
 });

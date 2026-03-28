@@ -31,17 +31,17 @@ function enhanceInspectorNode(inspector: ReactNode, mode: InspectorMode, collaps
 export function AppShell({ topbar, sidebar, header, notice, inspector, children, sidebarCollapsed = false }: AppShellProps) {
   const shellTier = useShellBreakpoint();
   const inspectorMode: InspectorMode = shellTier.tier === 'm' ? 'drawer' : shellTier.tier === 's' ? 'inline' : 'rail';
-  const [drawerExpanded, setDrawerExpanded] = useState(false);
+  const [embeddedExpanded, setEmbeddedExpanded] = useState(false);
 
   useEffect(() => {
-    if (inspectorMode !== 'drawer') {
-      setDrawerExpanded(false);
+    if (inspectorMode === 'rail') {
+      setEmbeddedExpanded(false);
     }
   }, [inspectorMode]);
 
   const shouldEmbedInspector = Boolean(inspector) && inspectorMode !== 'rail';
   const shouldRenderRail = Boolean(inspector) && inspectorMode === 'rail';
-  const inspectorCollapsed = inspectorMode === 'drawer' ? !drawerExpanded : false;
+  const inspectorCollapsed = shouldEmbedInspector ? !embeddedExpanded : false;
 
   const inspectorNode = useMemo(
     () => enhanceInspectorNode(inspector, inspectorMode, inspectorCollapsed, shellTier.tier),
@@ -67,12 +67,23 @@ export function AppShell({ topbar, sidebar, header, notice, inspector, children,
                 <button
                   type="button"
                   className="inspector-drawer-toggle"
-                  aria-expanded={drawerExpanded}
+                  aria-expanded={embeddedExpanded}
                   aria-controls="inspector-drawer-panel"
-                  aria-label={drawerExpanded ? '收起对象检查器' : '展开对象检查器'}
-                  onClick={() => setDrawerExpanded((open) => !open)}
+                  aria-label={embeddedExpanded ? '收起对象检查器' : '展开对象检查器'}
+                  onClick={() => setEmbeddedExpanded((open) => !open)}
                 >
-                  {drawerExpanded ? '收起对象检查器' : '展开对象检查器'}
+                  {embeddedExpanded ? '收起对象检查器' : '展开对象检查器'}
+                </button>
+              ) : inspectorMode === 'inline' ? (
+                <button
+                  type="button"
+                  className="inspector-drawer-toggle"
+                  aria-expanded={embeddedExpanded}
+                  aria-controls="inspector-drawer-panel"
+                  aria-label={embeddedExpanded ? '收起对象检查器' : '展开对象检查器'}
+                  onClick={() => setEmbeddedExpanded((open) => !open)}
+                >
+                  {embeddedExpanded ? '收起对象检查器' : '展开对象检查器'}
                 </button>
               ) : null}
               <div id="inspector-drawer-panel" hidden={inspectorCollapsed}>
