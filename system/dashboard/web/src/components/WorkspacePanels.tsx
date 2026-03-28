@@ -215,12 +215,14 @@ function renderArtifactButton({
   row,
   selected,
   onSelect,
+  showRawTitle,
   showRawPath,
   titleFor,
 }: {
   row: ArtifactRowState;
   selected: boolean;
   onSelect: (id: string) => void;
+  showRawTitle: boolean;
   showRawPath: boolean;
   titleFor: (row: ArtifactRowState | null) => string;
 }) {
@@ -230,7 +232,7 @@ function renderArtifactButton({
     <EntityRowButton
       key={id}
       className={`artifact-button artifact-button-${layer} ${selected ? 'active' : ''}`.trim()}
-      title={titleFor(row)}
+      title={<ValueText value={titleFor(row)} showRaw={showRawTitle} expandable={false} />}
       subtitle={labelFor(row.category as string | undefined)}
       active={selected}
       onClick={() => onSelect(id)}
@@ -619,6 +621,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
                   row,
                   selected: selectedId === safeDisplayValue(row.id),
                   onSelect: (id) => setArtifactQuery(id),
+                  showRawTitle: view.list.titleField.showRaw ?? false,
                   showRawPath: view.list.pathField.showRaw ?? false,
                   titleFor: artifactTitle,
                 })) : <div className="empty-block">{t('workspace_artifacts_no_matches')}</div>}

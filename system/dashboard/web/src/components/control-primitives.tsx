@@ -140,9 +140,9 @@ export function EntityRowButton({
   type,
   children,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  title: string;
-  subtitle?: string;
+}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title'> & {
+  title: ReactNode;
+  subtitle?: ReactNode;
   active?: boolean;
   children?: ReactNode;
 }) {
