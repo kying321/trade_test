@@ -160,7 +160,7 @@ function buildTopbarGlobalSummary(model: TerminalReadModel | null | undefined) {
   return {
     changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
     chips: [
-      { label: '模式', value: String(model?.experienceContract.mode || 'read_only_snapshot') },
+      { label: '模式', value: labelFor(String(model?.experienceContract.mode || 'read_only_snapshot')) },
       { label: '快照', value: formatDateTime(model?.meta.generated_at_utc) },
     ],
   };
@@ -168,10 +168,6 @@ function buildTopbarGlobalSummary(model: TerminalReadModel | null | undefined) {
 
 function buildOverviewPageMeta() {
   return {
-    topbarChips: [
-      { label: '当前页', value: '总览' },
-      { label: '职责', value: '入口分流' },
-    ],
     sidebarTitle: '一级域路由',
     sidebarSubtitle: '总览入口',
     sidebarDescription: '系统状态 / 入口切换 / 路由总览',
@@ -183,10 +179,6 @@ function buildOverviewPageMeta() {
 function buildTerminalPageMeta(requested: SurfaceKey) {
   const isInternal = requested === 'internal';
   return {
-    topbarChips: [
-      { label: '当前页', value: isInternal ? '内部面' : '公开面' },
-      { label: '职责', value: isInternal ? '深层证据' : '执行穿透' },
-    ],
     sidebarTitle: '终端路由',
     sidebarSubtitle: '面型切换',
     sidebarDescription: isInternal ? '内部只读 / 深层字段 / 执行证据' : '公开摘要 / 执行穿透 / 调度门禁',
@@ -200,7 +192,6 @@ function buildTerminalPageMeta(requested: SurfaceKey) {
 
 function buildWorkspacePageMeta(section: WorkspaceSection) {
   const pageMeta: Record<WorkspaceSection, {
-    topbarChips: Array<{ label: string; value: string }>;
     sidebarTitle: string;
     sidebarSubtitle: string;
     sidebarDescription: string;
@@ -211,10 +202,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
     headerBarSubtitle: string;
   }> = {
     artifacts: {
-      topbarChips: [
-        { label: '当前页', value: '工件池' },
-        { label: '职责', value: '主线筛选' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
       sidebarDescription: '工件 / 回测 / 契约 / 原始',
@@ -225,10 +212,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
       headerBarSubtitle: '主线分组 / 状态雷达 / 检索范围',
     },
     alignment: {
-      topbarChips: [
-        { label: '当前页', value: '对齐页' },
-        { label: '职责', value: '方向校准' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
       sidebarDescription: '工件 / 对齐 / 回测 / 契约 / 原始',
@@ -239,10 +222,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
       headerBarSubtitle: '内部反馈投射 / 趋势 / 建议动作',
     },
     backtests: {
-      topbarChips: [
-        { label: '当前页', value: '回测池' },
-        { label: '职责', value: '验证比较' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
       sidebarDescription: '工件 / 回测 / 契约 / 原始',
@@ -253,10 +232,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
       headerBarSubtitle: '时序切片 / 近期比较 / OOS 验证',
     },
     contracts: {
-      topbarChips: [
-        { label: '当前页', value: '契约层' },
-        { label: '职责', value: '路由验收' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
       sidebarDescription: '工件 / 回测 / 契约 / 原始',
@@ -267,10 +242,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
       headerBarSubtitle: '公开入口 / 子链验收 / 回退链',
     },
     raw: {
-      topbarChips: [
-        { label: '当前页', value: '原始层' },
-        { label: '职责', value: '证据回退' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
       sidebarDescription: '工件 / 回测 / 契约 / 原始',
@@ -489,7 +460,7 @@ function buildWorkspaceHeaderActions(
   activeSectionId: string | undefined,
 ): ReactNode {
   const activeSection = activeSectionId ? pageSections.find((item) => item.id === activeSectionId) : undefined;
-  const stageLabel = activeSection?.label || buildWorkspacePageMeta(section).topbarChips[0]?.value || labelFor(section);
+  const stageLabel = activeSection?.label || buildWorkspacePageMeta(section).headerTitle || labelFor(section);
   return (
     <div className="context-header-route-badges">
       <Badge value="neutral">{`当前阶段：${stageLabel}`}</Badge>

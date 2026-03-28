@@ -114,16 +114,16 @@ afterEach(() => {
 describe('global search ui', () => {
   it('topbar 仅暴露全局契约，不再混入页面职责芯片', async () => {
     await renderApp();
-    const topbar = document.querySelector('header.global-topbar');
+    const topbar = document.querySelector<HTMLElement>('header.global-topbar');
     expect(topbar).toBeTruthy();
     if (!topbar) throw new Error('global topbar not found');
-    const summaryStrip = within(topbar).getByLabelText('global-summary');
+    const summaryStrip = within(topbar).getByLabelText('global-summary') as HTMLElement;
 
     expect(within(topbar).queryByText('职责')).toBeNull();
     expect(within(topbar).queryByText(/职责/)).toBeNull();
     expect(within(topbar).getByRole('navigation', { name: 'primary-domains' })).toBeTruthy();
     expect(within(topbar).getByRole('button', { name: '打开全局搜索' })).toBeTruthy();
-    expect(within(summaryStrip).getByText(/快照|只读|generated/i)).toBeTruthy();
+    expect(summaryStrip.textContent || '').toMatch(/快照|只读|generated/i);
   });
 
   it('toggles overlay visibility when the topbar search trigger is clicked twice', async () => {

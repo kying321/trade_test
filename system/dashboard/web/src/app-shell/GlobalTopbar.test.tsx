@@ -21,7 +21,7 @@ function renderTopbar({
         globalSummary={{
           changeClass: 'RESEARCH_ONLY',
           chips: [
-            { label: '模式', value: 'read_only_snapshot' },
+            { label: '模式', value: '只读快照' },
             { label: '快照', value: 'generated:2026-03-28T03:00:00Z' },
           ],
         }}
@@ -41,7 +41,7 @@ describe('GlobalTopbar', () => {
     expect(screen.queryByText('职责')).toBeNull();
     expect(screen.getByRole('navigation', { name: 'primary-domains' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开全局搜索' })).toBeTruthy();
-    expect(within(screen.getByLabelText('global-summary')).getByText(/快照|只读|generated/i)).toBeTruthy();
+    expect(screen.getByLabelText('global-summary').textContent || '').toMatch(/快照|只读|generated/i);
   });
 
   it('将品牌、主域导航、全局工具与环境条拆成独立层级区域', () => {
@@ -56,7 +56,7 @@ describe('GlobalTopbar', () => {
     expect(within(controlDeck).getByRole('button', { name: '打开全局搜索' })).toBeTruthy();
 
     const summaryStrip = screen.getByLabelText('global-summary');
-    expect(within(summaryStrip).getByText('模式：read_only_snapshot')).toBeTruthy();
+    expect(within(summaryStrip).getByText('模式：只读快照')).toBeTruthy();
     expect(within(summaryStrip).getByText('快照：generated:2026-03-28T03:00:00Z')).toBeTruthy();
     expect(within(summaryStrip).getByText('变更级别：RESEARCH_ONLY')).toBeTruthy();
   });

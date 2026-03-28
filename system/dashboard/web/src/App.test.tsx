@@ -839,7 +839,7 @@ describe('Fenlie terminal console', () => {
     expect(commodityCard?.textContent || '').toContain('BU2606');
     expect(textOf('.global-topbar-inner')).not.toContain('请求视图');
     expect(textOf('.global-topbar-inner')).not.toContain('实际视图');
-    expect(textOf('.global-summary-strip')).toContain('模式：read_only_snapshot');
+    expect(textOf('.global-summary-strip')).toContain('模式：只读快照');
     expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.global-summary-strip')).toContain('变更级别：仅研究');
   });
@@ -892,7 +892,7 @@ describe('Fenlie terminal console', () => {
     expect(screen.getAllByText('公开面').length).toBeGreaterThan(0);
     expect(screen.getAllByText('安全摘要').length).toBeGreaterThan(0);
     await screen.findByLabelText('ops-context-strip');
-    expect(textOf('.global-summary-strip')).toContain('模式：read_only_snapshot');
+    expect(textOf('.global-summary-strip')).toContain('模式：只读快照');
     expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.context-header .panel-kicker')).toContain('公开面');
     expect(textOf('.context-header h2')).toContain('执行穿透 / 调度与门禁');
@@ -919,7 +919,7 @@ describe('Fenlie terminal console', () => {
     await navigateHash('#/workspace/contracts');
 
     expect(await screen.findByLabelText('workspace-context-strip', undefined, { timeout: 3000 })).toBeTruthy();
-    expect(textOf('.global-summary-strip')).toContain('模式：read_only_snapshot');
+    expect(textOf('.global-summary-strip')).toContain('模式：只读快照');
     expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.context-header .panel-kicker')).toContain('契约层');
     expect(textOf('.context-header h2')).toContain('公开入口 / 数据契约 / 路由验收');
