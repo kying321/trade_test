@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ActionButton } from '../components/control-primitives';
 import type { TerminalReadModel } from '../types/contracts';
 import { buildSearchCatalog, searchCatalog } from './catalog';
 import { SearchResultsContent } from './SearchResults';
@@ -89,7 +90,7 @@ export function GlobalSearchOverlay({
             <p className="panel-kicker">Cmd/Ctrl+K</p>
             <strong>全局关键词搜索</strong>
           </div>
-          <button type="button" className="chip-button" onClick={onClose}>关闭</button>
+          <ActionButton className="chip-button" onClick={onClose}>关闭</ActionButton>
         </div>
         <SearchResultsContent
           model={model}

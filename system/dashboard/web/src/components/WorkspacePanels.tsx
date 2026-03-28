@@ -6,6 +6,7 @@ import type { OperatorAlertLink, TerminalReadModel, ViewFieldSchema } from '../t
 import { labelFor } from '../utils/dictionary';
 import { buildTerminalLink, buildWorkspaceLink, type SharedFocusState } from '../utils/focus-links';
 import { compactPath, safeDisplayValue, statusTone } from '../utils/formatters';
+import { EntityRowButton } from './control-primitives';
 import { AccordionCard, Badge, DenseTable, DrilldownSection, JsonBlock, KeyValueGrid, PanelCard, PathText, ValueText } from './ui-kit';
 
 const t = (key: string) => labelFor(key);
@@ -214,36 +215,31 @@ function renderArtifactButton({
   row,
   selected,
   onSelect,
-  showRawTitle,
   showRawPath,
   titleFor,
 }: {
   row: ArtifactRowState;
   selected: boolean;
   onSelect: (id: string) => void;
-  showRawTitle: boolean;
   showRawPath: boolean;
   titleFor: (row: ArtifactRowState | null) => string;
 }) {
   const id = safeDisplayValue(row.id);
   const layer = artifactLayer(row);
   return (
-    <button
+    <EntityRowButton
       key={id}
-      className={`stack-button artifact-button artifact-button-${layer} ${selected ? 'active' : ''}`.trim()}
+      className={`artifact-button artifact-button-${layer} ${selected ? 'active' : ''}`.trim()}
+      title={titleFor(row)}
+      subtitle={labelFor(row.category as string | undefined)}
+      active={selected}
       onClick={() => onSelect(id)}
     >
-      <strong>
-        <ValueText
-          value={titleFor(row)}
-          showRaw={showRawTitle}
-          expandable={false}
-        />
-      </strong>
-      <span>{labelFor(row.category as string | undefined)}</span>
       <Badge value={row.research_decision || row.status} />
-      <PathText value={row.path} showRaw={showRawPath} expandable={false} />
-    </button>
+      <small className="control-entity-row-subtitle">
+        <PathText value={row.path} showRaw={showRawPath} expandable={false} />
+      </small>
+    </EntityRowButton>
   );
 }
 
@@ -623,7 +619,6 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
                   row,
                   selected: selectedId === safeDisplayValue(row.id),
                   onSelect: (id) => setArtifactQuery(id),
-                  showRawTitle: view.list.titleField.showRaw ?? false,
                   showRawPath: view.list.pathField.showRaw ?? false,
                   titleFor: artifactTitle,
                 })) : <div className="empty-block">{t('workspace_artifacts_no_matches')}</div>}

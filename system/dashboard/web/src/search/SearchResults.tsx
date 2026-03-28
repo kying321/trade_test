@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom';
-import { Badge, ClampText, PanelCard } from '../components/ui-kit';
+import { ActionLink, EntityRowButton, FilterChip } from '../components/control-primitives';
+import { Badge, PanelCard } from '../components/ui-kit';
 import type { TerminalReadModel } from '../types/contracts';
 import { groupSearchResults, buildSearchCatalog, searchCatalog } from './catalog';
 import { buildSearchLink } from './links';
@@ -31,14 +31,14 @@ export function SearchScopeChips({
   return (
     <div className="chip-row search-scope-row">
       {scopes.map((item) => (
-        <button
+        <FilterChip
           key={item}
-          type="button"
-          className={`chip-button ${scope === item ? 'active' : ''}`.trim()}
+          className="chip-button"
+          active={scope === item}
           onClick={() => onChange(item)}
         >
           {item === 'all' ? '全部' : CATEGORY_LABELS[item]}
-        </button>
+        </FilterChip>
       ))}
     </div>
   );
@@ -64,19 +64,19 @@ function SearchResultGroup({
       </div>
       <div className="stack-list search-result-list">
         {results.map((result) => (
-          <button
-            type="button"
+          <EntityRowButton
             key={result.id}
-            className={`stack-button search-result-button ${activeId === result.id ? 'active' : ''}`.trim()}
+            className={`search-result-button ${activeId === result.id ? 'active' : ''}`.trim()}
+            title={result.title}
+            subtitle={result.subtitle || result.destination}
+            active={activeId === result.id}
             onClick={() => onPick(result)}
           >
-            <span className="nav-link-copy">
-              <strong><ClampText raw={result.title} expandable={false}>{result.title}</ClampText></strong>
-              <small><ClampText raw={result.subtitle || result.destination}>{result.subtitle || result.destination}</ClampText></small>
-              <small>{resultHint(result)}</small>
+            <span className="nav-link-copy search-result-copy">
+              <small className="search-result-hint">{resultHint(result)}</small>
             </span>
             <Badge value={result.category}>{CATEGORY_LABELS[result.category]}</Badge>
-          </button>
+          </EntityRowButton>
         ))}
       </div>
     </section>
@@ -127,7 +127,7 @@ export function SearchResultsContent({
       )}
       {showViewAll && query.trim() ? (
         <div className="button-row search-actions">
-          <Link className="button" to={viewAllHref}>查看全部结果</Link>
+          <ActionLink className="button" to={viewAllHref}>查看全部结果</ActionLink>
         </div>
       ) : null}
       {query.trim() && !results.length ? (

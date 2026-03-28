@@ -99,6 +99,15 @@ async function renderApp() {
   return view;
 }
 
+async function openSearchAndQuery(value: string) {
+  await act(async () => {
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+  });
+  await act(async () => {
+    fireEvent.change(screen.getByRole('textbox'), { target: { value } });
+  });
+}
+
 beforeEach(() => {
   mockedThemePreference = 'system';
   mockedResolvedTheme = 'dark';
@@ -217,6 +226,91 @@ describe('global search ui', () => {
       fireEvent.click(result);
     });
 
+    await waitFor(() => {
+      expect(window.location.hash).toContain('/workspace/artifacts');
+      expect(window.location.hash).toContain('artifact=hold_selection_handoff');
+    });
+  });
+
+  it('separates entity rows from action links in overlay search results', async () => {
+    await renderApp();
+    await openSearchAndQuery('hold_selection_handoff');
+
+    const entityRow = screen.getAllByRole('button', { name: /持有选择主头/i })[0];
+    expect(entityRow.className).toContain('control-entity-row');
+    const viewAll = screen.getByRole('link', { name: /查看全部结果/i });
+    expect(viewAll.className).toContain('control-action-link');
+    expect(screen.getAllByText(/标题命中|说明命中|路径命中|关键词命中/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps scope switching explicit between all/module/route/artifact', async () => {
+    window.location.hash = '#/search';
+    await renderApp();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '模块' }));
+    });
+    await waitFor(() => {
+      expect(window.location.hash).toContain('scope=module');
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '路由' }));
+    });
+    await waitFor(() => {
+      expect(window.location.hash).toContain('scope=route');
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '工件' }));
+    });
+    await waitFor(() => {
+      expect(window.location.hash).toContain('scope=artifact');
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    await waitFor(() => {
+      expect(window.location.hash).toContain('/search');
+      expect(window.location.hash).not.toContain('scope=');
+    });
+  });
+
+  it('preserves deep-link params for route/module/artifact search navigation', async () => {
+    await renderApp();
+
+    await openSearchAndQuery('总览');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '路由' }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /总览/i }));
+    });
+    await waitFor(() => {
+      expect(window.location.hash).toContain('/overview');
+      expect(window.location.hash).not.toContain('anchor=');
+    });
+
+    await openSearchAndQuery('国内商品推理线');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '模块' }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /国内商品推理线/i })[0]);
+    });
+    await waitFor(() => {
+      expect(window.location.hash).toContain('anchor=');
+      expect(window.location.hash).toContain('/overview');
+    });
+
+    await openSearchAndQuery('hold_selection_handoff');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '工件' }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /持有选择主头/i })[0]);
+    });
     await waitFor(() => {
       expect(window.location.hash).toContain('/workspace/artifacts');
       expect(window.location.hash).toContain('artifact=hold_selection_handoff');
