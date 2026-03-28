@@ -54,7 +54,7 @@ function resolveDomainTabMatchEnd(pathname: string, end?: boolean) {
 }
 
 export function DomainTab({ className, active, children, style, to, end, caseSensitive, ...props }: DomainTabProps) {
-  const resolvedPath = useResolvedPath(to);
+  const resolvedPath = useResolvedPath(to, { relative: props.relative });
   const routeActive = Boolean(useMatch({
     path: resolvedPath.pathname,
     end: resolveDomainTabMatchEnd(resolvedPath.pathname, end),
