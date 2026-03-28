@@ -306,6 +306,11 @@ button { cursor: pointer; }
   box-shadow: var(--shadow-panel);
 }
 
+.control-action-link.active {
+  border-color: var(--pill-active-border);
+  box-shadow: var(--pill-active-inset), var(--shadow-panel);
+}
+
 .control-action-button:disabled {
   opacity: 0.65;
   cursor: not-allowed;

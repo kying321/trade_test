@@ -1,5 +1,5 @@
-import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
-import { NavLink, type NavLinkProps, type NavLinkRenderProps, useMatch, useResolvedPath } from 'react-router-dom';
+import type { AnchorHTMLAttributes, ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react';
+import { Link, NavLink, type LinkProps, type NavLinkProps, type NavLinkRenderProps, useMatch, useResolvedPath } from 'react-router-dom';
 
 function joinControlClass(base: string, extra?: string) {
   return [base, extra].filter(Boolean).join(' ');
@@ -39,41 +39,51 @@ function normalizeNavClassName(
     );
 }
 
-function normalizeNavStyle(
-  style: NavLinkProps['style'],
-  forceActive?: boolean,
-): NavLinkProps['style'] {
-  if (typeof style !== 'function') return style;
-  return (state) => style(normalizeNavRenderState(state, forceActive));
+type DomainTabProps = Omit<LinkProps, 'className' | 'style' | 'children'> & {
+  active?: boolean;
+  caseSensitive?: boolean;
+  end?: boolean;
+  className?: NavLinkProps['className'];
+  style?: CSSProperties | ((props: NavLinkRenderProps) => CSSProperties | undefined);
+  children?: ReactNode | ((props: NavLinkRenderProps) => ReactNode);
+};
+
+function resolveDomainTabMatchEnd(pathname: string, end?: boolean) {
+  if (typeof end === 'boolean') return end;
+  return pathname === '/';
 }
 
-function normalizeNavChildren(
-  children: NavLinkProps['children'],
-  forceActive?: boolean,
-): NavLinkProps['children'] {
-  if (typeof children !== 'function') return children;
-  return (state) => children(normalizeNavRenderState(state, forceActive));
-}
-
-export function DomainTab({ className, active, children, style, ...props }: NavLinkProps & { active?: boolean }) {
-  const resolvedPath = useResolvedPath(props.to);
+export function DomainTab({ className, active, children, style, to, end, caseSensitive, ...props }: DomainTabProps) {
+  const resolvedPath = useResolvedPath(to);
   const routeActive = Boolean(useMatch({
     path: resolvedPath.pathname,
-    end: props.end ?? false,
-    caseSensitive: props.caseSensitive,
+    end: resolveDomainTabMatchEnd(resolvedPath.pathname, end),
+    caseSensitive,
   }));
-  const selected = routeActive || Boolean(active);
+  const renderState = normalizeNavRenderState({
+    isActive: routeActive,
+    isPending: false,
+    isTransitioning: false,
+  }, active);
 
   return (
-    <NavLink
+    <Link
       {...props}
-      role="tab"
-      aria-selected={selected}
-      className={normalizeNavClassName('control-domain-tab', className, active)}
-      style={normalizeNavStyle(style, active)}
+      to={to}
+      aria-current={renderState.isActive ? 'page' : undefined}
+      className={typeof className === 'function'
+        ? joinControlClass(
+          joinControlClass('control-domain-tab', renderState.isActive ? 'active' : undefined),
+          className(renderState),
+        )
+        : joinControlClass(
+          joinControlClass('control-domain-tab', renderState.isActive ? 'active' : undefined),
+          className,
+        )}
+      style={typeof style === 'function' ? style(renderState) : style}
     >
-      {normalizeNavChildren(children, active)}
-    </NavLink>
+      {typeof children === 'function' ? children(renderState) : children}
+    </Link>
   );
 }
 
