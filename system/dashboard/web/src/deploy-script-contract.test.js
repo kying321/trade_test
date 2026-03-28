@@ -94,6 +94,13 @@ describe('deploy script contract', () => {
     expect(scripts['smoke:terminal-internal-focus']).toContain('--mode internal_terminal_focus');
   });
 
+  it('exposes a dedicated graph-home browser smoke entrypoint', () => {
+    const scripts = loadScripts();
+
+    expect(scripts['smoke:graph-home']).toContain('run_dashboard_workspace_artifacts_smoke.py');
+    expect(scripts['smoke:graph-home']).toContain('--mode graph_home');
+  });
+
   it('routes dashboard python entrypoints through the shared python launcher', () => {
     const scripts = loadScripts();
     const sharedLauncher = 'node ./scripts/run-python.mjs';
@@ -108,6 +115,7 @@ describe('deploy script contract', () => {
       'smoke:alignment-internal',
       'smoke:alignment-internal-manual-probe',
       'smoke:terminal-internal-focus',
+      'smoke:graph-home',
       'feedback:publish',
       'feedback:publish-refresh',
       'feedback:publish-manual',

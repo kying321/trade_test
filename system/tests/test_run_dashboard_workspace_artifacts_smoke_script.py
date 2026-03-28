@@ -277,6 +277,113 @@ def test_build_commodity_visibility_smoke_spec_covers_overview_and_terminal_publ
     assert str(result_path) in spec
 
 
+def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_links(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "graph-home-smoke.png"
+    result_path = tmp_path / "graph-home-smoke.json"
+
+    spec = mod.build_graph_home_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        route_assertions=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["默认管道", "推荐下一跳", "回到交易中枢", "去操作终端", "去研究工作区", "打开全局搜索"],
+            }
+        ],
+    )
+
+    assert "#/" in spec
+    assert "#/unknown-route" in spec
+    assert "#/graph-home" in spec
+    assert "图谱化主页" in spec
+    assert "默认管道" in spec
+    assert "推荐下一跳" in spec
+    assert "去操作终端" in spec
+    assert "去研究工作区" in spec
+    assert "打开全局搜索" in spec
+    assert "graph home smoke" in spec
+    assert "graph_home_assertion" in spec
+    assert "const resolvedRoute = await page.evaluate(() => window.location.hash);" in spec
+    assert "terminal_link_href" in spec
+    assert "workspace_link_href" in spec
+    assert "search_link_href" in spec
+    assert str(result_path) in spec
+
+
+def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> None:
+    mod = load_module()
+    report_path = tmp_path / "report.json"
+    screenshot_path = tmp_path / "graph-home-smoke.png"
+
+    payload = mod.build_artifact_payload(
+        workspace=tmp_path,
+        report_path=report_path,
+        screenshot_path=screenshot_path,
+        build_result={"returncode": 0},
+        server_ready_seconds=0.11,
+        smoke_result={
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "playwright_result": {
+                    "requested_surface": "public",
+                    "effective_surface": "public",
+                    "visited_routes": [
+                        {"route": "#/graph-home", "headline": "图谱化主页"},
+                        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+                        {"route": "#/workspace/artifacts", "headline": "工件目标池"},
+                        {"route": "#/search", "headline": "全局关键词搜索"},
+                    ],
+                "snapshot_requests": [
+                    "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
+                ],
+                "internal_snapshot_requests": [],
+                "graph_home_assertion": {
+                    "default_route": "#/",
+                    "fallback_route": "#/unknown-route",
+                    "resolved_route": "#/graph-home",
+                    "default_center": "交易中枢",
+                    "terminal_link_href": "#/terminal/public",
+                    "workspace_link_href": "#/workspace/artifacts",
+                    "search_link_href": "#/search",
+                },
+            },
+        },
+        base_url="http://127.0.0.1:4173/",
+        mode="graph_home",
+        expected_route_markers=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["默认管道", "推荐下一跳", "回到交易中枢", "去操作终端", "去研究工作区", "打开全局搜索"],
+            }
+        ],
+    )
+
+    assert payload["action"] == "dashboard_graph_home_browser_smoke"
+    assert payload["ok"] is True
+    assert payload["routes"] == [
+        {"route": "#/graph-home", "headline": "图谱化主页"},
+        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+        {"route": "#/workspace/artifacts", "headline": "工件目标池"},
+        {"route": "#/search", "headline": "全局关键词搜索"},
+    ]
+    assert payload["graph_home_assertion"] == {
+        "default_route": "#/",
+        "fallback_route": "#/unknown-route",
+        "resolved_route": "#/graph-home",
+        "default_center": "交易中枢",
+        "terminal_link_href": "#/terminal/public",
+        "workspace_link_href": "#/workspace/artifacts",
+        "search_link_href": "#/search",
+    }
+
+
 def test_build_artifact_payload_reports_commodity_visibility_surface(tmp_path: Path) -> None:
     mod = load_module()
     report_path = tmp_path / "report.json"

@@ -114,6 +114,21 @@ TERMINAL_FOCUS_SLOT_LABELS = {
 COMMODITY_VISIBILITY_OVERVIEW_ROUTE = "#/overview"
 COMMODITY_VISIBILITY_TERMINAL_ROUTE = "#/terminal/public"
 COMMODITY_REASONING_LINE_TITLE = "国内商品推理线"
+GRAPH_HOME_ROUTE_ASSERTIONS = [
+    {
+        "route": "#/graph-home",
+        "nav_label": "图谱主页",
+        "headline": "图谱化主页",
+        "markers": [
+            "默认管道",
+            "推荐下一跳",
+            "回到交易中枢",
+            "去操作终端",
+            "去研究工作区",
+            "打开全局搜索",
+        ],
+    }
+]
 
 
 def commodity_visibility_markers_from_snapshot(snapshot: dict[str, Any]) -> list[str]:
@@ -1117,6 +1132,133 @@ def build_commodity_visibility_smoke_spec(
     )
 
 
+def build_graph_home_smoke_spec(
+    *,
+    base_url: str,
+    screenshot_path: Path,
+    result_path: Path,
+    route_assertions: list[dict[str, Any]],
+) -> str:
+    routes_json = json.dumps(route_assertions, ensure_ascii=False, indent=2)
+    return (
+        textwrap.dedent(
+            f"""
+            const {{ test, expect }} = require('@playwright/test');
+            const fs = require('node:fs');
+
+            const ROUTES = {routes_json};
+            const DEFAULT_ROUTE = '#/';
+            const FALLBACK_ROUTE = '#/unknown-route';
+
+            async function expectStableMarker(page, marker) {{
+              await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
+              await expect(page.locator('body')).toContainText(marker);
+            }}
+
+            test.use({{ browserName: 'chromium' }});
+
+            test('graph home smoke', async ({{ page }}) => {{
+              const snapshotRequests = [];
+              const internalSnapshotRequests = [];
+              const visitedRoutes = [];
+              const graphRoute = ROUTES[0];
+
+              page.on('response', async (response) => {{
+                const url = response.url();
+                if (url.includes('fenlie_dashboard_snapshot.json')) snapshotRequests.push(url);
+                if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
+              }});
+
+              await page.goto({base_url!r} + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.waitForFunction(() => window.location.hash.includes('/graph-home'));
+              await expect(page.getByRole('heading', {{ name: graphRoute.headline, exact: true }})).toBeVisible();
+              for (const marker of graphRoute.markers) {{
+                await expectStableMarker(page, marker);
+              }}
+
+              const nav = page.getByRole('navigation', {{ name: 'primary-domains' }});
+              await expect(nav.getByRole('link', {{ name: '图谱主页' }})).toBeVisible();
+              const defaultCenter = await page.locator('.summary-chip').filter({{ hasText: '中心：' }}).first().textContent();
+              const terminalLink = page.getByRole('link', {{ name: '去操作终端' }});
+              const workspaceLink = page.getByRole('link', {{ name: '去研究工作区' }});
+              const searchLink = page.getByRole('link', {{ name: '打开全局搜索' }});
+              const terminalLinkHref = await terminalLink.getAttribute('href');
+              const workspaceLinkHref = await workspaceLink.getAttribute('href');
+              const searchLinkHref = await searchLink.getAttribute('href');
+
+              visitedRoutes.push({{
+                route: graphRoute.route,
+                headline: graphRoute.headline,
+                url: page.url(),
+              }});
+
+              await terminalLink.click();
+              await page.waitForFunction(() => window.location.hash.includes('/terminal/public'));
+              await expect(page.getByRole('heading', {{ name: '执行穿透 / 调度与门禁', exact: true }})).toBeVisible();
+              visitedRoutes.push({{
+                route: '#/terminal/public',
+                headline: '执行穿透 / 调度与门禁',
+                url: page.url(),
+              }});
+
+              await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+              await workspaceLink.click();
+              await page.waitForFunction(() => window.location.hash.includes('/workspace/artifacts'));
+              await expect(page.getByRole('heading', {{ name: '工件目标池', exact: true }})).toBeVisible();
+              visitedRoutes.push({{
+                route: '#/workspace/artifacts',
+                headline: '工件目标池',
+                url: page.url(),
+              }});
+
+              await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+              await searchLink.click();
+              await page.waitForFunction(() => window.location.hash.includes('/search'));
+              await expect(page.getByRole('heading', {{ name: '全局关键词搜索', exact: true }})).toBeVisible();
+              visitedRoutes.push({{
+                route: '#/search',
+                headline: '全局关键词搜索',
+                url: page.url(),
+              }});
+
+              await page.goto({base_url!r} + FALLBACK_ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.waitForFunction(() => window.location.hash.includes('/graph-home'));
+              await expect(page.getByRole('heading', {{ name: graphRoute.headline, exact: true }})).toBeVisible();
+              const resolvedRoute = await page.evaluate(() => window.location.hash);
+
+              fs.writeFileSync(
+                {str(result_path)!r},
+                JSON.stringify(
+                  {{
+                    requested_surface: 'public',
+                    effective_surface: 'public',
+                    visited_routes: visitedRoutes,
+                    snapshot_requests: snapshotRequests,
+                    internal_snapshot_requests: internalSnapshotRequests,
+                    graph_home_assertion: {{
+                      default_route: DEFAULT_ROUTE,
+                      fallback_route: FALLBACK_ROUTE,
+                      resolved_route: resolvedRoute,
+                      default_center: String(defaultCenter || '').trim().replace(/^中心：/, ''),
+                      terminal_link_href: terminalLinkHref,
+                      workspace_link_href: workspaceLinkHref,
+                      search_link_href: searchLinkHref,
+                    }},
+                  }},
+                  null,
+                  2,
+                ),
+                'utf8',
+              );
+
+              await page.screenshot({{ path: {str(screenshot_path)!r}, fullPage: true }});
+            }});
+            """
+        ).strip()
+        + "\n"
+    )
+
+
 def run_playwright_smoke(
     *,
     web_root: Path,
@@ -1158,6 +1300,13 @@ def run_playwright_smoke(
                 screenshot_path=screenshot_path,
                 result_path=result_path,
                 route_assertions=route_assertions or [],
+            )
+        elif mode == "graph_home":
+            spec = build_graph_home_smoke_spec(
+                base_url=base_url,
+                screenshot_path=screenshot_path,
+                result_path=result_path,
+                route_assertions=route_assertions or GRAPH_HOME_ROUTE_ASSERTIONS,
             )
         else:
             spec = build_workspace_routes_smoke_spec(
@@ -1339,6 +1488,8 @@ def build_artifact_payload(
         action_name = "dashboard_internal_terminal_focus_browser_smoke"
     elif mode == "commodity_visibility":
         action_name = "dashboard_commodity_visibility_browser_smoke"
+    elif mode == "graph_home":
+        action_name = "dashboard_graph_home_browser_smoke"
     else:
         action_name = "dashboard_workspace_routes_browser_smoke"
     expected_focus_panel = "signal-risk" if mode == "internal_terminal_focus" else "lab-review"
@@ -1385,6 +1536,7 @@ def build_artifact_payload(
         "artifacts_filter_assertion": artifacts_filter_assertion,
         "artifacts_exit_risk_review_assertion": artifacts_exit_risk_review_assertion,
         "terminal_drilldown_assertion": terminal_drilldown_assertion,
+        "graph_home_assertion": playwright_result.get("graph_home_assertion"),
         "projection_assertion": playwright_result.get("projection_assertion"),
         "expected_default_artifact": expected_default_artifact,
         "expected_focus_panel": expected_focus_panel,
@@ -1409,9 +1561,9 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true", help="Skip npm run build before smoke.")
     parser.add_argument(
         "--mode",
-        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus", "commodity_visibility"],
+        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus", "commodity_visibility", "graph_home"],
         default="public_workspace",
-        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path; commodity_visibility validates overview + terminal/public commodity reasoning visibility.",
+        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path; commodity_visibility validates overview + terminal/public commodity reasoning visibility; graph_home validates the default landing page redirect and graph-home quick links.",
     )
     args = parser.parse_args()
 
@@ -1435,6 +1587,9 @@ def main() -> None:
     elif args.mode == "commodity_visibility":
         report_path = review_dir / f"{timestamp}_dashboard_commodity_visibility_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_commodity_visibility_browser_smoke.png"
+    elif args.mode == "graph_home":
+        report_path = review_dir / f"{timestamp}_dashboard_graph_home_browser_smoke.json"
+        screenshot_path = review_dir / f"{timestamp}_dashboard_graph_home_browser_smoke.png"
     else:
         report_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.png"
@@ -1475,6 +1630,8 @@ def main() -> None:
                 "markers": [COMMODITY_REASONING_LINE_TITLE],
             },
         ]
+    elif args.mode == "graph_home":
+        expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
     else:
         expected_route_markers = list(PUBLIC_WORKSPACE_ROUTE_ASSERTIONS)
     server_ready_seconds = 0.0
@@ -1516,6 +1673,9 @@ def main() -> None:
             elif args.mode == "commodity_visibility":
                 internal_expectations = None
                 expected_route_markers = load_commodity_visibility_route_assertions(dist_dir=dist_dir)
+            elif args.mode == "graph_home":
+                internal_expectations = None
+                expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
             else:
                 internal_expectations = None
                 expected_route_markers = load_public_workspace_route_assertions(dist_dir=dist_dir)

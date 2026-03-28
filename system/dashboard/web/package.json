@@ -16,6 +16,7 @@
     "smoke:alignment-internal": "node ./scripts/run-python.mjs ../../scripts/run_dashboard_workspace_artifacts_smoke.py --workspace ../../.. --mode internal_alignment",
     "smoke:alignment-internal-manual-probe": "node ./scripts/run-python.mjs ../../scripts/run_dashboard_workspace_artifacts_smoke.py --workspace ../../.. --mode internal_alignment_manual_probe",
     "smoke:terminal-internal-focus": "node ./scripts/run-python.mjs ../../scripts/run_dashboard_workspace_artifacts_smoke.py --workspace ../../.. --mode internal_terminal_focus",
+    "smoke:graph-home": "node ./scripts/run-python.mjs ../../scripts/run_dashboard_workspace_artifacts_smoke.py --workspace ../../.. --mode graph_home",
     "feedback:publish": "node ./scripts/run-python.mjs ../../scripts/publish_conversation_feedback_autopublish_internal.py --review-dir ../../output/review",
     "feedback:publish-refresh": "bash -lc 'node ./scripts/run-python.mjs ../../scripts/publish_conversation_feedback_autopublish_internal.py --review-dir ../../output/review \"$@\" && node ./scripts/run-python.mjs ../../scripts/run_operator_panel_refresh.py --workspace ../../..' --",
     "feedback:publish-manual": "node ./scripts/run-python.mjs ../../scripts/publish_conversation_feedback_manual_internal.py --review-dir ../../output/review",
