@@ -93,6 +93,36 @@ function buildCommodityReasoningMetrics(model: TerminalReadModel | null): Metric
   return [...micro, ...repair];
 }
 
+function buildOverviewStateMetrics(model: TerminalReadModel | null): MetricItem[] {
+  if (!model) return [];
+  return [
+    {
+      id: 'overview-state-surface',
+      label: '当前视图',
+      value: model.surface.effectiveLabel || '—',
+      tone: statusTone(model.surface.effective),
+    },
+    {
+      id: 'overview-state-change-class',
+      label: '变更级别',
+      value: labelFor(String(model.meta.change_class || 'RESEARCH_ONLY')),
+      tone: statusTone(model.meta.change_class),
+    },
+    {
+      id: 'overview-state-artifacts',
+      label: '工件数',
+      value: model.workspace.artifactRows.length,
+      tone: statusTone(model.workspace.artifactRows.length > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'overview-state-source-heads',
+      label: '源头主头',
+      value: model.workspace.sourceHeads.length,
+      tone: statusTone(model.workspace.sourceHeads.length > 0 ? 'positive' : 'warning'),
+    },
+  ];
+}
+
 export function OverviewPage({ model }: OverviewPageProps) {
   const holdSelectionHandoff = model?.workspace.sourceHeads.find((row) => row.id === 'hold_selection_handoff')
     || model?.workspace.sourceHeads[0]
@@ -112,6 +142,7 @@ export function OverviewPage({ model }: OverviewPageProps) {
     'alignment-summary',
   );
   const commodityReasoningMetrics = buildCommodityReasoningMetrics(model);
+  const overviewStateMetrics = buildOverviewStateMetrics(model);
 
   return (
     <section className="overview-page">
@@ -122,6 +153,7 @@ export function OverviewPage({ model }: OverviewPageProps) {
       <section className="overview-rhythm-band" aria-label="overview-rhythm-state">
         <h3>当前状态</h3>
         <p>系统状态 / 入口 / 路由总览</p>
+        {overviewStateMetrics.length ? <MetricStrip items={overviewStateMetrics} /> : null}
       </section>
       <section className="overview-rhythm-band" aria-label="overview-rhythm-focus">
         <h3>当前焦点</h3>

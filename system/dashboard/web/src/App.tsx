@@ -23,6 +23,7 @@ import { OverviewPage } from './pages/OverviewPage';
 import { OpsPage } from './pages/OpsPage';
 import { ResearchPage } from './pages/ResearchPage';
 import { SearchPage } from './pages/SearchPage';
+import { buildSearchCatalog, searchCatalog } from './search/catalog';
 import { GlobalSearchOverlay } from './search/SearchOverlay';
 import { buildSearchLink } from './search/links';
 import type { SearchResultEntry, SearchScope } from './search/types';
@@ -399,18 +400,22 @@ function buildOverviewHeaderRhythm(focus: SharedFocusState) {
   };
 }
 
-function buildSearchHeaderRhythm() {
+function buildSearchHeaderRhythm(query: string, scope: SearchScope, resultCount: number) {
+  const normalizedQuery = query.trim() || '未输入';
+  const scopeLabel = scope === 'all' ? '全部' : scope === 'module' ? '模块' : scope === 'route' ? '路由' : '工件';
   return {
     stateSection: {
       title: '检索范围',
       items: [
         { type: 'fact' as const, label: '覆盖', value: '模块 / 路由 / 工件', detail: '只搜索前端本地索引，不查 docs/code/tests。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: '结果', value: String(resultCount), detail: '当前 query/scope 下的本地匹配数量。', tone: 'neutral' as const },
       ],
     },
     focusSection: {
       title: '当前焦点',
       items: [
-        { type: 'fact' as const, label: '定位方式', value: '关键词 / scope / 深链', detail: '优先把人带到正确 section 或 artifact。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: '关键词', value: normalizedQuery, detail: '空值表示仅查看检索入口。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: 'scope', value: scopeLabel, detail: '当前结果过滤维度。', tone: 'neutral' as const },
       ],
     },
     actionSection: {
@@ -1111,6 +1116,10 @@ function SearchRoute({
   useSurfaceRefresh(requestedSurface, 'search', requestedSurface !== 'internal');
   const query = searchParams.get('q') || '';
   const scope = parseSearchScope(searchParams.get('scope'));
+  const searchResultCount = useMemo(
+    () => searchCatalog(buildSearchCatalog(model || undefined), query, scope).length,
+    [model, query, scope],
+  );
 
   const updateSearchParams = (nextQuery: string, nextScope: SearchScope) => {
     const next = new URLSearchParams();
@@ -1134,7 +1143,7 @@ function SearchRoute({
           onToggleCollapse={onToggleSidebarCollapse}
         />
       )}
-      header={<ContextHeader compact title="全局搜索" subtitle="跨页面、跨模块、跨工件的本地索引搜索" breadcrumbs={[{ label: '总览' }, { label: '搜索', current: true }]} {...buildSearchHeaderRhythm()} />}
+      header={<ContextHeader compact title="全局搜索" subtitle="跨页面、跨模块、跨工件的本地索引搜索" breadcrumbs={[{ label: '总览' }, { label: '搜索', current: true }]} {...buildSearchHeaderRhythm(query, scope, searchResultCount)} />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
       inspector={<InspectorRail title="对象检查器" focus={{}} model={model} context={{ domain: 'overview', surface: requestedSurface }} />}
     >
