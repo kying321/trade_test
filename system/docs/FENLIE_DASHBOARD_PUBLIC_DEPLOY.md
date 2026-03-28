@@ -304,15 +304,21 @@ npm run verify:release-checklist
 - `npm run smoke:workspace-routes -- --skip-build`
 - `npm run smoke:alignment-internal -- --skip-build`
 - `npm run smoke:terminal-internal-focus -- --skip-build`
+- `npm run smoke:graph-home -- --skip-build`
+- `npm run smoke:graph-home-narrow -- --skip-build`
+- `npm run smoke:graph-home-pipeline -- --skip-build`
 - `npm run verify:public-surface -- --skip-workspace-build`
 
-当前本地已验证结果（`terminal/internal focus browser smoke` 已纳入 `verify:release-checklist` 并随整链通过）：
+当前本地已验证结果（graph-home 三条 smoke 已纳入 `verify:release-checklist` 候选链并单独通过）：
 
 - `25 files / 148 tests passed`
 - `dashboard python contracts => 79 passed`
 - `workspace routes smoke => ok = true`
 - `internal alignment smoke => ok = true`
 - `terminal/internal focus browser smoke => ok = true`
+- `graph-home browser smoke => ok = true`
+- `graph-home narrow browser smoke => ok = true`
+- `graph-home pipeline browser smoke => ok = true`
 - `public acceptance => ok = true`
 
 用途：减少上架前人工串命令导致的漏跑/顺序漂移。

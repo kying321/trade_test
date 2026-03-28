@@ -48,6 +48,9 @@ describe('deploy script contract', () => {
     expect(scripts['verify:release-checklist']).toContain('npm run smoke:workspace-routes -- --skip-build');
     expect(scripts['verify:release-checklist']).toContain('npm run smoke:alignment-internal -- --skip-build');
     expect(scripts['verify:release-checklist']).toContain('npm run smoke:terminal-internal-focus -- --skip-build');
+    expect(scripts['verify:release-checklist']).toContain('npm run smoke:graph-home -- --skip-build');
+    expect(scripts['verify:release-checklist']).toContain('npm run smoke:graph-home-narrow -- --skip-build');
+    expect(scripts['verify:release-checklist']).toContain('npm run smoke:graph-home-pipeline -- --skip-build');
     expect(scripts['verify:release-checklist']).toContain('npm run verify:public-surface -- --skip-workspace-build');
     expect(
       scripts['verify:release-checklist'].indexOf('npm run test:dashboard-python-contracts'),
@@ -55,6 +58,15 @@ describe('deploy script contract', () => {
     expect(
       scripts['verify:release-checklist'].indexOf('npm run smoke:alignment-internal -- --skip-build'),
     ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:terminal-internal-focus -- --skip-build'));
+    expect(
+      scripts['verify:release-checklist'].indexOf('npm run smoke:terminal-internal-focus -- --skip-build'),
+    ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home -- --skip-build'));
+    expect(
+      scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home -- --skip-build'),
+    ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home-narrow -- --skip-build'));
+    expect(
+      scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home-narrow -- --skip-build'),
+    ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home-pipeline -- --skip-build'));
   });
 
   it('keeps feedback publish entrypoints visible to npm test and release workflows', () => {

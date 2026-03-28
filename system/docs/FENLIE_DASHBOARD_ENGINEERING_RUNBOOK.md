@@ -219,7 +219,7 @@ npm run verify:release-checklist
 
 用途：
 
-- 一次性执行 `build -> test -> tsc -> public topology Python 合同回归 -> workspace routes smoke -> internal alignment smoke -> terminal/internal focus browser smoke -> public acceptance`
+- 一次性执行 `build -> test -> tsc -> public topology Python 合同回归 -> workspace routes smoke -> internal alignment smoke -> terminal/internal focus browser smoke -> graph-home browser smoke -> graph-home narrow browser smoke -> graph-home pipeline browser smoke -> public acceptance`
 - 作为当前 dashboard 上架前最小充分验证的单一入口
 - 默认对 smoke / public acceptance 走 `--skip-build`，避免在同一条链里重复 build
 - 其中会先跑 `npm run test:dashboard-python-contracts`
@@ -242,6 +242,9 @@ npm run verify:release-checklist
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062219Z_dashboard_workspace_routes_browser_smoke.json`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062139Z_dashboard_internal_alignment_browser_smoke.json`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062143Z_dashboard_internal_terminal_focus_browser_smoke.json`
+- `/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/20260328T160126Z_dashboard_graph_home_browser_smoke.json`
+- `/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/20260328T155425Z_dashboard_graph_home_narrow_browser_smoke.json`
+- `/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/20260328T161226Z_dashboard_graph_home_pipeline_browser_smoke.json`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062149Z_dashboard_public_topology_smoke.json`
 - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062226Z_dashboard_public_acceptance.json`
 - `npm test` 当前结果：`25 files / 148 tests passed`
@@ -319,6 +322,64 @@ npm run smoke:terminal-internal-focus
 ```bash
 /Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/*_dashboard_internal_terminal_focus_browser_smoke.json
 /Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/*_dashboard_internal_terminal_focus_browser_smoke.png
+```
+
+### 5.7.3 graph-home browser smoke
+
+```bash
+npm run smoke:graph-home
+```
+
+用途：
+
+- 真实浏览器验证 `#/` 默认落到 `#/graph-home`
+- 验证 `#/unknown-route` fallback 也会回到 graph-home
+- 验证 graph-home 快捷入口能深跳到 terminal / workspace / search
+- 验证 graph canvas 节点点击后，右侧详情与顶部中心文案会同步切换，并能通过“回到交易中枢”恢复
+
+最近会生成如下 review 工件：
+
+```bash
+/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/*_dashboard_graph_home_browser_smoke.json
+/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/*_dashboard_graph_home_browser_smoke.png
+```
+
+### 5.7.4 graph-home narrow browser smoke
+
+```bash
+npm run smoke:graph-home-narrow
+```
+
+用途：
+
+- 真实浏览器验证 graph-home 在窄屏 viewport 下仍是默认首页
+- 验证 `data-shell-tier = s`
+- 验证窄屏下 sidebar collapse toggle 不出现，utility 内的 `搜索 / Search` 仍可见
+
+最近会生成如下 review 工件：
+
+```bash
+/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/*_dashboard_graph_home_narrow_browser_smoke.json
+/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/*_dashboard_graph_home_narrow_browser_smoke.png
+```
+
+### 5.7.5 graph-home pipeline browser smoke
+
+```bash
+npm run smoke:graph-home-pipeline
+```
+
+用途：
+
+- 真实浏览器验证 graph-home 自定义管道的加入、拖拽排序与刷新后持久化
+- 断言 `graph_home_pipelines_v1` 会保存 reorder 后的 node 顺序
+- 刷新后再次读取页面，确认排序与 localStorage 一致
+
+最近会生成如下 review 工件：
+
+```bash
+/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/*_dashboard_graph_home_pipeline_browser_smoke.json
+/Users/jokenrobot/.config/superpowers/worktrees/fenlie/codex-tv-basis-arb-v1/system/output/review/*_dashboard_graph_home_pipeline_browser_smoke.png
 ```
 
 ### 5.8 发布 internal autopublish 输入

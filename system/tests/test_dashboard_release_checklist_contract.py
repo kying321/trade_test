@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_release_checklist_includes_internal_alignment_and_terminal_focus_smoke() -> None:
+def test_release_checklist_includes_graph_home_smoke_chain() -> None:
     package_json = ROOT / 'system/dashboard/web/package.json'
     payload = json.loads(package_json.read_text(encoding='utf-8'))
     script = payload['scripts']['verify:release-checklist']
@@ -33,13 +33,19 @@ def test_release_checklist_includes_internal_alignment_and_terminal_focus_smoke(
     assert 'npm run smoke:workspace-routes -- --skip-build' in script
     assert 'npm run smoke:alignment-internal -- --skip-build' in script
     assert 'npm run smoke:terminal-internal-focus -- --skip-build' in script
+    assert 'npm run smoke:graph-home -- --skip-build' in script
+    assert 'npm run smoke:graph-home-narrow -- --skip-build' in script
+    assert 'npm run smoke:graph-home-pipeline -- --skip-build' in script
     assert 'npm run test:dashboard-python-contracts' in script
     assert script.index('npm run smoke:workspace-routes -- --skip-build') < script.index('npm run smoke:alignment-internal -- --skip-build')
     assert script.index('npm run smoke:alignment-internal -- --skip-build') < script.index('npm run smoke:terminal-internal-focus -- --skip-build')
+    assert script.index('npm run smoke:terminal-internal-focus -- --skip-build') < script.index('npm run smoke:graph-home -- --skip-build')
+    assert script.index('npm run smoke:graph-home -- --skip-build') < script.index('npm run smoke:graph-home-narrow -- --skip-build')
+    assert script.index('npm run smoke:graph-home-narrow -- --skip-build') < script.index('npm run smoke:graph-home-pipeline -- --skip-build')
     assert script.index('npm run test:dashboard-python-contracts') < script.index('npm run verify:public-surface -- --skip-workspace-build')
 
 
-def test_runbook_release_checklist_mentions_internal_alignment_smoke() -> None:
+def test_runbook_release_checklist_mentions_graph_home_smoke_chain() -> None:
     runbook = (ROOT / 'system/docs/FENLIE_DASHBOARD_ENGINEERING_RUNBOOK.md').read_text(encoding='utf-8')
 
     assert 'npm run verify:release-checklist' in runbook
@@ -49,6 +55,12 @@ def test_runbook_release_checklist_mentions_internal_alignment_smoke() -> None:
     assert 'internal alignment 浏览器 smoke' in runbook
     assert 'npm run smoke:terminal-internal-focus' in runbook
     assert 'terminal/internal focus browser smoke' in runbook
+    assert 'npm run smoke:graph-home' in runbook
+    assert 'graph-home browser smoke' in runbook
+    assert 'npm run smoke:graph-home-narrow' in runbook
+    assert 'graph-home narrow browser smoke' in runbook
+    assert 'npm run smoke:graph-home-pipeline' in runbook
+    assert 'graph-home pipeline browser smoke' in runbook
     assert 'test_publish_conversation_feedback_autopublish_internal_script.py' in runbook
     assert 'test_publish_conversation_feedback_manual_internal_script.py' in runbook
     assert 'test_build_conversation_feedback_projection_internal_script.py' in runbook
@@ -62,6 +74,9 @@ def test_public_deploy_doc_mentions_shared_python_launcher() -> None:
 
     assert 'npm run verify:public-surface -- --skip-workspace-build' in deploy_doc
     assert 'npm run test:dashboard-python-contracts' in deploy_doc
+    assert 'npm run smoke:graph-home -- --skip-build' in deploy_doc
+    assert 'npm run smoke:graph-home-narrow -- --skip-build' in deploy_doc
+    assert 'npm run smoke:graph-home-pipeline -- --skip-build' in deploy_doc
     assert 'node ./scripts/run-python.mjs' in deploy_doc
     assert 'CONDA_PREFIX/bin/python3' in deploy_doc
     assert 'run_dashboard_public_acceptance.py' in deploy_doc

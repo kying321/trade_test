@@ -28,7 +28,7 @@
     "cf:preflight": "env -u HTTP_PROXY -u HTTPS_PROXY node ./scripts/cloudflare-preflight.mjs",
     "cf:whoami": "env -u HTTP_PROXY -u HTTPS_PROXY node ./scripts/cloudflare-wrangler.mjs whoami",
     "cf:deploy": "npm run cf:preflight && npm run build && npm run strip:internal && env -u HTTP_PROXY -u HTTPS_PROXY node ./scripts/cloudflare-wrangler.mjs pages deploy dist --project-name fenlie-dashboard-web --branch main --commit-dirty=true",
-    "verify:release-checklist": "npm run build && npm test && npx tsc --noEmit && npm run test:dashboard-python-contracts && npm run smoke:workspace-routes -- --skip-build && npm run smoke:alignment-internal -- --skip-build && npm run smoke:terminal-internal-focus -- --skip-build && npm run verify:public-surface -- --skip-workspace-build"
+    "verify:release-checklist": "npm run build && npm test && npx tsc --noEmit && npm run test:dashboard-python-contracts && npm run smoke:workspace-routes -- --skip-build && npm run smoke:alignment-internal -- --skip-build && npm run smoke:terminal-internal-focus -- --skip-build && npm run smoke:graph-home -- --skip-build && npm run smoke:graph-home-narrow -- --skip-build && npm run smoke:graph-home-pipeline -- --skip-build && npm run verify:public-surface -- --skip-workspace-build"
   },
   "dependencies": {
     "echarts": "6.0.0",
