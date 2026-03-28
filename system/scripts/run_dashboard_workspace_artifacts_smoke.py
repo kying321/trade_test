@@ -1381,6 +1381,140 @@ def build_graph_home_narrow_smoke_spec(
     )
 
 
+def build_graph_home_pipeline_smoke_spec(
+    *,
+    base_url: str,
+    screenshot_path: Path,
+    result_path: Path,
+    route_assertions: list[dict[str, Any]],
+) -> str:
+    routes_json = json.dumps(route_assertions, ensure_ascii=False, indent=2)
+    return (
+        textwrap.dedent(
+            f"""
+            const {{ test, expect }} = require('@playwright/test');
+            const fs = require('node:fs');
+
+            const ROUTES = {routes_json};
+            const DEFAULT_ROUTE = '#/';
+            const STORAGE_KEY = 'graph_home_pipelines_v1';
+
+            async function expectStableMarker(page, marker) {{
+              await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
+              await expect(page.locator('body')).toContainText(marker);
+            }}
+
+            test.use({{ browserName: 'chromium' }});
+
+            test('graph home pipeline smoke', async ({{ page }}) => {{
+              const snapshotRequests = [];
+              const internalSnapshotRequests = [];
+              const visitedRoutes = [];
+              const graphRoute = ROUTES[0];
+
+              page.on('response', async (response) => {{
+                const url = response.url();
+                if (url.includes('fenlie_dashboard_snapshot.json')) snapshotRequests.push(url);
+                if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
+              }});
+
+              await page.goto({base_url!r} + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.waitForFunction(() => window.location.hash.includes('/graph-home'));
+              await expect(page.getByRole('heading', {{ name: graphRoute.headline, exact: true }})).toBeVisible();
+              for (const marker of graphRoute.markers) {{
+                await expectStableMarker(page, marker);
+              }}
+
+              const addToPipelineButton = page.getByRole('button', {{ name: '加入自定义管道' }});
+              await addToPipelineButton.click();
+              await page.waitForTimeout(300);
+
+              const graphCanvas = page.locator('canvas').first();
+              await graphCanvas.scrollIntoViewIfNeeded();
+              const graphBox = await graphCanvas.boundingBox();
+              if (!graphBox) throw new Error('graph_canvas_missing');
+              const detailHeadingLocator = page.locator('.graph-home-side .panel-card').first().locator('.panel-card-title');
+              const candidateOffsets = [
+                [220, 0],
+                [68, 209],
+                [-178, 129],
+                [-178, -129],
+                [68, -209],
+              ];
+              const selectableHeadings = new Set(['市场输入', '研究判断', '交易逻辑', '执行与风控', '复盘反馈']);
+              let selectedHeading = '';
+              for (const [dx, dy] of candidateOffsets) {{
+                await page.mouse.click(graphBox.x + graphBox.width / 2 + dx, graphBox.y + graphBox.height / 2 + dy);
+                await page.waitForTimeout(350);
+                const nextHeading = String(await detailHeadingLocator.textContent() || '').trim();
+                if (selectableHeadings.has(nextHeading)) {{
+                  selectedHeading = nextHeading;
+                  break;
+                }}
+              }}
+              expect(selectedHeading).not.toBe('');
+              await addToPipelineButton.click();
+              await page.waitForTimeout(300);
+
+              const pipelineItems = page.locator('.graph-pipeline-item');
+              const initialOrder = await page.locator('.graph-pipeline-item > span:first-child').allTextContents();
+              expect(initialOrder.length).toBeGreaterThanOrEqual(2);
+
+              await pipelineItems.nth(1).dragTo(pipelineItems.nth(0));
+              await page.waitForTimeout(800);
+              const reorderedOrder = await page.locator('.graph-pipeline-item > span:first-child').allTextContents();
+              expect(reorderedOrder[0]).toBe(selectedHeading);
+              expect(reorderedOrder[1]).toBe('交易中枢');
+
+              const storedAfterDrag = await page.evaluate((key) => JSON.parse(window.localStorage.getItem(key) || 'null'), STORAGE_KEY);
+              expect(storedAfterDrag?.pipelines?.[0]?.nodeIds || []).toEqual(['pipeline-execution-risk', 'trade-hub']);
+
+              await page.reload({{ waitUntil: 'networkidle' }});
+              const persistedOrder = await page.locator('.graph-pipeline-item > span:first-child').allTextContents();
+              expect(persistedOrder[0]).toBe(selectedHeading);
+              expect(persistedOrder[1]).toBe('交易中枢');
+              const resolvedRoute = await page.evaluate(() => window.location.hash);
+
+              visitedRoutes.push({{
+                route: graphRoute.route,
+                headline: graphRoute.headline,
+                url: page.url(),
+              }});
+
+              fs.writeFileSync(
+                {str(result_path)!r},
+                JSON.stringify(
+                  {{
+                    requested_surface: 'public',
+                    effective_surface: 'public',
+                    visited_routes: visitedRoutes,
+                    snapshot_requests: snapshotRequests,
+                    internal_snapshot_requests: internalSnapshotRequests,
+                    graph_home_assertion: {{
+                      default_route: DEFAULT_ROUTE,
+                      resolved_route: resolvedRoute,
+                      pipeline_persistence_assertion: {{
+                        selected_heading: selectedHeading,
+                        initial_order: initialOrder,
+                        reordered_order: reorderedOrder,
+                        persisted_order: persistedOrder,
+                      }},
+                    }},
+                  }},
+                  null,
+                  2,
+                ),
+                'utf8',
+              );
+
+              await page.screenshot({{ path: {str(screenshot_path)!r}, fullPage: true }});
+            }});
+            """
+        ).strip()
+        + "\n"
+    )
+
+
 def run_playwright_smoke(
     *,
     web_root: Path,
@@ -1436,6 +1570,18 @@ def run_playwright_smoke(
                 screenshot_path=screenshot_path,
                 result_path=result_path,
                 route_assertions=route_assertions or GRAPH_HOME_ROUTE_ASSERTIONS,
+            )
+        elif mode == "graph_home_pipeline":
+            spec = build_graph_home_pipeline_smoke_spec(
+                base_url=base_url,
+                screenshot_path=screenshot_path,
+                result_path=result_path,
+                route_assertions=route_assertions or [{
+                    "route": "#/graph-home",
+                    "nav_label": "图谱主页",
+                    "headline": "图谱化主页",
+                    "markers": ["加入自定义管道", "创建默认管道"],
+                }],
             )
         else:
             spec = build_workspace_routes_smoke_spec(
@@ -1621,6 +1767,8 @@ def build_artifact_payload(
         action_name = "dashboard_graph_home_browser_smoke"
     elif mode == "graph_home_narrow":
         action_name = "dashboard_graph_home_narrow_browser_smoke"
+    elif mode == "graph_home_pipeline":
+        action_name = "dashboard_graph_home_pipeline_browser_smoke"
     else:
         action_name = "dashboard_workspace_routes_browser_smoke"
     expected_focus_panel = "signal-risk" if mode == "internal_terminal_focus" else "lab-review"
@@ -1692,9 +1840,9 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true", help="Skip npm run build before smoke.")
     parser.add_argument(
         "--mode",
-        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus", "commodity_visibility", "graph_home", "graph_home_narrow"],
+        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus", "commodity_visibility", "graph_home", "graph_home_narrow", "graph_home_pipeline"],
         default="public_workspace",
-        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path; commodity_visibility validates overview + terminal/public commodity reasoning visibility; graph_home validates the default landing page redirect and graph-home quick links; graph_home_narrow validates the same landing page contract under a narrow viewport.",
+        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path; commodity_visibility validates overview + terminal/public commodity reasoning visibility; graph_home validates the default landing page redirect and graph-home quick links; graph_home_narrow validates the same landing page contract under a narrow viewport; graph_home_pipeline validates custom-pipeline drag reorder and reload persistence.",
     )
     args = parser.parse_args()
 
@@ -1724,6 +1872,9 @@ def main() -> None:
     elif args.mode == "graph_home_narrow":
         report_path = review_dir / f"{timestamp}_dashboard_graph_home_narrow_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_graph_home_narrow_browser_smoke.png"
+    elif args.mode == "graph_home_pipeline":
+        report_path = review_dir / f"{timestamp}_dashboard_graph_home_pipeline_browser_smoke.json"
+        screenshot_path = review_dir / f"{timestamp}_dashboard_graph_home_pipeline_browser_smoke.png"
     else:
         report_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.png"
@@ -1768,6 +1919,13 @@ def main() -> None:
         expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
     elif args.mode == "graph_home_narrow":
         expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
+    elif args.mode == "graph_home_pipeline":
+        expected_route_markers = [{
+            "route": "#/graph-home",
+            "nav_label": "图谱主页",
+            "headline": "图谱化主页",
+            "markers": ["加入自定义管道", "创建默认管道"],
+        }]
     else:
         expected_route_markers = list(PUBLIC_WORKSPACE_ROUTE_ASSERTIONS)
     server_ready_seconds = 0.0
@@ -1815,6 +1973,14 @@ def main() -> None:
             elif args.mode == "graph_home_narrow":
                 internal_expectations = None
                 expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
+            elif args.mode == "graph_home_pipeline":
+                internal_expectations = None
+                expected_route_markers = [{
+                    "route": "#/graph-home",
+                    "nav_label": "图谱主页",
+                    "headline": "图谱化主页",
+                    "markers": ["加入自定义管道", "创建默认管道"],
+                }]
             else:
                 internal_expectations = None
                 expected_route_markers = load_public_workspace_route_assertions(dist_dir=dist_dir)

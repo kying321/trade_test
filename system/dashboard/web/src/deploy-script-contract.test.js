@@ -108,6 +108,13 @@ describe('deploy script contract', () => {
     expect(scripts['smoke:graph-home-narrow']).toContain('--mode graph_home_narrow');
   });
 
+  it('exposes a dedicated graph-home pipeline browser smoke entrypoint', () => {
+    const scripts = loadScripts();
+
+    expect(scripts['smoke:graph-home-pipeline']).toContain('run_dashboard_workspace_artifacts_smoke.py');
+    expect(scripts['smoke:graph-home-pipeline']).toContain('--mode graph_home_pipeline');
+  });
+
   it('routes dashboard python entrypoints through the shared python launcher', () => {
     const scripts = loadScripts();
     const sharedLauncher = 'node ./scripts/run-python.mjs';
@@ -124,6 +131,7 @@ describe('deploy script contract', () => {
       'smoke:terminal-internal-focus',
       'smoke:graph-home',
       'smoke:graph-home-narrow',
+      'smoke:graph-home-pipeline',
       'feedback:publish',
       'feedback:publish-refresh',
       'feedback:publish-manual',

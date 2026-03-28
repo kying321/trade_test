@@ -482,6 +482,97 @@ def test_build_artifact_payload_reports_graph_home_narrow_surface(tmp_path: Path
     }
 
 
+def test_build_graph_home_pipeline_smoke_spec_covers_drag_reorder_and_refresh_persistence(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "graph-home-pipeline-smoke.png"
+    result_path = tmp_path / "graph-home-pipeline-smoke.json"
+
+    spec = mod.build_graph_home_pipeline_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        route_assertions=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["加入自定义管道", "创建默认管道"],
+            }
+        ],
+    )
+
+    assert "graph home pipeline smoke" in spec
+    assert "graph_home_pipelines_v1" in spec
+    assert "dragTo" in spec
+    assert "pipeline_persistence_assertion" in spec
+    assert "await page.reload({ waitUntil: 'networkidle' });" in spec
+    assert "加入自定义管道" in spec
+    assert str(result_path) in spec
+
+
+def test_build_artifact_payload_reports_graph_home_pipeline_surface(tmp_path: Path) -> None:
+    mod = load_module()
+    report_path = tmp_path / "report.json"
+    screenshot_path = tmp_path / "graph-home-pipeline-smoke.png"
+
+    payload = mod.build_artifact_payload(
+        workspace=tmp_path,
+        report_path=report_path,
+        screenshot_path=screenshot_path,
+        build_result={"returncode": 0},
+        server_ready_seconds=0.14,
+        smoke_result={
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "playwright_result": {
+                "requested_surface": "public",
+                "effective_surface": "public",
+                "visited_routes": [
+                    {"route": "#/graph-home", "headline": "图谱化主页"},
+                ],
+                "snapshot_requests": [
+                    "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
+                ],
+                "internal_snapshot_requests": [],
+                "graph_home_assertion": {
+                    "default_route": "#/",
+                    "resolved_route": "#/graph-home",
+                    "pipeline_persistence_assertion": {
+                        "selected_heading": "执行与风控",
+                        "initial_order": ["交易中枢", "执行与风控"],
+                        "reordered_order": ["执行与风控", "交易中枢"],
+                        "persisted_order": ["执行与风控", "交易中枢"],
+                    },
+                },
+            },
+        },
+        base_url="http://127.0.0.1:4173/",
+        mode="graph_home_pipeline",
+        expected_route_markers=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["加入自定义管道", "创建默认管道"],
+            }
+        ],
+    )
+
+    assert payload["action"] == "dashboard_graph_home_pipeline_browser_smoke"
+    assert payload["ok"] is True
+    assert payload["graph_home_assertion"] == {
+        "default_route": "#/",
+        "resolved_route": "#/graph-home",
+        "pipeline_persistence_assertion": {
+            "selected_heading": "执行与风控",
+            "initial_order": ["交易中枢", "执行与风控"],
+            "reordered_order": ["执行与风控", "交易中枢"],
+            "persisted_order": ["执行与风控", "交易中枢"],
+        },
+    }
+
+
 def test_build_artifact_payload_reports_commodity_visibility_surface(tmp_path: Path) -> None:
     mod = load_module()
     report_path = tmp_path / "report.json"
