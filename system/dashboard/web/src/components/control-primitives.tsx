@@ -150,7 +150,6 @@ export function EntityRowButton({
     <button
       type={type ?? 'button'}
       {...props}
-      aria-pressed={Boolean(active)}
       data-active={active ? 'true' : 'false'}
       className={joinControlClass('control-entity-row', className)}
     >

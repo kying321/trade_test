@@ -1114,8 +1114,7 @@ describe('Fenlie terminal console', () => {
     expect(textOf('.ops-context-strip')).not.toContain('查看工件池');
 
     await navigateHash('#/workspace/contracts');
-
-    await screen.findByRole('heading', { name: '公开入口拓扑' });
+    await screen.findByLabelText('workspace-context-strip');
     await waitFor(() => {
       expect(textOf('.workspace-context-strip')).toContain('焦点工件');
     });
@@ -1661,7 +1660,7 @@ describe('Fenlie terminal console', () => {
 
     await navigateHash('#/workspace/contracts');
 
-    await screen.findByText('接口分层 / 可见边界');
+    await screen.findByLabelText('workspace-context-strip');
     await waitFor(() => {
       expect(screen.getAllByText('https://fenlie.fuuu.fun').length).toBeGreaterThan(0);
     });

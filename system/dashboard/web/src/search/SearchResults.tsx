@@ -1,5 +1,5 @@
 import { ActionLink, EntityRowButton, FilterChip } from '../components/control-primitives';
-import { Badge, PanelCard } from '../components/ui-kit';
+import { Badge, ClampText, PanelCard } from '../components/ui-kit';
 import type { TerminalReadModel } from '../types/contracts';
 import { groupSearchResults, buildSearchCatalog, searchCatalog } from './catalog';
 import { buildSearchLink } from './links';
@@ -67,8 +67,8 @@ function SearchResultGroup({
           <EntityRowButton
             key={result.id}
             className={`search-result-button ${activeId === result.id ? 'active' : ''}`.trim()}
-            title={result.title}
-            subtitle={result.subtitle || result.destination}
+            title={<ClampText raw={result.title} expandable={false}>{result.title}</ClampText>}
+            subtitle={<ClampText raw={result.subtitle || result.destination} expandable={false}>{result.subtitle || result.destination}</ClampText>}
             active={activeId === result.id}
             onClick={() => onPick(result)}
           >

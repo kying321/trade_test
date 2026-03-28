@@ -49,7 +49,6 @@ it('renders domain tabs separately from action buttons and filter chips', () => 
   expect(filterChip.className).toContain('control-filter-chip');
   expect(filterChip.getAttribute('aria-pressed')).toBe('true');
   expect(entityRow.className).toContain('control-entity-row');
-  expect(entityRow.getAttribute('aria-pressed')).toBe('true');
 });
 
 it('defaults control button primitives to type=button', () => {
@@ -77,7 +76,6 @@ it('uses false semantic active state when not active', () => {
 
   expect(screen.getByRole('button', { name: 'public' }).getAttribute('aria-pressed')).toBe('false');
   expect(screen.getByRole('button', { name: 'warning' }).getAttribute('aria-pressed')).toBe('false');
-  expect(screen.getByRole('button', { name: '持有选择主头' }).getAttribute('aria-pressed')).toBe('false');
 });
 
 it('merges route-active state with callback className for nav primitives', () => {
