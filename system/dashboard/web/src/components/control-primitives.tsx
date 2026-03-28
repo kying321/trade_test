@@ -5,8 +5,16 @@ function joinControlClass(base: string, extra?: string) {
   return [base, extra].filter(Boolean).join(' ');
 }
 
+function normalizeDomainTabClassName(className?: NavLinkProps['className']): NavLinkProps['className'] {
+  if (typeof className === 'function') {
+    return (state) => joinControlClass('control-domain-tab', className(state));
+  }
+
+  return () => joinControlClass('control-domain-tab', className);
+}
+
 export function DomainTab({ className, active: _active, ...props }: NavLinkProps & { active?: boolean }) {
-  return <NavLink {...props} className={joinControlClass('control-domain-tab', className)} />;
+  return <NavLink {...props} className={normalizeDomainTabClassName(className)} />;
 }
 
 export function SegmentedOption({ className, active, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { active?: boolean }) {

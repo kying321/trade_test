@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { expect, it } from 'vitest';
 import {
   ActionButton,
   DomainTab,
