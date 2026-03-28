@@ -162,4 +162,27 @@ describe('GraphHomePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '回到交易中枢' }));
     expect(screen.getByRole('heading', { name: '交易中枢' })).toBeTruthy();
   });
+
+  it('surfaces precise deep links for selected stage and artifact nodes instead of coarse page jumps', () => {
+    render(
+      <HashRouter>
+        <GraphHomePage model={createModel()} />
+      </HashRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '市场输入' }));
+    expect(screen.getByRole('link', { name: '进入子网页' }).getAttribute('href')).toBe('#/terminal/public?anchor=terminal-data-regime&panel=data-regime');
+
+    fireEvent.change(screen.getByPlaceholderText('过滤节点：标签 / 副标题'), { target: { value: 'ETH' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ETH 15m 主线' }));
+    const artifactHref = screen.getByRole('link', { name: '进入子网页' }).getAttribute('href') || '';
+    const artifactParams = new URLSearchParams(artifactHref.split('?')[1] || '');
+    expect(artifactHref.startsWith('#/workspace/artifacts?')).toBe(true);
+    expect(artifactParams.get('artifact')).toBe('price_action_breakout_pullback');
+    expect(artifactParams.get('anchor')).toBe('workspace-artifacts-focus-panel');
+    expect(artifactParams.get('search_scope')).toBe('title');
+    expect(artifactParams.get('panel')).toBe('lab-review');
+    expect(artifactParams.get('section')).toBe('research-heads');
+    expect(artifactParams.get('group')).toBe('research_mainline');
+  });
 });

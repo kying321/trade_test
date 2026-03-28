@@ -125,4 +125,21 @@ describe('graph home model', () => {
     expect(graph.nodes.some((node) => node.id === 'artifact-price_action_breakout_pullback' && node.kind === 'artifact')).toBe(true);
     expect(graph.edges.some((edge) => edge.source === 'trade-hub' && edge.target === 'pipeline-research-judgment')).toBe(true);
   });
+
+  it('builds focused deep-link destinations for stage, route, and artifact nodes', () => {
+    const graph = buildGraphHomeModel(createModel(), []);
+    const artifactDestination = graph.nodes.find((node) => node.id === 'artifact-price_action_breakout_pullback')?.destination;
+    const artifactParams = new URLSearchParams(artifactDestination?.split('?')[1] || '');
+
+    expect(graph.nodes.find((node) => node.id === 'pipeline-market-input')?.destination).toBe('/terminal/public?anchor=terminal-data-regime&panel=data-regime');
+    expect(graph.nodes.find((node) => node.id === 'pipeline-feedback')?.destination).toBe('/workspace/alignment?page_section=alignment-actions');
+    expect(graph.nodes.find((node) => node.id === 'route-workspace-contracts')?.destination).toBe('/workspace/contracts?page_section=contracts-source-heads');
+    expect(artifactDestination?.startsWith('/workspace/artifacts?')).toBe(true);
+    expect(artifactParams.get('artifact')).toBe('price_action_breakout_pullback');
+    expect(artifactParams.get('anchor')).toBe('workspace-artifacts-focus-panel');
+    expect(artifactParams.get('search_scope')).toBe('title');
+    expect(artifactParams.get('panel')).toBe('lab-review');
+    expect(artifactParams.get('section')).toBe('research-heads');
+    expect(artifactParams.get('group')).toBe('research_mainline');
+  });
 });

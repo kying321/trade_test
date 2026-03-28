@@ -1,4 +1,6 @@
 import type { TerminalReadModel } from '../types/contracts';
+import { buildWorkspacePageLink, buildWorkspaceLink, buildTerminalLink } from '../utils/focus-links';
+import { buildSearchLink } from '../search/links';
 import type { GraphEdge, GraphHomeModel, GraphLayoutNode, GraphNode, GraphPipeline } from './types';
 
 const PIPELINE_STAGE_DEFS = [
@@ -40,6 +42,15 @@ function addNode(nodes: Map<string, GraphNode>, node: Omit<GraphNode, 'upstream'
 export function buildGraphHomeModel(model: TerminalReadModel, pipelines: GraphPipeline[]): GraphHomeModel {
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
+  const defaultFocus = model.workspace.defaultFocus || {};
+  const artifactFocus = defaultFocus.artifact ? {
+    artifact: defaultFocus.artifact,
+    group: defaultFocus.group,
+    panel: defaultFocus.panel,
+    section: defaultFocus.section,
+    search_scope: defaultFocus.search_scope,
+    anchor: 'workspace-artifacts-focus-panel',
+  } : {};
 
   addNode(nodes, {
     id: 'trade-hub',
@@ -64,6 +75,16 @@ export function buildGraphHomeModel(model: TerminalReadModel, pipelines: GraphPi
       kind: 'pipeline_stage',
       label: stage.label,
       subtitle: stage.subtitle,
+      destination:
+        stage.id === 'pipeline-market-input'
+          ? buildTerminalLink('public', { anchor: 'terminal-data-regime', panel: 'data-regime' })
+          : stage.id === 'pipeline-research-judgment'
+            ? buildWorkspaceLink('artifacts', artifactFocus)
+            : stage.id === 'pipeline-trading-logic'
+              ? buildTerminalLink('public', { anchor: 'terminal-lab-review', panel: 'lab-review', artifact: defaultFocus.artifact })
+              : stage.id === 'pipeline-execution-risk'
+                ? buildTerminalLink('public', { anchor: 'terminal-signal-risk', panel: 'signal-risk' })
+                : buildWorkspacePageLink('alignment', {}, 'alignment-actions'),
       importance: stage.importance,
       status: 'active',
     });
@@ -76,7 +97,7 @@ export function buildGraphHomeModel(model: TerminalReadModel, pipelines: GraphPi
     label: '公开终端',
     subtitle: '执行 / 风控 / 门禁',
     importance: 7,
-    destination: '/terminal/public',
+    destination: buildTerminalLink('public', { anchor: 'terminal-signal-risk', panel: 'signal-risk' }),
     status: 'active',
   });
   addNode(nodes, {
@@ -85,7 +106,7 @@ export function buildGraphHomeModel(model: TerminalReadModel, pipelines: GraphPi
     label: '工件池',
     subtitle: '研究判断 / artifact',
     importance: 7,
-    destination: '/workspace/artifacts',
+    destination: buildWorkspaceLink('artifacts', artifactFocus),
     status: 'active',
   });
   addNode(nodes, {
@@ -94,7 +115,7 @@ export function buildGraphHomeModel(model: TerminalReadModel, pipelines: GraphPi
     label: '契约层',
     subtitle: '入口拓扑 / 验收',
     importance: 7,
-    destination: '/workspace/contracts',
+    destination: buildWorkspacePageLink('contracts', {}, 'contracts-source-heads'),
     status: 'active',
   });
   addNode(nodes, {
@@ -103,7 +124,7 @@ export function buildGraphHomeModel(model: TerminalReadModel, pipelines: GraphPi
     label: '搜索',
     subtitle: '跨模块定位',
     importance: 6,
-    destination: '/search',
+    destination: buildSearchLink(defaultFocus.artifact || ''),
     status: 'active',
   });
 
@@ -134,7 +155,14 @@ export function buildGraphHomeModel(model: TerminalReadModel, pipelines: GraphPi
       label: artifact.label || artifact.id,
       subtitle: artifact.path || artifact.category || 'artifact',
       importance: artifact.id === model.workspace.defaultFocus?.artifact ? 8 : 6,
-      destination: `/workspace/artifacts?artifact=${encodeURIComponent(artifact.id)}`,
+      destination: buildWorkspaceLink('artifacts', {
+        artifact: artifact.id,
+        anchor: 'workspace-artifacts-focus-panel',
+        group: artifact.artifact_group || defaultFocus.group,
+        panel: defaultFocus.panel,
+        section: defaultFocus.section,
+        search_scope: defaultFocus.search_scope,
+      }),
       status: artifact.research_decision || artifact.status,
     });
     connect(edges, nodes, 'pipeline-research-judgment', id, 'validates', 0.9);
