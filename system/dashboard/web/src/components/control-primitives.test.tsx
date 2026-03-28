@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { expect, it } from 'vitest';
 import {
+  ActionLink,
   ActionButton,
   DomainTab,
   EntityRowButton,
@@ -11,13 +12,14 @@ import {
 
 it('renders domain tabs separately from action buttons and filter chips', () => {
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/outside']}>
       <DomainTab to="/overview" active>
         总览
       </DomainTab>
       <SegmentedOption active onClick={() => undefined}>
         public
       </SegmentedOption>
+      <ActionLink to="/search">查看详情</ActionLink>
       <ActionButton onClick={() => undefined}>打开搜索</ActionButton>
       <FilterChip active onClick={() => undefined}>
         warning
@@ -25,14 +27,55 @@ it('renders domain tabs separately from action buttons and filter chips', () => 
       <EntityRowButton
         title="持有选择主头"
         subtitle="research_hold_transfer"
+        active
         onClick={() => undefined}
       />
     </MemoryRouter>
   );
 
-  expect(screen.getByRole('link', { name: '总览' }).className).toContain('control-domain-tab');
-  expect(screen.getByRole('button', { name: 'public' }).className).toContain('control-segment-option');
-  expect(screen.getByRole('button', { name: '打开搜索' }).className).toContain('control-action-button');
-  expect(screen.getByRole('button', { name: 'warning' }).className).toContain('control-filter-chip');
-  expect(screen.getByRole('button', { name: /持有选择主头/i }).className).toContain('control-entity-row');
+  const domainTab = screen.getByRole('link', { name: '总览' });
+  const segmentedOption = screen.getByRole('button', { name: 'public' });
+  const actionLink = screen.getByRole('link', { name: '查看详情' });
+  const actionButton = screen.getByRole('button', { name: '打开搜索' });
+  const filterChip = screen.getByRole('button', { name: 'warning' });
+  const entityRow = screen.getByRole('button', { name: /持有选择主头/i });
+
+  expect(domainTab.className).toContain('control-domain-tab');
+  expect(domainTab.className).toContain('active');
+  expect(segmentedOption.className).toContain('control-segment-option');
+  expect(segmentedOption.getAttribute('aria-pressed')).toBe('true');
+  expect(actionLink.className).toContain('control-action-link');
+  expect(actionButton.className).toContain('control-action-button');
+  expect(filterChip.className).toContain('control-filter-chip');
+  expect(filterChip.getAttribute('aria-pressed')).toBe('true');
+  expect(entityRow.className).toContain('control-entity-row');
+  expect(entityRow.getAttribute('aria-pressed')).toBe('true');
+});
+
+it('defaults control button primitives to type=button', () => {
+  render(
+    <>
+      <SegmentedOption>public</SegmentedOption>
+      <ActionButton>打开搜索</ActionButton>
+      <FilterChip>warning</FilterChip>
+    </>
+  );
+
+  expect(screen.getByRole('button', { name: 'public' }).getAttribute('type')).toBe('button');
+  expect(screen.getByRole('button', { name: '打开搜索' }).getAttribute('type')).toBe('button');
+  expect(screen.getByRole('button', { name: 'warning' }).getAttribute('type')).toBe('button');
+});
+
+it('uses false semantic active state when not active', () => {
+  render(
+    <>
+      <SegmentedOption>public</SegmentedOption>
+      <FilterChip>warning</FilterChip>
+      <EntityRowButton title="持有选择主头" onClick={() => undefined} />
+    </>
+  );
+
+  expect(screen.getByRole('button', { name: 'public' }).getAttribute('aria-pressed')).toBe('false');
+  expect(screen.getByRole('button', { name: 'warning' }).getAttribute('aria-pressed')).toBe('false');
+  expect(screen.getByRole('button', { name: '持有选择主头' }).getAttribute('aria-pressed')).toBe('false');
 });
