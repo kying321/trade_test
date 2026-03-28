@@ -170,7 +170,6 @@ function buildOverviewPageMeta() {
   return {
     sidebarTitle: '一级域路由',
     sidebarSubtitle: '总览入口',
-    sidebarDescription: '系统状态 / 入口切换 / 路由总览',
     headerTitle: '总览',
     headerSubtitle: '系统状态 / 入口 / 路由总览',
   };
@@ -181,7 +180,6 @@ function buildTerminalPageMeta(requested: SurfaceKey) {
   return {
     sidebarTitle: '终端路由',
     sidebarSubtitle: '面型切换',
-    sidebarDescription: isInternal ? '内部只读 / 深层字段 / 执行证据' : '公开摘要 / 执行穿透 / 调度门禁',
     headerTitle: isInternal ? '内部面' : '公开面',
     headerSubtitle: isInternal ? '内部只读 / 深层字段 / 执行证据' : '执行穿透 / 调度与门禁',
     headerBarKicker: isInternal ? '终端 / 深层证据' : '终端 / 运行态',
@@ -194,17 +192,15 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
   const pageMeta: Record<WorkspaceSection, {
     sidebarTitle: string;
     sidebarSubtitle: string;
-    sidebarDescription: string;
     headerTitle: string;
     headerSubtitle: string;
     headerBarKicker: string;
     headerBarTitle: string;
     headerBarSubtitle: string;
-  }> = {
+    }> = {
     artifacts: {
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 回测 / 契约 / 原始',
       headerTitle: '工件池',
       headerSubtitle: '研究地图 / 状态雷达 / 焦点动作',
       headerBarKicker: '工件 / 当前焦点',
@@ -214,7 +210,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
     alignment: {
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 对齐 / 回测 / 契约 / 原始',
       headerTitle: '方向对齐投射',
       headerSubtitle: '高价值反馈 / 漂移趋势 / 建议动作',
       headerBarKicker: '对齐 / 内部投射',
@@ -224,7 +219,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
     backtests: {
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 回测 / 契约 / 原始',
       headerTitle: '回测池',
       headerSubtitle: '时序比较 / 近期比较 / OOS 切片',
       headerBarKicker: '回测 / 验证窗口',
@@ -234,7 +228,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
     contracts: {
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 回测 / 契约 / 原始',
       headerTitle: '契约层',
       headerSubtitle: '公开入口 / 数据契约 / 路由验收',
       headerBarKicker: '契约 / 验收记录',
@@ -244,7 +237,6 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
     raw: {
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 回测 / 契约 / 原始',
       headerTitle: '原始层',
       headerSubtitle: '原始快照 / 证据回退 / JSON 穿透',
       headerBarKicker: '原始 / 最终回退',
@@ -900,7 +892,6 @@ function OverviewRoute({
         <ContextSidebar
           title={pageMeta.sidebarTitle}
           subtitle={pageMeta.sidebarSubtitle}
-          description={pageMeta.sidebarDescription}
           items={PRIMARY_NAV.map((item) => ({ ...item, to: item.id === 'overview' ? buildOverviewLink(focus) : item.id === 'ops' ? buildOpsLegacyLink(requestedSurface, focus) : buildResearchLegacyLink('artifacts', focus) }))}
           utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
           collapsed={sidebarCollapsed}
@@ -961,7 +952,6 @@ function TerminalRoute({
         <ContextSidebar
           title={pageMeta.sidebarTitle}
           subtitle={pageMeta.sidebarSubtitle}
-          description={pageMeta.sidebarDescription}
           items={buildOpsSidebarItems(focus)}
           utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
           collapsed={sidebarCollapsed}
@@ -1042,7 +1032,6 @@ function WorkspaceRoute({
       sidebar={<ContextSidebar
         title={pageMeta.sidebarTitle}
         subtitle={pageMeta.sidebarSubtitle}
-        description={pageMeta.sidebarDescription}
         items={buildResearchSidebarItems(navigationFocus, model || undefined)}
         pageSections={pageSections.map((item) => ({
           ...item,
@@ -1118,7 +1107,6 @@ function SearchRoute({
         <ContextSidebar
           title="全局搜索"
           subtitle="跨页面检索"
-          description="模块 / 路由 / 工件统一检索，点击结果后跳到具体页面或阶段。"
           items={PRIMARY_NAV.map((item) => ({ ...item, to: item.id === 'overview' ? buildOverviewLink({}) : item.id === 'ops' ? buildOpsLegacyLink('public', {}) : buildResearchLegacyLink('artifacts', {}) }))}
           utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink(query, scope) }]}
           collapsed={sidebarCollapsed}

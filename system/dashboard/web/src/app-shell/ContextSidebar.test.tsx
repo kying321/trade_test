@@ -10,7 +10,6 @@ function renderSidebar({ collapsed = false }: { collapsed?: boolean } = {}) {
       <ContextSidebar
         title="研究工作区"
         subtitle="Fenlie Research Workspace"
-        description="把研究主线、阶段导航和只读回退拆成明确分区。"
         collapsed={collapsed}
         onToggleCollapse={onToggleCollapse}
         items={[

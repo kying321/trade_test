@@ -14,7 +14,6 @@ type PageSectionNavItem = {
 type ContextSidebarProps = {
   title: string;
   subtitle: string;
-  description?: string;
   items: NavItem[];
   pageSections?: PageSectionNavItem[];
   activeSectionId?: string;
@@ -30,7 +29,7 @@ type SidebarTaskNavProps = {
   activeSectionId?: string;
 };
 
-function SidebarDomainIdentity({ title, subtitle, description }: Pick<ContextSidebarProps, 'title' | 'subtitle' | 'description'>) {
+function SidebarDomainIdentity({ title, subtitle }: Pick<ContextSidebarProps, 'title' | 'subtitle'>) {
   return (
     <section className="sidebar-section sidebar-domain-identity" aria-label="sidebar-domain-identity">
       <div className="brand-block">
@@ -40,13 +39,6 @@ function SidebarDomainIdentity({ title, subtitle, description }: Pick<ContextSid
         <h1>
           <ClampText raw={subtitle} expandable={false}>{subtitle}</ClampText>
         </h1>
-        {description ? (
-          <p>
-            <ClampText raw={description} expandable={false}>
-              {description}
-            </ClampText>
-          </p>
-        ) : null}
       </div>
     </section>
   );
@@ -161,7 +153,6 @@ function SidebarUtilities({ utilityLinks }: Pick<ContextSidebarProps, 'utilityLi
 export function ContextSidebar({
   title,
   subtitle,
-  description = '参考 Bloomberg / Aladdin 的物理隔离方式，严格源头所有，只读优先。',
   items,
   pageSections = [],
   activeSectionId,
@@ -188,7 +179,7 @@ export function ContextSidebar({
       ) : null}
       {!collapsed ? (
         <>
-          <SidebarDomainIdentity title={title} subtitle={subtitle} description={description} />
+          <SidebarDomainIdentity title={title} subtitle={subtitle} />
           <SidebarTaskNav items={items} pageSections={pageSections} activeSectionId={activeSectionId} />
           <SidebarUtilities utilityLinks={utilityLinks} />
         </>
