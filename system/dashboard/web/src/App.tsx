@@ -277,14 +277,16 @@ function buildWorkspaceHeaderBadges(
 
 function buildOpsSidebarItems(focus: SharedFocusState) {
   return OPS_SURFACE_NAV.map((item) => ({
-    ...item,
+    id: item.id,
+    label: item.label,
     to: item.id === 'terminal-internal' ? buildTerminalLink('internal', focus) : buildTerminalLink('public', focus),
   }));
 }
 
 function buildResearchSidebarItems(focus: SharedFocusState, model?: TerminalReadModel) {
   return RESEARCH_LEGACY_NAV.map((item) => ({
-    ...item,
+    id: item.id,
+    label: item.label,
     to: buildWorkspacePageLink(
       item.section,
       focus,
@@ -892,7 +894,7 @@ function OverviewRoute({
         <ContextSidebar
           title={pageMeta.sidebarTitle}
           subtitle={pageMeta.sidebarSubtitle}
-          items={PRIMARY_NAV.map((item) => ({ ...item, to: item.id === 'overview' ? buildOverviewLink(focus) : item.id === 'ops' ? buildOpsLegacyLink(requestedSurface, focus) : buildResearchLegacyLink('artifacts', focus) }))}
+          items={[]}
           utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
           collapsed={sidebarCollapsed}
           canCollapse={canCollapseSidebar}
@@ -1107,7 +1109,7 @@ function SearchRoute({
         <ContextSidebar
           title="全局搜索"
           subtitle="跨页面检索"
-          items={PRIMARY_NAV.map((item) => ({ ...item, to: item.id === 'overview' ? buildOverviewLink({}) : item.id === 'ops' ? buildOpsLegacyLink('public', {}) : buildResearchLegacyLink('artifacts', {}) }))}
+          items={[]}
           utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink(query, scope) }]}
           collapsed={sidebarCollapsed}
           canCollapse={canCollapseSidebar}

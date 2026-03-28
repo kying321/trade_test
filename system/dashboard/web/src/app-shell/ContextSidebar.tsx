@@ -1,6 +1,10 @@
 import { Link, NavLink } from 'react-router-dom';
 import { ClampText } from '../components/ui-kit';
-import type { NavItem } from '../pages/page-types';
+type SidebarNavItem = {
+  id: string;
+  label: string;
+  to: string;
+};
 
 type PageSectionNavItem = {
   id: string;
@@ -14,7 +18,7 @@ type PageSectionNavItem = {
 type ContextSidebarProps = {
   title: string;
   subtitle: string;
-  items: NavItem[];
+  items: SidebarNavItem[];
   pageSections?: PageSectionNavItem[];
   activeSectionId?: string;
   collapsed: boolean;
@@ -24,7 +28,7 @@ type ContextSidebarProps = {
 };
 
 type SidebarTaskNavProps = {
-  items: NavItem[];
+  items: SidebarNavItem[];
   pageSections: PageSectionNavItem[];
   activeSectionId?: string;
 };
@@ -60,26 +64,32 @@ function SidebarTaskNav({ items, pageSections, activeSectionId }: SidebarTaskNav
     return groups;
   }, []);
   const useGroupedSections = sectionGroups.length >= 2;
+  const showNav = items.length > 0;
+  const showToc = pageSections.length >= 3;
+
+  if (!showNav && !showToc) return null;
 
   return (
     <section className="sidebar-section sidebar-task-nav" aria-label="sidebar-task-nav">
-      <nav className="nav-stack" aria-label="context-nav">
-        {items.map((item) => (
-          <NavLink
-            key={item.id}
-            aria-label={item.label}
-            className={({ isActive }) => `nav-link control-entity-row ${isActive ? 'active' : ''}`.trim()}
-            to={item.to}
-          >
-            <span className="nav-link-copy">
-              <strong>
-                <ClampText raw={item.label} expandable={false}>{item.label}</ClampText>
-              </strong>
-            </span>
-          </NavLink>
-        ))}
-      </nav>
-      {pageSections.length >= 3 ? (
+      {showNav ? (
+        <nav className="nav-stack" aria-label="context-nav">
+          {items.map((item) => (
+            <NavLink
+              key={item.id}
+              aria-label={item.label}
+              className={({ isActive }) => `nav-link control-entity-row ${isActive ? 'active' : ''}`.trim()}
+              to={item.to}
+            >
+              <span className="nav-link-copy">
+                <strong>
+                  <ClampText raw={item.label} expandable={false}>{item.label}</ClampText>
+                </strong>
+              </span>
+            </NavLink>
+          ))}
+        </nav>
+      ) : null}
+      {showToc ? (
         <section className="sidebar-page-toc" aria-label="sidebar-page-sections">
           <nav className="page-sections-nav" aria-label="page-sections-nav">
             <div className="context-subnav-head">
@@ -100,6 +110,7 @@ function SidebarTaskNav({ items, pageSections, activeSectionId }: SidebarTaskNav
                         {group.items.map((item) => (
                           <Link
                             key={item.id}
+                            aria-current={activeSectionId === item.id ? 'location' : undefined}
                             className={`page-section-link control-filter-chip level-${item.level} ${activeSectionId === item.id ? 'active' : ''}`.trim()}
                             to={item.to}
                           >
@@ -116,6 +127,7 @@ function SidebarTaskNav({ items, pageSections, activeSectionId }: SidebarTaskNav
                 {pageSections.map((item) => (
                   <Link
                     key={item.id}
+                    aria-current={activeSectionId === item.id ? 'location' : undefined}
                     className={`page-section-link control-filter-chip level-${item.level} ${activeSectionId === item.id ? 'active' : ''}`.trim()}
                     to={item.to}
                   >
@@ -134,13 +146,13 @@ function SidebarTaskNav({ items, pageSections, activeSectionId }: SidebarTaskNav
 function SidebarUtilities({ utilityLinks }: Pick<ContextSidebarProps, 'utilityLinks'>) {
   return (
     <section className="sidebar-section sidebar-utilities" aria-label="sidebar-utilities">
-      <div className="rail-footnote">
+      <nav className="rail-footnote" aria-label="sidebar-utility-nav">
         {utilityLinks?.map((item) => (
           <Link key={item.to} to={item.to}>{item.label}</Link>
         ))}
         <a href="/data/fenlie_dashboard_snapshot.json" target="_blank" rel="noreferrer">公开快照</a>
         <a href="/operator_task_visual_panel.html" target="_blank" rel="noreferrer">运维面板</a>
-      </div>
+      </nav>
     </section>
   );
 }
