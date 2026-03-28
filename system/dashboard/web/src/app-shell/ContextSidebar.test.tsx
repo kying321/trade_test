@@ -35,11 +35,13 @@ describe('ContextSidebar', () => {
   it('把品牌、主导航、长页目录和只读入口拆成独立区块', () => {
     renderSidebar();
 
-    const brandRegion = screen.getByRole('region', { name: 'sidebar-brand-context' });
+    const brandRegion = screen.getByRole('region', { name: 'sidebar-domain-identity' });
     expect(within(brandRegion).getByText('研究工作区')).toBeTruthy();
     expect(within(brandRegion).getByText('Fenlie Research Workspace')).toBeTruthy();
 
-    const nav = screen.getByRole('navigation', { name: 'context-nav' });
+    const navRegion = screen.getByRole('region', { name: 'sidebar-task-nav' });
+    const nav = within(navRegion).getByRole('navigation', { name: 'context-nav' });
+    expect(within(nav).getAllByRole('link').length).toBeGreaterThan(0);
     expect(within(nav).getByRole('link', { name: '工件池 主线与归档入口' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: '对齐页 内部方向对齐投射' })).toBeTruthy();
 
@@ -49,6 +51,7 @@ describe('ContextSidebar', () => {
     expect(within(toc).getByText('动作追踪')).toBeTruthy();
 
     const utilities = screen.getByRole('region', { name: 'sidebar-utilities' });
+    expect(within(utilities).queryByText(/变更级别/)).toBeNull();
     expect(within(utilities).getByRole('link', { name: '搜索 / Search' })).toBeTruthy();
     expect(within(utilities).getByRole('link', { name: '公开快照' })).toBeTruthy();
     expect(within(utilities).getByRole('link', { name: '运维面板' })).toBeTruthy();

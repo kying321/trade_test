@@ -1308,6 +1308,37 @@ button { cursor: pointer; }
   background: var(--page-link-active-bg);
 }
 
+.sidebar-task-nav .control-entity-row {
+  border-color: color-mix(in srgb, var(--line-soft) 72%, var(--pill-active-border));
+  background: color-mix(in srgb, var(--bg-panel-soft) 84%, var(--page-link-bg));
+}
+
+.sidebar-page-toc .control-filter-chip {
+  border-radius: 10px;
+  border-color: var(--line-soft);
+  background: var(--page-link-bg);
+  color: var(--text-2);
+  min-height: 34px;
+  justify-content: flex-start;
+}
+
+.sidebar-page-toc .control-filter-chip.active {
+  border-color: var(--page-link-active-border);
+  background: var(--page-link-active-bg);
+  color: var(--text-1);
+}
+
+.sidebar-utilities a {
+  font-size: 11px;
+  color: var(--text-2);
+  opacity: 0.88;
+}
+
+.sidebar-utilities a:hover {
+  color: var(--text-1);
+  opacity: 1;
+}
+
 .nav-link,
 .surface-switch,
 .stack-button,
