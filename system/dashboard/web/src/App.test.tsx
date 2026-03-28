@@ -30,6 +30,14 @@ function textOf(selector: string): string {
   return document.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim() || '';
 }
 
+function panelHeading(name: string): HTMLElement {
+  const heading = screen
+    .getAllByRole('heading', { name })
+    .find((node) => node.classList.contains('panel-card-title'));
+  if (!heading) throw new Error(`panel heading not found: ${name}`);
+  return heading as HTMLElement;
+}
+
 async function renderApp(): Promise<ReturnType<typeof render>> {
   let view: ReturnType<typeof render> | null = null;
   await act(async () => {
@@ -823,8 +831,8 @@ describe('Fenlie terminal console', () => {
     expect(screen.getAllByText('研究工作区').length).toBeGreaterThan(0);
     expect(screen.getByRole('navigation', { name: 'primary-domains' })).toBeTruthy();
     expect(screen.getAllByText('系统状态 / 入口 / 路由总览').length).toBeGreaterThan(0);
-    expect(screen.getByRole('heading', { name: '研究主线摘要' })).toBeTruthy();
-    const summaryCard = screen.getByRole('heading', { name: '研究主线摘要' }).closest('section');
+    expect(screen.getAllByRole('heading', { name: '当前焦点' }).length).toBeGreaterThan(0);
+    const summaryCard = panelHeading('当前焦点').closest('section');
     expect(summaryCard?.textContent || '').toContain('hold16_zero');
     expect(summaryCard?.textContent || '').toContain('hold8_zero');
     expect(summaryCard?.textContent || '').toContain('hold12_zero');
@@ -861,6 +869,22 @@ describe('Fenlie terminal console', () => {
     const link = screen.getByRole('link', { name: '进入对齐页' });
     expect(link.getAttribute('href')).toContain('/workspace/alignment');
     expect(link.getAttribute('href')).toContain('view=internal');
+  });
+
+  it('shows first-screen rhythm state focus action on overview and terminal routes', async () => {
+    window.location.hash = '#/overview';
+    await renderApp();
+
+    await screen.findByRole('heading', { name: '总览' });
+    expect(screen.getAllByText(/当前状态|state/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/当前焦点|focus/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/下一步|action/i).length).toBeGreaterThan(0);
+
+    await navigateHash('#/terminal/public');
+    await screen.findByLabelText('ops-context-strip');
+    expect(screen.getAllByText(/当前状态|state/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/当前焦点|focus/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/下一步|action/i).length).toBeGreaterThan(0);
   });
 
   it('supports system / dark / light theme tri-state with url override and persisted preference', async () => {
@@ -1308,7 +1332,9 @@ describe('Fenlie terminal console', () => {
     window.location.hash = '#/workspace/artifacts?artifact=price_action_breakout_pullback';
     await renderApp();
 
-    await screen.findByRole('heading', { name: '当前焦点' });
+    await waitFor(() => {
+      expect(panelHeading('当前焦点')).toBeTruthy();
+    });
     expect(screen.getAllByText('查看终端层 / 策略实验室与回测复盘 / 穿透层 1 / 研究头部').length).toBeGreaterThan(0);
   });
 
@@ -1436,7 +1462,7 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByRole('heading', { name: '研究地图' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '状态雷达' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '检索定位' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '当前焦点' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: '当前焦点' }).length).toBeGreaterThan(0);
     expect(screen.queryByText('穿透控件')).toBeNull();
     await waitFor(() => {
       expect(document.querySelector('.artifact-group-button.active')?.textContent || '').toMatch(/核心研究主线|研究主线/);
@@ -1504,7 +1530,7 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByRole('heading', { name: '研究地图' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '状态雷达' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '检索定位' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '当前焦点' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: '当前焦点' }).length).toBeGreaterThan(0);
 
     await waitFor(() => {
       expect(window.location.hash).toContain('artifact=price_action_breakout_pullback');
@@ -1969,9 +1995,9 @@ describe('Fenlie terminal console', () => {
     expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/intraday_orderflow_blueprint/);
     expect(screen.getAllByText('intraday_orderflow_blueprint').length).toBeGreaterThan(0);
     expect(screen.getAllByText('intraday_orderflow_research_gate_blocker').length).toBeGreaterThan(0);
-    const focusCard = screen.getByRole('heading', { name: '当前焦点' }).closest('section');
-    expect(focusCard?.textContent || '').toContain('查看终端层');
-    const terminalLink = Array.from(within(focusCard as HTMLElement).getAllByRole('link'))
+    const actionCard = panelHeading('下一步动作').closest('section');
+    expect(actionCard?.textContent || '').toContain('查看终端层');
+    const terminalLink = Array.from(within(actionCard as HTMLElement).getAllByRole('link'))
       .find((link) => (link.getAttribute('href') || '').includes('#/terminal/public?artifact=intraday_orderflow_blueprint'));
     expect(terminalLink).toBeTruthy();
     if (!terminalLink) {

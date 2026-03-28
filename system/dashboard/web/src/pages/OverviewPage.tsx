@@ -119,6 +119,45 @@ export function OverviewPage({ model }: OverviewPageProps) {
         <h2>总览</h2>
         <p>先看系统态势，再分流进入操作终端或研究工作区。</p>
       </div>
+      <div className="overview-rhythm-band" aria-label="overview-rhythm-state">
+        <h3>当前状态</h3>
+        <p>系统状态 / 入口 / 路由总览</p>
+      </div>
+      <div data-search-anchor="overview-mainline-summary" id="overview-mainline-summary">
+        <PanelCard
+          title="当前焦点"
+          kicker="研究主线摘要"
+          meta={holdSelectionHandoff
+            ? `${safeDisplayValue(holdSelectionHandoff.label || holdSelectionHandoff.id)} ｜ ${compactPath(holdSelectionHandoff.path, 4)}`
+            : '当前快照未暴露 hold_selection_handoff 主头'}
+          actions={<Link className="button" to={sourceHeadLink}>查看源头主线</Link>}
+        >
+          {holdSelectionHandoff ? (
+            <MetricStrip items={buildHoldSelectionMetrics(holdSelectionHandoff)} />
+          ) : (
+            <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
+          )}
+        </PanelCard>
+      </div>
+      <div className="overview-rhythm-band" aria-label="overview-rhythm-focus">
+        <h3>当前焦点</h3>
+        <p>国内商品推理线和主线冲突统一在同一焦点带，避免首屏并列抢占。</p>
+      </div>
+      {commodityReasoningMetrics.length ? (
+        <div data-search-anchor="overview-commodity-reasoning" id="overview-commodity-reasoning">
+          <PanelCard
+            title="国内商品推理线"
+            kicker="reasoning / visible-priority"
+            meta="首屏固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
+          >
+            <MetricStrip items={commodityReasoningMetrics} showRawValues />
+          </PanelCard>
+        </div>
+      ) : null}
+      <div className="overview-rhythm-band" aria-label="overview-rhythm-action">
+        <h3>下一步</h3>
+        <p>选择入口进入操作终端、研究工作区或契约验收。</p>
+      </div>
       <div className="overview-entry-grid">
         <Link className="panel-card overview-entry-card" to="/terminal/public">
           <p className="panel-kicker">一级域</p>
@@ -136,33 +175,9 @@ export function OverviewPage({ model }: OverviewPageProps) {
           <span>查看公开面验收与入口拓扑</span>
         </Link>
       </div>
-      <div data-search-anchor="overview-mainline-summary" id="overview-mainline-summary">
-        <PanelCard
-          title="研究主线摘要"
-          kicker="source-owned / canonical"
-          meta={holdSelectionHandoff
-            ? `${safeDisplayValue(holdSelectionHandoff.label || holdSelectionHandoff.id)} ｜ ${compactPath(holdSelectionHandoff.path, 4)}`
-            : '当前快照未暴露 hold_selection_handoff 主头'}
-          actions={<Link className="button" to={sourceHeadLink}>查看源头主线</Link>}
-        >
-          {holdSelectionHandoff ? (
-            <MetricStrip items={buildHoldSelectionMetrics(holdSelectionHandoff)} />
-          ) : (
-            <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
-          )}
-        </PanelCard>
+      <div className="overview-rhythm-band" aria-label="overview-rhythm-evidence">
+        <h3>证据</h3>
       </div>
-      {commodityReasoningMetrics.length ? (
-        <div data-search-anchor="overview-commodity-reasoning" id="overview-commodity-reasoning">
-          <PanelCard
-            title="国内商品推理线"
-            kicker="reasoning / visible-priority"
-            meta="首屏固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
-          >
-            <MetricStrip items={commodityReasoningMetrics} showRawValues />
-          </PanelCard>
-        </div>
-      ) : null}
       {requestedInternal ? (
         <div data-search-anchor="overview-alignment-projection" id="overview-alignment-projection">
           <PanelCard
