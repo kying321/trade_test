@@ -4,7 +4,7 @@ import type { OperatorAlertLink, SurfaceKey, TerminalReadModel, ViewDrilldownSch
 import { labelFor } from '../utils/dictionary';
 import { safeDisplayValue, statusTone } from '../utils/formatters';
 import { buildDrilldownRowId, buildTerminalFocusKey, buildTerminalLink, buildWorkspaceLink, type SharedFocusState } from '../utils/focus-links';
-import { Badge, DenseTable, DrilldownList, DrilldownSection, FreshnessList, MetricStrip, PanelCard } from './ui-kit';
+import { Badge, ClampText, DenseTable, DrilldownList, DrilldownSection, FreshnessList, MetricStrip, PanelCard } from './ui-kit';
 
 const t = (key: string) => labelFor(key);
 
@@ -311,7 +311,9 @@ function TerminalBreadcrumbs({
         {focus?.row && rowLabel ? (
           <>
             <span className="terminal-breadcrumb-sep">/</span>
-            <span className="terminal-breadcrumb-current">{rowLabel}</span>
+            <span className="terminal-breadcrumb-current">
+              <ClampText raw={rowLabel} critical>{rowLabel}</ClampText>
+            </span>
           </>
         ) : null}
       </div>

@@ -67,7 +67,7 @@ function SearchResultGroup({
           <EntityRowButton
             key={result.id}
             className={`search-result-button ${activeId === result.id ? 'active' : ''}`.trim()}
-            title={<ClampText raw={result.title} expandable={false}>{result.title}</ClampText>}
+            title={<ClampText raw={result.title} critical>{result.title}</ClampText>}
             subtitle={<ClampText raw={result.subtitle || result.destination} expandable={false}>{result.subtitle || result.destination}</ClampText>}
             active={activeId === result.id}
             onClick={() => onPick(result)}

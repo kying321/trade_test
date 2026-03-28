@@ -567,7 +567,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
           {selectedRow ? (
             <KeyValueGrid
               rows={[
-                { ...c('artifact_title', 'workspace_artifacts_focus_field_title'), value: artifactTitle(selectedRow) },
+                { ...c('artifact_title', 'workspace_artifacts_focus_field_title'), value: artifactTitle(selectedRow), critical: true },
                 { ...c('artifact_group', 'workspace_artifacts_focus_field_group'), value: artifactGroupLabel(activeGroup) },
                 { ...c('category', 'category'), value: selectedRow.category || '—' },
                 { ...c('status', 'status'), value: selectedRow.research_decision || selectedRow.status || '—', kind: 'badge' as const },
