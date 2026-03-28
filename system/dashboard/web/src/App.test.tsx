@@ -1523,6 +1523,20 @@ describe('Fenlie terminal console', () => {
     });
   });
 
+  it('shows expand affordance for the current artifact title when the focus label overflows', async () => {
+    const restoreOverflow = mockClampOverflow({ overflows: true });
+
+    try {
+      window.location.hash = '#/workspace/artifacts?artifact=price_action_breakout_pullback';
+      await renderApp();
+
+      const focusSection = document.querySelector('[aria-label="workspace-rhythm-focus"]');
+      expect(focusSection?.querySelector('.clamp-toggle')).toBeTruthy();
+    } finally {
+      restoreOverflow();
+    }
+  });
+
   it('locks the generated public snapshot to mainline-first url focus and four-card left rail state', async () => {
     installPassiveStore(workspaceArtifactsSmokeSnapshot as DashboardSnapshot);
 
@@ -1611,6 +1625,21 @@ describe('Fenlie terminal console', () => {
 
     const inspectorLinks = Array.from(document.querySelectorAll('.inspector-link-stack a')).map((node) => node.getAttribute('href') || '');
     expect(inspectorLinks.some((href) => href.includes(encodeURIComponent(conflictingSectionArtifact)))).toBe(false);
+  });
+
+  it('shows expand affordance for the terminal breadcrumb current node when the focused label overflows', async () => {
+    const restoreOverflow = mockClampOverflow({ overflows: true });
+
+    try {
+      const pinnedArtifactPath = 'review/20260321T115900Z_price_action_breakout_pullback_sim_only.json';
+      window.location.hash = `#/terminal/public?artifact=${encodeURIComponent(pinnedArtifactPath)}&panel=signal-risk&section=focus-slots&row=primary`;
+      await renderApp();
+
+      await screen.findByText('关联工作台');
+      expect(document.querySelector('.terminal-breadcrumb-current .clamp-toggle')).toBeTruthy();
+    } finally {
+      restoreOverflow();
+    }
   });
 
   it('refreshes workspace contracts after route change so stale snapshot does not persist', async () => {

@@ -69,6 +69,37 @@ const snapshot: DashboardSnapshot = {
   },
 };
 
+function mockClampOverflow({ overflows }: { overflows: boolean }) {
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('clamp-copy')) return overflows ? 64 : 32;
+      return 32;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('clamp-copy')) return 32;
+      return 32;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('clamp-copy')) return overflows ? 220 : 120;
+      return 120;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.classList.contains('clamp-copy')) return 120;
+      return 120;
+    },
+  });
+}
+
 function installPassiveStore(snapshotValue: DashboardSnapshot = snapshot) {
   const loaded: LoadedSurface = {
     snapshot: snapshotValue,
@@ -241,6 +272,14 @@ describe('global search ui', () => {
     const viewAll = screen.getByRole('link', { name: /查看全部结果/i });
     expect(viewAll.className).toContain('control-action-link');
     expect(screen.getAllByText(/标题命中|说明命中|路径命中|关键词命中/).length).toBeGreaterThan(0);
+    expect(document.querySelector('.search-result-button .clamp-toggle')).toBeNull();
+  });
+
+  it('keeps search result rows free of nested clamp toggles even when titles overflow', async () => {
+    mockClampOverflow({ overflows: true });
+    await renderApp();
+    await openSearchAndQuery('hold_selection_handoff');
+
     expect(document.querySelector('.search-result-button .clamp-toggle')).toBeNull();
   });
 
