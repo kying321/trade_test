@@ -150,8 +150,6 @@ function SidebarUtilities({ utilityLinks }: Pick<ContextSidebarProps, 'utilityLi
         {utilityLinks?.map((item) => (
           <Link key={item.to} to={item.to}>{item.label}</Link>
         ))}
-        <a href="/data/fenlie_dashboard_snapshot.json" target="_blank" rel="noreferrer">公开快照</a>
-        <a href="/operator_task_visual_panel.html" target="_blank" rel="noreferrer">运维面板</a>
       </nav>
     </section>
   );
