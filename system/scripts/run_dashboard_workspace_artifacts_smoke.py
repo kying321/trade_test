@@ -1259,6 +1259,93 @@ def build_graph_home_smoke_spec(
     )
 
 
+def build_graph_home_narrow_smoke_spec(
+    *,
+    base_url: str,
+    screenshot_path: Path,
+    result_path: Path,
+    route_assertions: list[dict[str, Any]],
+) -> str:
+    routes_json = json.dumps(route_assertions, ensure_ascii=False, indent=2)
+    return (
+        textwrap.dedent(
+            f"""
+            const {{ test, expect }} = require('@playwright/test');
+            const fs = require('node:fs');
+
+            const ROUTES = {routes_json};
+            const DEFAULT_ROUTE = '#/';
+
+            async function expectStableMarker(page, marker) {{
+              await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
+              await expect(page.locator('body')).toContainText(marker);
+            }}
+
+            test.use({{ browserName: 'chromium', viewport: {{ width: 390, height: 844 }} }});
+
+            test('graph home narrow smoke', async ({{ page }}) => {{
+              const snapshotRequests = [];
+              const internalSnapshotRequests = [];
+              const visitedRoutes = [];
+              const graphRoute = ROUTES[0];
+
+              page.on('response', async (response) => {{
+                const url = response.url();
+                if (url.includes('fenlie_dashboard_snapshot.json')) snapshotRequests.push(url);
+                if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
+              }});
+
+              await page.goto({base_url!r} + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.waitForFunction(() => window.location.hash.includes('/graph-home'));
+              await expect(page.getByRole('heading', {{ name: graphRoute.headline, exact: true }})).toBeVisible();
+              for (const marker of graphRoute.markers) {{
+                await expectStableMarker(page, marker);
+              }}
+
+              const shellTier = await page.locator('.app-shell-grid').getAttribute('data-shell-tier');
+              const sidebarToggleVisible = await page.getByRole('button', {{ name: /侧边导航/ }}).isVisible().catch(() => false);
+              const sidebarUtilityLink = page.getByRole('link', {{ name: '搜索 / Search' }});
+              await expect(sidebarUtilityLink).toBeVisible();
+              const sidebarUtilityLinkHref = await sidebarUtilityLink.getAttribute('href');
+              const resolvedRoute = await page.evaluate(() => window.location.hash);
+
+              visitedRoutes.push({{
+                route: graphRoute.route,
+                headline: graphRoute.headline,
+                url: page.url(),
+              }});
+
+              fs.writeFileSync(
+                {str(result_path)!r},
+                JSON.stringify(
+                  {{
+                    requested_surface: 'public',
+                    effective_surface: 'public',
+                    visited_routes: visitedRoutes,
+                    snapshot_requests: snapshotRequests,
+                    internal_snapshot_requests: internalSnapshotRequests,
+                    graph_home_assertion: {{
+                      default_route: DEFAULT_ROUTE,
+                      resolved_route: resolvedRoute,
+                      shell_tier: shellTier,
+                      sidebar_toggle_visible: sidebarToggleVisible,
+                      sidebar_utility_link_href: sidebarUtilityLinkHref,
+                    }},
+                  }},
+                  null,
+                  2,
+                ),
+                'utf8',
+              );
+
+              await page.screenshot({{ path: {str(screenshot_path)!r}, fullPage: true }});
+            }});
+            """
+        ).strip()
+        + "\n"
+    )
+
+
 def run_playwright_smoke(
     *,
     web_root: Path,
@@ -1303,6 +1390,13 @@ def run_playwright_smoke(
             )
         elif mode == "graph_home":
             spec = build_graph_home_smoke_spec(
+                base_url=base_url,
+                screenshot_path=screenshot_path,
+                result_path=result_path,
+                route_assertions=route_assertions or GRAPH_HOME_ROUTE_ASSERTIONS,
+            )
+        elif mode == "graph_home_narrow":
+            spec = build_graph_home_narrow_smoke_spec(
                 base_url=base_url,
                 screenshot_path=screenshot_path,
                 result_path=result_path,
@@ -1490,6 +1584,8 @@ def build_artifact_payload(
         action_name = "dashboard_commodity_visibility_browser_smoke"
     elif mode == "graph_home":
         action_name = "dashboard_graph_home_browser_smoke"
+    elif mode == "graph_home_narrow":
+        action_name = "dashboard_graph_home_narrow_browser_smoke"
     else:
         action_name = "dashboard_workspace_routes_browser_smoke"
     expected_focus_panel = "signal-risk" if mode == "internal_terminal_focus" else "lab-review"
@@ -1561,9 +1657,9 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true", help="Skip npm run build before smoke.")
     parser.add_argument(
         "--mode",
-        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus", "commodity_visibility", "graph_home"],
+        choices=["public_workspace", "internal_alignment", "internal_alignment_manual_probe", "internal_terminal_focus", "commodity_visibility", "graph_home", "graph_home_narrow"],
         default="public_workspace",
-        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path; commodity_visibility validates overview + terminal/public commodity reasoning visibility; graph_home validates the default landing page redirect and graph-home quick links.",
+        help="Smoke scope. public_workspace validates the public route matrix; internal_alignment validates the internal alignment page; internal_alignment_manual_probe temporarily seeds a manual feedback row and verifies the same internal page end-to-end; internal_terminal_focus validates the terminal/internal focus-slot drilldown CTA path; commodity_visibility validates overview + terminal/public commodity reasoning visibility; graph_home validates the default landing page redirect and graph-home quick links; graph_home_narrow validates the same landing page contract under a narrow viewport.",
     )
     args = parser.parse_args()
 
@@ -1590,6 +1686,9 @@ def main() -> None:
     elif args.mode == "graph_home":
         report_path = review_dir / f"{timestamp}_dashboard_graph_home_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_graph_home_browser_smoke.png"
+    elif args.mode == "graph_home_narrow":
+        report_path = review_dir / f"{timestamp}_dashboard_graph_home_narrow_browser_smoke.json"
+        screenshot_path = review_dir / f"{timestamp}_dashboard_graph_home_narrow_browser_smoke.png"
     else:
         report_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.json"
         screenshot_path = review_dir / f"{timestamp}_dashboard_workspace_routes_browser_smoke.png"
@@ -1631,6 +1730,8 @@ def main() -> None:
             },
         ]
     elif args.mode == "graph_home":
+        expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
+    elif args.mode == "graph_home_narrow":
         expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
     else:
         expected_route_markers = list(PUBLIC_WORKSPACE_ROUTE_ASSERTIONS)
@@ -1674,6 +1775,9 @@ def main() -> None:
                 internal_expectations = None
                 expected_route_markers = load_commodity_visibility_route_assertions(dist_dir=dist_dir)
             elif args.mode == "graph_home":
+                internal_expectations = None
+                expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
+            elif args.mode == "graph_home_narrow":
                 internal_expectations = None
                 expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
             else:
