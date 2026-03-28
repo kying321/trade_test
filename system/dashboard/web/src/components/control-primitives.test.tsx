@@ -131,6 +131,24 @@ it('normalizes forced active state for DomainTab callback classes and semantics'
   expect(domainTab.getAttribute('aria-selected')).toBe('true');
 });
 
+it('normalizes forced active state for DomainTab render-prop children and style callbacks', () => {
+  render(
+    <MemoryRouter initialEntries={['/outside']}>
+      <DomainTab
+        to="/overview"
+        active
+        style={({ isActive }) => ({ opacity: isActive ? 1 : 0.5 })}
+      >
+        {({ isActive }) => <span>{isActive ? 'active-copy' : 'idle-copy'}</span>}
+      </DomainTab>
+    </MemoryRouter>,
+  );
+
+  const domainTab = screen.getByRole('tab', { name: 'active-copy' });
+  expect(domainTab.textContent).toBe('active-copy');
+  expect((domainTab as HTMLAnchorElement).style.opacity).toBe('1');
+});
+
 it('passes through standard button props on EntityRowButton', () => {
   render(
     <EntityRowButton

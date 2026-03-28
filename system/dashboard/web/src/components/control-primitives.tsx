@@ -1,8 +1,19 @@
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
-import { NavLink, type NavLinkProps, useMatch, useResolvedPath } from 'react-router-dom';
+import { NavLink, type NavLinkProps, type NavLinkRenderProps, useMatch, useResolvedPath } from 'react-router-dom';
 
 function joinControlClass(base: string, extra?: string) {
   return [base, extra].filter(Boolean).join(' ');
+}
+
+function normalizeNavRenderState(
+  state: NavLinkRenderProps,
+  forceActive?: boolean,
+): NavLinkRenderProps {
+  if (!forceActive || state.isActive) return state;
+  return {
+    ...state,
+    isActive: true,
+  };
 }
 
 function normalizeNavClassName(
@@ -12,10 +23,7 @@ function normalizeNavClassName(
 ): NavLinkProps['className'] {
   if (typeof className === 'function') {
     return (state) => {
-      const effectiveState = {
-        ...state,
-        isActive: state.isActive || Boolean(forceActive),
-      };
+      const effectiveState = normalizeNavRenderState(state, forceActive);
       return (
       joinControlClass(
         joinControlClass(base, effectiveState.isActive ? 'active' : undefined),
@@ -31,7 +39,23 @@ function normalizeNavClassName(
     );
 }
 
-export function DomainTab({ className, active, ...props }: NavLinkProps & { active?: boolean }) {
+function normalizeNavStyle(
+  style: NavLinkProps['style'],
+  forceActive?: boolean,
+): NavLinkProps['style'] {
+  if (typeof style !== 'function') return style;
+  return (state) => style(normalizeNavRenderState(state, forceActive));
+}
+
+function normalizeNavChildren(
+  children: NavLinkProps['children'],
+  forceActive?: boolean,
+): NavLinkProps['children'] {
+  if (typeof children !== 'function') return children;
+  return (state) => children(normalizeNavRenderState(state, forceActive));
+}
+
+export function DomainTab({ className, active, children, style, ...props }: NavLinkProps & { active?: boolean }) {
   const resolvedPath = useResolvedPath(props.to);
   const routeActive = Boolean(useMatch({
     path: resolvedPath.pathname,
@@ -46,7 +70,10 @@ export function DomainTab({ className, active, ...props }: NavLinkProps & { acti
       role="tab"
       aria-selected={selected}
       className={normalizeNavClassName('control-domain-tab', className, active)}
-    />
+      style={normalizeNavStyle(style, active)}
+    >
+      {normalizeNavChildren(children, active)}
+    </NavLink>
   );
 }
 
