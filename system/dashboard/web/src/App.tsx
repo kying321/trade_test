@@ -376,38 +376,38 @@ function buildFocusSection(focus: SharedFocusState): ContextHeaderSection {
   };
 }
 
-function buildOverviewHeaderSections(focus: SharedFocusState): ContextHeaderSection[] {
-  return [
-    {
-      id: 'domain',
-      title: '当前域',
+function buildOverviewHeaderRhythm(focus: SharedFocusState) {
+  return {
+    stateSection: {
+      title: '当前状态',
       items: [
-        { type: 'link', label: '总览', value: '一级分流', to: buildOverviewLink(focus), active: true },
-        { type: 'link', label: '操作终端', value: '调度 / 信号 / 风控', to: buildOpsLegacyLink('public', focus) },
-        { type: 'link', label: '研究工作区', value: '工件 / 回测 / 原始', to: buildResearchLegacyLink('artifacts', focus) },
+        { type: 'link' as const, label: '总览', value: '一级分流', to: buildOverviewLink(focus), active: true },
+        { type: 'link' as const, label: '操作终端', value: '调度 / 信号 / 风控', to: buildOpsLegacyLink('public', focus) },
+        { type: 'link' as const, label: '研究工作区', value: '工件 / 回测 / 原始', to: buildResearchLegacyLink('artifacts', focus) },
       ],
     },
-    buildFocusSection(focus),
-    {
-      id: 'backtrack',
-      title: '层级回退',
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
       items: [
-        { type: 'link', label: '清空穿透参数', value: '返回总览基线', to: '/overview' },
+        { type: 'link' as const, label: '清空穿透参数', value: '返回总览基线', to: '/overview' },
       ],
     },
-  ];
+  };
 }
 
-function buildSearchHeaderSections(): ContextHeaderSection[] {
-  return [
-    {
-      id: 'search',
+function buildSearchHeaderRhythm() {
+  return {
+    stateSection: {
       title: '检索范围',
       items: [
-        { type: 'fact', label: '覆盖', value: '模块 / 路由 / 工件', detail: '只搜索前端本地索引，不查 docs/code/tests。', tone: 'neutral' },
+        { type: 'fact' as const, label: '覆盖', value: '模块 / 路由 / 工件', detail: '只搜索前端本地索引，不查 docs/code/tests。', tone: 'neutral' as const },
       ],
     },
-  ];
+  };
 }
 
 function buildTerminalHeaderActions(
@@ -901,7 +901,7 @@ function OverviewRoute({
           onToggleCollapse={onToggleSidebarCollapse}
         />
       )}
-      header={<ContextHeader title={pageMeta.headerTitle} subtitle={pageMeta.headerSubtitle} breadcrumbs={[{ label: '总览', current: true }]} sections={buildOverviewHeaderSections(focus)} />}
+      header={<ContextHeader title={pageMeta.headerTitle} subtitle={pageMeta.headerSubtitle} breadcrumbs={[{ label: '总览', current: true }]} {...buildOverviewHeaderRhythm(focus)} />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
       inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'overview', surface: requestedSurface }} />}
     >
@@ -1116,7 +1116,7 @@ function SearchRoute({
           onToggleCollapse={onToggleSidebarCollapse}
         />
       )}
-      header={<ContextHeader compact title="全局搜索" subtitle="跨页面、跨模块、跨工件的本地索引搜索" breadcrumbs={[{ label: '总览' }, { label: '搜索', current: true }]} sections={buildSearchHeaderSections()} />}
+      header={<ContextHeader compact title="全局搜索" subtitle="跨页面、跨模块、跨工件的本地索引搜索" breadcrumbs={[{ label: '总览' }, { label: '搜索', current: true }]} {...buildSearchHeaderRhythm()} />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
       inspector={<InspectorRail title="对象检查器" focus={{}} model={model} context={{ domain: 'overview', surface: requestedSurface }} />}
     >

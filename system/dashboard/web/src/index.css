@@ -938,6 +938,44 @@ button { cursor: pointer; }
   gap: 16px;
 }
 
+.overview-rhythm-band,
+.terminal-rhythm-band,
+.workspace-rhythm-band {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: var(--bg-panel-soft);
+}
+
+.overview-rhythm-band h3,
+.terminal-rhythm-band h3,
+.workspace-rhythm-band h3 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.overview-rhythm-band p,
+.terminal-rhythm-band p,
+.workspace-rhythm-band p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.terminal-rhythm-layout,
+.workspace-rhythm-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .overview-hero {
   padding: 20px;
   border-radius: 20px;

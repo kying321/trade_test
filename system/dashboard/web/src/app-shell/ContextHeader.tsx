@@ -65,12 +65,7 @@ function normalizeRhythmSections({
       evidenceSection ? { id: 'evidence', title: evidenceSection.title || '证据', items: evidenceSection.items } : null,
     ].filter((section): section is ContextHeaderSection => Boolean(section));
   }
-  if (!sections.length) return [];
-  const normalizedTitles = ['当前状态', '当前焦点', '下一步', '证据'];
-  return sections.map((section, index) => ({
-    ...section,
-    title: normalizedTitles[index] || section.title,
-  }));
+  return sections;
 }
 
 export function ContextHeader({
