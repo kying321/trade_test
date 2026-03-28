@@ -433,6 +433,76 @@ function buildSearchHeaderRhythm(query: string, scope: SearchScope, resultCount:
   };
 }
 
+function buildTerminalHeaderRhythm(
+  focus: SharedFocusState,
+  requested: SurfaceKey,
+  effective: SurfaceKey,
+) {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '请求视图', value: surfaceLabel(requested), tone: requested === effective ? 'positive' as const : 'warning' as const },
+        { type: 'fact' as const, label: '当前视图', value: surfaceLabel(effective), tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'link' as const, label: '公开面', value: '切回公开视图', to: buildTerminalLink('public', focus), active: effective === 'public' },
+        { type: 'link' as const, label: '内部面', value: '切到内部视图', to: buildTerminalLink('internal', focus), active: effective === 'internal' },
+      ],
+    },
+  };
+}
+
+function buildWorkspaceHeaderRhythm(
+  focus: SharedFocusState,
+  section: WorkspaceSection,
+  pageSections: Array<{ id: string; label: string }>,
+  activeSectionId: string | undefined,
+) {
+  const activeSection = activeSectionId ? pageSections.find((item) => item.id === activeSectionId) : undefined;
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '当前页', value: buildWorkspacePageMeta(section).headerTitle, tone: 'neutral' as const },
+        { type: 'fact' as const, label: '当前阶段', value: activeSection?.label || buildWorkspacePageMeta(section).headerTitle, tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: pageSections.length
+        ? [
+            {
+              type: 'link' as const,
+              label: '进入阶段',
+              value: activeSection?.label || pageSections[0]?.label || buildWorkspacePageMeta(section).headerTitle,
+              to: buildWorkspacePageLink(section, focus, activeSectionId || pageSections[0]?.id),
+            },
+          ]
+        : [
+            {
+              type: 'fact' as const,
+              label: '动作',
+              value: '查看当前阶段',
+              detail: '当前页暂无更细分的 page_section 入口。',
+              tone: 'neutral' as const,
+            },
+          ],
+    },
+  };
+}
+
 function buildTerminalHeaderActions(
   focus: SharedFocusState,
   requested: SurfaceKey,
@@ -990,6 +1060,7 @@ function TerminalRoute({
         subtitle={pageMeta.headerSubtitle}
         breadcrumbs={[{ label: '总览' }, { label: '操作终端', current: true }]}
         actions={buildTerminalHeaderActions(focus, requested, effectiveSurface)}
+        {...buildTerminalHeaderRhythm(focus, requested, effectiveSurface)}
       />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
       inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'terminal', surface: requested }} />}
@@ -1074,6 +1145,7 @@ function WorkspaceRoute({
         subtitle={pageMeta.headerSubtitle}
         breadcrumbs={[{ label: '总览' }, { label: '研究工作区', current: true }]}
         actions={buildWorkspaceHeaderActions(section, pageSections, activeSectionId)}
+        {...buildWorkspaceHeaderRhythm(navigationFocus, section, pageSections, activeSectionId)}
       />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
       inspector={<InspectorRail title="对象检查器" focus={navigationFocus} model={model} context={{ domain: 'workspace', section, surface: requestedSurface }} />}

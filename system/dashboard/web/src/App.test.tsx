@@ -922,7 +922,9 @@ describe('Fenlie terminal console', () => {
     expect(textOf('.context-header h2')).toContain('执行穿透 / 调度与门禁');
     expect(textOf('.context-header')).not.toContain('穿透焦点');
     expect(textOf('.context-header')).not.toContain('层级回退');
-    expect(document.querySelector('.context-header-controls')).toBeNull();
+    expect(textOf('.context-header-controls')).toContain('当前状态');
+    expect(textOf('.context-header-controls')).toContain('当前焦点');
+    expect(textOf('.context-header-controls')).toContain('下一步');
     expect(textOf('.ops-context-strip')).toContain('运行上下文');
     expect(textOf('.ops-context-strip')).toContain('视图断言');
     expect(screen.queryByText('数据面切换')).toBeNull();
@@ -949,7 +951,9 @@ describe('Fenlie terminal console', () => {
     expect(textOf('.context-header h2')).toContain('公开入口 / 数据契约 / 路由验收');
     expect(textOf('.context-header')).not.toContain('穿透焦点');
     expect(textOf('.context-header')).not.toContain('层级回退');
-    expect(document.querySelector('.context-header-controls')).toBeNull();
+    expect(textOf('.context-header-controls')).toContain('当前状态');
+    expect(textOf('.context-header-controls')).toContain('当前焦点');
+    expect(textOf('.context-header-controls')).toContain('下一步');
     expect(textOf('.context-header-route-badges')).toContain('当前阶段：');
     expect(screen.getAllByText('研究工作区').length).toBeGreaterThan(0);
     expect(screen.getByText('接口分层 / 可见边界')).toBeTruthy();
