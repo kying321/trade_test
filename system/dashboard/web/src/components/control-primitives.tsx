@@ -11,11 +11,17 @@ function normalizeNavClassName(
   forceActive?: boolean,
 ): NavLinkProps['className'] {
   if (typeof className === 'function') {
-    return (state) =>
+    return (state) => {
+      const effectiveState = {
+        ...state,
+        isActive: state.isActive || Boolean(forceActive),
+      };
+      return (
       joinControlClass(
-        joinControlClass(base, state.isActive || forceActive ? 'active' : undefined),
-        className(state),
-      );
+        joinControlClass(base, effectiveState.isActive ? 'active' : undefined),
+        className(effectiveState),
+      ));
+    };
   }
 
   return (state) =>
@@ -26,7 +32,13 @@ function normalizeNavClassName(
 }
 
 export function DomainTab({ className, active, ...props }: NavLinkProps & { active?: boolean }) {
-  return <NavLink {...props} className={normalizeNavClassName('control-domain-tab', className, active)} />;
+  return (
+    <NavLink
+      {...props}
+      aria-selected={active ? true : undefined}
+      className={normalizeNavClassName('control-domain-tab', className, active)}
+    />
+  );
 }
 
 type ActionLinkProps = Omit<NavLinkProps, 'type'> &

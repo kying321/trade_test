@@ -95,6 +95,27 @@ it('merges route-active state with callback className for nav primitives', () =>
   expect(actionLink.className).toContain('route-active-extra');
 });
 
+it('normalizes forced active state for DomainTab callback classes and semantics', () => {
+  render(
+    <MemoryRouter initialEntries={['/outside']}>
+      <DomainTab
+        to="/overview"
+        active
+        className={({ isActive }) => (isActive ? 'forced-active-extra' : 'forced-idle-extra')}
+      >
+        总览
+      </DomainTab>
+    </MemoryRouter>,
+  );
+
+  const domainTab = screen.getByRole('link', { name: '总览' });
+  expect(domainTab.className).toContain('control-domain-tab');
+  expect(domainTab.className).toContain('active');
+  expect(domainTab.className).toContain('forced-active-extra');
+  expect(domainTab.className).not.toContain('forced-idle-extra');
+  expect(domainTab.getAttribute('aria-selected')).toBe('true');
+});
+
 it('passes through standard button props on EntityRowButton', () => {
   render(
     <EntityRowButton
