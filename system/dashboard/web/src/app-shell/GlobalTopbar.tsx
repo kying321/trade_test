@@ -28,6 +28,13 @@ function resolvedThemeLabel(theme: ResolvedTheme): string {
   return theme === 'light' ? '白天' : '夜间';
 }
 
+function isPrimaryNavActive(item: NavItem, currentPath: string): boolean {
+  if (item.id === 'overview') return currentPath === '/overview' || currentPath === '/';
+  if (item.id === 'ops' || item.to.startsWith('/terminal/')) return currentPath.startsWith('/terminal/');
+  if (item.id === 'research' || item.to.startsWith('/workspace/')) return currentPath.startsWith('/workspace/');
+  return currentPath === item.to;
+}
+
 export function GlobalTopbar({
   primaryNav,
   globalSummary,
@@ -49,7 +56,7 @@ export function GlobalTopbar({
             <DomainTab
               key={item.id}
               className="primary-nav-link"
-              active={currentPath === item.to}
+              active={isPrimaryNavActive(item, currentPath)}
               to={item.to}
             >
               <span>{item.label}</span>

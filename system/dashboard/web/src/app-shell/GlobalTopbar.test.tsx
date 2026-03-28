@@ -62,7 +62,7 @@ describe('GlobalTopbar', () => {
   });
 
   it('为主导航保留当前激活态并暴露为独立导航区', () => {
-    renderTopbar({ currentPath: '/workspace/artifacts', themePreference: 'dark' });
+    renderTopbar({ currentPath: '/workspace/backtests', themePreference: 'dark' });
 
     const nav = screen.getByRole('navigation', { name: 'primary-domains' });
     expect(within(nav).getByRole('link', { name: '总览' })).toBeTruthy();
