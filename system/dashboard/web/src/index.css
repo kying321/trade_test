@@ -225,6 +225,115 @@ a { color: inherit; text-decoration: none; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 
+/* Semantic control primitives */
+.control-domain-tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--pill-border);
+  background: var(--control-bg-soft);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  transition: 160ms ease;
+}
+
+.control-domain-tab.active,
+.control-domain-tab[aria-current='page'] {
+  color: var(--text-1);
+  border-color: var(--pill-active-border);
+  background: var(--pill-active-bg);
+  box-shadow: var(--pill-active-inset);
+}
+
+.control-segment-option {
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 900px;
+  border: 1px solid transparent;
+  background: var(--segment-bg);
+  color: var(--text-2);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.control-segment-option[data-active='true'],
+.control-segment-option:focus-visible {
+  color: var(--text-1);
+  border-color: var(--segment-active-border);
+  background: var(--segment-active-bg);
+}
+
+.control-filter-chip {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--chip-bg);
+  background: var(--chip-bg);
+  color: var(--text-2);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-filter-chip[data-active='true'] {
+  border-color: var(--pill-active-border);
+  background: var(--pill-active-bg);
+  color: var(--text-1);
+}
+
+.control-action-button {
+  min-height: 36px;
+  padding: 0 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: var(--pill-active-bg);
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  box-shadow: var(--shadow-panel);
+}
+
+.control-action-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.control-entity-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--chip-bg);
+  color: var(--text-1);
+  text-align: left;
+}
+
+.control-entity-row span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.control-entity-row small {
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.control-entity-row[data-active='true'] {
+  border-color: var(--pill-active-border);
+  box-shadow: var(--shadow-panel);
+}
+
 :focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
