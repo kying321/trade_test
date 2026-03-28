@@ -1,4 +1,4 @@
-import type { AnchorHTMLAttributes, ButtonHTMLAttributes } from 'react';
+import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
 import { NavLink, type NavLinkProps } from 'react-router-dom';
 
 function joinControlClass(base: string, extra?: string) {
@@ -74,22 +74,31 @@ export function FilterChip({
   );
 }
 
-export function EntityRowButton({ title, subtitle, active, onClick }: {
+export function EntityRowButton({
+  title,
+  subtitle,
+  active,
+  className,
+  type,
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
   title: string;
   subtitle?: string;
   active?: boolean;
-  onClick: () => void;
+  children?: ReactNode;
 }) {
   return (
     <button
-      type="button"
+      type={type ?? 'button'}
+      {...props}
       aria-pressed={Boolean(active)}
       data-active={active ? 'true' : 'false'}
-      className="control-entity-row"
-      onClick={onClick}
+      className={joinControlClass('control-entity-row', className)}
     >
       <span>{title}</span>
       {subtitle ? <small>{subtitle}</small> : null}
+      {children}
     </button>
   );
 }

@@ -79,3 +79,40 @@ it('uses false semantic active state when not active', () => {
   expect(screen.getByRole('button', { name: 'warning' }).getAttribute('aria-pressed')).toBe('false');
   expect(screen.getByRole('button', { name: '持有选择主头' }).getAttribute('aria-pressed')).toBe('false');
 });
+
+it('merges route-active state with callback className for nav primitives', () => {
+  render(
+    <MemoryRouter initialEntries={['/search']}>
+      <ActionLink to="/search" className={({ isActive }) => (isActive ? 'route-active-extra' : 'route-idle-extra')}>
+        查看详情
+      </ActionLink>
+    </MemoryRouter>,
+  );
+
+  const actionLink = screen.getByRole('link', { name: '查看详情' });
+  expect(actionLink.className).toContain('control-action-link');
+  expect(actionLink.className).toContain('active');
+  expect(actionLink.className).toContain('route-active-extra');
+});
+
+it('passes through standard button props on EntityRowButton', () => {
+  render(
+    <EntityRowButton
+      title="持有选择主头"
+      subtitle="research_hold_transfer"
+      className="custom-row"
+      data-testid="entity-row"
+      disabled
+      aria-label="自定义实体行"
+      onClick={() => undefined}
+    >
+      <span>附加信息</span>
+    </EntityRowButton>,
+  );
+
+  const row = screen.getByTestId('entity-row');
+  expect(row.className).toContain('control-entity-row');
+  expect(row.className).toContain('custom-row');
+  expect(row.getAttribute('disabled')).not.toBeNull();
+  expect(screen.getByText('附加信息')).toBeTruthy();
+});
