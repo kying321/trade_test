@@ -864,6 +864,18 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByText('自定义管道')).toBeTruthy();
   });
 
+  it('uses graph home as the default root route and fallback route', async () => {
+    window.location.hash = '#/';
+    await renderApp();
+
+    expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
+    expect(window.location.hash).toContain('/graph-home');
+
+    await navigateHash('#/unknown-route');
+    expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
+    expect(window.location.hash).toContain('/graph-home');
+  });
+
   it('renders internal feedback summary on overview when view=internal', async () => {
     installPassiveStoreForSurface('internal', {
       snapshot: buildFeedbackSnapshot(),

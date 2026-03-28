@@ -1352,7 +1352,7 @@ function AppRoutes() {
   return (
     <>
       <Routes>
-        <Route path="/" element={<Navigate to="/overview" replace />} />
+        <Route path="/" element={<Navigate to="/graph-home" replace />} />
         <Route
           path="/overview"
           element={(
@@ -1418,7 +1418,7 @@ function AppRoutes() {
             />
           )}
         />
-        <Route path="*" element={<Navigate to="/overview" replace />} />
+        <Route path="*" element={<Navigate to="/graph-home" replace />} />
       </Routes>
       {model ? (
         <GlobalSearchOverlay
