@@ -1185,6 +1185,36 @@ def build_graph_home_smoke_spec(
               const terminalLinkHref = await terminalLink.getAttribute('href');
               const workspaceLinkHref = await workspaceLink.getAttribute('href');
               const searchLinkHref = await searchLink.getAttribute('href');
+              const graphCanvas = page.locator('canvas').first();
+              await graphCanvas.scrollIntoViewIfNeeded();
+              const graphBox = await graphCanvas.boundingBox();
+              if (!graphBox) throw new Error('graph_canvas_missing');
+              const detailHeadingLocator = page.locator('.graph-home-side .panel-card').first().locator('.panel-card-title');
+              const centerChipLocator = page.locator('.graph-home-toolbar .summary-chip').filter({{ hasText: '中心：' }}).first();
+              const candidateOffsets = [
+                [220, 0],
+                [68, 209],
+                [-178, 129],
+                [-178, -129],
+                [68, -209],
+              ];
+              const selectableHeadings = new Set(['市场输入', '研究判断', '交易逻辑', '执行与风控', '复盘反馈']);
+              let selectedHeading = '';
+              let selectedCenter = '';
+              for (const [dx, dy] of candidateOffsets) {{
+                await page.mouse.click(graphBox.x + graphBox.width / 2 + dx, graphBox.y + graphBox.height / 2 + dy);
+                await page.waitForTimeout(450);
+                const nextHeading = String(await detailHeadingLocator.textContent() || '').trim();
+                if (selectableHeadings.has(nextHeading)) {{
+                  selectedHeading = nextHeading;
+                  selectedCenter = String(await centerChipLocator.textContent() || '').trim().replace(/^中心：/, '');
+                  break;
+                }}
+              }}
+              expect(selectedHeading).not.toBe('');
+              await page.getByRole('button', {{ name: '回到交易中枢' }}).click();
+              await expect(detailHeadingLocator).toContainText('交易中枢');
+              const recenterHeading = String(await detailHeadingLocator.textContent() || '').trim();
 
               visitedRoutes.push({{
                 route: graphRoute.route,
@@ -1243,6 +1273,11 @@ def build_graph_home_smoke_spec(
                       terminal_link_href: terminalLinkHref,
                       workspace_link_href: workspaceLinkHref,
                       search_link_href: searchLinkHref,
+                      canvas_selection_assertion: {{
+                        selected_heading: selectedHeading,
+                        selected_center: selectedCenter,
+                        recenter_heading: recenterHeading,
+                      }},
                     }},
                   }},
                   null,

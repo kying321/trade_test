@@ -308,6 +308,9 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
     assert "graph home smoke" in spec
     assert "graph_home_assertion" in spec
     assert "const resolvedRoute = await page.evaluate(() => window.location.hash);" in spec
+    assert "const graphCanvas = page.locator('canvas').first();" in spec
+    assert "candidateOffsets" in spec
+    assert "canvas_selection_assertion" in spec
     assert "terminal_link_href" in spec
     assert "workspace_link_href" in spec
     assert "search_link_href" in spec
@@ -350,6 +353,11 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
                     "terminal_link_href": "#/terminal/public",
                     "workspace_link_href": "#/workspace/artifacts",
                     "search_link_href": "#/search",
+                    "canvas_selection_assertion": {
+                        "selected_heading": "执行与风控",
+                        "selected_center": "执行与风控",
+                        "recenter_heading": "交易中枢",
+                    },
                 },
             },
         },
@@ -381,6 +389,11 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
         "terminal_link_href": "#/terminal/public",
         "workspace_link_href": "#/workspace/artifacts",
         "search_link_href": "#/search",
+        "canvas_selection_assertion": {
+            "selected_heading": "执行与风控",
+            "selected_center": "执行与风控",
+            "recenter_heading": "交易中枢",
+        },
     }
 
 
