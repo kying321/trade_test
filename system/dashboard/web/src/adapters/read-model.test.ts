@@ -346,6 +346,24 @@ describe('buildTerminalReadModel', () => {
             ],
           },
         },
+        event_game_state_snapshot: {
+          payload: {
+            game_state: 'financial_pressure',
+            primary_theater: 'usd_liquidity_and_sanctions',
+          },
+        },
+        event_transmission_chain_map: {
+          payload: {
+            dominant_chain: 'credit_intermediary_chain',
+            primary_theater: 'usd_liquidity_and_sanctions',
+            chains: [
+              {
+                chain_id: 'credit_intermediary_chain',
+                status: 'dominant',
+              },
+            ],
+          },
+        },
         event_asset_shock_map: {
           payload: {
             assets: [
@@ -357,11 +375,65 @@ describe('buildTerminalReadModel', () => {
             ],
           },
         },
+        event_safety_margin_snapshot: {
+          payload: {
+            system_margin_score: 0.42,
+            hard_boundaries: {
+              canary_hard_block: false,
+              new_risk_hard_block: true,
+              shadow_only_boundary: false,
+            },
+          },
+        },
         event_crisis_operator_summary: {
           payload: {
             status: 'watch',
             summary: 'event crisis watch',
             takeaway: 'monitor private credit flow',
+            event_crisis_primary_theater_brief: 'usd_liquidity_and_sanctions',
+            event_crisis_dominant_chain_brief: 'credit_intermediary_chain',
+            event_crisis_safety_margin_brief: 'system_margin=0.42',
+            event_crisis_hard_boundary_brief: 'new_risk_hard_block',
+          },
+        },
+        commodity_reasoning_scenario_tree: {
+          payload: {
+            primary_scenario: 'supply_chain_tightening',
+            contract_focus: 'BU2606',
+          },
+        },
+        commodity_reasoning_transmission_map: {
+          payload: {
+            primary_chain: 'feedstock_cost_push_chain',
+            chains: [
+              {
+                contract: 'BU2606',
+                sector: 'energy_chemicals',
+                commodity: 'asphalt',
+              },
+            ],
+          },
+        },
+        commodity_reasoning_boundary_strength: {
+          payload: {
+            range_summary: 'contract_focused',
+            boundary_rows: [
+              {
+                target_id: 'BU2606',
+                boundary_strength: 'tight',
+                fragility_flags: ['basis_weak'],
+              },
+            ],
+          },
+        },
+        commodity_reasoning_summary: {
+          payload: {
+            primary_scenario_brief: 'supply_chain_tightening',
+            primary_chain_brief: 'feedstock_cost_push_chain',
+            range_scope_brief: 'contract_focused',
+            boundary_strength_brief: 'tight',
+            invalidator_brief: 'basis_weak',
+            contracts_in_focus: ['BU2606'],
           },
         },
       },
@@ -373,9 +445,66 @@ describe('buildTerminalReadModel', () => {
 
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-severity')).toBe(true);
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-regime-state')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-game-state')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-dominant-chain')).toBe(true);
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-analogy')).toBe(true);
     expect(model.dataRegime.microCapture.some((metric) => metric.id === 'event-shock-map')).toBe(true);
     expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-crisis-summary')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-safety-margin')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'event-hard-boundary')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'commodity-scenario')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'commodity-chain')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'commodity-boundary')).toBe(true);
+  });
+
+  it('maps commodity reasoning artifacts into terminal views', () => {
+    const commoditySnapshot = {
+      ...loaded.snapshot,
+      artifact_payloads: {
+        ...loaded.snapshot.artifact_payloads,
+        commodity_reasoning_scenario_tree: {
+          payload: {
+            primary_scenario: 'supply_chain_tightening',
+            contract_focus: 'BU2606',
+          },
+        },
+        commodity_reasoning_transmission_map: {
+          payload: {
+            primary_chain: 'feedstock_cost_push_chain',
+            chains: [
+              {
+                contract: 'BU2606',
+                commodity: 'asphalt',
+              },
+            ],
+          },
+        },
+        commodity_reasoning_boundary_strength: {
+          payload: {
+            range_summary: 'contract_focused',
+          },
+        },
+        commodity_reasoning_summary: {
+          payload: {
+            primary_scenario_brief: 'supply_chain_tightening',
+            primary_chain_brief: 'feedstock_cost_push_chain',
+            range_scope_brief: 'contract_focused',
+            boundary_strength_brief: 'tight',
+            invalidator_brief: 'basis_weak',
+            contracts_in_focus: ['BU2606'],
+          },
+        },
+      },
+    };
+    const model = buildTerminalReadModel({
+      ...loaded,
+      snapshot: commoditySnapshot,
+    });
+
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'commodity-scenario')).toBe(true);
+    expect(model.dataRegime.microCapture.some((metric) => metric.id === 'commodity-chain')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'commodity-summary')).toBe(true);
+    expect(model.signalRisk.repairPlan.some((metric) => metric.id === 'commodity-boundary')).toBe(true);
   });
 
   it('tolerates malformed event payloads without crashing', () => {
@@ -737,6 +866,45 @@ describe('buildTerminalReadModel', () => {
     );
   });
 
+  it('suppresses raw workspace handoffs on public surface', () => {
+    const model = buildTerminalReadModel({
+      ...loaded,
+      requestedSurface: 'public',
+      effectiveSurface: 'public',
+      snapshot: {
+        ...loaded.snapshot,
+        artifact_payloads: {
+          ...loaded.snapshot.artifact_payloads,
+          operator_panel: {
+            ...(loaded.snapshot.artifact_payloads?.operator_panel || {}),
+            payload: {
+              ...((loaded.snapshot.artifact_payloads?.operator_panel as { payload?: Record<string, unknown> })?.payload || {}),
+              control_chain: [
+                {
+                  stage: 'risk',
+                  label: '风控',
+                  source_status: 'blocked',
+                  source_decision: 'hold',
+                  source_artifact: '/tmp/crypto_shortline_pattern_router.json',
+                  next_target_artifact: 'crypto_shortline_pattern_router',
+                },
+              ],
+            },
+            summary: { status: 'warning' },
+          },
+          crypto_shortline_pattern_router: {
+            path: '/tmp/crypto_shortline_pattern_router.json',
+            payload: {},
+            summary: { status: 'warning' },
+          },
+        },
+      },
+    });
+
+    const handoffs = model.navigation.terminalHandoffs['signal-risk|control-chain|risk'];
+    expect(findLinkByPath(handoffs, '/workspace/raw')).toBeUndefined();
+  });
+
   it('maps public acceptance into workspace contracts and keeps raw evidence internal-only', () => {
     const acceptanceLoaded: LoadedSurface = {
       ...loaded,
@@ -809,6 +977,7 @@ describe('buildTerminalReadModel', () => {
                     group: 'research_cross_section',
                     search_scope: 'title',
                     search: 'orderflow',
+                    source_available: true,
                     active_artifact: 'intraday_orderflow_blueprint',
                     visible_artifacts: [
                       'intraday_orderflow_blueprint',
@@ -853,6 +1022,7 @@ describe('buildTerminalReadModel', () => {
     expect(internalAcceptance.summary.public_snapshot_fetch_count).toBe(4);
     expect(internalAcceptance.summary.internal_snapshot_fetch_count).toBe(0);
     expect(internalAcceptance.summary.orderflow_filter_route).toBe('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(internalAcceptance.summary.orderflow_source_available).toBe(true);
     expect(internalAcceptance.summary.orderflow_active_artifact).toBe('intraday_orderflow_blueprint');
     expect(internalAcceptance.summary.orderflow_visible_artifacts).toBe('intraday_orderflow_blueprint ｜ intraday_orderflow_research_gate_blocker');
     expect(internalAcceptance.checks[0].frontend_public).toBe('https://fuuu.fun');
@@ -861,6 +1031,7 @@ describe('buildTerminalReadModel', () => {
     expect(internalAcceptance.checks[0].pages_overview_screenshot_path).toBe('/tmp/pages_overview_browser.png');
     expect(internalAcceptance.checks[1].public_snapshot_fetch_count).toBe(4);
     expect(internalAcceptance.checks[1].orderflow_filter_route).toBe('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(internalAcceptance.checks[1].orderflow_source_available).toBe(true);
     expect(internalAcceptance.checks[1].orderflow_active_artifact).toBe('intraday_orderflow_blueprint');
     expect(internalAcceptance.checks[1].orderflow_visible_artifacts).toBe('intraday_orderflow_blueprint ｜ intraday_orderflow_research_gate_blocker');
     expect(internalAcceptance.subcommands[0].stdout).toBe('root_public timeout');
@@ -874,5 +1045,45 @@ describe('buildTerminalReadModel', () => {
     const publicAcceptance = (publicModel.workspace as any).publicAcceptance;
     expect(publicAcceptance.subcommands[0].stdout).toBeUndefined();
     expect(publicAcceptance.subcommands[0].stderr).toBeUndefined();
+
+    const degradedAcceptanceLoaded: LoadedSurface = {
+      ...acceptanceLoaded,
+      snapshot: {
+        ...acceptanceLoaded.snapshot,
+        artifact_payloads: {
+          ...acceptanceLoaded.snapshot.artifact_payloads,
+          dashboard_public_acceptance: {
+            ...((acceptanceLoaded.snapshot.artifact_payloads || {}).dashboard_public_acceptance as Record<string, unknown>),
+            payload: {
+              ...((((acceptanceLoaded.snapshot.artifact_payloads || {}).dashboard_public_acceptance as any)?.payload) || {}),
+              checks: {
+                ...(((((acceptanceLoaded.snapshot.artifact_payloads || {}).dashboard_public_acceptance as any)?.payload) || {}).checks || {}),
+                workspace_routes_smoke: {
+                  ...((((((acceptanceLoaded.snapshot.artifact_payloads || {}).dashboard_public_acceptance as any)?.payload) || {}).checks || {}).workspace_routes_smoke || {}),
+                  artifacts_filter_assertion: {
+                    route: '#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow',
+                    group: 'research_cross_section',
+                    search_scope: 'title',
+                    search: 'orderflow',
+                    source_available: false,
+                    active_artifact: '',
+                    visible_artifacts: [],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const degradedModel = buildTerminalReadModel(degradedAcceptanceLoaded);
+    const degradedAcceptance = (degradedModel.workspace as any).publicAcceptance;
+    expect(degradedAcceptance.summary.orderflow_filter_route).toBe('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(degradedAcceptance.summary.orderflow_source_available).toBe(false);
+    expect(degradedAcceptance.summary.orderflow_active_artifact).toBe('—');
+    expect(degradedAcceptance.summary.orderflow_visible_artifacts).toBeUndefined();
+    expect(degradedAcceptance.checks[1].orderflow_source_available).toBe(false);
+    expect(degradedAcceptance.checks[1].orderflow_active_artifact).toBe('—');
+    expect(degradedAcceptance.checks[1].orderflow_visible_artifacts).toBeUndefined();
   });
 });

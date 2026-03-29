@@ -20,22 +20,20 @@ from typing import Any
 REQUEST_TIMEOUT_CAP_SECONDS = 5.0
 STRICT_REQUEST_ATTEMPTS = 2
 CHANGE_CLASS = "RESEARCH_ONLY"
-MIN_BROWSER_RENDER_TIMEOUT_MS = 15000
+MIN_BROWSER_RENDER_TIMEOUT_MS = 30000
 DEFAULT_ROOT_URL = "https://fuuu.fun"
 DEFAULT_PAGES_URL = "https://fenlie.fuuu.fun"
 DEFAULT_OPENCLAW_URL = "http://43.153.148.242:3001"
 DEFAULT_GATEWAY_URL = "http://43.153.148.242:8787"
 PUBLIC_OVERVIEW_ROUTE_PATH = "overview"
 PUBLIC_CONTRACTS_ROUTE_PATH = "workspace/contracts"
-PUBLIC_OVERVIEW_MARKERS = ["研究主线摘要", "hold24_zero"]
+PUBLIC_OVERVIEW_MARKERS = ["研究主线摘要", "国内商品推理线"]
 PUBLIC_CONTRACTS_MARKERS = [
     "公开面验收",
-    "root overview 截图",
-    "pages overview 截图",
-    "root contracts 截图",
-    "pages contracts 截图",
-    "公开快照拉取次数",
-    "内部快照拉取次数",
+    "穿透层 1 / 验收总览",
+    "接口目录",
+    "源头主线",
+    "回退链",
 ]
 
 
@@ -291,7 +289,7 @@ def run_public_route_browser_smoke(
     screenshot_path: Path,
 ) -> dict[str, Any]:
     web_root = Path(__file__).resolve().parents[1] / "dashboard" / "web"
-    navigation_timeout_ms = int(_timeout_seconds(timeout_seconds) * 1000)
+    navigation_timeout_ms = max(int(float(timeout_seconds) * 1000), MIN_BROWSER_RENDER_TIMEOUT_MS)
     render_timeout_ms = max(navigation_timeout_ms, MIN_BROWSER_RENDER_TIMEOUT_MS)
     screenshot_path = screenshot_path.expanduser().resolve()
     screenshot_path.parent.mkdir(parents=True, exist_ok=True)

@@ -6,9 +6,7 @@ import sys
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_public_acceptance.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_dashboard_public_acceptance.py"
 
 
 def load_module():
@@ -28,6 +26,7 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
     review_dir.mkdir(parents=True)
 
     monkeypatch.setattr(mod, "resolve_system_root", lambda value: system_root)
+    monkeypatch.setattr(mod, "current_python_executable", lambda: "/opt/miniconda3/bin/python3")
     monkeypatch.setattr(mod, "now_utc", lambda: mod.dt.datetime(2026, 3, 20, 7, 15, tzinfo=mod.dt.timezone.utc))
     seen_cmds: dict[str, list[str]] = {}
 
@@ -55,6 +54,7 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
+                    "source_available": True,
                     "active_artifact": "intraday_orderflow_blueprint",
                     "visible_artifacts": [
                         "intraday_orderflow_blueprint",
@@ -92,12 +92,15 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
         "group": "research_cross_section",
         "search_scope": "title",
         "search": "orderflow",
+        "source_available": True,
         "active_artifact": "intraday_orderflow_blueprint",
         "visible_artifacts": [
             "intraday_orderflow_blueprint",
             "intraday_orderflow_research_gate_blocker",
         ],
     }
+    assert seen_cmds["topology_smoke"][0] == "/opt/miniconda3/bin/python3"
+    assert seen_cmds["workspace_routes_smoke"][0] == "/opt/miniconda3/bin/python3"
     assert "--allow-insecure-tls-fallback" in seen_cmds["topology_smoke"]
 
 
@@ -299,3 +302,66 @@ def test_run_acceptance_requires_orderflow_artifacts_filter_assertion(monkeypatc
     assert workspace_check["ok"] is False
     assert workspace_check["status"] == "failed"
     assert workspace_check["failure_reason"] == "missing_orderflow_artifacts_filter_assertion"
+
+
+def test_run_acceptance_allows_orderflow_source_unavailable_degrade(monkeypatch, tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    system_root = workspace / "system"
+    review_dir = system_root / "output" / "review"
+    review_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(mod, "resolve_system_root", lambda value: system_root)
+
+    def fake_run_script(*, name: str, cmd: list[str], cwd: Path):
+        payload = {
+            "ok": True,
+            "status": "ok",
+            "change_class": "RESEARCH_ONLY",
+        }
+        if name == "workspace_routes_smoke":
+            payload = {
+                **payload,
+                "network_observation": {
+                    "public_snapshot_fetch_count": 5,
+                    "internal_snapshot_fetch_count": 0,
+                },
+                "artifacts_filter_assertion": {
+                    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "group": "research_cross_section",
+                    "search_scope": "title",
+                    "search": "orderflow",
+                    "source_available": False,
+                    "active_artifact": "",
+                    "visible_artifacts": [],
+                },
+            }
+        return {
+            "name": name,
+            "cmd": cmd,
+            "cwd": str(cwd),
+            "returncode": 0,
+            "stdout": json.dumps(payload, ensure_ascii=False),
+            "stderr": "",
+            "payload": payload,
+        }
+
+    monkeypatch.setattr(mod, "run_json_script", fake_run_script)
+
+    result = mod.run_acceptance(
+        workspace=workspace,
+        skip_workspace_build=True,
+        workspace_timeout_seconds=45.0,
+    )
+
+    assert result["ok"] is True
+    workspace_check = result["checks"]["workspace_routes_smoke"]
+    assert workspace_check["artifacts_filter_assertion"] == {
+        "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+        "group": "research_cross_section",
+        "search_scope": "title",
+        "search": "orderflow",
+        "source_available": False,
+        "active_artifact": "",
+        "visible_artifacts": [],
+    }

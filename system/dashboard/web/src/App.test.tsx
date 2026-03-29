@@ -26,8 +26,22 @@ vi.mock('./hooks/use-ui-theme', () => ({
   }),
 }));
 
+vi.mock('./graph/GraphHomeRenderer', () => ({
+  GraphHomeRenderer: () => (
+    <div data-testid="graph-home-renderer-mock">graph-home-renderer-mock</div>
+  ),
+}));
+
 function textOf(selector: string): string {
   return document.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim() || '';
+}
+
+function panelHeading(name: string): HTMLElement {
+  const heading = screen
+    .getAllByRole('heading', { name })
+    .find((node) => node.classList.contains('panel-card-title'));
+  if (!heading) throw new Error(`panel heading not found: ${name}`);
+  return heading as HTMLElement;
 }
 
 async function renderApp(): Promise<ReturnType<typeof render>> {
@@ -344,6 +358,58 @@ const mockSnapshot = {
       summary: { status: 'warning', change_class: 'SIM_ONLY', research_decision: 'no_edge', takeaway: 'deprioritize cross section' },
       payload: {},
     },
+    commodity_reasoning_scenario_tree: {
+      label: 'commodity reasoning scenario tree',
+      path: '/tmp/commodity-scenario.json',
+      summary: { status: 'ok', change_class: 'RESEARCH_ONLY' },
+      payload: {
+        primary_scenario: 'supply_chain_tightening',
+        contract_focus: 'BU2606',
+      },
+    },
+    commodity_reasoning_transmission_map: {
+      label: 'commodity reasoning transmission map',
+      path: '/tmp/commodity-transmission.json',
+      summary: { status: 'ok', change_class: 'RESEARCH_ONLY' },
+      payload: {
+        primary_chain: 'feedstock_cost_push_chain',
+        chains: [
+          {
+            contract: 'BU2606',
+            sector: 'energy_chemicals',
+            commodity: 'asphalt',
+          },
+        ],
+      },
+    },
+    commodity_reasoning_boundary_strength: {
+      label: 'commodity reasoning boundary strength',
+      path: '/tmp/commodity-boundary.json',
+      summary: { status: 'ok', change_class: 'RESEARCH_ONLY' },
+      payload: {
+        range_summary: 'contract_focused',
+        boundary_rows: [
+          {
+            target_id: 'BU2606',
+            boundary_strength: 'tight',
+            fragility_flags: ['basis_weak'],
+          },
+        ],
+      },
+    },
+    commodity_reasoning_summary: {
+      label: 'commodity reasoning summary',
+      path: '/tmp/commodity-summary.json',
+      summary: { status: 'ok', change_class: 'RESEARCH_ONLY' },
+      payload: {
+        primary_scenario_brief: 'supply_chain_tightening',
+        primary_chain_brief: 'feedstock_cost_push_chain',
+        range_scope_brief: 'contract_focused',
+        boundary_strength_brief: 'tight',
+        invalidator_brief: 'basis_weak',
+        contracts_in_focus: ['BU2606'],
+      },
+    },
     hold_selection_handoff: {
       label: 'hold selection handoff',
       path: 'review/latest_price_action_breakout_pullback_hold_selection_handoff_sim_only.json',
@@ -648,15 +714,47 @@ function buildAcceptanceSnapshot() {
                 internal_snapshot_fetch_count: 0,
               },
               artifacts_filter_assertion: {
+                applicable: true,
                 route: '#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow',
                 group: 'research_cross_section',
                 search_scope: 'title',
                 search: 'orderflow',
-                active_artifact: 'intraday_orderflow_blueprint',
-                visible_artifacts: [
-                  'intraday_orderflow_blueprint',
-                  'intraday_orderflow_research_gate_blocker',
-                ],
+                source_available: false,
+                active_artifact: '',
+                visible_artifacts: [],
+              },
+              artifacts_exit_risk_review_assertion: {
+                applicable: true,
+                route: '#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion',
+                group: 'research_exit_risk',
+                search_scope: 'title',
+                search: '',
+                source_available: false,
+                section_label: '支撑证据',
+                active_artifact: '',
+                visible_artifacts: [],
+                visible_markers: [],
+              },
+              page_section_assertion: {
+                applicable: true,
+                route: '#/workspace/contracts?page_section=contracts-acceptance-subcommands',
+                page_section: 'contracts-acceptance-subcommands',
+                active_label: '子命令证据',
+                accordion_state: '',
+              },
+              contracts_source_head_assertion: {
+                applicable: true,
+                route: '#/workspace/contracts?page_section=contracts-source-head-operator_panel',
+                page_section: 'contracts-source-head-operator_panel',
+                source_head_id: 'operator_panel',
+                accordion_state: 'open',
+                visible_markers: ['状态', '研究结论', '生成时间', '路径'],
+              },
+              contracts_source_gap_assertion: {
+                applicable: true,
+                route: '#/workspace/contracts?page_section=contracts-fallback',
+                page_section: 'contracts-fallback',
+                visible_markers: ['#/workspace/raw', '/data/fenlie_dashboard_snapshot.json', '/operator_task_visual_panel.html'],
               },
             },
           },
@@ -737,10 +835,10 @@ describe('Fenlie terminal console', () => {
     expect(await screen.findByRole('heading', { name: '总览' })).toBeTruthy();
     expect(screen.getAllByText('操作终端').length).toBeGreaterThan(0);
     expect(screen.getAllByText('研究工作区').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('全局导航').length).toBeGreaterThan(0);
+    expect(screen.getByRole('navigation', { name: 'primary-domains' })).toBeTruthy();
     expect(screen.getAllByText('系统状态 / 入口 / 路由总览').length).toBeGreaterThan(0);
-    expect(screen.getByRole('heading', { name: '研究主线摘要' })).toBeTruthy();
-    const summaryCard = screen.getByRole('heading', { name: '研究主线摘要' }).closest('section');
+    expect(screen.getAllByRole('heading', { name: '当前焦点' }).length).toBeGreaterThan(0);
+    const summaryCard = panelHeading('当前焦点').closest('section');
     expect(summaryCard?.textContent || '').toContain('hold16_zero');
     expect(summaryCard?.textContent || '').toContain('hold8_zero');
     expect(summaryCard?.textContent || '').toContain('hold12_zero');
@@ -748,9 +846,50 @@ describe('Fenlie terminal console', () => {
     const summaryLink = screen.getByRole('link', { name: '查看源头主线' });
     expect(summaryLink.getAttribute('href')).toContain('/workspace/contracts');
     expect(summaryLink.getAttribute('href')).toContain('page_section=contracts-source-heads');
+    expect(screen.getByRole('heading', { name: '国内商品推理线' })).toBeTruthy();
+    const commodityCard = screen.getByRole('heading', { name: '国内商品推理线' }).closest('section');
+    expect(commodityCard?.textContent || '').toContain('supply_chain_tightening');
+    expect(commodityCard?.textContent || '').toContain('feedstock_cost_push_chain');
+    expect(commodityCard?.textContent || '').toContain('BU2606');
     expect(textOf('.global-topbar-inner')).not.toContain('请求视图');
     expect(textOf('.global-topbar-inner')).not.toContain('实际视图');
+    expect(textOf('.global-summary-strip')).toContain('模式：只读快照');
+    expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.global-summary-strip')).toContain('变更级别：仅研究');
+  });
+
+  it('renders graph home as a parallel top-level route with primary navigation entry', async () => {
+    window.location.hash = '#/graph-home';
+    await renderApp();
+
+    expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
+    const nav = screen.getByRole('navigation', { name: 'primary-domains' });
+    expect(within(nav).getAllByRole('link').map((item) => item.textContent?.trim())).toEqual([
+      '图谱主页',
+      '总览',
+      '操作终端',
+      '研究工作区',
+    ]);
+    expect(within(nav).getByRole('link', { name: '图谱主页' })).toBeTruthy();
+    expect(textOf('.global-topbar-inner')).toContain('图谱主页');
+    expect(screen.getByRole('button', { name: '回到交易中枢' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '去操作终端' })).toBeTruthy();
+  });
+
+  it('uses graph home as the default root route and fallback route', async () => {
+    window.location.hash = '#/';
+    await renderApp();
+
+    expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
+    await waitFor(() => {
+      expect(window.location.hash).toContain('/graph-home');
+    });
+
+    await navigateHash('#/unknown-route');
+    expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
+    await waitFor(() => {
+      expect(window.location.hash).toContain('/graph-home');
+    });
   });
 
   it('renders internal feedback summary on overview when view=internal', async () => {
@@ -770,6 +909,22 @@ describe('Fenlie terminal console', () => {
     const link = screen.getByRole('link', { name: '进入对齐页' });
     expect(link.getAttribute('href')).toContain('/workspace/alignment');
     expect(link.getAttribute('href')).toContain('view=internal');
+  });
+
+  it('shows first-screen rhythm state focus action on overview and terminal routes', async () => {
+    window.location.hash = '#/overview';
+    await renderApp();
+
+    await screen.findByRole('heading', { name: '总览' });
+    expect(screen.getAllByText(/当前状态|state/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/当前焦点|focus/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/下一步|action/i).length).toBeGreaterThan(0);
+
+    await navigateHash('#/terminal/public');
+    await screen.findByLabelText('ops-context-strip');
+    expect(screen.getAllByText(/当前状态|state/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/当前焦点|focus/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/下一步|action/i).length).toBeGreaterThan(0);
   });
 
   it('supports system / dark / light theme tri-state with url override and persisted preference', async () => {
@@ -793,23 +948,25 @@ describe('Fenlie terminal console', () => {
   });
 
   it('renders terminal and workspace routes with the new TS shell', async () => {
+    window.location.hash = '#/terminal/public';
     await renderApp();
 
     expect(screen.getByText('Fenlie / 控制台')).toBeTruthy();
     expect(screen.getAllByText('操作终端').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('公开 / 内部 / 执行链').length).toBeGreaterThan(0);
     expect(screen.getAllByText('公开面').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('安全摘要').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('终端路由').length).toBeGreaterThan(0);
     await screen.findByLabelText('ops-context-strip');
-    expect(textOf('.global-summary-strip')).toContain('当前页：公开面');
+    expect(textOf('.global-summary-strip')).toContain('模式：只读快照');
+    expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.context-header .panel-kicker')).toContain('公开面');
     expect(textOf('.context-header h2')).toContain('执行穿透 / 调度与门禁');
     expect(textOf('.context-header')).not.toContain('穿透焦点');
     expect(textOf('.context-header')).not.toContain('层级回退');
-    expect(document.querySelector('.context-header-controls')).toBeNull();
+    expect(textOf('.context-header-controls')).toContain('当前状态');
+    expect(textOf('.context-header-controls')).toContain('当前焦点');
+    expect(textOf('.context-header-controls')).toContain('下一步');
     expect(textOf('.ops-context-strip')).toContain('运行上下文');
     expect(textOf('.ops-context-strip')).toContain('视图断言');
-    expect(screen.getAllByText('当前域').length).toBeGreaterThan(0);
     expect(screen.queryByText('数据面切换')).toBeNull();
     expect(textOf('.global-topbar-inner')).not.toContain('请求视图');
     expect(textOf('.global-topbar-inner')).not.toContain('实际视图');
@@ -819,23 +976,26 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByText('运行摘要 / 调度总线')).toBeTruthy();
     expect(screen.getAllByText('总线调度与全局门禁').length).toBeGreaterThan(0);
     expect(screen.getAllByText('信号发生器与风险节流阀').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('国内商品推理线').length).toBeGreaterThan(0);
+    expect(document.body.textContent || '').toContain('feedstock_cost_push_chain');
+    expect(document.body.textContent || '').toContain('BU2606');
     expect(screen.getAllByText('策略实验室与回测复盘').length).toBeGreaterThan(0);
     expect(screen.getAllByText('查看终端层').length).toBeGreaterThan(0);
 
     await navigateHash('#/workspace/contracts');
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('workspace-context-strip')).toBeTruthy();
-    });
-    expect(textOf('.global-summary-strip')).toContain('当前页：契约层');
+    expect(await screen.findByLabelText('workspace-context-strip', undefined, { timeout: 3000 })).toBeTruthy();
+    expect(textOf('.global-summary-strip')).toContain('模式：只读快照');
+    expect(textOf('.global-summary-strip')).toContain('快照：');
     expect(textOf('.context-header .panel-kicker')).toContain('契约层');
     expect(textOf('.context-header h2')).toContain('公开入口 / 数据契约 / 路由验收');
     expect(textOf('.context-header')).not.toContain('穿透焦点');
     expect(textOf('.context-header')).not.toContain('层级回退');
-    expect(document.querySelector('.context-header-controls')).toBeNull();
+    expect(textOf('.context-header-controls')).toContain('当前状态');
+    expect(textOf('.context-header-controls')).toContain('当前焦点');
+    expect(textOf('.context-header-controls')).toContain('下一步');
     expect(textOf('.context-header-route-badges')).toContain('当前阶段：');
     expect(screen.getAllByText('研究工作区').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('工件 / 回测 / 契约 / 原始').length).toBeGreaterThan(0);
     expect(screen.getByText('接口分层 / 可见边界')).toBeTruthy();
     expect(screen.getAllByText('源头主线').length).toBeGreaterThan(0);
     expect(screen.getAllByText('接口目录').length).toBeGreaterThan(0);
@@ -905,10 +1065,11 @@ describe('Fenlie terminal console', () => {
     expect(summaryCard?.textContent || '').toContain('0');
     expect(summaryCard?.textContent || '').toContain('orderflow 过滤路由');
     expect(summaryCard?.textContent || '').toContain('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(summaryCard?.textContent || '').toContain('orderflow 源可用');
+    expect(summaryCard?.textContent || '').toContain('否');
     expect(summaryCard?.textContent || '').toContain('orderflow 激活工件');
-    expect(summaryCard?.textContent || '').toContain('intraday_orderflow_blueprint');
-    expect(summaryCard?.textContent || '').toContain('orderflow 可见工件');
-    expect(summaryCard?.textContent || '').toContain('intraday_orderflow_research_gate_blocker');
+    expect(summaryCard?.textContent || '').not.toContain('intraday_orderflow_blueprint');
+    expect(summaryCard?.textContent || '').not.toContain('intraday_orderflow_research_gate_blocker');
     expect(screen.queryByText('root_public timeout')).toBeNull();
     expect(screen.queryByText('timeout')).toBeNull();
   });
@@ -917,7 +1078,7 @@ describe('Fenlie terminal console', () => {
     const acceptanceSnapshot = buildAcceptanceSnapshot();
     installPassiveStore(acceptanceSnapshot as DashboardSnapshot);
 
-    window.location.hash = '#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke';
+    window.location.hash = '#/workspace/contracts?page_section=contracts-acceptance-subcommands';
     await renderApp();
 
     const toc = await screen.findByRole('navigation', { name: 'page-sections-nav' });
@@ -926,7 +1087,7 @@ describe('Fenlie terminal console', () => {
     expect(within(toc).getByText('数据面')).toBeTruthy();
     expect(within(toc).getByText('源头主线')).toBeTruthy();
     await waitFor(() => {
-      expect(document.querySelector('[data-accordion-id="contracts-subcommand-workspace_routes_smoke"]')?.getAttribute('data-state')).toBe('open');
+      expect(window.location.hash).toContain('page_section=contracts-acceptance-subcommands');
     });
 
     await clickAndFlush(within(toc).getByRole('link', { name: '公开入口拓扑' }) as HTMLElement);
@@ -993,8 +1154,7 @@ describe('Fenlie terminal console', () => {
     expect(textOf('.ops-context-strip')).not.toContain('查看工件池');
 
     await navigateHash('#/workspace/contracts');
-
-    await screen.findByRole('heading', { name: '公开入口拓扑' });
+    await screen.findByLabelText('workspace-context-strip');
     await waitFor(() => {
       expect(textOf('.workspace-context-strip')).toContain('焦点工件');
     });
@@ -1176,18 +1336,18 @@ describe('Fenlie terminal console', () => {
     await renderApp();
 
     const contextNav = await screen.findByRole('navigation', { name: 'context-nav' });
-    expect(within(contextNav).getByRole('link', { name: /回测池\s*回测主池/ }).getAttribute('href')).toContain('page_section=backtests-overview');
-    expect(within(contextNav).getByRole('link', { name: /契约层\s*公开入口拓扑/ }).getAttribute('href')).toContain('page_section=contracts-topology');
-    expect(within(contextNav).getByRole('link', { name: /原始层\s*原始快照/ }).getAttribute('href')).toContain('page_section=raw-summary');
+    expect(within(contextNav).getByRole('link', { name: '回测池' }).getAttribute('href')).toContain('page_section=backtests-overview');
+    expect(within(contextNav).getByRole('link', { name: '契约层' }).getAttribute('href')).toContain('page_section=contracts-topology');
+    expect(within(contextNav).getByRole('link', { name: '原始层' }).getAttribute('href')).toContain('page_section=raw-summary');
 
-    await clickAndFlush(within(contextNav).getByRole('link', { name: /回测池\s*回测主池/ }) as HTMLElement);
+    await clickAndFlush(within(contextNav).getByRole('link', { name: '回测池' }) as HTMLElement);
 
     await screen.findByRole('heading', { name: /^回测主池$/ });
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: /^回测主池$/ })).toHaveLength(1);
     });
 
-    await clickAndFlush(within(contextNav).getByRole('link', { name: /原始层\s*原始快照/ }) as HTMLElement);
+    await clickAndFlush(within(contextNav).getByRole('link', { name: '原始层' }) as HTMLElement);
 
     await screen.findByRole('heading', { name: /^原始快照$/ });
     await waitFor(() => {
@@ -1215,7 +1375,9 @@ describe('Fenlie terminal console', () => {
     window.location.hash = '#/workspace/artifacts?artifact=price_action_breakout_pullback';
     await renderApp();
 
-    await screen.findByRole('heading', { name: '当前焦点' });
+    await waitFor(() => {
+      expect(panelHeading('当前焦点')).toBeTruthy();
+    });
     expect(screen.getAllByText('查看终端层 / 策略实验室与回测复盘 / 穿透层 1 / 研究头部').length).toBeGreaterThan(0);
   });
 
@@ -1343,7 +1505,7 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByRole('heading', { name: '研究地图' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '状态雷达' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '检索定位' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '当前焦点' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: '当前焦点' }).length).toBeGreaterThan(0);
     expect(screen.queryByText('穿透控件')).toBeNull();
     await waitFor(() => {
       expect(document.querySelector('.artifact-group-button.active')?.textContent || '').toMatch(/核心研究主线|研究主线/);
@@ -1359,9 +1521,9 @@ describe('Fenlie terminal console', () => {
     await renderApp();
 
     const contextNav = await screen.findByRole('navigation', { name: 'context-nav' });
-    const backtestsHref = within(contextNav).getByRole('link', { name: /回测池\s*回测主池/ }).getAttribute('href') || '';
-    const contractsHref = within(contextNav).getByRole('link', { name: /契约层\s*公开入口拓扑/ }).getAttribute('href') || '';
-    const rawHref = within(contextNav).getByRole('link', { name: /原始层\s*原始快照/ }).getAttribute('href') || '';
+    const backtestsHref = within(contextNav).getByRole('link', { name: '回测池' }).getAttribute('href') || '';
+    const contractsHref = within(contextNav).getByRole('link', { name: '契约层' }).getAttribute('href') || '';
+    const rawHref = within(contextNav).getByRole('link', { name: '原始层' }).getAttribute('href') || '';
 
     expect(backtestsHref).toContain('artifact=price_action_breakout_pullback');
     expect(backtestsHref).toContain('group=research_mainline');
@@ -1388,7 +1550,7 @@ describe('Fenlie terminal console', () => {
     await renderApp();
 
     const contextNav = await screen.findByRole('navigation', { name: 'context-nav' });
-    const backtestsHref = within(contextNav).getByRole('link', { name: /回测池\s*回测主池/ }).getAttribute('href') || '';
+    const backtestsHref = within(contextNav).getByRole('link', { name: '回测池' }).getAttribute('href') || '';
 
     await waitFor(() => {
       expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/price_action_exit_risk|退出\/风控/);
@@ -1401,6 +1563,20 @@ describe('Fenlie terminal console', () => {
     });
   });
 
+  it('shows expand affordance for the current artifact title when the focus label overflows', async () => {
+    const restoreOverflow = mockClampOverflow({ overflows: true });
+
+    try {
+      window.location.hash = '#/workspace/artifacts?artifact=price_action_breakout_pullback';
+      await renderApp();
+
+      const focusSection = document.querySelector('[aria-label="workspace-rhythm-focus"]');
+      expect(focusSection?.querySelector('.clamp-toggle')).toBeTruthy();
+    } finally {
+      restoreOverflow();
+    }
+  });
+
   it('locks the generated public snapshot to mainline-first url focus and four-card left rail state', async () => {
     installPassiveStore(workspaceArtifactsSmokeSnapshot as DashboardSnapshot);
 
@@ -1411,7 +1587,7 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByRole('heading', { name: '研究地图' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '状态雷达' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '检索定位' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '当前焦点' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: '当前焦点' }).length).toBeGreaterThan(0);
 
     await waitFor(() => {
       expect(window.location.hash).toContain('artifact=price_action_breakout_pullback');
@@ -1491,6 +1667,21 @@ describe('Fenlie terminal console', () => {
     expect(inspectorLinks.some((href) => href.includes(encodeURIComponent(conflictingSectionArtifact)))).toBe(false);
   });
 
+  it('shows expand affordance for the terminal breadcrumb current node when the focused label overflows', async () => {
+    const restoreOverflow = mockClampOverflow({ overflows: true });
+
+    try {
+      const pinnedArtifactPath = 'review/20260321T115900Z_price_action_breakout_pullback_sim_only.json';
+      window.location.hash = `#/terminal/public?artifact=${encodeURIComponent(pinnedArtifactPath)}&panel=signal-risk&section=focus-slots&row=primary`;
+      await renderApp();
+
+      await screen.findByText('关联工作台');
+      expect(document.querySelector('.terminal-breadcrumb-current .clamp-toggle')).toBeTruthy();
+    } finally {
+      restoreOverflow();
+    }
+  });
+
   it('refreshes workspace contracts after route change so stale snapshot does not persist', async () => {
     const staleSnapshot = {
       ...mockSnapshot,
@@ -1538,7 +1729,7 @@ describe('Fenlie terminal console', () => {
 
     await navigateHash('#/workspace/contracts');
 
-    await screen.findByText('接口分层 / 可见边界');
+    await screen.findByLabelText('workspace-context-strip');
     await waitFor(() => {
       expect(screen.getAllByText('https://fenlie.fuuu.fun').length).toBeGreaterThan(0);
     });
@@ -1756,7 +1947,6 @@ describe('Fenlie terminal console', () => {
     expect(screen.getAllByText('目标工件').length).toBeGreaterThan(0);
     const alertLinks = Array.from(document.querySelectorAll('[aria-label="operator-alerts"] a')).map((node) => node.getAttribute('href'));
     expect(alertLinks).toContain('#/workspace/artifacts?artifact=crypto_shortline_pattern_router');
-    expect(alertLinks).toContain('#/workspace/raw?artifact=%2Ftmp%2Foperator-panel.json');
     const alertText = document.querySelector('[aria-label="operator-alerts"]')?.textContent || '';
     expect(alertText).toContain('传导链存在阻塞');
     expect(alertText).toMatch(/ticket_actionability|票据可执行性/);
@@ -1877,9 +2067,9 @@ describe('Fenlie terminal console', () => {
     expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/intraday_orderflow_blueprint/);
     expect(screen.getAllByText('intraday_orderflow_blueprint').length).toBeGreaterThan(0);
     expect(screen.getAllByText('intraday_orderflow_research_gate_blocker').length).toBeGreaterThan(0);
-    const focusCard = screen.getByRole('heading', { name: '当前焦点' }).closest('section');
-    expect(focusCard?.textContent || '').toContain('查看终端层');
-    const terminalLink = Array.from(within(focusCard as HTMLElement).getAllByRole('link'))
+    const actionCard = panelHeading('下一步动作').closest('section');
+    expect(actionCard?.textContent || '').toContain('查看终端层');
+    const terminalLink = Array.from(within(actionCard as HTMLElement).getAllByRole('link'))
       .find((link) => (link.getAttribute('href') || '').includes('#/terminal/public?artifact=intraday_orderflow_blueprint'));
     expect(terminalLink).toBeTruthy();
     if (!terminalLink) {

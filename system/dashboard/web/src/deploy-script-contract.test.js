@@ -48,6 +48,9 @@ describe('deploy script contract', () => {
     expect(scripts['verify:release-checklist']).toContain('npm run smoke:workspace-routes -- --skip-build');
     expect(scripts['verify:release-checklist']).toContain('npm run smoke:alignment-internal -- --skip-build');
     expect(scripts['verify:release-checklist']).toContain('npm run smoke:terminal-internal-focus -- --skip-build');
+    expect(scripts['verify:release-checklist']).toContain('npm run smoke:graph-home -- --skip-build');
+    expect(scripts['verify:release-checklist']).toContain('npm run smoke:graph-home-narrow -- --skip-build');
+    expect(scripts['verify:release-checklist']).toContain('npm run smoke:graph-home-pipeline -- --skip-build');
     expect(scripts['verify:release-checklist']).toContain('npm run verify:public-surface -- --skip-workspace-build');
     expect(
       scripts['verify:release-checklist'].indexOf('npm run test:dashboard-python-contracts'),
@@ -55,6 +58,15 @@ describe('deploy script contract', () => {
     expect(
       scripts['verify:release-checklist'].indexOf('npm run smoke:alignment-internal -- --skip-build'),
     ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:terminal-internal-focus -- --skip-build'));
+    expect(
+      scripts['verify:release-checklist'].indexOf('npm run smoke:terminal-internal-focus -- --skip-build'),
+    ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home -- --skip-build'));
+    expect(
+      scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home -- --skip-build'),
+    ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home-narrow -- --skip-build'));
+    expect(
+      scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home-narrow -- --skip-build'),
+    ).toBeLessThan(scripts['verify:release-checklist'].indexOf('npm run smoke:graph-home-pipeline -- --skip-build'));
   });
 
   it('keeps feedback publish entrypoints visible to npm test and release workflows', () => {
@@ -94,6 +106,27 @@ describe('deploy script contract', () => {
     expect(scripts['smoke:terminal-internal-focus']).toContain('--mode internal_terminal_focus');
   });
 
+  it('exposes a dedicated graph-home browser smoke entrypoint', () => {
+    const scripts = loadScripts();
+
+    expect(scripts['smoke:graph-home']).toContain('run_dashboard_workspace_artifacts_smoke.py');
+    expect(scripts['smoke:graph-home']).toContain('--mode graph_home');
+  });
+
+  it('exposes a dedicated graph-home narrow browser smoke entrypoint', () => {
+    const scripts = loadScripts();
+
+    expect(scripts['smoke:graph-home-narrow']).toContain('run_dashboard_workspace_artifacts_smoke.py');
+    expect(scripts['smoke:graph-home-narrow']).toContain('--mode graph_home_narrow');
+  });
+
+  it('exposes a dedicated graph-home pipeline browser smoke entrypoint', () => {
+    const scripts = loadScripts();
+
+    expect(scripts['smoke:graph-home-pipeline']).toContain('run_dashboard_workspace_artifacts_smoke.py');
+    expect(scripts['smoke:graph-home-pipeline']).toContain('--mode graph_home_pipeline');
+  });
+
   it('routes dashboard python entrypoints through the shared python launcher', () => {
     const scripts = loadScripts();
     const sharedLauncher = 'node ./scripts/run-python.mjs';
@@ -108,6 +141,9 @@ describe('deploy script contract', () => {
       'smoke:alignment-internal',
       'smoke:alignment-internal-manual-probe',
       'smoke:terminal-internal-focus',
+      'smoke:graph-home',
+      'smoke:graph-home-narrow',
+      'smoke:graph-home-pipeline',
       'feedback:publish',
       'feedback:publish-refresh',
       'feedback:publish-manual',

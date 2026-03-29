@@ -112,6 +112,10 @@
   - 当前 `run_dashboard_public_acceptance.py` 已把 `artifacts_filter_assertion` 升级为聚合验收硬门槛：
     - 缺失该字段 => `failure_reason=missing_orderflow_artifacts_filter_assertion`
     - 字段值偏离 => `failure_reason=invalid_orderflow_artifacts_filter_assertion`
+  - 2026-03-27 已补 source-owned 降级语义：
+    - broad smoke 跟随 `workspace_default_focus`
+    - contracts 深链对齐到 `contracts-acceptance-subcommands / contracts-source-head-operator_panel / contracts-fallback`
+    - 当当前 snapshot 缺席 orderflow 工件时，显式输出 `source_available=false`
 - 2026-03-21 `11:13Z~11:14Z` 已在 orderflow terminal handoff / contracts 验收字段接入后重新完成 build + 公开验收闭环：
   - 本地 build：`cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run build`
   - 最新 operator panel：

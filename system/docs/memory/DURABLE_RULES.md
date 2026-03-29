@@ -4,6 +4,8 @@
 - 默认语言：中文，语气直接、简洁、技术性强、便于审计。靠 facts + contracts 表述，避免无端推测。
 - 任何 substantial work 前必须声明 mode（architecture_review/source_first_implementation/API 触发等）与首步。
 - 只选用最窄 change class，并注明 DOC_ONLY/RESEARCH_ONLY/SIM_ONLY/LIVE_GUARD_ONLY/LIVE_EXECUTION_PATH。
+- 长任务默认先给出时间预估；如果用户明确允许持续等待，应优先继续等待/轮询直到完成或出现真实 blocker，而不是频繁中断确认。
+- 对长任务的中途汇报应保持克制：优先在任务完成、through review、或出现真实 blocker 时再汇报；避免只因轮询超时就打断用户。
 
 ## Source-Owned State Rule
 - 凡是能在 source artifact（dataset、handoff JSON、control field）中写明的 lane、gate、anchor、queue ownership、review state，不得在 consumer 侧重推。

@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -32,7 +32,13 @@ from lie_engine.orchestration import (
     TestingOrchestrator,
     estimate_factor_contrib_120d,
 )
-from lie_engine.orchestration.guards import black_swan_assessment, loss_cooldown_active, major_event_window
+from lie_engine.orchestration.event_overlay import load_event_live_guard_overlay
+from lie_engine.orchestration.guards import (
+    black_swan_assessment,
+    build_guard_assessment,
+    loss_cooldown_active,
+    major_event_window,
+)
 from lie_engine.regime import compute_atr_zscore, derive_regime_consensus, infer_hmm_state, latest_multi_scale_hurst
 from lie_engine.research import run_research_backtest as run_research_pipeline
 from lie_engine.research import run_strategy_lab as run_strategy_lab_pipeline
@@ -114,6 +120,38 @@ class LieEngine:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return {}
+
+    def _state_event_overlay_path(self) -> Path:
+        return self.ctx.output_dir / "state" / "event_live_guard_overlay.json"
+
+    def _load_event_overlay(self) -> Mapping[str, Any] | None:
+        path = self._state_event_overlay_path()
+        if not path.exists():
+            return None
+        payload = load_event_live_guard_overlay(path)
+        return payload if payload else None
+
+    def _load_latest_event_regime_snapshot(self) -> Mapping[str, Any] | None:
+        path = self.ctx.output_dir / "review" / "latest_event_regime_snapshot.json"
+        data = self._load_json_safely(path)
+        return data if data else None
+
+    def _load_latest_event_analogy(self) -> Mapping[str, Any] | None:
+        path = self.ctx.output_dir / "review" / "latest_event_crisis_analogy.json"
+        data = self._load_json_safely(path)
+        return data if data else None
+
+    def _apply_event_overlay_to_risk_control(
+        self, risk_control: dict[str, Any], event_overlay: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        updated = dict(risk_control)
+        if not event_overlay:
+            return updated
+        overlay_multiplier = self._clamp_float(float(event_overlay.get("risk_multiplier_override", 1.0)), 0.0, 1.0)
+        current = float(updated.get("risk_multiplier", 1.0))
+        updated["risk_multiplier"] = self._clamp_float(min(current, overlay_multiplier), 0.0, 1.0)
+        updated["event_overlay"] = dict(event_overlay)
+        return updated
 
     @staticmethod
     def _clamp_float(v: float, lo: float, hi: float) -> float:
@@ -1097,6 +1135,7 @@ class LieEngine:
         sentiment: dict[str, float],
         news: list[NewsEvent],
         recent_trades: pd.DataFrame,
+        event_overlay: Mapping[str, Any] | None = None,
     ) -> GuardAssessment:
         score, items, trigger = self._black_swan_assessment(regime=regime, sentiment=sentiment, news=news)
         event_window = self._major_event_window(as_of=as_of, news=news)
@@ -1113,6 +1152,14 @@ class LieEngine:
             reasons.append("连亏冷却期未结束：暂停新增仓位")
         if trigger:
             reasons.append("黑天鹅评分超阈值：保护模式生效")
+        if event_overlay:
+            if bool(event_overlay.get("canary_freeze")):
+                reasons.append("事件 overlay 冻结 canary：暂停新增仓位")
+            override_codes = event_overlay.get("override_reason_codes")
+            if isinstance(override_codes, list):
+                for entry in override_codes:
+                    if isinstance(entry, str):
+                        reasons.append(f"事件 overlay 理由：{entry}")
 
         return GuardAssessment(
             black_swan_score=score,
@@ -3118,6 +3165,9 @@ class LieEngine:
             micro_factor_map=micro_factor_map,
         )
 
+        event_overlay = self._load_event_overlay()
+        event_regime_summary = self._load_latest_event_regime_snapshot()
+        event_analogy = self._load_latest_event_analogy()
         recent_trades = self._load_recent_trades(300)
         win_rate, payoff = infer_edge_from_trades(recent_trades)
         guard = self._evaluate_guards(
@@ -3127,6 +3177,7 @@ class LieEngine:
             sentiment=ingest.sentiment,
             news=ingest.news,
             recent_trades=recent_trades,
+            event_overlay=event_overlay,
         )
         micro_gate_reasons = self._microstructure_gate_reasons(
             symbols=symbols,
@@ -3149,6 +3200,7 @@ class LieEngine:
             market_factor_state=market_factor_state,
             as_of=as_of,
         )
+        risk_control = self._apply_event_overlay_to_risk_control(risk_control=risk_control, event_overlay=event_overlay)
 
         by_symbol, by_theme, used_exposure = self._symbol_exposure_snapshot()
         budget = self.risk_manager.build_budget(account_equity=1_000_000.0, used_exposure_pct=used_exposure)
@@ -3274,6 +3326,23 @@ class LieEngine:
             },
         }
 
+        guard_brief = None
+        if event_overlay:
+            parts = []
+            if bool(event_overlay.get("canary_freeze")):
+                parts.append("canary_freeze")
+            codes = event_overlay.get("override_reason_codes")
+            if isinstance(codes, list):
+                parts.extend(str(code) for code in codes if isinstance(code, str))
+            if parts:
+                guard_brief = "事件 overlay：" + ",".join(parts)
+
+        top_analogues = None
+        if isinstance(event_analogy, dict):
+            analogues = event_analogy.get("top_analogues")
+            if isinstance(analogues, list) and analogues:
+                top_analogues = analogues  # pass through raw structures
+
         daily_md = render_daily_briefing(
             as_of=as_of,
             regime=regime,
@@ -3285,6 +3354,10 @@ class LieEngine:
             black_swan_score=guard.black_swan_score,
             non_trade_reasons=guard.non_trade_reasons,
             mode_feedback=mode_feedback,
+            protection_override=guard.trade_blocked,
+            event_regime_summary=event_regime_summary,
+            event_top_analogues=top_analogues,
+            event_guard_brief=guard_brief,
         )
 
         daily_dir = self.ctx.output_dir / "daily"

@@ -18,6 +18,9 @@ type InspectorRailProps = {
   focus?: SharedFocusState;
   model?: TerminalReadModel | null;
   context?: InspectorContext;
+  mode?: 'rail' | 'drawer' | 'inline';
+  collapsed?: boolean;
+  shellTier?: 'xl' | 'l' | 'm' | 's';
 };
 
 type InspectorLink = {
@@ -121,7 +124,21 @@ export function InspectorRail({
   focus,
   model,
   context = { domain: 'overview', surface: 'public' },
+  mode = 'rail',
+  collapsed = false,
+  shellTier = 'l',
 }: InspectorRailProps) {
+  if (!model) {
+    return (
+      <div className="inspector-rail-inner" data-mode={mode} data-shell-tier={shellTier} data-collapsed={collapsed ? 'true' : 'false'}>
+        <div className="inspector-title-block">
+          <h3>{title}</h3>
+          <p>暂无可检查对象，先在主舞台选择工件或终端焦点。</p>
+        </div>
+      </div>
+    );
+  }
+
   const artifactId = resolveArtifactId(model, focus, context);
   const artifactRow = artifactId ? model?.workspace.artifactRows.find((row) => artifactRefMatches(row, artifactId)) : null;
   const canonicalArtifactId = safeDisplayValue(artifactRow?.id || artifactId);
@@ -369,7 +386,7 @@ export function InspectorRail({
   }
 
   return (
-    <div className="inspector-rail-inner">
+    <div className="inspector-rail-inner" data-mode={mode} data-shell-tier={shellTier} data-collapsed={collapsed ? 'true' : 'false'}>
       <div className="inspector-title-block">
         <h3>{title}</h3>
         <p>{titleDescription}</p>

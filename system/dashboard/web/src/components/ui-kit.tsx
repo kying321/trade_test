@@ -32,12 +32,14 @@ export function ClampText({
   children,
   maxLines = 2,
   expandable = true,
+  critical = false,
   className = '',
   raw,
 }: {
   children: ReactNode;
   maxLines?: number;
   expandable?: boolean;
+  critical?: boolean;
   className?: string;
   raw?: string;
 }) {
@@ -87,7 +89,8 @@ export function ClampText({
     return () => observer.disconnect();
   }, [measureOverflow]);
 
-  const showToggle = expandable && (overflowing || expanded);
+  const canExpand = critical || expandable;
+  const showToggle = canExpand && (overflowing || expanded);
 
   return (
     <span className={`clamp-text ${className}`.trim()} data-expanded={expanded ? 'true' : 'false'}>
@@ -130,7 +133,7 @@ function MetricValue({
   return showRaw ? <ValueText value={rendered} showRaw /> : <>{rendered}</>;
 }
 
-function renderStructuredValue(value: unknown, kind: ViewValueKind | undefined, showRaw: boolean) {
+function renderStructuredValue(value: unknown, kind: ViewValueKind | undefined, showRaw: boolean, critical = false) {
   switch (kind) {
     case 'badge':
       return <Badge value={value as string | undefined} />;
@@ -141,10 +144,10 @@ function renderStructuredValue(value: unknown, kind: ViewValueKind | undefined, 
     case 'sparkline':
       return <Sparkline points={value as Array<{ equity?: number }> | undefined} />;
     case 'path':
-      return <PathText value={value} showRaw={showRaw} />;
+      return <PathText value={value} showRaw={showRaw} critical={critical} />;
     case 'text':
     default:
-      return <ValueText value={value} showRaw={showRaw} />;
+      return <ValueText value={value} showRaw={showRaw} critical={critical} />;
   }
 }
 
@@ -160,17 +163,19 @@ export function ValueText({
   className = '',
   showRaw = true,
   expandable = true,
+  critical = false,
 }: {
   value: unknown;
   className?: string;
   showRaw?: boolean;
   expandable?: boolean;
+  critical?: boolean;
 }) {
   const raw = safeDisplayValue(value);
   const { primary, secondary } = explainLabel(raw);
   return (
     <span className={`value-text ${className}`.trim()} title={raw}>
-      <ClampText className="value-primary" raw={raw} expandable={expandable}>{primary}</ClampText>
+      <ClampText className="value-primary" raw={raw} expandable={expandable} critical={critical}>{primary}</ClampText>
       {showRaw && secondary ? <small className="value-raw">{secondary}</small> : null}
     </span>
   );
@@ -299,18 +304,20 @@ export function PathText({
   showRaw = false,
   keepSegments = 4,
   expandable = true,
+  critical = false,
 }: {
   value: unknown;
   showRaw?: boolean;
   keepSegments?: number;
   expandable?: boolean;
+  critical?: boolean;
 }) {
   const raw = safeDisplayValue(value);
   const primary = compactPath(raw, keepSegments);
   const showSecondary = showRaw && raw !== primary && raw !== '—';
   return (
     <span className="value-text" title={raw}>
-      <ClampText className="value-primary" raw={raw} expandable={expandable}>{primary}</ClampText>
+      <ClampText className="value-primary" raw={raw} expandable={expandable} critical={critical}>{primary}</ClampText>
       {showSecondary ? <small className="value-raw">{raw}</small> : null}
     </span>
   );
@@ -399,7 +406,7 @@ export function AccordionCard({
 export function KeyValueGrid({
   rows,
 }: {
-  rows: Array<ViewFieldSchema & { value: unknown }>;
+  rows: Array<ViewFieldSchema & { value: unknown; critical?: boolean }>;
 }) {
   return (
     <div className="kv-grid">
@@ -407,7 +414,7 @@ export function KeyValueGrid({
         <div className="kv-row" key={row.key}>
           <span className="kv-key">{row.label}</span>
           <strong className="kv-value">
-            {renderStructuredValue(row.value, row.kind, row.showRaw ?? true)}
+            {renderStructuredValue(row.value, row.kind, row.showRaw ?? true, row.critical ?? false)}
           </strong>
         </div>
       ))}

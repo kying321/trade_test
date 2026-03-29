@@ -142,6 +142,47 @@ def sanitize_value(value: Any) -> Any:
     return value
 
 
+def sanitize_surface_value(
+    value: Any,
+    *,
+    surface: SurfaceSpec,
+    workspace: Path,
+    review_dir: Path,
+    artifacts_dir: Path,
+    public_dir: Path,
+) -> Any:
+    sanitized = sanitize_value(value)
+    if isinstance(sanitized, dict):
+        return {
+            key: sanitize_surface_value(
+                child,
+                surface=surface,
+                workspace=workspace,
+                review_dir=review_dir,
+                artifacts_dir=artifacts_dir,
+                public_dir=public_dir,
+            )
+            for key, child in sanitized.items()
+        }
+    if isinstance(sanitized, list):
+        return [
+            sanitize_surface_value(
+                item,
+                surface=surface,
+                workspace=workspace,
+                review_dir=review_dir,
+                artifacts_dir=artifacts_dir,
+                public_dir=public_dir,
+            )
+            for item in sanitized
+        ]
+    if isinstance(sanitized, str) and not surface.expose_absolute_paths:
+        candidate = Path(sanitized)
+        if candidate.is_absolute():
+            return path_locator(candidate, workspace, review_dir, artifacts_dir, public_dir)
+    return sanitized
+
+
 def path_locator(path: Path, workspace: Path, review_dir: Path, artifacts_dir: Path, public_dir: Path) -> str:
     resolved = path.resolve()
     candidates = (
@@ -248,7 +289,14 @@ def payload_entry(
     if path is None or not path.exists() or path_is_sensitive(path):
         return None
     raw = load_json(path)
-    payload = sanitize_value(raw)
+    payload = sanitize_surface_value(
+        raw,
+        surface=surface,
+        workspace=workspace,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        public_dir=public_dir,
+    )
     display_path = surface_path(path, surface, workspace, review_dir, artifacts_dir, public_dir)
     key = label
     return key, {
@@ -411,12 +459,30 @@ def build_source_heads(artifact_payloads: dict[str, dict[str, Any]], source_head
 
 def ensure_event_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
     event_artifacts = [
+        ("event_game_state_snapshot", "research", "event_insight", "event_game_state_snapshot.json"),
+        ("event_transmission_chain_map", "research", "event_insight", "event_transmission_chain_map.json"),
         ("event_regime_snapshot", "research", "event_insight", "event_regime_snapshot.json"),
         ("event_crisis_analogy", "research", "event_insight", "event_crisis_analogy.json"),
         ("event_asset_shock_map", "research", "event_insight", "event_asset_shock_map.json"),
+        ("event_safety_margin_snapshot", "research", "event_insight", "event_safety_margin_snapshot.json"),
         ("event_crisis_operator_summary", "research", "event_insight", "event_crisis_operator_summary.json"),
     ]
     for artifact_id, category, artifact_group, suffix in event_artifacts:
+        if artifact_id in selected_paths:
+            continue
+        candidate = latest_review_suffix(review_dir, suffix)
+        if candidate:
+            selected_paths[artifact_id] = (candidate, category, artifact_group)
+
+
+def ensure_commodity_reasoning_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    commodity_artifacts = [
+        ("commodity_reasoning_scenario_tree", "research", "commodity_reasoning", "commodity_reasoning_scenario_tree.json"),
+        ("commodity_reasoning_transmission_map", "research", "commodity_reasoning", "commodity_reasoning_transmission_map.json"),
+        ("commodity_reasoning_boundary_strength", "research", "commodity_reasoning", "commodity_reasoning_boundary_strength.json"),
+        ("commodity_reasoning_summary", "research", "commodity_reasoning", "commodity_reasoning_summary.json"),
+    ]
+    for artifact_id, category, artifact_group, suffix in commodity_artifacts:
         if artifact_id in selected_paths:
             continue
         candidate = latest_review_suffix(review_dir, suffix)
@@ -554,6 +620,7 @@ def build_surface_snapshot(
     max_equity_points: int,
 ) -> dict[str, Any]:
     ensure_event_artifacts(selected_paths, review_dir)
+    ensure_commodity_reasoning_artifacts(selected_paths, review_dir)
     generated_at = utc_now()
     artifact_payloads: dict[str, dict[str, Any]] = {}
     for label, (path, category, artifact_group) in selected_paths.items():
@@ -603,7 +670,7 @@ def build_surface_snapshot(
         "change_class": "RESEARCH_ONLY",
         "surface": surface.key,
         "generated_at_utc": generated_at,
-    "workspace": surface.expose_absolute_paths and str(workspace) or workspace.name,
+        "workspace": str(workspace) if surface.expose_absolute_paths else workspace.name,
         "ui_routes": ui_routes,
         "meta": {
             "generated_at_utc": generated_at,

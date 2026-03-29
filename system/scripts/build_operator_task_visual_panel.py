@@ -576,6 +576,22 @@ def build_source_rows(
             safe_text(hot_brief.get("source_brooks_structure_review_queue_brief")),
         ),
         (
+            "domestic_futures_bridge",
+            "Domestic Futures Bridge",
+            safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_artifact")),
+            safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_status")),
+            safe_text(source_payloads.get("domestic_futures_bridge", {}).get("as_of")),
+            safe_text(
+                ":".join(
+                    [
+                        safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_head_symbol")) or "-",
+                        safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_head_stage")) or "-",
+                        safe_text(hot_brief.get("source_domestic_futures_execution_bridge_capability_head_blocker_code")) or "-",
+                    ]
+                )
+            ),
+        ),
+        (
             "time_sync_repair_plan",
             "System Time Sync Repair Plan",
             safe_text(hot_brief.get("source_system_time_sync_repair_plan_artifact")),
@@ -648,6 +664,86 @@ def build_chain_data(
     return {"nodes": nodes, "edges": edges, "lane_order": safe_text(cross_market.get("operator_state_lane_priority_order_brief"))}
 
 
+def build_degraded_panel_payload(
+    *,
+    review_dir: Path,
+    dashboard_dist: Path,
+    reference_now: dt.datetime,
+    reason: str,
+    hot_brief_path: Path | None = None,
+    cross_market_path: Path | None = None,
+    event_summary_path: Path | None = None,
+) -> dict[str, Any]:
+    summary_path = event_summary_path or latest_review_json_artifact(
+        review_dir, "event_crisis_operator_summary", reference_now
+    )
+    event_summary = load_optional_payload(summary_path)
+    return {
+        "action": "build_operator_task_visual_panel",
+        "status": "degraded",
+        "ok": True,
+        "generated_at_utc": fmt_utc(reference_now),
+        "review_dir": str(review_dir),
+        "dashboard_dist": str(dashboard_dist),
+        "source_artifacts": {
+            "hot_brief": str(hot_brief_path or ""),
+            "cross_market": str(cross_market_path or ""),
+            "event_crisis_operator_summary": str(summary_path or ""),
+        },
+        "summary": {
+            "operator_head": {},
+            "review_head": {},
+            "repair_head": {},
+            "operator_head_brief": f"degraded:{reason}",
+            "review_head_brief": "",
+            "repair_head_brief": "",
+            "remote_live_gate_brief": "",
+            "remote_live_clearing_brief": "",
+            "lane_state_brief": "",
+            "lane_priority_order_brief": "",
+            "action_queue_brief": "",
+            "crypto_refresh_reuse_brief": "",
+            "remote_live_history_brief": "",
+            "remote_live_diagnosis_brief": "",
+            "brooks_refresh_brief": "",
+            "priority_repair_plan_brief": "",
+            "priority_repair_plan_artifact": "",
+            "priority_repair_plan_admin_required": False,
+            "priority_repair_verification_brief": "",
+            "priority_repair_verification_artifact": "",
+            "priority_repair_verification_cleared": False,
+            "event_crisis_primary_theater_brief": safe_text(
+                event_summary.get("event_crisis_primary_theater_brief")
+            ),
+            "event_crisis_dominant_chain_brief": safe_text(
+                event_summary.get("event_crisis_dominant_chain_brief")
+            ),
+            "event_crisis_safety_margin_brief": safe_text(
+                event_summary.get("event_crisis_safety_margin_brief")
+            ),
+            "event_crisis_hard_boundary_brief": safe_text(
+                event_summary.get("event_crisis_hard_boundary_brief")
+            ),
+        },
+        "lane_cards": [],
+        "focus_slots": [],
+        "action_queue": [],
+        "action_checklist": [],
+        "repair_queue": [],
+        "review_backlog": [],
+        "operator_backlog": [],
+        "chain": {"nodes": [], "edges": [], "lane_order": ""},
+        "impact_rows": [],
+        "source_rows": [],
+        "head_lanes": {"operator": {}, "review": {}, "repair": {}},
+        "priority_repair_plan": {},
+        "priority_repair_verification": {},
+        "openclaw_orderflow_blueprint": {},
+        "control_chain": [],
+        "continuous_optimization_backlog": [],
+    }
+
+
 def build_panel_payload(
     *,
     review_dir: Path,
@@ -656,9 +752,22 @@ def build_panel_payload(
 ) -> dict[str, Any]:
     hot_brief_path = latest_review_json_artifact(review_dir, "hot_universe_operator_brief", reference_now)
     if hot_brief_path is None:
-        raise RuntimeError("operator_task_visual_panel_missing_hot_brief")
+        return build_degraded_panel_payload(
+            review_dir=review_dir,
+            dashboard_dist=dashboard_dist,
+            reference_now=reference_now,
+            reason="missing_hot_brief",
+        )
     hot_brief = load_json_mapping(hot_brief_path)
     hot_brief.setdefault("artifact", str(hot_brief_path))
+
+    event_summary_path = resolve_source_path(
+        source_payload=hot_brief,
+        artifact_key="source_event_crisis_operator_summary_artifact",
+        review_dir=review_dir,
+        suffix="event_crisis_operator_summary",
+        reference_now=reference_now,
+    )
 
     cross_market_path = resolve_source_path(
         source_payload=hot_brief,
@@ -668,7 +777,14 @@ def build_panel_payload(
         reference_now=reference_now,
     )
     if cross_market_path is None:
-        raise RuntimeError("operator_task_visual_panel_missing_cross_market")
+        return build_degraded_panel_payload(
+            review_dir=review_dir,
+            dashboard_dist=dashboard_dist,
+            reference_now=reference_now,
+            reason="missing_cross_market",
+            hot_brief_path=hot_brief_path,
+            event_summary_path=event_summary_path,
+        )
     cross_market = load_json_mapping(cross_market_path)
     cross_market.setdefault("artifact", str(cross_market_path))
 
@@ -729,6 +845,13 @@ def build_panel_payload(
             suffix="brooks_price_action_execution_plan",
             reference_now=reference_now,
         ),
+        "domestic_futures_bridge": resolve_source_path(
+            source_payload=hot_brief,
+            artifact_key="source_domestic_futures_execution_bridge_capability_artifact",
+            review_dir=review_dir,
+            suffix="domestic_futures_execution_bridge_capability",
+            reference_now=reference_now,
+        ),
         "time_sync_repair_plan": resolve_source_path(
             source_payload=hot_brief,
             artifact_key="source_system_time_sync_repair_plan_artifact",
@@ -752,6 +875,11 @@ def build_panel_payload(
         ),
     }
     source_payloads = {key: load_optional_payload(path) for key, path in source_paths.items()}
+    event_summary = load_optional_payload(event_summary_path)
+    commodity_reasoning_summary_path = latest_review_json_artifact(
+        review_dir, "commodity_reasoning_summary", reference_now
+    )
+    commodity_reasoning_summary = load_optional_payload(commodity_reasoning_summary_path)
 
     promotion_unblock_brief = safe_text(
         hot_brief.get("source_openclaw_orderflow_blueprint_remote_promotion_unblock_readiness_brief")
@@ -822,6 +950,8 @@ def build_panel_payload(
             "hot_brief": str(hot_brief_path),
             "cross_market": str(cross_market_path),
             **{key: str(path or "") for key, path in source_paths.items()},
+            "event_crisis_operator_summary": str(event_summary_path or ""),
+            "commodity_reasoning_summary": str(commodity_reasoning_summary_path or ""),
         },
         "summary": {
             "operator_head": safe_row(operator_head_lane.get("head")),
@@ -1178,6 +1308,33 @@ def build_panel_payload(
             "openclaw_top_backlog_why": safe_text(
                 hot_brief.get("source_openclaw_orderflow_blueprint_top_backlog_why")
             ),
+            "event_crisis_primary_theater_brief": safe_text(
+                event_summary.get("event_crisis_primary_theater_brief")
+            ),
+            "event_crisis_dominant_chain_brief": safe_text(
+                event_summary.get("event_crisis_dominant_chain_brief")
+            ),
+            "event_crisis_safety_margin_brief": safe_text(
+                event_summary.get("event_crisis_safety_margin_brief")
+            ),
+            "event_crisis_hard_boundary_brief": safe_text(
+                event_summary.get("event_crisis_hard_boundary_brief")
+            ),
+            "commodity_reasoning_primary_scenario_brief": safe_text(
+                commodity_reasoning_summary.get("primary_scenario_brief")
+            ),
+            "commodity_reasoning_primary_chain_brief": safe_text(
+                commodity_reasoning_summary.get("primary_chain_brief")
+            ),
+            "commodity_reasoning_range_scope_brief": safe_text(
+                commodity_reasoning_summary.get("range_scope_brief")
+            ),
+            "commodity_reasoning_boundary_strength_brief": safe_text(
+                commodity_reasoning_summary.get("boundary_strength_brief")
+            ),
+            "commodity_reasoning_invalidator_brief": safe_text(
+                commodity_reasoning_summary.get("invalidator_brief")
+            ),
         },
         "lane_cards": build_lane_cards(cross_market),
         "focus_slots": operator_focus_slots,
@@ -1359,6 +1516,72 @@ def render_html(payload: dict[str, Any]) -> str:
             f"artifact={path_brief(safe_text(summary.get('openclaw_blueprint_artifact')))}",
         ],
         state="review" if safe_text(summary.get("openclaw_blueprint_brief")) else "neutral",
+    )
+    geostrategy_cards = [
+        (
+            "主战场",
+            safe_text(summary.get("event_crisis_primary_theater_brief")) or "-",
+            [
+                f"dominant_chain={safe_text(summary.get('event_crisis_dominant_chain_brief')) or '-'}",
+            ],
+            "review",
+        ),
+        (
+            "主传导链",
+            safe_text(summary.get("event_crisis_dominant_chain_brief")) or "-",
+            [
+                f"primary_theater={safe_text(summary.get('event_crisis_primary_theater_brief')) or '-'}",
+            ],
+            "review",
+        ),
+        (
+            "安全边际",
+            safe_text(summary.get("event_crisis_safety_margin_brief")) or "-",
+            [
+                f"hard_boundary={safe_text(summary.get('event_crisis_hard_boundary_brief')) or '-'}",
+            ],
+            "watch",
+        ),
+        (
+            "硬边界",
+            safe_text(summary.get("event_crisis_hard_boundary_brief")) or "-",
+            [
+                f"safety_margin={safe_text(summary.get('event_crisis_safety_margin_brief')) or '-'}",
+            ],
+            "repair" if safe_text(summary.get("event_crisis_hard_boundary_brief")) not in {"", "-", "none"} else "neutral",
+        ),
+    ]
+    geostrategy_html = "".join(
+        [
+            card_html(title=title, brief=brief, meta=meta, state=state)
+            for title, brief, meta, state in geostrategy_cards
+        ]
+    )
+    commodity_reasoning_cards = [
+        (
+            "主情景",
+            safe_text(summary.get("commodity_reasoning_primary_scenario_brief")) or "-",
+            [f"primary_chain={safe_text(summary.get('commodity_reasoning_primary_chain_brief')) or '-'}"],
+            "review",
+        ),
+        (
+            "主传导链",
+            safe_text(summary.get("commodity_reasoning_primary_chain_brief")) or "-",
+            [f"range_scope={safe_text(summary.get('commodity_reasoning_range_scope_brief')) or '-'}"],
+            "review",
+        ),
+        (
+            "边界强度",
+            safe_text(summary.get("commodity_reasoning_boundary_strength_brief")) or "-",
+            [f"invalidator={safe_text(summary.get('commodity_reasoning_invalidator_brief')) or '-'}"],
+            "watch",
+        ),
+    ]
+    commodity_reasoning_html = "".join(
+        [
+            card_html(title=title, brief=brief, meta=meta, state=state)
+            for title, brief, meta, state in commodity_reasoning_cards
+        ]
     )
 
     lane_cards_html = "".join(
@@ -1797,6 +2020,22 @@ def render_html(payload: dict[str, Any]) -> str:
           顶层 `primary / followup / secondary` 槽位已经由 cross-market source 驱动。当前第三槽位是 Brooks 结构头，不再是旧的 crypto fallback。
         </p>
         <div class="card-grid">{focus_slots_html}</div>
+      </section>
+
+      <section class="section">
+        <h2>事件危机地缘层</h2>
+        <p class="section-lead">
+          这里只展示 event crisis summary 透传下来的主战场、主传导链、安全边际与硬边界，不在面板层重算任何 authority。
+        </p>
+        <div class="card-grid">{geostrategy_html}</div>
+      </section>
+
+      <section class="section">
+        <h2>国内商品推理线</h2>
+        <p class="section-lead">
+          这里只透传国内商品推理线的主情景、主传导链、范围与边界强度，不在面板层重算推理 authority。
+        </p>
+        <div class="card-grid">{commodity_reasoning_html}</div>
       </section>
 
       <section class="section">

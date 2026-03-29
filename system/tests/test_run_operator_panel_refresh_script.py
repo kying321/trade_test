@@ -8,9 +8,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_operator_panel_refresh.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_operator_panel_refresh.py"
 
 
 def load_module():
@@ -36,6 +34,38 @@ def test_run_json_rejects_non_mapping_payload(monkeypatch) -> None:
         mod.run_json(name="demo", cmd=["python3", "fake.py"])
 
 
+def test_event_summary_has_geostrategy_fields_rejects_stale_payload(tmp_path: Path) -> None:
+    mod = load_module()
+    stale = tmp_path / "latest_event_crisis_operator_summary.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "event_crisis_primary_theater_brief": None,
+                "event_crisis_dominant_chain_brief": "",
+                "event_crisis_safety_margin_brief": None,
+                "event_crisis_hard_boundary_brief": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert mod.event_summary_has_geostrategy_fields(stale) is False
+
+    stale.write_text(
+        json.dumps(
+            {
+                "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+                "event_crisis_safety_margin_brief": "system_margin=0.42",
+                "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert mod.event_summary_has_geostrategy_fields(stale) is True
+
+
 def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp_path: Path, capsys) -> None:
     mod = load_module()
     workspace = tmp_path / "workspace"
@@ -53,6 +83,20 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
         public_dir.mkdir(parents=True, exist_ok=True)
         (public_dir / "data").mkdir(parents=True, exist_ok=True)
 
+        if name == "run_event_crisis_pipeline":
+            (review_dir / "latest_event_crisis_operator_summary.json").write_text(
+                json.dumps(
+                    {
+                        "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                        "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+                        "event_crisis_safety_margin_brief": "system_margin=0.42",
+                        "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return {"artifacts": {"operator_summary": str(review_dir / "latest_event_crisis_operator_summary.json")}}
         if name == "build_operator_task_visual_panel":
             (public_dir / "operator_task_visual_panel.html").write_text(
                 "<html><body>panel</body></html>\n",
@@ -65,18 +109,27 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
             return {
                 "artifact": str(review_dir / "20260321T084000Z_operator_task_visual_panel.json"),
                 "html": str(review_dir / "20260321T084000Z_operator_task_visual_panel.html"),
-                "summary": {
-                    "operator_head_brief": "ETHUSDT:wait_for_pullback",
-                    "review_head_brief": "review:hold16_anchor",
-                    "repair_head_brief": "repair:none",
-                    "remote_live_gate_brief": "remote_live:not_applicable",
-                    "lane_state_brief": "lanes:stable",
-                    "lane_priority_order_brief": "ETHUSDT>BNBUSDT",
-                    "action_queue_brief": "queue:empty",
-                    "crypto_refresh_reuse_brief": "crypto_refresh:reuse_ok",
-                    "remote_live_history_brief": "remote_history:n/a",
-                    "brooks_refresh_brief": "brooks:ok",
-                },
+            "summary": {
+                "operator_head_brief": "ETHUSDT:wait_for_pullback",
+                "review_head_brief": "review:hold16_anchor",
+                "repair_head_brief": "repair:none",
+                "remote_live_gate_brief": "remote_live:not_applicable",
+                "lane_state_brief": "lanes:stable",
+                "lane_priority_order_brief": "ETHUSDT>BNBUSDT",
+                "action_queue_brief": "queue:empty",
+                "crypto_refresh_reuse_brief": "crypto_refresh:reuse_ok",
+                "remote_live_history_brief": "remote_history:n/a",
+                "brooks_refresh_brief": "brooks:ok",
+                "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+                "event_crisis_safety_margin_brief": "system_margin=0.42",
+                "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+                "commodity_reasoning_primary_scenario_brief": "supply_chain_tightening",
+                "commodity_reasoning_primary_chain_brief": "feedstock_cost_push_chain",
+                "commodity_reasoning_range_scope_brief": "contract_focused",
+                "commodity_reasoning_boundary_strength_brief": "tight",
+                "commodity_reasoning_invalidator_brief": "basis_weak",
+            },
             }
         if name == "build_conversation_feedback_projection_internal":
             return {
@@ -122,6 +175,22 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
     assert payload["operator_head_brief"] == "ETHUSDT:wait_for_pullback"
     assert payload["review_head_brief"] == "review:hold16_anchor"
     assert payload["lane_priority_order_brief"] == "ETHUSDT>BNBUSDT"
+    assert payload["event_crisis_primary_theater_brief"] == "usd_liquidity_and_sanctions"
+    assert payload["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
+    assert payload["event_crisis_safety_margin_brief"] == "system_margin=0.42"
+    assert payload["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    assert payload["commodity_reasoning_primary_scenario_brief"] == "supply_chain_tightening"
+    assert payload["commodity_reasoning_primary_chain_brief"] == "feedstock_cost_push_chain"
+    assert payload["commodity_reasoning_range_scope_brief"] == "contract_focused"
+    assert payload["commodity_reasoning_boundary_strength_brief"] == "tight"
+    assert payload["commodity_reasoning_invalidator_brief"] == "basis_weak"
+    for removed_key in (
+        "event_crisis_regime_brief",
+        "event_crisis_top_analogue_brief",
+        "event_crisis_watch_assets_brief",
+        "event_crisis_guard_brief",
+    ):
+        assert removed_key not in payload
     assert payload["snapshot_outputs"] == [
         str(public_dir / "data" / "fenlie_dashboard_snapshot.json"),
         str(public_dir / "data" / "fenlie_dashboard_internal_snapshot.json"),
@@ -161,3 +230,43 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
         "--now",
         "2026-03-21T08:40:00Z",
     ]
+    assert seen_cmds["run_event_crisis_pipeline"] == [
+        "python3",
+        str(system_root / "scripts" / "run_event_crisis_pipeline.py"),
+        "--mode",
+        "snapshot",
+        "--output-root",
+        str(system_root / "output"),
+        "--now",
+        "2026-03-21T08:40:00Z",
+    ]
+
+
+def test_build_summary_does_not_report_degraded_operator_head_when_full_source_panel_exists(tmp_path: Path) -> None:
+    mod = load_module()
+    payload = mod.build_summary(
+        workspace=tmp_path,
+        public_dir=tmp_path / "public",
+        dist_dir=tmp_path / "dist",
+        panel_payload={
+            "summary": {
+                "operator_head_brief": "review:brooks_structure:SC2603:review_manual_stop_entry:92",
+                "review_head_brief": "review:brooks_structure:SC2603:review_manual_stop_entry:92",
+                "repair_head_brief": "inactive:-",
+                "remote_live_gate_brief": "current_head_outside_remote_live_scope:brooks_structure:SC2603:scope_unknown",
+                "lane_state_brief": "waiting=0 | review=1 | watch=0 | blocked=0 | repair=0",
+                "lane_priority_order_brief": "review@92:1 > waiting@0:0 > watch@0:0 > blocked@0:0 > repair@0:0",
+                "action_queue_brief": "1:brooks_structure:SC2603:review_manual_stop_entry",
+                "brooks_refresh_brief": "ready:SC2603:second_entry_trend_continuation:manual_structure_review_now",
+                "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                "event_crisis_dominant_chain_brief": "usd_liquidity_chain",
+                "event_crisis_safety_margin_brief": "system_margin=0.627433",
+                "event_crisis_hard_boundary_brief": "none",
+            }
+        },
+        snapshot_payload={"outputs": []},
+        feedback_payload={},
+        sync_results=[],
+    )
+    assert payload["operator_head_brief"] == "review:brooks_structure:SC2603:review_manual_stop_entry:92"
+    assert not payload["operator_head_brief"].startswith("degraded:")

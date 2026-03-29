@@ -138,6 +138,51 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue(bool(rp.get("execution_anti_martingale_enabled", False)))
         self.assertAlmostEqual(float(rp.get("execution_anti_martingale_step", 0.0)), 0.2, places=6)
 
+    def test_daily_briefing_receives_event_insights(self) -> None:
+        eng, tmp_root = self._make_engine()
+        d = date(2026, 2, 13)
+        review_dir = tmp_root / "output" / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / "latest_event_regime_snapshot.json").write_text(
+            "{\"regime_state\": \"sector_stress\", \"event_severity_score\": 0.45}", encoding="utf-8"
+        )
+        (review_dir / "latest_event_crisis_analogy.json").write_text(
+            "{\"top_analogues\": [{\"archetype_id\": \"gfc_2008\", \"similarity_score\": 0.75}]}",
+            encoding="utf-8",
+        )
+        state_dir = tmp_root / "output" / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "event_live_guard_overlay.json").write_text(
+            "{\"risk_multiplier_override\": 0.5, \"canary_freeze\": true, \"override_reason_codes\": [\"event_crisis_contagion\"]}",
+            encoding="utf-8",
+        )
+        eng.ctx.output_dir = tmp_root / "output"
+        eng.run_eod(d)
+        briefing = (tmp_root / "output" / "daily" / "2026-02-13_briefing.md").read_text(encoding="utf-8")
+        self.assertIn("事件体制", briefing)
+        self.assertIn("类比#1", briefing)
+        self.assertIn("事件 overlay", briefing)
+        self.assertIn("保护模式：**是**", briefing)
+
+    def test_execution_risk_control_respects_event_overlay_floor(self) -> None:
+        eng, _ = self._make_engine()
+        risk_control = eng._execution_risk_control(
+            source_confidence_score=1.0,
+            mode_health={"passed": True, "active": True},
+            market_factor_state={},
+            as_of=date(2026, 2, 13),
+        )
+        overlay = {"risk_multiplier_override": 0.5}
+        adjusted = eng._apply_event_overlay_to_risk_control(risk_control=risk_control, event_overlay=overlay)
+        self.assertAlmostEqual(float(adjusted.get("risk_multiplier", 0.0)), 0.5, places=6)
+        overlay_raise = {"risk_multiplier_override": 0.95}
+        adjusted_raise = eng._apply_event_overlay_to_risk_control(risk_control=risk_control, event_overlay=overlay_raise)
+        self.assertAlmostEqual(  # overlay should not raise above base
+            float(adjusted_raise.get("risk_multiplier", 0.0)),
+            float(risk_control.get("risk_multiplier", 0.0)),
+            places=6,
+        )
+
     def test_run_time_sync_probe_with_mock_sntp(self) -> None:
         eng, tmp_root = self._make_engine()
         eng.settings.raw.setdefault("validation", {})

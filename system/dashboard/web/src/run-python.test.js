@@ -71,4 +71,20 @@ describe('run-python launcher', () => {
 
     expect(result.status).toBe(143);
   });
+
+  it('prepends common local node bin directories so python children can find npm/npx', () => {
+    const condaRoot = mkdtempSync(join(tmpdir(), 'fenlie-conda-path-'));
+    const binDir = join(condaRoot, 'bin');
+    const fakePython = join(binDir, 'python3');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(fakePython, '#!/bin/sh\nprintf \"%s\\n\" \"$PATH\"\n', 'utf8');
+    chmodSync(fakePython, 0o755);
+
+    const result = runLauncher([], {
+      CONDA_PREFIX: condaRoot,
+      PATH: '/usr/bin:/bin',
+    });
+
+    expect(result.stdout).toContain('/usr/local/bin');
+  });
 });

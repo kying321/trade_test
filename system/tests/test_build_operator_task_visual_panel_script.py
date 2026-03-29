@@ -6,9 +6,7 @@ import json
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_operator_task_visual_panel.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "build_operator_task_visual_panel.py"
 
 
 def load_module():
@@ -42,6 +40,7 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     time_sync_repair_plan = review_dir / "20260314T000908Z_system_time_sync_repair_plan.json"
     time_sync_repair_verification = review_dir / "20260314T000909Z_system_time_sync_repair_verification_report.json"
     openclaw_blueprint = review_dir / "20260314T000910Z_openclaw_orderflow_blueprint.json"
+    domestic_futures_bridge = review_dir / "20260314T000911Z_domestic_futures_execution_bridge_capability.json"
     hot_brief = review_dir / "20260314T001100Z_hot_universe_operator_brief.json"
 
     write_json(
@@ -248,6 +247,30 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
                 ],
             },
         ),
+        (
+            domestic_futures_bridge,
+            {
+                "status": "ok",
+                "as_of": "2026-03-14T00:09:11Z",
+                "head_symbol": "SC2603",
+                "bridge_stage_counts": {
+                    "research_only": 0,
+                    "paper_only": 0,
+                    "manual_only": 1,
+                    "guarded_canary": 0,
+                    "executable": 0,
+                },
+                "capabilities": [
+                    {
+                        "symbol": "SC2603",
+                        "bridge_stage": "manual_only",
+                        "blocker_code": "no_automated_execution_bridge",
+                        "blocker_detail": "Structure route is valid, but this asset class has no automated execution bridge in-system.",
+                        "execution_truth_source": "manual_confirmation",
+                    }
+                ],
+            },
+        ),
     ]:
         write_json(path, payload)
 
@@ -285,6 +308,15 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
             "source_brooks_structure_review_queue_brief": "ready:SC2603:96:review_queue_now",
             "source_brooks_route_report_artifact": str(brooks_route),
             "source_brooks_execution_plan_artifact": str(brooks_plan),
+            "source_domestic_futures_execution_bridge_capability_artifact": str(domestic_futures_bridge),
+            "source_domestic_futures_execution_bridge_capability_status": "ok",
+            "source_domestic_futures_execution_bridge_capability_head_symbol": "SC2603",
+            "source_domestic_futures_execution_bridge_capability_head_stage": "manual_only",
+            "source_domestic_futures_execution_bridge_capability_head_blocker_code": "no_automated_execution_bridge",
+            "source_domestic_futures_execution_bridge_capability_head_truth_source": "manual_confirmation",
+            "source_domestic_futures_execution_bridge_capability_head_blocker_detail": (
+                "Structure route is valid, but this asset class has no automated execution bridge in-system."
+            ),
             "source_system_time_sync_repair_plan_artifact": str(time_sync_repair_plan),
             "source_system_time_sync_repair_plan_status": "run_now",
             "source_system_time_sync_repair_plan_brief": "manual_time_repair_required:SC2603:timed_apns_fallback",
@@ -409,6 +441,30 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
         },
     )
 
+    event_summary_path = review_dir / "latest_event_crisis_operator_summary.json"
+    write_json(
+        event_summary_path,
+        {
+            "status": "watch",
+            "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+            "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+            "event_crisis_safety_margin_brief": "system_margin=0.42",
+            "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+        },
+    )
+    commodity_reasoning_summary_path = review_dir / "latest_commodity_reasoning_summary.json"
+    write_json(
+        commodity_reasoning_summary_path,
+        {
+            "primary_scenario_brief": "supply_chain_tightening",
+            "primary_chain_brief": "feedstock_cost_push_chain",
+            "range_scope_brief": "contract_focused",
+            "boundary_strength_brief": "tight",
+            "invalidator_brief": "basis_weak",
+            "contracts_in_focus": ["BU2606"],
+        },
+    )
+
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -521,6 +577,22 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert payload["summary"]["openclaw_top_backlog_why"] == (
         "blocked:SC2603:probe_blocked+environment_blocked+review_head_time_sync_blocked"
     )
+    assert payload["summary"]["event_crisis_primary_theater_brief"] == "usd_liquidity_and_sanctions"
+    assert payload["summary"]["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
+    assert payload["summary"]["event_crisis_safety_margin_brief"] == "system_margin=0.42"
+    assert payload["summary"]["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    assert payload["summary"]["commodity_reasoning_primary_scenario_brief"] == "supply_chain_tightening"
+    assert payload["summary"]["commodity_reasoning_primary_chain_brief"] == "feedstock_cost_push_chain"
+    assert payload["summary"]["commodity_reasoning_range_scope_brief"] == "contract_focused"
+    assert payload["summary"]["commodity_reasoning_boundary_strength_brief"] == "tight"
+    assert payload["summary"]["commodity_reasoning_invalidator_brief"] == "basis_weak"
+    for removed_key in (
+        "event_crisis_regime_brief",
+        "event_crisis_top_analogue_brief",
+        "event_crisis_watch_assets_brief",
+        "event_crisis_guard_brief",
+    ):
+        assert removed_key not in payload["summary"]
     assert payload["priority_repair_plan"]["admin_required"] is True
     assert payload["priority_repair_verification"]["status"] == "blocked"
     assert payload["openclaw_orderflow_blueprint"]["status"] == "ok"
@@ -536,12 +608,23 @@ def test_main_builds_visual_panel_and_dashboard_outputs(tmp_path: Path, monkeypa
     assert "传导链图" in html_text
     assert "优先修复计划" in html_text
     assert "系统时间同步修复验证" in html_text
+    assert "事件危机地缘层" in html_text
+    assert "usd_liquidity_and_sanctions" in html_text
+    assert "credit_intermediary_chain" in html_text
+    assert "system_margin=0.42" in html_text
+    assert "new_risk_hard_block" in html_text
+    assert "supply_chain_tightening" in html_text
+    assert "feedstock_cost_push_chain" in html_text
+    assert "contract_focused" in html_text
+    assert "basis_weak" in html_text
     assert "等待纸面执行平仓证据" in html_text
     assert "需要清障 / 运维实盘门禁 + 风控守护" in html_text
     assert "wait_for_paper_execution_close_evidence" in html_text
     assert "持续优化执行传导链" in html_text
     assert "SC2603" in html_text
     assert "ROLLBACK_HARD" in html_text
+    assert "Domestic Futures Bridge" in html_text
+    assert "no_automated_execution_bridge" in html_text
 
 
 def test_build_panel_payload_prioritizes_promotion_unblock_when_time_sync_is_already_clear(
@@ -652,3 +735,40 @@ def test_build_panel_payload_prioritizes_promotion_unblock_when_time_sync_is_alr
     assert payload["summary"]["priority_repair_plan_artifact"] == "remote_ticket_actionability_state"
     assert payload["summary"]["priority_repair_plan_admin_required"] is False
     assert payload["priority_repair_plan"]["status"] == "shadow_ready_ticket_actionability_blocked"
+
+
+def test_build_panel_payload_degrades_when_hot_brief_missing_but_event_summary_exists(
+    tmp_path: Path,
+) -> None:
+    mod = load_module()
+    review_dir = tmp_path / "review"
+    dashboard_dist = tmp_path / "dashboard-dist"
+    review_dir.mkdir()
+    dashboard_dist.mkdir()
+
+    write_json(
+        review_dir / "latest_event_crisis_operator_summary.json",
+        {
+            "status": "watch",
+            "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+            "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+            "event_crisis_safety_margin_brief": "system_margin=0.42",
+            "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+        },
+    )
+
+    payload = mod.build_panel_payload(
+        review_dir=review_dir,
+        dashboard_dist=dashboard_dist,
+        reference_now=dt.datetime(2026, 3, 27, 12, 0, tzinfo=dt.timezone.utc),
+    )
+
+    assert payload["ok"] is True
+    assert payload["status"] == "degraded"
+    assert payload["summary"]["operator_head_brief"] == "degraded:missing_hot_brief"
+    assert payload["summary"]["event_crisis_primary_theater_brief"] == "usd_liquidity_and_sanctions"
+    assert payload["summary"]["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
+    assert payload["summary"]["event_crisis_safety_margin_brief"] == "system_margin=0.42"
+    assert payload["summary"]["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    assert payload["source_artifacts"]["hot_brief"] == ""
+    assert payload["source_artifacts"]["cross_market"] == ""

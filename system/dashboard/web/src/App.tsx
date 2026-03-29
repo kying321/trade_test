@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Badge, ClampText, DrilldownSection, KeyValueGrid } from './components/ui-kit';
@@ -12,21 +12,28 @@ import { AppShell } from './app-shell/AppShell';
 import { ContextHeader, type ContextHeaderSection } from './app-shell/ContextHeader';
 import { ContextSidebar } from './app-shell/ContextSidebar';
 import { GlobalNoticeLayer } from './app-shell/GlobalNoticeLayer';
-import { GlobalTopbar, type GlobalTopbarDomainContext, type ResolvedTheme, type ThemePreference } from './app-shell/GlobalTopbar';
+import { GlobalTopbar, type ResolvedTheme, type ThemePreference } from './app-shell/GlobalTopbar';
 import { InspectorRail } from './app-shell/InspectorRail';
 import { useSidebarCollapse } from './hooks/use-sidebar-collapse';
 import { useUiTheme } from './hooks/use-ui-theme';
 import { PRIMARY_NAV, OPS_SURFACE_NAV, RESEARCH_LEGACY_NAV } from './navigation/nav-config';
-import { buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from './navigation/route-contract';
+import { buildGraphHomeLink, buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from './navigation/route-contract';
 import { getWorkspacePageSections } from './navigation/workspace-sections';
+import { GraphHomePage } from './pages/GraphHomePage';
 import { OverviewPage } from './pages/OverviewPage';
 import { OpsPage } from './pages/OpsPage';
 import { ResearchPage } from './pages/ResearchPage';
+import { SearchPage } from './pages/SearchPage';
+import { buildSearchCatalog, searchCatalog } from './search/catalog';
+import { GlobalSearchOverlay } from './search/SearchOverlay';
+import { buildSearchLink } from './search/links';
+import type { SearchResultEntry, SearchScope } from './search/types';
 
 const POLL_MS = 30_000;
 const t = (key: string) => labelFor(key);
 const FOCUS_FIELD_LABELS: Array<{ key: keyof SharedFocusState; label: string }> = [
   { key: 'artifact', label: '工件' },
+  { key: 'anchor', label: '锚点' },
   { key: 'panel', label: '面板' },
   { key: 'section', label: '分段' },
   { key: 'row', label: '行' },
@@ -63,6 +70,7 @@ type HeaderBadgeItem = {
 function parseFocus(searchParams: URLSearchParams): SharedFocusState {
   return {
     artifact: searchParams.get('artifact') || undefined,
+    anchor: searchParams.get('anchor') || undefined,
     domain: searchParams.get('domain') || undefined,
     tone: searchParams.get('tone') || undefined,
     search: searchParams.get('search') || undefined,
@@ -75,6 +83,11 @@ function parseFocus(searchParams: URLSearchParams): SharedFocusState {
     symbol: searchParams.get('symbol') || undefined,
     window: searchParams.get('window') || undefined,
   };
+}
+
+function parseSearchScope(raw: string | null | undefined): SearchScope {
+  if (raw === 'module' || raw === 'route' || raw === 'artifact') return raw;
+  return 'all';
 }
 
 function resolveWorkspacePageSectionId(
@@ -90,6 +103,21 @@ function resolveWorkspacePageSectionId(
 
 function canUseViewportScroll() {
   return typeof navigator === 'undefined' || !/jsdom/i.test(navigator.userAgent);
+}
+
+function resolveSearchAnchorId(searchParams: URLSearchParams, focus: SharedFocusState): string | undefined {
+  return searchParams.get('anchor') || focus.anchor || undefined;
+}
+
+function scrollToSearchAnchor(anchorId: string | undefined) {
+  if (!anchorId) return false;
+  const target = document.querySelector<HTMLElement>(`[data-search-anchor="${anchorId}"], #${anchorId}`);
+  return safeScrollIntoView(target);
+}
+
+function scrollToWorkspaceAnchor(sectionId: string) {
+  const target = document.querySelector<HTMLElement>(`[data-workspace-section="${sectionId}"]`);
+  return safeScrollIntoView(target);
 }
 
 function safeScrollIntoView(target: Element | null | undefined) {
@@ -125,45 +153,26 @@ function useSurfaceRefresh(requested: SurfaceKey, refreshKey?: string, allowFall
 function buildPrimaryNav(focus: SharedFocusState, currentSurface: SurfaceKey) {
   return PRIMARY_NAV.map((item) => {
     if (item.id === 'overview') return { ...item, to: buildOverviewLink(focus) };
+    if (item.id === 'graph') return { ...item, to: buildGraphHomeLink(focus) };
     if (item.id === 'ops') return { ...item, to: buildOpsLegacyLink(currentSurface, focus) };
     return { ...item, to: buildResearchLegacyLink('artifacts', focus) };
   });
 }
 
-function buildTopbarDomainContext(domain: 'overview' | 'ops' | 'research'): GlobalTopbarDomainContext {
-  if (domain === 'overview') {
-    return {
-      kicker: '一级域',
-      title: '全局导航',
-      detail: '入口 / 路由',
-      tone: 'overview',
-    };
-  }
-  if (domain === 'ops') {
-    return {
-      kicker: '当前域',
-      title: '操作终端',
-      detail: '公开 / 内部 / 执行链',
-      tone: 'ops',
-    };
-  }
+function buildTopbarGlobalSummary(model: TerminalReadModel | null | undefined) {
   return {
-    kicker: '当前域',
-    title: '研究工作区',
-    detail: '工件 / 回测 / 契约 / 原始',
-    tone: 'research',
+    changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
+    chips: [
+      { label: '模式', value: labelFor(String(model?.experienceContract.mode || 'read_only_snapshot')) },
+      { label: '快照', value: formatDateTime(model?.meta.generated_at_utc) },
+    ],
   };
 }
 
 function buildOverviewPageMeta() {
   return {
-    topbarChips: [
-      { label: '当前页', value: '总览' },
-      { label: '职责', value: '入口分流' },
-    ],
     sidebarTitle: '一级域路由',
     sidebarSubtitle: '总览入口',
-    sidebarDescription: '系统状态 / 入口切换 / 路由总览',
     headerTitle: '总览',
     headerSubtitle: '系统状态 / 入口 / 路由总览',
   };
@@ -172,13 +181,8 @@ function buildOverviewPageMeta() {
 function buildTerminalPageMeta(requested: SurfaceKey) {
   const isInternal = requested === 'internal';
   return {
-    topbarChips: [
-      { label: '当前页', value: isInternal ? '内部面' : '公开面' },
-      { label: '职责', value: isInternal ? '深层证据' : '执行穿透' },
-    ],
     sidebarTitle: '终端路由',
     sidebarSubtitle: '面型切换',
-    sidebarDescription: isInternal ? '内部只读 / 深层字段 / 执行证据' : '公开摘要 / 执行穿透 / 调度门禁',
     headerTitle: isInternal ? '内部面' : '公开面',
     headerSubtitle: isInternal ? '内部只读 / 深层字段 / 执行证据' : '执行穿透 / 调度与门禁',
     headerBarKicker: isInternal ? '终端 / 深层证据' : '终端 / 运行态',
@@ -189,24 +193,17 @@ function buildTerminalPageMeta(requested: SurfaceKey) {
 
 function buildWorkspacePageMeta(section: WorkspaceSection) {
   const pageMeta: Record<WorkspaceSection, {
-    topbarChips: Array<{ label: string; value: string }>;
     sidebarTitle: string;
     sidebarSubtitle: string;
-    sidebarDescription: string;
     headerTitle: string;
     headerSubtitle: string;
     headerBarKicker: string;
     headerBarTitle: string;
     headerBarSubtitle: string;
-  }> = {
+    }> = {
     artifacts: {
-      topbarChips: [
-        { label: '当前页', value: '工件池' },
-        { label: '职责', value: '主线筛选' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 回测 / 契约 / 原始',
       headerTitle: '工件池',
       headerSubtitle: '研究地图 / 状态雷达 / 焦点动作',
       headerBarKicker: '工件 / 当前焦点',
@@ -214,13 +211,8 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
       headerBarSubtitle: '主线分组 / 状态雷达 / 检索范围',
     },
     alignment: {
-      topbarChips: [
-        { label: '当前页', value: '对齐页' },
-        { label: '职责', value: '方向校准' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 对齐 / 回测 / 契约 / 原始',
       headerTitle: '方向对齐投射',
       headerSubtitle: '高价值反馈 / 漂移趋势 / 建议动作',
       headerBarKicker: '对齐 / 内部投射',
@@ -228,13 +220,8 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
       headerBarSubtitle: '内部反馈投射 / 趋势 / 建议动作',
     },
     backtests: {
-      topbarChips: [
-        { label: '当前页', value: '回测池' },
-        { label: '职责', value: '验证比较' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 回测 / 契约 / 原始',
       headerTitle: '回测池',
       headerSubtitle: '时序比较 / 近期比较 / OOS 切片',
       headerBarKicker: '回测 / 验证窗口',
@@ -242,13 +229,8 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
       headerBarSubtitle: '时序切片 / 近期比较 / OOS 验证',
     },
     contracts: {
-      topbarChips: [
-        { label: '当前页', value: '契约层' },
-        { label: '职责', value: '路由验收' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 回测 / 契约 / 原始',
       headerTitle: '契约层',
       headerSubtitle: '公开入口 / 数据契约 / 路由验收',
       headerBarKicker: '契约 / 验收记录',
@@ -256,13 +238,8 @@ function buildWorkspacePageMeta(section: WorkspaceSection) {
       headerBarSubtitle: '公开入口 / 子链验收 / 回退链',
     },
     raw: {
-      topbarChips: [
-        { label: '当前页', value: '原始层' },
-        { label: '职责', value: '证据回退' },
-      ],
       sidebarTitle: '研究路由',
       sidebarSubtitle: '阶段切换',
-      sidebarDescription: '工件 / 回测 / 契约 / 原始',
       headerTitle: '原始层',
       headerSubtitle: '原始快照 / 证据回退 / JSON 穿透',
       headerBarKicker: '原始 / 最终回退',
@@ -303,14 +280,16 @@ function buildWorkspaceHeaderBadges(
 
 function buildOpsSidebarItems(focus: SharedFocusState) {
   return OPS_SURFACE_NAV.map((item) => ({
-    ...item,
+    id: item.id,
+    label: item.label,
     to: item.id === 'terminal-internal' ? buildTerminalLink('internal', focus) : buildTerminalLink('public', focus),
   }));
 }
 
 function buildResearchSidebarItems(focus: SharedFocusState, model?: TerminalReadModel) {
   return RESEARCH_LEGACY_NAV.map((item) => ({
-    ...item,
+    id: item.id,
+    label: item.label,
     to: buildWorkspacePageLink(
       item.section,
       focus,
@@ -400,26 +379,153 @@ function buildFocusSection(focus: SharedFocusState): ContextHeaderSection {
   };
 }
 
-function buildOverviewHeaderSections(focus: SharedFocusState): ContextHeaderSection[] {
-  return [
-    {
-      id: 'domain',
-      title: '当前域',
+function buildOverviewHeaderRhythm(focus: SharedFocusState) {
+  return {
+    stateSection: {
+      title: '当前状态',
       items: [
-        { type: 'link', label: '总览', value: '一级分流', to: buildOverviewLink(focus), active: true },
-        { type: 'link', label: '操作终端', value: '调度 / 信号 / 风控', to: buildOpsLegacyLink('public', focus) },
-        { type: 'link', label: '研究工作区', value: '工件 / 回测 / 原始', to: buildResearchLegacyLink('artifacts', focus) },
+        { type: 'link' as const, label: '总览', value: '一级分流', to: buildOverviewLink(focus), active: true },
+        { type: 'link' as const, label: '操作终端', value: '调度 / 信号 / 风控', to: buildOpsLegacyLink('public', focus) },
+        { type: 'link' as const, label: '研究工作区', value: '工件 / 回测 / 原始', to: buildResearchLegacyLink('artifacts', focus) },
       ],
     },
-    buildFocusSection(focus),
-    {
-      id: 'backtrack',
-      title: '层级回退',
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
       items: [
-        { type: 'link', label: '清空穿透参数', value: '返回总览基线', to: '/overview' },
+        { type: 'link' as const, label: '清空穿透参数', value: '返回总览基线', to: '/overview' },
       ],
     },
-  ];
+  };
+}
+
+function buildSearchHeaderRhythm(query: string, scope: SearchScope, resultCount: number) {
+  const normalizedQuery = query.trim() || '未输入';
+  const scopeLabel = scope === 'all' ? '全部' : scope === 'module' ? '模块' : scope === 'route' ? '路由' : '工件';
+  return {
+    stateSection: {
+      title: '检索范围',
+      items: [
+        { type: 'fact' as const, label: '覆盖', value: '模块 / 路由 / 工件', detail: '只搜索前端本地索引，不查 docs/code/tests。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: '结果', value: String(resultCount), detail: '当前 query/scope 下的本地匹配数量。', tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: [
+        { type: 'fact' as const, label: '关键词', value: normalizedQuery, detail: '空值表示仅查看检索入口。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: 'scope', value: scopeLabel, detail: '当前结果过滤维度。', tone: 'neutral' as const },
+      ],
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'fact' as const, label: '动作', value: '输入关键词并跳转', detail: '支持模块、路由、artifact/source head 检索。', tone: 'neutral' as const },
+      ],
+    },
+    evidenceSection: {
+      title: '证据',
+      items: [
+        { type: 'fact' as const, label: '命中解释', value: '标题 / 说明 / 路径 / 关键词', detail: '结果列表会显示匹配字段。', tone: 'neutral' as const },
+      ],
+    },
+  };
+}
+
+function buildGraphHomeHeaderRhythm() {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '中心模式', value: '交易中枢 + 自定义管道', detail: '点击节点后重新居中并展开影响链。', tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: [
+        { type: 'fact' as const, label: '第一圈节点', value: '管道阶段', detail: '市场输入 / 研究判断 / 交易逻辑 / 执行风控 / 复盘反馈。', tone: 'neutral' as const },
+      ],
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'fact' as const, label: '默认交互', value: '点击节点后重新居中', detail: '右侧详情板展开上游 / 下游 / 深跳入口。', tone: 'neutral' as const },
+      ],
+    },
+  };
+}
+
+function buildTerminalHeaderRhythm(
+  focus: SharedFocusState,
+  requested: SurfaceKey,
+  effective: SurfaceKey,
+) {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '请求视图', value: surfaceLabel(requested), tone: requested === effective ? 'positive' as const : 'warning' as const },
+        { type: 'fact' as const, label: '当前视图', value: surfaceLabel(effective), tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'link' as const, label: '公开面', value: '切回公开视图', to: buildTerminalLink('public', focus), active: effective === 'public' },
+        { type: 'link' as const, label: '内部面', value: '切到内部视图', to: buildTerminalLink('internal', focus), active: effective === 'internal' },
+      ],
+    },
+  };
+}
+
+function buildWorkspaceHeaderRhythm(
+  focus: SharedFocusState,
+  section: WorkspaceSection,
+  pageSections: Array<{ id: string; label: string }>,
+  activeSectionId: string | undefined,
+) {
+  const activeSection = activeSectionId ? pageSections.find((item) => item.id === activeSectionId) : undefined;
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '当前页', value: buildWorkspacePageMeta(section).headerTitle, tone: 'neutral' as const },
+        { type: 'fact' as const, label: '当前阶段', value: activeSection?.label || buildWorkspacePageMeta(section).headerTitle, tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: pageSections.length
+        ? [
+            {
+              type: 'link' as const,
+              label: '进入阶段',
+              value: activeSection?.label || pageSections[0]?.label || buildWorkspacePageMeta(section).headerTitle,
+              to: buildWorkspacePageLink(section, focus, activeSectionId || pageSections[0]?.id),
+            },
+          ]
+        : [
+            {
+              type: 'fact' as const,
+              label: '动作',
+              value: '查看当前阶段',
+              detail: '当前页暂无更细分的 page_section 入口。',
+              tone: 'neutral' as const,
+            },
+          ],
+    },
+  };
 }
 
 function buildTerminalHeaderActions(
@@ -466,7 +572,7 @@ function buildWorkspaceHeaderActions(
   activeSectionId: string | undefined,
 ): ReactNode {
   const activeSection = activeSectionId ? pageSections.find((item) => item.id === activeSectionId) : undefined;
-  const stageLabel = activeSection?.label || buildWorkspacePageMeta(section).topbarChips[0]?.value || labelFor(section);
+  const stageLabel = activeSection?.label || buildWorkspacePageMeta(section).headerTitle || labelFor(section);
   return (
     <div className="context-header-route-badges">
       <Badge value="neutral">{`当前阶段：${stageLabel}`}</Badge>
@@ -889,25 +995,31 @@ function OverviewRoute({
   const effectiveSurface = model?.surface.effective || requestedSurface;
   const pageMeta = buildOverviewPageMeta();
 
+  useEffect(() => {
+    const anchorId = resolveSearchAnchorId(searchParams, focus);
+    const handle = window.requestAnimationFrame(() => {
+      if (anchorId && scrollToSearchAnchor(anchorId)) return;
+      safeResetWindowScroll();
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [focus, searchParams]);
+
   return (
     <AppShell
       sidebarCollapsed={sidebarCollapsed}
-      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, effectiveSurface)} globalSummary={{
-        changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
-        chips: pageMeta.topbarChips,
-      }} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} domainContext={buildTopbarDomainContext('overview')} />}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, effectiveSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
       sidebar={(
         <ContextSidebar
           title={pageMeta.sidebarTitle}
           subtitle={pageMeta.sidebarSubtitle}
-          description={pageMeta.sidebarDescription}
-          items={PRIMARY_NAV.map((item) => ({ ...item, to: item.id === 'overview' ? buildOverviewLink(focus) : item.id === 'ops' ? buildOpsLegacyLink(requestedSurface, focus) : buildResearchLegacyLink('artifacts', focus) }))}
+          items={[]}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
           collapsed={sidebarCollapsed}
           canCollapse={canCollapseSidebar}
           onToggleCollapse={onToggleSidebarCollapse}
         />
       )}
-      header={<ContextHeader title={pageMeta.headerTitle} subtitle={pageMeta.headerSubtitle} breadcrumbs={[{ label: '总览', current: true }]} sections={buildOverviewHeaderSections(focus)} />}
+      header={<ContextHeader title={pageMeta.headerTitle} subtitle={pageMeta.headerSubtitle} breadcrumbs={[{ label: '总览', current: true }]} {...buildOverviewHeaderRhythm(focus)} />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
       inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'overview', surface: requestedSurface }} />}
     >
@@ -942,19 +1054,26 @@ function TerminalRoute({
   useSurfaceRefresh(requested);
 
   const effectiveSurface = model?.surface.effective || requested;
+
+  useEffect(() => {
+    const anchorId = resolveSearchAnchorId(searchParams, focus)
+      || (focus.panel && focus.section ? `terminal-${focus.panel}-${focus.section}` : focus.panel ? `terminal-${focus.panel}` : undefined);
+    const handle = window.requestAnimationFrame(() => {
+      if (anchorId && scrollToSearchAnchor(anchorId)) return;
+      if (focus.panel || focus.section) safeResetWindowScroll();
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [focus, searchParams]);
   return (
     <AppShell
       sidebarCollapsed={sidebarCollapsed}
-      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, requested)} globalSummary={{
-        changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
-        chips: pageMeta.topbarChips,
-      }} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} domainContext={buildTopbarDomainContext('ops')} />}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, requested)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
       sidebar={(
         <ContextSidebar
           title={pageMeta.sidebarTitle}
           subtitle={pageMeta.sidebarSubtitle}
-          description={pageMeta.sidebarDescription}
           items={buildOpsSidebarItems(focus)}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
           collapsed={sidebarCollapsed}
           canCollapse={canCollapseSidebar}
           onToggleCollapse={onToggleSidebarCollapse}
@@ -966,6 +1085,7 @@ function TerminalRoute({
         subtitle={pageMeta.headerSubtitle}
         breadcrumbs={[{ label: '总览' }, { label: '操作终端', current: true }]}
         actions={buildTerminalHeaderActions(focus, requested, effectiveSurface)}
+        {...buildTerminalHeaderRhythm(focus, requested, effectiveSurface)}
       />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
       inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'terminal', surface: requested }} />}
@@ -1004,14 +1124,19 @@ function WorkspaceRoute({
     pageSections.map((item) => item.id),
     focus,
   );
+  const anchorId = resolveSearchAnchorId(searchParams, focus);
   const pageMeta = buildWorkspacePageMeta(section);
 
   useSurfaceRefresh(requestedSurface, section, requestedSurface !== 'internal');
 
   useEffect(() => {
-    if (activeSectionId) return;
-    const fallbackSectionId = section !== 'artifacts' ? pageSections[0]?.id : undefined;
     const handle = window.requestAnimationFrame(() => {
+      if (anchorId && scrollToSearchAnchor(anchorId)) return;
+      if (activeSectionId) {
+        scrollToWorkspaceAnchor(activeSectionId);
+        return;
+      }
+      const fallbackSectionId = section !== 'artifacts' ? pageSections[0]?.id : undefined;
       if (fallbackSectionId) {
         const target = document.querySelector<HTMLElement>(`[data-workspace-section="${fallbackSectionId}"]`);
         if (safeScrollIntoView(target)) return;
@@ -1019,25 +1144,22 @@ function WorkspaceRoute({
       safeResetWindowScroll();
     });
     return () => window.cancelAnimationFrame(handle);
-  }, [activeSectionId, location.pathname, pageSections, section]);
+  }, [activeSectionId, anchorId, location.pathname, pageSections, section]);
 
   return (
     <AppShell
       sidebarCollapsed={sidebarCollapsed}
-      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(navigationFocus, requestedSurface)} globalSummary={{
-        changeClass: labelFor(String(model?.meta.change_class || 'RESEARCH_ONLY')),
-        chips: pageMeta.topbarChips,
-      }} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} domainContext={buildTopbarDomainContext('research')} />}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(navigationFocus, requestedSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
       sidebar={<ContextSidebar
         title={pageMeta.sidebarTitle}
         subtitle={pageMeta.sidebarSubtitle}
-        description={pageMeta.sidebarDescription}
         items={buildResearchSidebarItems(navigationFocus, model || undefined)}
         pageSections={pageSections.map((item) => ({
           ...item,
           to: buildWorkspacePageLink(section, navigationFocus, item.id),
         }))}
         activeSectionId={activeSectionId}
+        utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
         collapsed={sidebarCollapsed}
         canCollapse={canCollapseSidebar}
         onToggleCollapse={onToggleSidebarCollapse}
@@ -1048,6 +1170,7 @@ function WorkspaceRoute({
         subtitle={pageMeta.headerSubtitle}
         breadcrumbs={[{ label: '总览' }, { label: '研究工作区', current: true }]}
         actions={buildWorkspaceHeaderActions(section, pageSections, activeSectionId)}
+        {...buildWorkspaceHeaderRhythm(navigationFocus, section, pageSections, activeSectionId)}
       />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
       inspector={<InspectorRail title="对象检查器" focus={navigationFocus} model={model} context={{ domain: 'workspace', section, surface: requestedSurface }} />}
@@ -1074,6 +1197,103 @@ function WorkspaceRoute({
   );
 }
 
+function SearchRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { model, loading, error } = useTerminalStore();
+  const requestedSurface = model?.surface.requested || 'public';
+  useSurfaceRefresh(requestedSurface, 'search', requestedSurface !== 'internal');
+  const query = searchParams.get('q') || '';
+  const scope = parseSearchScope(searchParams.get('scope'));
+  const searchResultCount = useMemo(
+    () => searchCatalog(buildSearchCatalog(model || undefined), query, scope).length,
+    [model, query, scope],
+  );
+
+  const updateSearchParams = (nextQuery: string, nextScope: SearchScope) => {
+    const next = new URLSearchParams();
+    if (nextQuery.trim()) next.set('q', nextQuery.trim());
+    if (nextScope !== 'all') next.set('scope', nextScope);
+    setSearchParams(next, { replace: true });
+  };
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav({}, requestedSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title="全局搜索"
+          subtitle="跨页面检索"
+          items={[]}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink(query, scope) }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader compact title="全局搜索" subtitle="跨页面、跨模块、跨工件的本地索引搜索" breadcrumbs={[{ label: '总览' }, { label: '搜索', current: true }]} {...buildSearchHeaderRhythm(query, scope, searchResultCount)} />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+      inspector={<InspectorRail title="对象检查器" focus={{}} model={model} context={{ domain: 'overview', surface: requestedSurface }} />}
+    >
+      {loading && !model ? <div className="loading-panel">加载搜索索引中…</div> : null}
+      <SearchPage
+        model={model}
+        query={query}
+        scope={scope}
+        onQueryChange={(next) => updateSearchParams(next, scope)}
+        onScopeChange={(next) => updateSearchParams(query, next)}
+        onPick={(entry) => navigate(entry.destination)}
+      />
+    </AppShell>
+  );
+}
+
+function GraphHomeRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const { model, loading, error } = useTerminalStore();
+  const requestedSurface = model?.surface.requested || 'public';
+  useSurfaceRefresh(requestedSurface, 'graph-home', requestedSurface !== 'internal');
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav({}, requestedSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title="图谱主页"
+          subtitle="交易关系图谱"
+          items={[]}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader compact title="图谱化主页" subtitle="交易中枢 + 自定义管道的 2.5D 动态辐射图" breadcrumbs={[{ label: '总览' }, { label: '图谱主页', current: true }]} {...buildGraphHomeHeaderRhythm()} />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+    >
+      {loading && !model ? <div className="loading-panel">加载图谱主页中…</div> : null}
+      <GraphHomePage model={model || null} />
+    </AppShell>
+  );
+}
+
 function AppRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1085,6 +1305,35 @@ function AppRoutes() {
     canCollapse: canCollapseSidebar,
     toggleCollapsed: onToggleSidebarCollapse,
   } = useSidebarCollapse();
+  const { model } = useTerminalStore();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchScope, setSearchScope] = useState<SearchScope>('all');
+
+  useEffect(() => {
+    const onToggle = () => setSearchOpen((prev) => !prev);
+    window.addEventListener('fenlie-toggle-search', onToggle);
+    return () => window.removeEventListener('fenlie-toggle-search', onToggle);
+  }, []);
+
+  useEffect(() => {
+    setSearchOpen(false);
+  }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isModifier = event.metaKey || event.ctrlKey;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(target?.isContentEditable);
+      if (!isModifier || event.key.toLowerCase() !== 'k') return;
+      if (isInput && !searchOpen) return;
+      event.preventDefault();
+      setSearchOpen((prev) => !prev);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [searchOpen]);
 
   const handleThemeChange = useCallback((next: ThemePreference) => {
     setPreference(next);
@@ -1101,49 +1350,88 @@ function AppRoutes() {
   }, [location.pathname, location.search, navigate, setPreference, themeOverride]);
 
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/overview" replace />} />
-      <Route
-        path="/overview"
-        element={(
-          <OverviewRoute
-            themePreference={preference}
-            resolvedTheme={resolvedTheme}
-            onThemeChange={handleThemeChange}
-            sidebarCollapsed={sidebarCollapsed}
-            canCollapseSidebar={canCollapseSidebar}
-            onToggleSidebarCollapse={onToggleSidebarCollapse}
-          />
-        )}
-      />
-      <Route
-        path="/terminal/:surface"
-        element={(
-          <TerminalRoute
-            themePreference={preference}
-            resolvedTheme={resolvedTheme}
-            onThemeChange={handleThemeChange}
-            sidebarCollapsed={sidebarCollapsed}
-            canCollapseSidebar={canCollapseSidebar}
-            onToggleSidebarCollapse={onToggleSidebarCollapse}
-          />
-        )}
-      />
-      <Route
-        path="/workspace/:section"
-        element={(
-          <WorkspaceRoute
-            themePreference={preference}
-            resolvedTheme={resolvedTheme}
-            onThemeChange={handleThemeChange}
-            sidebarCollapsed={sidebarCollapsed}
-            canCollapseSidebar={canCollapseSidebar}
-            onToggleSidebarCollapse={onToggleSidebarCollapse}
-          />
-        )}
-      />
-      <Route path="*" element={<Navigate to="/overview" replace />} />
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/" element={<Navigate to="/graph-home" replace />} />
+        <Route
+          path="/overview"
+          element={(
+            <OverviewRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/graph-home"
+          element={(
+            <GraphHomeRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/terminal/:surface"
+          element={(
+            <TerminalRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/search"
+          element={(
+            <SearchRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/workspace/:section"
+          element={(
+            <WorkspaceRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route path="*" element={<Navigate to="/graph-home" replace />} />
+      </Routes>
+      {model ? (
+        <GlobalSearchOverlay
+          isOpen={searchOpen}
+          model={model}
+          query={searchQuery}
+          scope={searchScope}
+          onClose={() => setSearchOpen(false)}
+          onQueryChange={setSearchQuery}
+          onScopeChange={setSearchScope}
+        />
+      ) : null}
+    </>
   );
 }
 

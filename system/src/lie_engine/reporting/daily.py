@@ -26,12 +26,17 @@ def render_daily_briefing(
     black_swan_score: float = 0.0,
     non_trade_reasons: list[str] | None = None,
     mode_feedback: dict[str, Any] | None = None,
+    protection_override: bool = False,
+    event_regime_summary: dict[str, object] | None = None,
+    event_top_analogues: list[dict[str, object]] | None = None,
+    event_guard_brief: str | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# 📊 离厄反脆弱简报 | {as_of.isoformat()}")
     lines.append("")
     lines.append("## 🌡️ 市场温度计")
-    lines.append(f"当前体制：**{regime.consensus.value}**；保护模式：**{'是' if regime.protection_mode else '否'}**")
+    protection_mode = bool(regime.protection_mode or protection_override)
+    lines.append(f"当前体制：**{regime.consensus.value}**；保护模式：**{'是' if protection_mode else '否'}**")
     lines.append("")
     if mode_feedback:
         lines.append("## 🧭 模式引擎")
@@ -158,6 +163,30 @@ def render_daily_briefing(
             lines.append(f"- {reason}")
     else:
         lines.append("- NONE")
+    lines.append("")
+
+    lines.append("## 🧭 事件洞察")
+    if event_regime_summary:
+        lines.append(
+            "- 事件体制："
+            + f"{event_regime_summary.get('regime_state', 'unknown')}"
+            + f"；严重度={float(event_regime_summary.get('event_severity_score', 0.0)):.2f}"
+        )
+    else:
+        lines.append("- 事件体制：暂无事件 summary")
+    if event_top_analogues:
+        limit = min(3, len(event_top_analogues))
+        for idx in range(limit):
+            analogue = event_top_analogues[idx]
+            name = str(analogue.get("archetype_id", "unknown"))
+            score = float(analogue.get("similarity_score", 0.0))
+            lines.append(f"- 类比#{idx + 1}: {name}（相似度 {score:.2f}）")
+    else:
+        lines.append("- 类比：暂无 top analogues")
+    if event_guard_brief:
+        lines.append(f"- Guard 备注：{event_guard_brief}")
+    else:
+        lines.append("- Guard 备注：无事件 overlay")
     lines.append("")
 
     lines.append("## 🗓️ 明日路演")

@@ -139,6 +139,7 @@ function artifactAlertLinks(options: {
   artifact?: unknown;
   rawArtifact?: unknown;
   includeContracts?: boolean;
+  allowRaw?: boolean;
   terminalFocus?: { surface: SurfaceView['effective']; panel?: string; section?: string; row?: string };
   tone?: OperatorAlertLink['tone'];
 }): OperatorAlertLink[] {
@@ -148,7 +149,7 @@ function artifactAlertLinks(options: {
   if (artifact !== '—') {
     links.push(alertLink(`${options.idPrefix}-artifact`, 'alert_link_view_artifact', buildWorkspaceLink('artifacts', { artifact }), options.tone));
   }
-  if (rawArtifact !== '—') {
+  if (options.allowRaw && rawArtifact !== '—') {
     links.push(alertLink(`${options.idPrefix}-raw`, 'alert_link_view_raw', buildWorkspaceLink('raw', { artifact: rawArtifact }), options.tone));
   }
   if (options.terminalFocus?.panel) {
@@ -325,7 +326,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
             ),
           ],
           links: [
-            alertLink('live-path-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'negative'),
+            ...(showRawPaths ? [alertLink('live-path-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'negative')] : []),
             alertLink('live-path-terminal', 'alert_link_view_terminal', buildTerminalLink(surface.effective, {
               panel: 'orchestration',
               section: 'guards',
@@ -391,6 +392,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
               row: surface.effective === 'internal' ? buildDrilldownRowId({ stage: 'risk' }, ['stage']) : undefined,
             },
             tone: guardianTone,
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -459,6 +461,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
                 : undefined,
             },
             tone: statusTone(controlChainBlocker.source_status || controlChainBlocker.source_decision || controlChainBlocker.blocking_reason),
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -516,6 +519,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
               section: 'action-log',
             },
             tone: 'negative',
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -607,6 +611,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
                 section: 'freshness',
               },
               tone: 'warning',
+              allowRaw: showRawPaths,
             }),
           }]
         : []),
@@ -642,7 +647,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
           ],
           links: [
             alertLink('surface-fallback-contracts', 'alert_link_view_contracts', buildWorkspaceLink('contracts'), 'warning'),
-            alertLink('surface-fallback-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'warning'),
+            ...(showRawPaths ? [alertLink('surface-fallback-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'warning')] : []),
             alertLink('surface-fallback-terminal', 'alert_link_view_terminal', buildTerminalLink(surface.effective), 'warning'),
           ],
         }]
@@ -675,8 +680,15 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
 
   const eventRegime = eventArtifact(snapshot, 'event_regime_snapshot');
   const eventAnalogy = eventArtifact(snapshot, 'event_crisis_analogy');
+  const eventGameState = eventArtifact(snapshot, 'event_game_state_snapshot');
+  const eventTransmission = eventArtifact(snapshot, 'event_transmission_chain_map');
   const eventAssetShockMap = eventArtifact(snapshot, 'event_asset_shock_map');
+  const eventSafetyMargin = eventArtifact(snapshot, 'event_safety_margin_snapshot');
   const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
+  const commodityScenario = eventArtifact(snapshot, 'commodity_reasoning_scenario_tree');
+  const commodityTransmission = eventArtifact(snapshot, 'commodity_reasoning_transmission_map');
+  const commodityBoundary = eventArtifact(snapshot, 'commodity_reasoning_boundary_strength');
+  const commoditySummary = eventArtifact(snapshot, 'commodity_reasoning_summary');
 
   const sourceConfidence: MetricItem[] = [
     toMetric('schema-ok-ratio', 'data_schema_ok_ratio', latestSummary.selected_schema_ok_ratio, t('selected_schema_ok_ratio')),
@@ -745,6 +757,35 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
       ),
     );
   }
+  const primaryTheater = normalizedString(
+    eventGameState.primary_theater ?? eventTransmission.primary_theater,
+  );
+  if (eventGameState.game_state) {
+    addEventMetric(
+      toMetric(
+        'event-game-state',
+        'event_game_state',
+        normalizedString(eventGameState.game_state),
+        primaryTheater,
+      ),
+    );
+  }
+  if (eventTransmission.dominant_chain) {
+    const hotChains = toArray<unknown>(eventTransmission.chains)
+      .map((entry) => toRecord<Dict>(entry))
+      .filter((row): row is Dict => Boolean(row))
+      .filter((row) => ['active', 'dominant'].includes(String(row.status || '')))
+      .map((row) => normalizedString(row.chain_id))
+      .filter((value): value is string => Boolean(value));
+    addEventMetric(
+      toMetric(
+        'event-dominant-chain',
+        'dominant_chain',
+        normalizedString(eventTransmission.dominant_chain),
+        hotChains.length ? `hot=${hotChains.join(',')}` : primaryTheater,
+      ),
+    );
+  }
   const analogyRows = toArray<unknown>(eventAnalogy.top_analogues ?? [])
     .map((analogy) => toRecord<Dict>(analogy))
     .filter((row): row is Dict => Boolean(row));
@@ -796,6 +837,37 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
       ),
     );
   }
+  if (commodityScenario.primary_scenario) {
+    addEventMetric(
+      toMetric(
+        'commodity-scenario',
+        'commodity_reasoning_scenario',
+        normalizedString(commodityScenario.primary_scenario),
+        normalizedString(commodityScenario.contract_focus),
+      ),
+    );
+  }
+  if (commodityTransmission.primary_chain) {
+    const firstCommodityChain = toRecord<Dict>(toArray<Dict>(commodityTransmission.chains)[0]) || {};
+    addEventMetric(
+      toMetric(
+        'commodity-chain',
+        'commodity_reasoning_chain',
+        normalizedString(commodityTransmission.primary_chain),
+        normalizedString(firstCommodityChain.contract || firstCommodityChain.commodity),
+      ),
+    );
+  }
+  if (commodityBoundary.range_summary) {
+    addEventMetric(
+      toMetric(
+        'commodity-range',
+        'commodity_reasoning_range',
+        normalizedString(commodityBoundary.range_summary),
+        normalizedString(commoditySummary.boundary_strength_brief),
+      ),
+    );
+  }
 
   return {
     sourceConfidence,
@@ -809,7 +881,9 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
   const operatorPanel = artifactPayload(snapshot, 'operator_panel');
   const summary = toRecord<Dict>(operatorPanel.summary) || {};
   const repairPlan = toRecord<Dict>(operatorPanel.priority_repair_plan) || {};
+  const eventSafetyMargin = eventArtifact(snapshot, 'event_safety_margin_snapshot');
   const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
+  const commoditySummary = eventArtifact(snapshot, 'commodity_reasoning_summary');
 
   const gateScores: MetricItem[] = [
     toMetric('guardian-clearance', 'signal_guardian_clearance', summary.openclaw_guardian_clearance_status, buildAssignmentHint('score', summary.openclaw_guardian_clearance_score)),
@@ -838,6 +912,52 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
         normalizedString(eventOperatorSummary.summary || eventOperatorSummary.status),
         normalizedString(eventOperatorSummary.takeaway),
         normalizedString(eventOperatorSummary.status),
+      ),
+    );
+  }
+  if (eventOperatorSummary.event_crisis_safety_margin_brief || eventSafetyMargin.system_margin_score !== undefined) {
+    repairMetrics.push(
+      toMetric(
+        'event-safety-margin',
+        'system_margin_score',
+        normalizedString(eventOperatorSummary.event_crisis_safety_margin_brief)
+          ?? eventSafetyMargin.system_margin_score,
+        normalizedString(eventOperatorSummary.event_crisis_primary_theater_brief),
+      ),
+    );
+  }
+  if (eventOperatorSummary.event_crisis_hard_boundary_brief || eventSafetyMargin.hard_boundaries) {
+    const hardBoundaries = toRecord<Dict>(eventSafetyMargin.hard_boundaries) || {};
+    const activeBoundaries = Object.entries(hardBoundaries)
+      .filter(([, value]) => Boolean(value))
+      .map(([key]) => key);
+    repairMetrics.push(
+      toMetric(
+        'event-hard-boundary',
+        'hard_boundaries',
+        normalizedString(eventOperatorSummary.event_crisis_hard_boundary_brief)
+          ?? (activeBoundaries.length ? activeBoundaries.join(',') : 'none'),
+        normalizedString(eventOperatorSummary.event_crisis_dominant_chain_brief),
+      ),
+    );
+  }
+  if (commoditySummary.primary_scenario_brief || commoditySummary.primary_chain_brief) {
+    repairMetrics.push(
+      toMetric(
+        'commodity-summary',
+        'commodity_reasoning_summary',
+        normalizedString(commoditySummary.primary_scenario_brief),
+        normalizedString(commoditySummary.primary_chain_brief),
+      ),
+    );
+  }
+  if (commoditySummary.boundary_strength_brief || commoditySummary.range_scope_brief) {
+    repairMetrics.push(
+      toMetric(
+        'commodity-boundary',
+        'commodity_reasoning_boundary',
+        normalizedString(commoditySummary.boundary_strength_brief),
+        normalizedString(commoditySummary.range_scope_brief),
       ),
     );
   }
@@ -1089,6 +1209,7 @@ function buildTerminalWorkspaceHandoffs(snapshot: DashboardSnapshot, surface: Su
   const focusSlots = toArray<Dict>(operatorPanel.focus_slots);
   const actionQueue = toArray<Dict>(operatorPanel.action_queue);
   const summary = toRecord<Dict>(operatorPanel.summary) || {};
+  const showRawPaths = surface.effective === 'internal';
   const handoffs: Record<string, OperatorAlertLink[]> = {};
   const primaryArtifact: Record<string, string> = {};
   const seen = new Set<string>();
@@ -1124,7 +1245,7 @@ function buildTerminalWorkspaceHandoffs(snapshot: DashboardSnapshot, surface: Su
         tone,
       }, artifactValue);
     }
-    if (rawValue && rawValue !== '—') {
+    if (showRawPaths && rawValue && rawValue !== '—') {
       push(focus, {
         id: `${idPrefix}-raw`,
         label: `${t('alert_link_view_raw')} / ${displayValue(rawValue)}`,
@@ -1349,6 +1470,9 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
   const workspaceSurface = toRecord<Dict>(workspaceRoutes.surface_assertion) || {};
   const workspaceNetwork = toRecord<Dict>(workspaceRoutes.network_observation) || {};
   const workspaceArtifactsFilter = toRecord<Dict>(workspaceRoutes.artifacts_filter_assertion) || {};
+  const orderflowSourceAvailable = typeof workspaceArtifactsFilter.source_available === 'boolean'
+    ? workspaceArtifactsFilter.source_available
+    : undefined;
   const subcommands = toRecord<Dict>(payload.subcommands) || {};
   const orderflowVisibleArtifacts = toArray<string>(workspaceArtifactsFilter.visible_artifacts)
     .map((value) => safeDisplayValue(value))
@@ -1373,6 +1497,7 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     root_contracts_screenshot_path: safeDisplayValue(topologyRootContractsBrowser.screenshot_path),
     pages_contracts_screenshot_path: safeDisplayValue(topologyPagesContractsBrowser.screenshot_path),
     orderflow_filter_route: safeDisplayValue(workspaceArtifactsFilter.route),
+    orderflow_source_available: orderflowSourceAvailable,
     orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
     orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
   };
@@ -1414,6 +1539,7 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       public_snapshot_fetch_count: typeof workspaceNetwork.public_snapshot_fetch_count === 'number' ? workspaceNetwork.public_snapshot_fetch_count : undefined,
       internal_snapshot_fetch_count: typeof workspaceNetwork.internal_snapshot_fetch_count === 'number' ? workspaceNetwork.internal_snapshot_fetch_count : undefined,
       orderflow_filter_route: safeDisplayValue(workspaceArtifactsFilter.route),
+      orderflow_source_available: orderflowSourceAvailable,
       orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
       orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
       ...(surface.effective === 'internal' && typeof workspaceRoutes.stdout === 'string' ? { stdout: workspaceRoutes.stdout } : {}),
@@ -1716,13 +1842,6 @@ function buildViewSchema(intent: DisplayIntent): TerminalViewSchema {
         sourceHeadSummaryFields: {
           label: field('label', 'label', { showRaw: showValueText('workspace.contracts.sourceHeads.summary', 'label') }),
           summary: field('summary', 'summary', { showRaw: showValueText('workspace.contracts.sourceHeads.summary', 'summary') }),
-        },
-        sourceHeadMetricFields: {
-          metrics: [
-            field('label', 'label', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'label') }),
-            field('status', 'status', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'status') }),
-            field('path', 'path', { showRaw: showValueText('workspace.contracts.sourceHeads.metrics', 'path') }),
-          ],
         },
         sourceHeadDetailFields: [
           field('status', 'status', { showRaw: showKeyValue('workspace.contracts.sourceHeads', 'status') }),

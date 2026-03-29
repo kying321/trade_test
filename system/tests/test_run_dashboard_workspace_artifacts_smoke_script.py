@@ -9,9 +9,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_workspace_artifacts_smoke.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_dashboard_workspace_artifacts_smoke.py"
 
 
 def load_module():
@@ -31,7 +29,23 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     ]
     route_assertions[0] = {
         **route_assertions[0],
-        "markers": ["关键摘要", "系统运行", "调度心跳", "研究主线", "hold16_zero", "退出风控", "下一步去哪"],
+        "markers": [
+            "系统状态 / 入口 / 路由总览",
+            "研究主线摘要",
+            "查看源头主线",
+            "契约验收",
+            "hold16_zero",
+            "国内商品推理线",
+            "policy_relief_watch",
+            "policy_relief_chain",
+            "BU2606",
+        ],
+    }
+    route_assertions[1] = {
+        **route_assertions[1],
+        "expected_default_artifact": "operator_panel",
+        "expected_focus_panel": "orchestration",
+        "expected_focus_section": "freshness",
     }
     screenshot_path = tmp_path / "workspace-routes-smoke.png"
     result_path = tmp_path / "workspace-routes-smoke.json"
@@ -44,14 +58,23 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     )
 
     assert "#/overview" in spec
-    assert "关键摘要" in spec
-    assert "系统运行" in spec
-    assert "调度心跳" in spec
-    assert "研究主线" in spec
+    assert "系统状态 / 入口 / 路由总览" in spec
+    assert "研究主线摘要" in spec
+    assert "查看源头主线" in spec
+    assert "契约验收" in spec
     assert "hold16_zero" in spec
-    assert "退出风控" in spec
-    assert "下一步去哪" in spec
+    assert "国内商品推理线" in spec
+    assert "policy_relief_watch" in spec
+    assert "policy_relief_chain" in spec
+    assert "BU2606" in spec
     assert "#/workspace/artifacts" in spec
+    assert "const defaultWorkspaceArtifact = String(workspaceStartRoute.expected_default_artifact || 'price_action_breakout_pullback');" in spec
+    assert "const defaultWorkspacePanel = String(workspaceStartRoute.expected_focus_panel || 'lab-review');" in spec
+    assert "const defaultWorkspaceSection = String(workspaceStartRoute.expected_focus_section || 'research-heads');" in spec
+    assert "await page.waitForFunction((artifactId) => window.location.hash.includes(`artifact=${artifactId}`), defaultWorkspaceArtifact);" in spec
+    assert "await page.waitForFunction((panelId) => window.location.hash.includes(`panel=${panelId}`), defaultWorkspacePanel);" in spec
+    assert "await page.waitForFunction((sectionId) => window.location.hash.includes(`section=${sectionId}`), defaultWorkspaceSection);" in spec
+    assert "await expect(activeArtifactValue).toHaveAttribute('title', defaultWorkspaceArtifact);" in spec
     assert "工件池" in spec
     assert "#/workspace/alignment" in spec
     assert "对齐页" in spec
@@ -63,18 +86,20 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "契约层" in spec
     assert "公开入口拓扑" in spec
     assert "公开面验收" in spec
-    assert "root overview 截图" in spec
-    assert "pages overview 截图" in spec
-    assert "root contracts 截图" in spec
-    assert "pages contracts 截图" in spec
-    assert "公开快照拉取次数" in spec
-    assert "内部快照拉取次数" in spec
+    assert "穿透层 1 / 验收总览" in spec
+    assert "接口目录" in spec
+    assert "源头主线" in spec
+    assert "回退链" in spec
     assert "研究地图" in spec
     assert "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow" in spec
     assert "intraday_orderflow_blueprint" in spec
     assert "intraday_orderflow_research_gate_blocker" in spec
+    assert "source_available: orderflowArtifacts.length > 0" in spec
+    assert "active_artifact: orderflowActiveArtifact" in spec
     assert "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion" in spec
     assert "await expectStableMarker(page, exitRiskReviewActiveArtifact);" in spec
+    assert "source_available: exitRiskReviewArtifacts.length > 0" in spec
+    assert "active_artifact: exitRiskReviewActiveArtifact" in spec
     assert "const exitRiskReviewSectionState = await page.evaluate((sectionHint) => {" in spec
     assert "const normalizedSectionHint = String(sectionHint || '').replace(/\\s+/g, '').toLowerCase();" in spec
     assert "const sections = Array.from(document.querySelectorAll('.artifact-layer-section'));" in spec
@@ -82,7 +107,7 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "target.open = true;" in spec
     assert "if (target instanceof HTMLDetailsElement) {" in spec
     assert "expect(exitRiskReviewSectionState.opened).toBeTruthy();" in spec
-    assert "const exitRiskReviewVisibleArtifacts = await page.evaluate(({ sectionHint, artifactIds }) => {" in spec
+    assert "exitRiskReviewVisibleArtifacts = await page.evaluate(({ sectionHint, artifactIds }) => {" in spec
     assert "const rawTitles = Array.from(target.querySelectorAll('.value-text[title]'))" in spec
     assert "expect(exitRiskReviewVisibleArtifacts).toEqual(exitRiskReviewArtifacts);" in spec
     assert "price_action_exit_risk_break_even_guarded_review" in spec
@@ -93,7 +118,7 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "支撑证据" in spec
     assert "expectStableMarker" in spec
     assert "toLowerCase().includes(text.toLowerCase())" in spec
-    assert "new RegExp(escapeRegExp(marker), 'i')" in spec
+    assert "await expect(page.locator('body')).toContainText(marker);" in spec
     assert "context-nav" in spec
     assert "async function clickContextNav(page, label)" in spec
     assert "const expandToggle = page.getByRole('button', { name: '展开侧边导航' });" in spec
@@ -101,21 +126,21 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "await clickContextNav(page, route.nav_label);" in spec
     assert "internalSnapshotRequests.length" in spec
     assert "document.documentElement.dataset.theme" in spec
-    assert "contracts-subcommand-workspace_routes_smoke" in spec
-    assert "data-accordion-id=\"contracts-subcommand-workspace_routes_smoke\"" in spec
-    assert "const pageSectionActiveLabel = ((await activePageSection.textContent()) || '').trim();" in spec
-    assert "const pageSectionAccordionState = await focusedAccordion.getAttribute('data-state');" in spec
+    assert "contracts-acceptance-subcommands" in spec
+    assert "let pageSectionActiveLabel = '';" in spec
+    assert "let pageSectionAccordionState = '';" in spec
+    assert "await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-acceptance-subcommands'));" in spec
     assert "active_label: pageSectionActiveLabel" in spec
     assert "accordion_state: pageSectionAccordionState" in spec
-    assert "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff" in spec
-    assert "data-accordion-id=\"contracts-source-head-price_action_exit_risk_handoff\"" in spec
-    assert "source head 状态" in spec
-    assert "下一研究优先级" in spec
-    assert "当前允许动作" in spec
-    assert "当前阻止动作" in spec
-    assert "#/workspace/contracts?page_section=contracts-source-gap-audit" in spec
-    assert "退出风控源差审计" in spec
-    assert "finding_count" in spec
+    assert "#/workspace/contracts?page_section=contracts-source-head-operator_panel" in spec
+    assert "data-accordion-id=\"contracts-source-head-operator_panel\"" in spec
+    assert "状态" in spec
+    assert "研究结论" in spec
+    assert "生成时间" in spec
+    assert "路径" in spec
+    assert "#/workspace/contracts?page_section=contracts-fallback" in spec
+    assert "/data/fenlie_dashboard_snapshot.json" in spec
+    assert "/operator_task_visual_panel.html" in spec
     assert "await expect(activeExitRiskReviewArtifact).toHaveAttribute('title', exitRiskReviewActiveArtifact);" in spec
     assert str(result_path) in spec
 
@@ -133,8 +158,22 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
                         "payload": {
                             "active_baseline": "hold16_zero",
                         }
+                    },
+                    "commodity_reasoning_summary": {
+                        "payload": {
+                            "primary_scenario_brief": "supply_chain_tightening",
+                            "primary_chain_brief": "feedstock_cost_push_chain",
+                            "contracts_in_focus": ["BU2606"],
+                        }
                     }
-                }
+                },
+                "workspace_default_focus": {
+                    "artifact": "operator_panel",
+                    "group": "system_anchor",
+                    "panel": "orchestration",
+                    "section": "freshness",
+                    "search_scope": "title",
+                },
             },
             ensure_ascii=False,
         ),
@@ -143,7 +182,465 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
 
     route_assertions = mod.load_public_workspace_route_assertions(dist_dir=dist_dir)
 
-    assert route_assertions[0]["markers"] == ["关键摘要", "系统运行", "调度心跳", "研究主线", "hold16_zero", "退出风控", "下一步去哪"]
+    assert route_assertions[0]["markers"] == [
+        "系统状态 / 入口 / 路由总览",
+        "研究主线摘要",
+        "查看源头主线",
+        "契约验收",
+        "hold16_zero",
+        "国内商品推理线",
+        "supply_chain_tightening",
+        "feedstock_cost_push_chain",
+        "BU2606",
+    ]
+    assert route_assertions[1]["expected_default_artifact"] == "operator_panel"
+    assert route_assertions[1]["expected_focus_panel"] == "orchestration"
+    assert route_assertions[1]["expected_focus_section"] == "freshness"
+
+
+def test_load_commodity_visibility_route_assertions_reads_public_snapshot_markers(tmp_path: Path) -> None:
+    mod = load_module()
+    dist_dir = tmp_path / "dist"
+    data_dir = dist_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "fenlie_dashboard_snapshot.json").write_text(
+        json.dumps(
+            {
+                "artifact_payloads": {
+                    "commodity_reasoning_summary": {
+                        "payload": {
+                            "primary_scenario_brief": "policy_relief_watch",
+                            "primary_chain_brief": "policy_relief_chain",
+                            "contracts_in_focus": ["BU2606"],
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    route_assertions = mod.load_commodity_visibility_route_assertions(dist_dir=dist_dir)
+
+    assert route_assertions == [
+        {
+            "route": "#/overview",
+            "nav_label": "总览",
+            "headline": "总览",
+            "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+        },
+        {
+            "route": "#/terminal/public",
+            "nav_label": "操作终端",
+            "headline": "执行穿透 / 调度与门禁",
+            "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+        },
+    ]
+
+
+def test_build_commodity_visibility_smoke_spec_covers_overview_and_terminal_public(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "commodity-visibility-smoke.png"
+    result_path = tmp_path / "commodity-visibility-smoke.json"
+
+    spec = mod.build_commodity_visibility_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        route_assertions=[
+            {
+                "route": "#/overview",
+                "nav_label": "总览",
+                "headline": "总览",
+                "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+            },
+                {
+                    "route": "#/terminal/public",
+                    "nav_label": "操作终端",
+                    "headline": "执行穿透 / 调度与门禁",
+                    "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+                },
+            ],
+    )
+
+    assert "#/overview" in spec
+    assert "#/terminal/public" in spec
+    assert "国内商品推理线" in spec
+    assert "policy_relief_watch" in spec
+    assert "policy_relief_chain" in spec
+    assert "BU2606" in spec
+    assert "commodity visibility smoke" in spec
+    assert "visited_routes" in spec
+    assert "await expect(page.locator('body')).toContainText(marker);" in spec
+    assert "requested_surface: 'public'" in spec
+    assert str(result_path) in spec
+
+
+def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_links(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "graph-home-smoke.png"
+    result_path = tmp_path / "graph-home-smoke.json"
+
+    spec = mod.build_graph_home_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        route_assertions=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["默认管道", "推荐下一跳", "回到交易中枢", "去操作终端", "去研究工作区", "打开全局搜索"],
+            }
+        ],
+    )
+
+    assert "#/" in spec
+    assert "#/unknown-route" in spec
+    assert "#/graph-home" in spec
+    assert "图谱化主页" in spec
+    assert "默认管道" in spec
+    assert "推荐下一跳" in spec
+    assert "去操作终端" in spec
+    assert "去研究工作区" in spec
+    assert "打开全局搜索" in spec
+    assert "graph home smoke" in spec
+    assert "graph_home_assertion" in spec
+    assert "const resolvedRoute = await page.evaluate(() => window.location.hash);" in spec
+    assert "const graphCanvas = page.locator('canvas').first();" in spec
+    assert "candidateOffsets" in spec
+    assert "canvas_selection_assertion" in spec
+    assert "terminal_link_href" in spec
+    assert "workspace_link_href" in spec
+    assert "search_link_href" in spec
+    assert str(result_path) in spec
+
+
+def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> None:
+    mod = load_module()
+    report_path = tmp_path / "report.json"
+    screenshot_path = tmp_path / "graph-home-smoke.png"
+
+    payload = mod.build_artifact_payload(
+        workspace=tmp_path,
+        report_path=report_path,
+        screenshot_path=screenshot_path,
+        build_result={"returncode": 0},
+        server_ready_seconds=0.11,
+        smoke_result={
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "playwright_result": {
+                    "requested_surface": "public",
+                    "effective_surface": "public",
+                    "visited_routes": [
+                        {"route": "#/graph-home", "headline": "图谱化主页"},
+                        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+                        {"route": "#/workspace/artifacts", "headline": "工件目标池"},
+                        {"route": "#/search", "headline": "全局关键词搜索"},
+                    ],
+                "snapshot_requests": [
+                    "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
+                ],
+                "internal_snapshot_requests": [],
+                "graph_home_assertion": {
+                    "default_route": "#/",
+                    "fallback_route": "#/unknown-route",
+                    "resolved_route": "#/graph-home",
+                    "default_center": "交易中枢",
+                    "terminal_link_href": "#/terminal/public",
+                    "workspace_link_href": "#/workspace/artifacts",
+                    "search_link_href": "#/search",
+                    "canvas_selection_assertion": {
+                        "selected_heading": "执行与风控",
+                        "selected_center": "执行与风控",
+                        "recenter_heading": "交易中枢",
+                    },
+                },
+            },
+        },
+        base_url="http://127.0.0.1:4173/",
+        mode="graph_home",
+        expected_route_markers=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["默认管道", "推荐下一跳", "回到交易中枢", "去操作终端", "去研究工作区", "打开全局搜索"],
+            }
+        ],
+    )
+
+    assert payload["action"] == "dashboard_graph_home_browser_smoke"
+    assert payload["ok"] is True
+    assert payload["routes"] == [
+        {"route": "#/graph-home", "headline": "图谱化主页"},
+        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+        {"route": "#/workspace/artifacts", "headline": "工件目标池"},
+        {"route": "#/search", "headline": "全局关键词搜索"},
+    ]
+    assert payload["graph_home_assertion"] == {
+        "default_route": "#/",
+        "fallback_route": "#/unknown-route",
+        "resolved_route": "#/graph-home",
+        "default_center": "交易中枢",
+        "terminal_link_href": "#/terminal/public",
+        "workspace_link_href": "#/workspace/artifacts",
+        "search_link_href": "#/search",
+        "canvas_selection_assertion": {
+            "selected_heading": "执行与风控",
+            "selected_center": "执行与风控",
+            "recenter_heading": "交易中枢",
+        },
+    }
+
+
+def test_build_graph_home_narrow_smoke_spec_covers_small_shell_tier_and_sidebar_contract(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "graph-home-narrow-smoke.png"
+    result_path = tmp_path / "graph-home-narrow-smoke.json"
+
+    spec = mod.build_graph_home_narrow_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        route_assertions=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["默认管道", "推荐下一跳", "去操作终端", "去研究工作区", "打开全局搜索"],
+            }
+        ],
+    )
+
+    assert "graph home narrow smoke" in spec
+    assert "viewport: { width: 390, height: 844 }" in spec
+    assert "data-shell-tier" in spec
+    assert "sidebar_toggle_visible" in spec
+    assert "sidebar_utility_link_href" in spec
+    assert "搜索 / Search" in spec
+    assert str(result_path) in spec
+
+
+def test_build_artifact_payload_reports_graph_home_narrow_surface(tmp_path: Path) -> None:
+    mod = load_module()
+    report_path = tmp_path / "report.json"
+    screenshot_path = tmp_path / "graph-home-narrow-smoke.png"
+
+    payload = mod.build_artifact_payload(
+        workspace=tmp_path,
+        report_path=report_path,
+        screenshot_path=screenshot_path,
+        build_result={"returncode": 0},
+        server_ready_seconds=0.12,
+        smoke_result={
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "playwright_result": {
+                "requested_surface": "public",
+                "effective_surface": "public",
+                "visited_routes": [
+                    {"route": "#/graph-home", "headline": "图谱化主页"},
+                ],
+                "snapshot_requests": [
+                    "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
+                ],
+                "internal_snapshot_requests": [],
+                "graph_home_assertion": {
+                    "default_route": "#/",
+                    "resolved_route": "#/graph-home",
+                    "shell_tier": "s",
+                    "sidebar_toggle_visible": False,
+                    "sidebar_utility_link_href": "#/search",
+                },
+            },
+        },
+        base_url="http://127.0.0.1:4173/",
+        mode="graph_home_narrow",
+        expected_route_markers=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["默认管道", "推荐下一跳", "去操作终端", "去研究工作区", "打开全局搜索"],
+            }
+        ],
+    )
+
+    assert payload["action"] == "dashboard_graph_home_narrow_browser_smoke"
+    assert payload["ok"] is True
+    assert payload["graph_home_assertion"] == {
+        "default_route": "#/",
+        "resolved_route": "#/graph-home",
+        "shell_tier": "s",
+        "sidebar_toggle_visible": False,
+        "sidebar_utility_link_href": "#/search",
+    }
+
+
+def test_build_graph_home_pipeline_smoke_spec_covers_drag_reorder_and_refresh_persistence(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "graph-home-pipeline-smoke.png"
+    result_path = tmp_path / "graph-home-pipeline-smoke.json"
+
+    spec = mod.build_graph_home_pipeline_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        route_assertions=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["加入自定义管道", "创建默认管道"],
+            }
+        ],
+    )
+
+    assert "graph home pipeline smoke" in spec
+    assert "graph_home_pipelines_v1" in spec
+    assert "dragTo" in spec
+    assert "pipeline_persistence_assertion" in spec
+    assert "await page.reload({ waitUntil: 'networkidle' });" in spec
+    assert "加入自定义管道" in spec
+    assert str(result_path) in spec
+
+
+def test_build_artifact_payload_reports_graph_home_pipeline_surface(tmp_path: Path) -> None:
+    mod = load_module()
+    report_path = tmp_path / "report.json"
+    screenshot_path = tmp_path / "graph-home-pipeline-smoke.png"
+
+    payload = mod.build_artifact_payload(
+        workspace=tmp_path,
+        report_path=report_path,
+        screenshot_path=screenshot_path,
+        build_result={"returncode": 0},
+        server_ready_seconds=0.14,
+        smoke_result={
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "playwright_result": {
+                "requested_surface": "public",
+                "effective_surface": "public",
+                "visited_routes": [
+                    {"route": "#/graph-home", "headline": "图谱化主页"},
+                ],
+                "snapshot_requests": [
+                    "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
+                ],
+                "internal_snapshot_requests": [],
+                "graph_home_assertion": {
+                    "default_route": "#/",
+                    "resolved_route": "#/graph-home",
+                    "pipeline_persistence_assertion": {
+                        "selected_heading": "执行与风控",
+                        "initial_order": ["交易中枢", "执行与风控"],
+                        "reordered_order": ["执行与风控", "交易中枢"],
+                        "persisted_order": ["执行与风控", "交易中枢"],
+                    },
+                },
+            },
+        },
+        base_url="http://127.0.0.1:4173/",
+        mode="graph_home_pipeline",
+        expected_route_markers=[
+            {
+                "route": "#/graph-home",
+                "nav_label": "图谱主页",
+                "headline": "图谱化主页",
+                "markers": ["加入自定义管道", "创建默认管道"],
+            }
+        ],
+    )
+
+    assert payload["action"] == "dashboard_graph_home_pipeline_browser_smoke"
+    assert payload["ok"] is True
+    assert payload["graph_home_assertion"] == {
+        "default_route": "#/",
+        "resolved_route": "#/graph-home",
+        "pipeline_persistence_assertion": {
+            "selected_heading": "执行与风控",
+            "initial_order": ["交易中枢", "执行与风控"],
+            "reordered_order": ["执行与风控", "交易中枢"],
+            "persisted_order": ["执行与风控", "交易中枢"],
+        },
+    }
+
+
+def test_build_artifact_payload_reports_commodity_visibility_surface(tmp_path: Path) -> None:
+    mod = load_module()
+    report_path = tmp_path / "report.json"
+    screenshot_path = tmp_path / "commodity-visibility-smoke.png"
+
+    payload = mod.build_artifact_payload(
+        workspace=tmp_path,
+        report_path=report_path,
+        screenshot_path=screenshot_path,
+        build_result={"returncode": 0},
+        server_ready_seconds=0.14,
+        smoke_result={
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "playwright_result": {
+                "requested_surface": "public",
+                "effective_surface": "public",
+                "visited_routes": [
+                    {"route": "#/overview", "headline": "总览"},
+                    {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+                ],
+                "snapshot_requests": [
+                    "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
+                ],
+                "internal_snapshot_requests": [],
+            },
+        },
+        base_url="http://127.0.0.1:4173/",
+        mode="commodity_visibility",
+        expected_route_markers=[
+            {
+                "route": "#/overview",
+                "nav_label": "总览",
+                "headline": "总览",
+                "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+            },
+                {
+                    "route": "#/terminal/public",
+                    "nav_label": "操作终端",
+                    "headline": "执行穿透 / 调度与门禁",
+                    "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+                },
+            ],
+    )
+
+    assert payload["action"] == "dashboard_commodity_visibility_browser_smoke"
+    assert payload["ok"] is True
+    assert payload["surface_assertion"]["requested_surface"] == "public"
+    assert payload["surface_assertion"]["effective_surface"] == "public"
+    assert payload["routes"] == [
+        {"route": "#/overview", "headline": "总览"},
+        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+    ]
+    assert payload["expected_route_markers"] == [
+        {
+            "route": "#/overview",
+            "nav_label": "总览",
+            "headline": "总览",
+            "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+        },
+        {
+            "route": "#/terminal/public",
+            "nav_label": "操作终端",
+            "headline": "执行穿透 / 调度与门禁",
+            "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
+        },
+    ]
 
 
 def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -> None:
@@ -186,30 +683,30 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     "resolved_theme": "light",
                 },
                 "page_section_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
-                    "page_section": "contracts-subcommand-workspace_routes_smoke",
-                    "active_label": "工作区路由子命令",
-                    "accordion_state": "open",
+                    "route": "#/workspace/contracts?page_section=contracts-acceptance-subcommands",
+                    "page_section": "contracts-acceptance-subcommands",
+                    "active_label": "子命令证据",
+                    "accordion_state": "",
                 },
                 "contracts_source_head_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff",
-                    "page_section": "contracts-source-head-price_action_exit_risk_handoff",
-                    "source_head_id": "price_action_exit_risk_handoff",
+                    "route": "#/workspace/contracts?page_section=contracts-source-head-operator_panel",
+                    "page_section": "contracts-source-head-operator_panel",
+                    "source_head_id": "operator_panel",
                     "accordion_state": "open",
                     "visible_markers": [
-                        "source head 状态",
-                        "下一研究优先级",
-                        "当前允许动作",
-                        "当前阻止动作",
+                        "状态",
+                        "研究结论",
+                        "生成时间",
+                        "路径",
                     ],
                 },
                 "contracts_source_gap_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-source-gap-audit",
-                    "page_section": "contracts-source-gap-audit",
+                    "route": "#/workspace/contracts?page_section=contracts-fallback",
+                    "page_section": "contracts-fallback",
                     "visible_markers": [
-                        "退出风控源差审计",
-                        "发现数量",
-                        "标准锚点",
+                        "#/workspace/raw",
+                        "/data/fenlie_dashboard_snapshot.json",
+                        "/operator_task_visual_panel.html",
                     ],
                 },
                 "artifacts_filter_assertion": {
@@ -217,6 +714,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
+                    "source_available": True,
                     "active_artifact": "intraday_orderflow_blueprint",
                     "visible_artifacts": [
                         "intraday_orderflow_blueprint",
@@ -228,6 +726,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     "group": "research_exit_risk",
                     "search_scope": "title",
                     "search": "",
+                    "source_available": True,
                     "section_label": "支撑证据",
                     "active_artifact": "price_action_exit_risk_break_even_review_conclusion",
                     "visible_artifacts": [
@@ -271,37 +770,42 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         "resolved_theme": "light",
     }
     assert payload["page_section_assertion"] == {
-        "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
-        "page_section": "contracts-subcommand-workspace_routes_smoke",
-        "active_label": "工作区路由子命令",
-        "accordion_state": "open",
+        "applicable": True,
+        "route": "#/workspace/contracts?page_section=contracts-acceptance-subcommands",
+        "page_section": "contracts-acceptance-subcommands",
+        "active_label": "子命令证据",
+        "accordion_state": "",
     }
     assert payload["contracts_source_head_assertion"] == {
-        "route": "#/workspace/contracts?page_section=contracts-source-head-price_action_exit_risk_handoff",
-        "page_section": "contracts-source-head-price_action_exit_risk_handoff",
-        "source_head_id": "price_action_exit_risk_handoff",
+        "applicable": True,
+        "route": "#/workspace/contracts?page_section=contracts-source-head-operator_panel",
+        "page_section": "contracts-source-head-operator_panel",
+        "source_head_id": "operator_panel",
         "accordion_state": "open",
         "visible_markers": [
-            "source head 状态",
-            "下一研究优先级",
-            "当前允许动作",
-            "当前阻止动作",
+            "状态",
+            "研究结论",
+            "生成时间",
+            "路径",
         ],
     }
     assert payload["contracts_source_gap_assertion"] == {
-        "route": "#/workspace/contracts?page_section=contracts-source-gap-audit",
-        "page_section": "contracts-source-gap-audit",
+        "applicable": True,
+        "route": "#/workspace/contracts?page_section=contracts-fallback",
+        "page_section": "contracts-fallback",
         "visible_markers": [
-            "退出风控源差审计",
-            "发现数量",
-            "标准锚点",
+            "#/workspace/raw",
+            "/data/fenlie_dashboard_snapshot.json",
+            "/operator_task_visual_panel.html",
         ],
     }
     assert payload["artifacts_filter_assertion"] == {
+        "applicable": True,
         "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
         "group": "research_cross_section",
         "search_scope": "title",
         "search": "orderflow",
+        "source_available": True,
         "active_artifact": "intraday_orderflow_blueprint",
         "visible_artifacts": [
             "intraday_orderflow_blueprint",
@@ -309,10 +813,12 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         ],
     }
     assert payload["artifacts_exit_risk_review_assertion"] == {
+        "applicable": True,
         "route": "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
         "group": "research_exit_risk",
         "search_scope": "title",
         "search": "",
+        "source_available": True,
         "section_label": "支撑证据",
         "active_artifact": "price_action_exit_risk_break_even_review_conclusion",
         "visible_artifacts": [
@@ -379,6 +885,13 @@ def test_load_internal_terminal_focus_expectations_reads_focus_slot_source_row(t
                                 }
                             ]
                         }
+                    },
+                    "commodity_reasoning_summary": {
+                        "payload": {
+                            "primary_scenario_brief": "supply_chain_tightening",
+                            "primary_chain_brief": "feedstock_cost_push_chain",
+                            "contracts_in_focus": ["BU2606"],
+                        }
                     }
                 }
             },
@@ -400,6 +913,10 @@ def test_load_internal_terminal_focus_expectations_reads_focus_slot_source_row(t
                 "信号发生器与风险节流阀",
                 "穿透层 3 / 焦点槽位",
                 "主槽位",
+                "国内商品推理线",
+                "supply_chain_tightening",
+                "feedstock_cost_push_chain",
+                "BU2606",
             ],
         }
     ]
@@ -416,19 +933,32 @@ def test_build_internal_terminal_focus_smoke_spec_asserts_drilldown_focus_link_o
         result_path=result_path,
         focus_row_id="primary",
         focus_row_label="主槽位",
+        visible_markers=[
+            "信号发生器与风险节流阀",
+            "穿透层 3 / 焦点槽位",
+            "主槽位",
+            "国内商品推理线",
+            "supply_chain_tightening",
+            "feedstock_cost_push_chain",
+            "BU2606",
+        ],
     )
 
     assert "#/terminal/internal?panel=signal-risk&section=focus-slots" in spec
     assert "信号发生器与风险节流阀" in spec
     assert "穿透层 3 / 焦点槽位" in spec
     assert "主槽位" in spec
+    assert "国内商品推理线" in spec
+    assert "supply_chain_tightening" in spec
+    assert "feedstock_cost_push_chain" in spec
+    assert "BU2606" in spec
     assert "summary.drill-card-summary .drill-card-link" in spec
-    assert ".drill-card-actions .drill-card-link" in spec
-    assert "expect(summaryLinkCount).toBe(0)" in spec
-    assert "expect(actionLinkCount).toBeGreaterThanOrEqual(1)" in spec
+    assert ".drill-card-summary .drill-card-link" in spec
+    assert "expect(summaryLinkCount).toBeGreaterThanOrEqual(1)" in spec
     assert "定位此项" in spec
     assert "当前焦点" in spec
     assert "row=primary" in spec
+    assert "for (const marker of VISIBLE_MARKERS)" in spec
     assert "expect(publicSnapshotRequests.length).toBe(0)" in spec
     assert "requested_surface: 'internal'" in spec
     assert "terminal_drilldown_assertion" in spec
@@ -497,6 +1027,49 @@ def test_build_artifact_payload_reports_internal_alignment_surface(tmp_path: Pat
         "top_event_headline": "拆分研究工作区左栏四控件",
         "top_action": "先刷新 internal snapshot 并验证对齐页，再收紧 internal fallback 语义。",
     }
+    assert payload["page_section_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "active_label": "",
+        "accordion_state": "",
+    }
+    assert payload["contracts_source_head_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "source_head_id": "",
+        "accordion_state": "",
+        "visible_markers": [],
+    }
+    assert payload["contracts_source_gap_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "visible_markers": [],
+    }
+    assert payload["artifacts_filter_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "group": "",
+        "search_scope": "",
+        "search": "",
+        "source_available": False,
+        "active_artifact": "",
+        "visible_artifacts": [],
+    }
+    assert payload["artifacts_exit_risk_review_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "group": "",
+        "search_scope": "",
+        "search": "",
+        "source_available": False,
+        "section_label": "",
+        "active_artifact": "",
+        "visible_artifacts": [],
+        "visible_markers": [],
+    }
     assert payload["expected_route_markers"] == [
         {
             "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
@@ -544,11 +1117,10 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                     "section": "focus-slots",
                     "focus_row_id": "primary",
                     "focus_row_label": "主槽位",
-                    "summary_link_count": 0,
-                    "action_link_count": 1,
-                    "action_label_before_click": "定位此项",
-                    "action_label_after_click": "当前焦点",
-                    "action_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
+                    "summary_link_count": 1,
+                    "summary_label_before_click": "定位此项",
+                    "summary_label_after_click": "当前焦点",
+                    "summary_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
                 },
             },
         },
@@ -563,6 +1135,10 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                     "信号发生器与风险节流阀",
                     "穿透层 3 / 焦点槽位",
                     "主槽位",
+                    "国内商品推理线",
+                    "supply_chain_tightening",
+                    "feedstock_cost_push_chain",
+                    "BU2606",
                 ],
             }
         ],
@@ -577,17 +1153,59 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
     assert payload["network_observation"]["internal_snapshot_fetch_count"] == 1
     assert payload["expected_focus_panel"] == "signal-risk"
     assert payload["expected_focus_section"] == "focus-slots"
+    assert payload["page_section_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "active_label": "",
+        "accordion_state": "",
+    }
+    assert payload["contracts_source_head_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "source_head_id": "",
+        "accordion_state": "",
+        "visible_markers": [],
+    }
+    assert payload["contracts_source_gap_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "page_section": "",
+        "visible_markers": [],
+    }
+    assert payload["artifacts_filter_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "group": "",
+        "search_scope": "",
+        "search": "",
+        "source_available": False,
+        "active_artifact": "",
+        "visible_artifacts": [],
+    }
+    assert payload["artifacts_exit_risk_review_assertion"] == {
+        "applicable": False,
+        "route": "",
+        "group": "",
+        "search_scope": "",
+        "search": "",
+        "source_available": False,
+        "section_label": "",
+        "active_artifact": "",
+        "visible_artifacts": [],
+        "visible_markers": [],
+    }
     assert payload["terminal_drilldown_assertion"] == {
         "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
         "panel": "signal-risk",
         "section": "focus-slots",
         "focus_row_id": "primary",
         "focus_row_label": "主槽位",
-        "summary_link_count": 0,
-        "action_link_count": 1,
-        "action_label_before_click": "定位此项",
-        "action_label_after_click": "当前焦点",
-        "action_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
+        "summary_link_count": 1,
+        "summary_label_before_click": "定位此项",
+        "summary_label_after_click": "当前焦点",
+        "summary_link_href": "/terminal/internal?panel=signal-risk&section=focus-slots&row=primary",
     }
     assert payload["expected_route_markers"] == [
         {
@@ -598,6 +1216,10 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                 "信号发生器与风险节流阀",
                 "穿透层 3 / 焦点槽位",
                 "主槽位",
+                "国内商品推理线",
+                "supply_chain_tightening",
+                "feedstock_cost_push_chain",
+                "BU2606",
             ],
         }
     ]

@@ -16,6 +16,9 @@ Actions:
   live-takeover-canary    Run remote Binance takeover canary (includes minimal live order).
   live-takeover-ready-check  Check whether remote account is ready for canary order (balance + creds).
   live-takeover-autopilot  Ready-check first, place canary only when ready; otherwise skip gracefully.
+  infra-canary-probe      Run remote Binance infra canary probe (no live order).
+  infra-canary-run        Run remote Binance infra canary round trip.
+  infra-canary-autopilot  Autopilot-check first, run real infra canary only when allowed.
   cut-local               Disable local OpenClaw launchd services.
   probe-cloud             Probe cloud host/project availability.
   compare                 Compare local/remote git heads.
@@ -53,6 +56,11 @@ Environment:
   LIVE_TAKEOVER_MARKET               default: spot (spot|futures_usdm)
   LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK default: true
   LIVE_TAKEOVER_FORWARD_LOCAL_CREDS  default: false (forward local BINANCE_API_KEY/BINANCE_SECRET to remote run env)
+  INFRA_CANARY_SYMBOL                default: BTCUSDT
+  INFRA_CANARY_QUOTE_USDT            default: 10
+  INFRA_CANARY_SINGLE_RUN_CAP_USDT   default: 12
+  INFRA_CANARY_DAILY_BUDGET_CAP_USDT default: 20
+  INFRA_CANARY_ALLOW_DUST            default: true
 
 Notes:
   - SSH connect timeout is hard-limited to 5s for bridge reliability checks.
@@ -127,6 +135,11 @@ live_takeover_trade_window_hours="${LIVE_TAKEOVER_TRADE_WINDOW_HOURS:-24}"
 live_takeover_market="$(printf '%s' "${LIVE_TAKEOVER_MARKET:-spot}" | tr '[:upper:]' '[:lower:]')"
 live_takeover_allow_daemon_env_fallback="${LIVE_TAKEOVER_ALLOW_DAEMON_ENV_FALLBACK:-true}"
 live_takeover_forward_local_creds="${LIVE_TAKEOVER_FORWARD_LOCAL_CREDS:-false}"
+infra_canary_symbol="${INFRA_CANARY_SYMBOL:-BTCUSDT}"
+infra_canary_quote_usdt="${INFRA_CANARY_QUOTE_USDT:-10}"
+infra_canary_single_run_cap_usdt="${INFRA_CANARY_SINGLE_RUN_CAP_USDT:-12}"
+infra_canary_daily_budget_cap_usdt="${INFRA_CANARY_DAILY_BUDGET_CAP_USDT:-20}"
+infra_canary_allow_dust="${INFRA_CANARY_ALLOW_DUST:-true}"
 
 if [[ "${live_takeover_market}" != "spot" && "${live_takeover_market}" != "futures_usdm" ]]; then
   echo "ERROR: LIVE_TAKEOVER_MARKET must be one of: spot, futures_usdm." >&2
@@ -278,6 +291,9 @@ live-takeover-probe
 live-takeover-canary
 live-takeover-ready-check
 live-takeover-autopilot
+infra-canary-probe
+infra-canary-run
+infra-canary-autopilot
 sample-whitelist
 sample-whitelist-gate
 assert-whitelist-gate
@@ -603,6 +619,149 @@ PY
   return 2
 }
 
+build_infra_canary_remote_cmd() {
+  local mode="$1"
+  local -a args
+  local quoted_cmd cred_env_arg
+  cred_env_arg="$(build_live_takeover_cred_env_arg)"
+  args=(
+    PYTHONPATH=src
+    python3
+    scripts/binance_infra_canary.py
+    --config
+    config.yaml
+    --output-root
+    output
+    --mode
+    "${mode}"
+    --symbol
+    "${infra_canary_symbol}"
+    --quote-usdt
+    "${infra_canary_quote_usdt}"
+    --single-run-cap-usdt
+    "${infra_canary_single_run_cap_usdt}"
+    --daily-budget-cap-usdt
+    "${infra_canary_daily_budget_cap_usdt}"
+  )
+  if is_true "${infra_canary_allow_dust}"; then
+    args+=(--allow-dust)
+  fi
+  if is_true "${live_takeover_allow_daemon_env_fallback}"; then
+    args+=(--allow-daemon-env-fallback)
+  fi
+  printf -v quoted_cmd '%q ' "${args[@]}"
+  printf '%s%s' "${cred_env_arg}" "${quoted_cmd% }"
+}
+
+run_infra_canary_mode() {
+  local mode="$1"
+  local remote_cmd
+  remote_cmd="$(build_infra_canary_remote_cmd "${mode}")"
+  ssh_exec "set -e; wd=\$(${remote_workdir_expr}); cd \"\$wd\"; ${remote_cmd}"
+}
+
+action_infra_canary_probe() {
+  run_infra_canary_mode "probe"
+}
+
+action_infra_canary_run() {
+  run_infra_canary_mode "run"
+}
+
+action_infra_canary_autopilot() {
+  local check_json rc_check tmp_json gate_json rc_gate
+  set +e
+  check_json="$(run_infra_canary_mode "autopilot-check" 2>/dev/null)"
+  rc_check=$?
+  set -e
+
+  if (( rc_check != 0 )); then
+    echo "FUSE: infra-canary-autopilot autopilot-check failed unexpectedly (rc=${rc_check})." >&2
+    if [[ -n "${check_json}" ]]; then
+      echo "${check_json}" >&2
+    fi
+    return 2
+  fi
+
+  tmp_json="$(mktemp)"
+  printf '%s\n' "${check_json}" > "${tmp_json}"
+  set +e
+  gate_json="$(
+    python3 - "${tmp_json}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload_path = Path(sys.argv[1])
+try:
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+except Exception as exc:
+    out = {
+        "executed": False,
+        "status": "skipped_invalid_check_payload",
+        "action": "infra-canary-autopilot",
+        "check_mode": "autopilot-check",
+        "check_ok": False,
+        "autopilot_allowed": False,
+        "reason": "invalid_autopilot_check_json",
+        "parse_error": str(exc),
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    raise SystemExit(4)
+
+raw_autopilot_allowed = payload.get("autopilot_allowed", None)
+autopilot_allowed = True if isinstance(raw_autopilot_allowed, bool) and raw_autopilot_allowed is True else False
+has_valid_gate_type = isinstance(raw_autopilot_allowed, bool)
+if "reason" in payload:
+    reason = str(payload.get("reason"))
+elif not has_valid_gate_type:
+    reason = "invalid_autopilot_allowed_type"
+elif autopilot_allowed:
+    reason = "ready"
+else:
+    reason = "autopilot_check_blocked"
+out = {
+    "executed": False,
+    "status": "ready_to_run" if autopilot_allowed else "skipped_not_ready",
+    "action": "infra-canary-autopilot",
+    "check_mode": "autopilot-check",
+    "check_ok": bool(payload.get("ok", False)),
+    "autopilot_allowed": autopilot_allowed,
+    "reason": reason,
+}
+if not has_valid_gate_type:
+    out["gate_field_error"] = {
+        "field": "autopilot_allowed",
+        "expected_type": "bool",
+        "actual_type": type(raw_autopilot_allowed).__name__,
+    }
+steps = payload.get("steps", {})
+if isinstance(steps, dict):
+    out["steps"] = steps
+print(json.dumps(out, ensure_ascii=False, indent=2))
+raise SystemExit(0 if autopilot_allowed else 3)
+PY
+  )"
+  rc_gate=$?
+  set -e
+  if (( rc_gate == 0 )); then
+    rm -f "${tmp_json}" >/dev/null 2>&1 || true
+    action_infra_canary_run
+    return $?
+  fi
+  if (( rc_gate == 3 || rc_gate == 4 )); then
+    printf '%s\n' "${gate_json}"
+    rm -f "${tmp_json}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  echo "FUSE: infra-canary-autopilot gate parse failed unexpectedly (rc=${rc_gate})." >&2
+  if [[ -n "${gate_json}" ]]; then
+    echo "${gate_json}" >&2
+  fi
+  rm -f "${tmp_json}" >/dev/null 2>&1 || true
+  return 2
+}
+
 append_sample_record() {
   local action="$1"
   local rc="$2"
@@ -642,6 +801,9 @@ run_action_by_name() {
     live-takeover-canary) action_live_takeover_canary ;;
     live-takeover-ready-check) action_live_takeover_ready_check ;;
     live-takeover-autopilot) action_live_takeover_autopilot ;;
+    infra-canary-probe) action_infra_canary_probe ;;
+    infra-canary-run) action_infra_canary_run ;;
+    infra-canary-autopilot) action_infra_canary_autopilot ;;
     *)
       echo "ERROR: unknown action '${action}'" >&2
       usage
