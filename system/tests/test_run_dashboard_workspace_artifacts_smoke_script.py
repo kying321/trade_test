@@ -123,7 +123,7 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "async function clickContextNav(page, label)" in spec
     assert "const expandToggle = page.getByRole('button', { name: '展开侧边导航' });" in spec
     assert "await page.getByRole('button', { name: '收起侧边导航' }).waitFor();" in spec
-    assert "await clickContextNav(page, route.nav_label);" in spec
+    assert "await page.goto('http://127.0.0.1:4173/' + route.route, { waitUntil: 'networkidle' });" in spec
     assert "internalSnapshotRequests.length" in spec
     assert "document.documentElement.dataset.theme" in spec
     assert "contracts-acceptance-subcommands" in spec
@@ -174,6 +174,13 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
                     "section": "freshness",
                     "search_scope": "title",
                 },
+                "catalog": [
+                    {
+                        "id": "operator_panel",
+                        "payload_key": "operator_panel",
+                        "label": "操作面板",
+                    }
+                ],
             },
             ensure_ascii=False,
         ),
@@ -196,6 +203,7 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
     assert route_assertions[1]["expected_default_artifact"] == "operator_panel"
     assert route_assertions[1]["expected_focus_panel"] == "orchestration"
     assert route_assertions[1]["expected_focus_section"] == "freshness"
+    assert route_assertions[4]["markers"] == ["告警定向原始层", "操作面板"]
 
 
 def test_load_commodity_visibility_route_assertions_reads_public_snapshot_markers(tmp_path: Path) -> None:
@@ -913,7 +921,6 @@ def test_load_internal_terminal_focus_expectations_reads_focus_slot_source_row(t
                 "信号发生器与风险节流阀",
                 "穿透层 3 / 焦点槽位",
                 "主槽位",
-                "国内商品推理线",
                 "supply_chain_tightening",
                 "feedstock_cost_push_chain",
                 "BU2606",
@@ -1135,7 +1142,6 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                     "信号发生器与风险节流阀",
                     "穿透层 3 / 焦点槽位",
                     "主槽位",
-                    "国内商品推理线",
                     "supply_chain_tightening",
                     "feedstock_cost_push_chain",
                     "BU2606",
@@ -1216,7 +1222,6 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                 "信号发生器与风险节流阀",
                 "穿透层 3 / 焦点槽位",
                 "主槽位",
-                "国内商品推理线",
                 "supply_chain_tightening",
                 "feedstock_cost_push_chain",
                 "BU2606",

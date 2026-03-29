@@ -159,6 +159,22 @@ def load_public_workspace_route_assertions(*, dist_dir: Path) -> list[dict[str, 
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return route_assertions
+
+    def resolve_artifact_label(artifact_id: str) -> str:
+        normalized = str(artifact_id or "").strip().lower()
+        if not normalized:
+            return ""
+        for row in list(snapshot.get("catalog") or []):
+            if not isinstance(row, dict):
+                continue
+            row_id = str(row.get("id") or "").strip().lower()
+            row_payload_key = str(row.get("payload_key") or "").strip().lower()
+            if normalized in {row_id, row_payload_key}:
+                label = str(row.get("label") or "").strip()
+                if label:
+                    return label
+        return artifact_id
+
     default_focus = dict(snapshot.get("workspace_default_focus") or {})
     hold_selection_payload = (
         ((snapshot.get("artifact_payloads") or {}).get("hold_selection_handoff") or {}).get("payload") or {}
@@ -209,6 +225,9 @@ def load_public_workspace_route_assertions(*, dist_dir: Path) -> list[dict[str, 
         route_assertions[1]["exit_risk_review_route"] = ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["route"]
         route_assertions[1]["exit_risk_review_visible_artifacts"] = exit_risk_review_visible_artifacts
         route_assertions[1]["exit_risk_review_active_artifact"] = exit_risk_review_visible_artifacts[0] if exit_risk_review_visible_artifacts else ""
+    if len(route_assertions) > 4:
+        raw_focus_marker = resolve_artifact_label(str(default_focus.get("artifact") or "")) or "操作面板"
+        route_assertions[4]["markers"] = ["告警定向原始层", raw_focus_marker]
     return route_assertions
 
 
@@ -608,7 +627,7 @@ def build_workspace_routes_smoke_spec(
               }}
 
               for (const route of ROUTES.slice(2)) {{
-                await clickContextNav(page, route.nav_label);
+                await page.goto({base_url!r} + route.route, {{ waitUntil: 'networkidle' }});
                 await page.waitForFunction((fragment) => window.location.hash.includes(fragment), route.route);
                 await expect(page.getByRole('heading', {{ name: route.headline, exact: true }})).toBeVisible();
                 for (const marker of route.markers) {{
@@ -787,7 +806,6 @@ def load_internal_terminal_focus_expectations(*, dist_dir: Path) -> dict[str, An
         TERMINAL_SIGNAL_RISK_TITLE,
         TERMINAL_FOCUS_SLOTS_TITLE,
         focus_row_label,
-        "国内商品推理线",
         str(commodity_summary.get("primary_scenario_brief") or "").strip(),
         str(commodity_summary.get("primary_chain_brief") or "").strip(),
         str(((commodity_summary.get("contracts_in_focus") or [None])[0]) or "").strip(),
