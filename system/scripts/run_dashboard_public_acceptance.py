@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,10 @@ def resolve_system_root(workspace: Path) -> Path:
     if workspace.name == "system":
         return workspace
     raise FileNotFoundError(f"cannot resolve system root from {workspace}")
+
+
+def current_python_executable() -> str:
+    return sys.executable or "python3"
 
 
 def run_json_script(*, name: str, cmd: list[str], cwd: Path) -> dict[str, Any]:
@@ -140,9 +145,10 @@ def run_acceptance(
 ) -> dict[str, Any]:
     system_root = resolve_system_root(workspace)
     scripts_root = system_root / "scripts"
+    python = current_python_executable()
 
     topology_cmd = [
-        "python3",
+        python,
         str(scripts_root / "run_dashboard_public_topology_smoke.py"),
         "--workspace",
         str(workspace),
@@ -150,7 +156,7 @@ def run_acceptance(
     if allow_insecure_tls_fallback:
         topology_cmd.append("--allow-insecure-tls-fallback")
     workspace_cmd = [
-        "python3",
+        python,
         str(scripts_root / "run_dashboard_workspace_artifacts_smoke.py"),
         "--workspace",
         str(workspace),

@@ -3,6 +3,8 @@ import { constants as fsConstants, existsSync, accessSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
 import { join } from 'node:path';
 
+const COMMON_LOCAL_NODE_BIN_DIRS = ['/usr/local/bin', '/opt/homebrew/bin'];
+
 function findExecutable(candidates) {
   for (const candidate of candidates) {
     if (!existsSync(candidate)) {
@@ -16,6 +18,27 @@ function findExecutable(candidates) {
     }
   }
   return null;
+}
+
+function augmentPath(rawPath = '') {
+  const segments = String(rawPath || '').split(':').filter(Boolean);
+  const next = [...segments];
+  for (const candidate of COMMON_LOCAL_NODE_BIN_DIRS) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    if (!next.includes(candidate)) {
+      next.push(candidate);
+    }
+  }
+  return next.join(':');
+}
+
+function buildChildEnv(env = process.env) {
+  return {
+    ...env,
+    PATH: augmentPath(env.PATH),
+  };
 }
 
 function probePythonExecutable(command, env = process.env) {
@@ -52,6 +75,14 @@ export function resolvePythonExecutable(env = process.env, platform = process.pl
     }
   }
 
+  const augmentedEnv = buildChildEnv(env);
+  for (const candidate of ['python3', 'python']) {
+    const resolved = probePythonExecutable(candidate, augmentedEnv);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
   if (platform === 'win32') {
     return 'python';
   }
@@ -73,6 +104,7 @@ if (printOnly) {
   args.shift();
 }
 
+const childEnv = buildChildEnv(process.env);
 const python = resolvePythonExecutable(process.env);
 if (printOnly) {
   process.stdout.write(`${python}\n`);
@@ -80,7 +112,7 @@ if (printOnly) {
 }
 
 const child = spawnSync(python, args, {
-  env: process.env,
+  env: childEnv,
   stdio: 'inherit',
 });
 

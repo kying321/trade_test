@@ -260,6 +260,48 @@ def test_run_public_route_browser_smoke_uses_uncapped_navigation_timeout(monkeyp
     assert "NAVIGATION_TIMEOUT_MS = 30000" in captured["spec"]
 
 
+def test_run_public_route_browser_smoke_keeps_a_30s_browser_timeout_floor(monkeypatch, tmp_path: Path) -> None:
+    mod = load_module()
+    captured: dict[str, str] = {}
+
+    class DummyProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, cwd, text, capture_output, check):  # noqa: ANN001
+        spec_path = Path(cmd[3])
+        temp_dir = Path(cmd[5])
+        captured["spec"] = spec_path.read_text(encoding="utf-8")
+        (temp_dir / "public-overview.result.json").write_text(
+            json.dumps(
+                {
+                    "route": "https://fuuu.fun/#/overview",
+                    "final_url": "https://fuuu.fun/#/overview",
+                    "markers": ["研究主线摘要", "国内商品推理线"],
+                    "screenshot_path": str(tmp_path / "shot.png"),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return DummyProc()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    result = mod.run_public_route_browser_smoke(
+        name="root_overview_browser",
+        root_url="https://fuuu.fun",
+        route_path="overview",
+        markers=["研究主线摘要", "国内商品推理线"],
+        timeout_seconds=5.0,
+        screenshot_path=tmp_path / "shot.png",
+    )
+
+    assert result["ok"] is True
+    assert "NAVIGATION_TIMEOUT_MS = 30000" in captured["spec"]
+
+
 def test_probe_text_endpoint_can_retry_with_insecure_tls(monkeypatch) -> None:
     mod = load_module()
 

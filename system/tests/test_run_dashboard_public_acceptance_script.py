@@ -26,6 +26,7 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
     review_dir.mkdir(parents=True)
 
     monkeypatch.setattr(mod, "resolve_system_root", lambda value: system_root)
+    monkeypatch.setattr(mod, "current_python_executable", lambda: "/opt/miniconda3/bin/python3")
     monkeypatch.setattr(mod, "now_utc", lambda: mod.dt.datetime(2026, 3, 20, 7, 15, tzinfo=mod.dt.timezone.utc))
     seen_cmds: dict[str, list[str]] = {}
 
@@ -98,6 +99,8 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
             "intraday_orderflow_research_gate_blocker",
         ],
     }
+    assert seen_cmds["topology_smoke"][0] == "/opt/miniconda3/bin/python3"
+    assert seen_cmds["workspace_routes_smoke"][0] == "/opt/miniconda3/bin/python3"
     assert "--allow-insecure-tls-fallback" in seen_cmds["topology_smoke"]
 
 
