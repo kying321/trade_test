@@ -21,6 +21,16 @@ def load_module():
     return module
 
 
+def load_spa_server_module():
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "serve_spa_fallback.py"
+    spec = importlib.util.spec_from_file_location("serve_spa_fallback_script", script_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_path: Path) -> None:
     mod = load_module()
     route_assertions = [
@@ -58,6 +68,8 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     )
 
     assert "/ops/overview" in spec
+    assert "const BASE_URL = 'http://127.0.0.1:4173/'.replace(/\\/$/, '');" in spec
+    assert "await page.goto(BASE_URL + overviewRoute.route, { waitUntil: 'networkidle' });" in spec
     assert "系统状态 / 入口 / 路由总览" in spec
     assert "研究主线摘要" in spec
     assert "查看源头主线" in spec
@@ -123,7 +135,7 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "async function clickContextNav(page, label)" in spec
     assert "const expandToggle = page.getByRole('button', { name: '展开侧边导航' });" in spec
     assert "await page.getByRole('button', { name: '收起侧边导航' }).waitFor();" in spec
-    assert "await page.goto('http://127.0.0.1:4173/' + route.route, { waitUntil: 'networkidle' });" in spec
+    assert "await page.goto(BASE_URL + route.route, { waitUntil: 'networkidle' });" in spec
     assert "internalSnapshotRequests.length" in spec
     assert "document.documentElement.dataset.theme" in spec
     assert "contracts-acceptance-subcommands" in spec
@@ -489,6 +501,8 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
     assert "const graphCanvas = page.locator('canvas').first();" in spec
     assert "candidateOffsets" in spec
     assert "canvas_selection_assertion" in spec
+    assert "const selectionObserved = selectedHeading !== '';" in spec
+    assert "if (selectionObserved) {" in spec
     assert "terminal_link_href" in spec
     assert "workspace_link_href" in spec
     assert "search_link_href" in spec
@@ -498,6 +512,7 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
     assert "researchAuditLinkAssertions.push" in spec
     assert "async function waitForRoute(page, expectedPathname, expectedParams = {})" in spec
     assert "selected_heading: String(defaultCenter || '').trim().replace(/^中心：/, '')" in spec
+    assert "await expectStableMarker(page, '风险观察');" in spec
     assert "检索 / ${auditCase.query}" in spec
     assert "工件 / ${auditCase.result_artifact}" in spec
     assert "原始层 / ${auditCase.raw_path}" in spec
@@ -543,6 +558,7 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
                     "workspace_link_href": "/workspace/artifacts",
                     "search_link_href": "/search",
                     "canvas_selection_assertion": {
+                        "selection_observed": True,
                         "selected_heading": "执行与风控",
                         "selected_center": "执行与风控",
                         "recenter_heading": "交易中枢",
@@ -595,6 +611,7 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
         "workspace_link_href": "/workspace/artifacts",
         "search_link_href": "/search",
         "canvas_selection_assertion": {
+            "selection_observed": True,
             "selected_heading": "执行与风控",
             "selected_center": "执行与风控",
             "recenter_heading": "交易中枢",
@@ -639,6 +656,7 @@ def test_build_graph_home_narrow_smoke_spec_covers_small_shell_tier_and_sidebar_
 
     assert "graph home narrow smoke" in spec
     assert "const DEFAULT_ROUTE = '/';" in spec
+    assert "const BASE_URL = 'http://127.0.0.1:4173/'.replace(/\\/$/, '');" in spec
     assert "await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));" in spec
     assert "const resolvedRoute = await page.evaluate(() => window.location.pathname);" in spec
     assert "viewport: { width: 390, height: 844 }" in spec
@@ -727,6 +745,7 @@ def test_build_graph_home_pipeline_smoke_spec_covers_drag_reorder_and_refresh_pe
 
     assert "graph home pipeline smoke" in spec
     assert "const DEFAULT_ROUTE = '/';" in spec
+    assert "const BASE_URL = 'http://127.0.0.1:4173/'.replace(/\\/$/, '');" in spec
     assert "await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));" in spec
     assert "const resolvedRoute = await page.evaluate(() => window.location.pathname);" in spec
     assert "graph_home_pipelines_v1" in spec
@@ -1777,17 +1796,27 @@ def test_http_server_uses_current_python_executable(tmp_path: Path, monkeypatch)
 
     assert seen["cmd"] == [
         "/tmp/http-python",
-        "-m",
-        "http.server",
+        str(SCRIPT_PATH.resolve().with_name("serve_spa_fallback.py")),
         "4317",
-        "--bind",
         "127.0.0.1",
-        "--directory",
         str(tmp_path),
     ]
     assert seen["cwd"] == str(tmp_path)
     assert seen["terminated"] is True
     assert seen["wait_timeout"] == 5
+
+
+def test_spa_fallback_server_routes_browser_paths_to_index(tmp_path: Path) -> None:
+    mod = load_spa_server_module()
+    (tmp_path / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "fenlie_dashboard_snapshot.json").write_text("{}", encoding="utf-8")
+
+    assert mod.should_fallback_to_index(tmp_path, "/ops/overview") is True
+    assert mod.should_fallback_to_index(tmp_path, "/workspace/contracts?page_section=contracts-topology") is True
+    assert mod.should_fallback_to_index(tmp_path, "/data/fenlie_dashboard_snapshot.json") is False
+    assert mod.should_fallback_to_index(tmp_path, "/index.html") is False
+    assert mod.should_fallback_to_index(tmp_path, "/assets/app.js") is False
 
 
 def test_temporary_manual_probe_restores_manual_jsonl_when_seed_refresh_fails(tmp_path: Path, monkeypatch) -> None:

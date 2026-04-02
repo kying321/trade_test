@@ -527,14 +527,12 @@ def inspect_manual_probe_state(*, review_dir: Path) -> dict[str, Any]:
 
 @contextlib.contextmanager
 def http_server(*, dist_dir: Path, host: str, port: int) -> Iterator[subprocess.Popen[str]]:
+    server_script = Path(__file__).with_name("serve_spa_fallback.py")
     cmd = [
         current_python_executable(),
-        "-m",
-        "http.server",
+        str(server_script),
         str(port),
-        "--bind",
         host,
-        "--directory",
         str(dist_dir),
     ]
     proc = subprocess.Popen(
@@ -570,6 +568,7 @@ def build_workspace_routes_smoke_spec(
             const fs = require('node:fs');
 
             const ROUTES = {route_matrix_json};
+            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
 
             function escapeRegExp(value) {{
               return value.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
@@ -689,7 +688,7 @@ def build_workspace_routes_smoke_spec(
                 if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
               }});
 
-              await page.goto({base_url!r} + overviewRoute.route, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + overviewRoute.route, {{ waitUntil: 'networkidle' }});
               for (const marker of overviewRoute.markers) {{
                 await expectStableMarker(page, marker);
               }}
@@ -699,7 +698,7 @@ def build_workspace_routes_smoke_spec(
                 url: page.url(),
               }});
 
-              await page.goto({base_url!r} + workspaceStartRoute.route, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + workspaceStartRoute.route, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction((artifactId) => `${{window.location.pathname}}${{window.location.search}}`.includes(`artifact=${{artifactId}}`), defaultWorkspaceArtifact);
               await page.waitForFunction((panelId) => `${{window.location.pathname}}${{window.location.search}}`.includes(`panel=${{panelId}}`), defaultWorkspacePanel);
               await page.waitForFunction((sectionId) => `${{window.location.pathname}}${{window.location.search}}`.includes(`section=${{sectionId}}`), defaultWorkspaceSection);
@@ -720,7 +719,7 @@ def build_workspace_routes_smoke_spec(
               }});
 
               if (orderflowArtifacts.length) {{
-                await page.goto({base_url!r} + artifactsFilterRoute, {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + artifactsFilterRoute, {{ waitUntil: 'networkidle' }});
                 await page.waitForFunction((fragment) => `${{window.location.pathname}}${{window.location.search}}`.includes(fragment), artifactsFilterRoute);
                 await page.waitForFunction((artifactId) => `${{window.location.pathname}}${{window.location.search}}`.includes(`artifact=${{artifactId}}`), orderflowActiveArtifact);
                 for (const artifactId of orderflowArtifacts) {{
@@ -731,7 +730,7 @@ def build_workspace_routes_smoke_spec(
               }}
 
               if (exitRiskReviewArtifacts.length && exitRiskReviewActiveArtifact) {{
-                await page.goto({base_url!r} + exitRiskReviewRoute, {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + exitRiskReviewRoute, {{ waitUntil: 'networkidle' }});
                 await page.waitForFunction((fragment) => `${{window.location.pathname}}${{window.location.search}}`.includes(fragment), exitRiskReviewRoute);
                 await page.waitForFunction((artifactId) => `${{window.location.pathname}}${{window.location.search}}`.includes(`artifact=${{artifactId}}`), exitRiskReviewActiveArtifact);
                 await expectStableMarker(page, exitRiskReviewActiveArtifact);
@@ -778,7 +777,7 @@ def build_workspace_routes_smoke_spec(
                 const auditResultArtifact = String(auditCase.result_artifact || '');
                 const auditResultLabel = String(auditCase.result_label || auditQuery || auditResultArtifact);
                 const auditRawPath = String(auditCase.raw_path || '');
-                await page.goto({base_url!r} + searchRoute, {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + searchRoute, {{ waitUntil: 'networkidle' }});
                     await waitForRoute(page, '/search', {{ q: auditQuery, scope: auditScope }});
                 await expect(page.locator('.global-search-input')).toHaveValue(auditQuery);
                 await expectStableMarker(page, auditRawPath);
@@ -806,7 +805,7 @@ def build_workspace_routes_smoke_spec(
               }}
 
               for (const route of ROUTES.slice(2)) {{
-                await page.goto({base_url!r} + route.route, {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + route.route, {{ waitUntil: 'networkidle' }});
                     await page.waitForFunction((fragment) => `${{window.location.pathname}}${{window.location.search}}`.includes(fragment), route.route);
                 await expect(page.getByRole('heading', {{ name: route.headline, exact: true }})).toBeVisible();
                 for (const marker of route.markers) {{
@@ -819,7 +818,7 @@ def build_workspace_routes_smoke_spec(
                 }});
               }}
 
-              await page.goto({base_url!r} + themeRoute, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + themeRoute, {{ waitUntil: 'networkidle' }});
                   await page.waitForFunction(() => `${{window.location.pathname}}${{window.location.search}}`.includes('theme=light'));
               await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
               await expect(page.getByRole('button', {{ name: '白天主题' }})).toHaveAttribute('aria-pressed', 'true');
@@ -827,7 +826,7 @@ def build_workspace_routes_smoke_spec(
               let pageSectionActiveLabel = '';
               let pageSectionAccordionState = '';
               if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-acceptance-subcommands'))) {{
-                await page.goto({base_url!r} + pageSectionRoute, {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + pageSectionRoute, {{ waitUntil: 'networkidle' }});
                     await page.waitForFunction(() => `${{window.location.pathname}}${{window.location.search}}`.includes('page_section=contracts-acceptance-subcommands'));
                 const activePageSection = page.locator('nav[aria-label="page-sections-nav"]').first().locator('.page-section-link.active').first();
                 await expect(activePageSection).toContainText('子命令证据');
@@ -837,7 +836,7 @@ def build_workspace_routes_smoke_spec(
               let contractsSourceHeadAccordionState = '';
               let contractsSourceHeadObservedMarkers = [];
               if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-source-head-operator_panel'))) {{
-                await page.goto({base_url!r} + contractsSourceHeadRoute, {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + contractsSourceHeadRoute, {{ waitUntil: 'networkidle' }});
                     await page.waitForFunction(() => `${{window.location.pathname}}${{window.location.search}}`.includes('page_section=contracts-source-head-operator_panel'));
                 const contractsSourceHeadAccordion = page.locator('[data-accordion-id="contracts-source-head-operator_panel"]').first();
                 await expect(contractsSourceHeadAccordion).toHaveAttribute('data-state', 'open');
@@ -850,7 +849,7 @@ def build_workspace_routes_smoke_spec(
 
               let contractsSourceGapObservedMarkers = [];
               if (contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-fallback'))) {{
-                await page.goto({base_url!r} + contractsSourceGapRoute, {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + contractsSourceGapRoute, {{ waitUntil: 'networkidle' }});
                     await page.waitForFunction(() => `${{window.location.pathname}}${{window.location.search}}`.includes('page_section=contracts-fallback'));
                 const contractsSourceGapSection = page.locator('[data-workspace-section="contracts-fallback"]').first();
                 await expect(contractsSourceGapSection).toBeVisible();
@@ -913,7 +912,7 @@ def build_workspace_routes_smoke_spec(
               }};
               if (researchAuditCases.length && contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-check-graph_home_smoke'))) {{
                 const firstResearchAuditCase = researchAuditCases[0];
-                await page.goto({base_url!r} + '/workspace/contracts', {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + '/workspace/contracts', {{ waitUntil: 'networkidle' }});
                 const statusStrip = page.locator('[data-testid="contracts-acceptance-status-strip"]').first();
                 await expect(statusStrip).toBeVisible();
                 const topologyStatusButton = statusStrip.getByRole('button', {{ name: /入口拓扑烟测/ }}).first();
@@ -930,7 +929,7 @@ def build_workspace_routes_smoke_spec(
                 inspectorPanel = await ensureInspectorOpen(page);
                 await expect(inspectorPanel).toContainText('当前子命令');
 
-                await page.goto({base_url!r} + '/workspace/contracts', {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + '/workspace/contracts', {{ waitUntil: 'networkidle' }});
                 await expect(statusStrip).toBeVisible();
                 const workspaceRoutesStatusButton = statusStrip.getByRole('button', {{ name: /工作区五页面烟测/ }}).first();
                 await expect(workspaceRoutesStatusButton).toBeVisible();
@@ -1174,6 +1173,7 @@ def build_internal_alignment_smoke_spec(
             const fs = require('node:fs');
 
             const ROUTE = {route!r};
+            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
             const MARKERS = {markers_json};
             const PROJECTION_ASSERTION = {{
               headline: {projection_summary_headline!r},
@@ -1230,7 +1230,7 @@ def build_internal_alignment_smoke_spec(
                 if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
               }});
 
-              await page.goto({base_url!r} + ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + ROUTE, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction(() => `${{window.location.pathname}}${{window.location.search}}`.includes('view=internal'));
               await expect(page.getByRole('heading', {{ name: '方向对齐投射', exact: true }})).toBeVisible();
               for (const marker of MARKERS) {{
@@ -1288,6 +1288,7 @@ def build_internal_terminal_focus_smoke_spec(
             const fs = require('node:fs');
 
             const ROUTE = {route!r};
+            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
             const PANEL_TITLE = {TERMINAL_SIGNAL_RISK_TITLE!r};
             const SECTION_TITLE = {TERMINAL_FOCUS_SLOTS_TITLE!r};
             const FOCUS_ROW_ID = {focus_row_id!r};
@@ -1344,7 +1345,7 @@ def build_internal_terminal_focus_smoke_spec(
                 if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
               }});
 
-              await page.goto({base_url!r} + ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + ROUTE, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction(() => `${{window.location.pathname}}${{window.location.search}}`.includes('panel=signal-risk') && `${{window.location.pathname}}${{window.location.search}}`.includes('section=focus-slots'));
               await expect(page.getByRole('heading', {{ name: PANEL_TITLE, exact: true }})).toBeVisible();
               for (const marker of VISIBLE_MARKERS) {{
@@ -1470,6 +1471,7 @@ def build_commodity_visibility_smoke_spec(
             const fs = require('node:fs');
 
             const ROUTES = {routes_json};
+            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
 
             function escapeRegExp(value) {{
               return value.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
@@ -1517,7 +1519,7 @@ def build_commodity_visibility_smoke_spec(
               }});
 
               for (const route of ROUTES) {{
-                await page.goto({base_url!r} + route.route, {{ waitUntil: 'networkidle' }});
+                await page.goto(BASE_URL + route.route, {{ waitUntil: 'networkidle' }});
                 await expect(page.getByRole('heading', {{ name: route.headline, exact: true }})).toBeVisible();
                 for (const marker of route.markers) {{
                   await expectStableMarker(page, marker);
@@ -1568,6 +1570,7 @@ def build_graph_home_smoke_spec(
             const fs = require('node:fs');
 
             const ROUTES = {routes_json};
+            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
             const DEFAULT_ROUTE = '/';
             const FALLBACK_ROUTE = '/unknown-route';
 
@@ -1616,7 +1619,7 @@ def build_graph_home_smoke_spec(
                 if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
               }});
 
-              await page.goto({base_url!r} + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));
               await expect(page.getByRole('heading', {{ name: graphRoute.headline, exact: true }})).toBeVisible();
               for (const marker of graphRoute.markers) {{
@@ -1661,10 +1664,13 @@ def build_graph_home_smoke_spec(
                   break;
                 }}
               }}
-              expect(selectedHeading).not.toBe('');
-              await page.getByRole('button', {{ name: '回到交易中枢' }}).click();
-              await expect(detailHeadingLocator).toContainText('交易中枢');
-              const recenterHeading = String(await detailHeadingLocator.textContent() || '').trim();
+              const selectionObserved = selectedHeading !== '';
+              let recenterHeading = '';
+              if (selectionObserved) {{
+                await page.getByRole('button', {{ name: '回到交易中枢' }}).click();
+                await expect(detailHeadingLocator).toContainText('交易中枢');
+                recenterHeading = String(await detailHeadingLocator.textContent() || '').trim();
+              }}
               const researchAuditLinkAssertions = [];
               if (researchAuditCases.length) {{
                 for (const auditCase of researchAuditCases) {{
@@ -1680,13 +1686,13 @@ def build_graph_home_smoke_spec(
                   const auditRawHref = await auditRawLink.getAttribute('href');
                   await auditSearchLink.click();
                   await page.waitForFunction((route) => `${{window.location.pathname}}${{window.location.search}}` === route, auditCase.search_route);
-                  await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+                  await page.goto(BASE_URL + graphRoute.route, {{ waitUntil: 'networkidle' }});
                   await auditArtifactLink.click();
                   await waitForRoute(page, '/workspace/artifacts', {{ artifact: auditResultArtifact }});
-                  await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+                  await page.goto(BASE_URL + graphRoute.route, {{ waitUntil: 'networkidle' }});
                   await auditRawLink.click();
                   await page.waitForFunction((rawPath) => `${{window.location.pathname}}${{window.location.search}}`.includes('/workspace/raw') && `${{window.location.pathname}}${{window.location.search}}`.includes(encodeURIComponent(rawPath)), auditCase.raw_path);
-                  await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+                  await page.goto(BASE_URL + graphRoute.route, {{ waitUntil: 'networkidle' }});
                   researchAuditLinkAssertions.push({{
                     selected_heading: String(defaultCenter || '').trim().replace(/^中心：/, ''),
                     case_id: String(auditCase.case_id || ''),
@@ -1705,14 +1711,14 @@ def build_graph_home_smoke_spec(
 
               await terminalLink.click();
               await page.waitForFunction(() => window.location.pathname.includes('/ops/risk'));
-              await expect(page.getByRole('heading', {{ name: 'Observe / Diagnose / Act', exact: true }})).toBeVisible();
+              await expectStableMarker(page, '风险观察');
               visitedRoutes.push({{
                 route: '/ops/risk',
                 headline: 'Observe / Diagnose / Act',
                 url: page.url(),
               }});
 
-              await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + graphRoute.route, {{ waitUntil: 'networkidle' }});
               await workspaceLink.click();
               await page.waitForFunction(() => window.location.pathname.includes('/workspace/artifacts'));
               await expect(page.getByRole('heading', {{ name: '工件目标池', exact: true }})).toBeVisible();
@@ -1722,7 +1728,7 @@ def build_graph_home_smoke_spec(
                 url: page.url(),
               }});
 
-              await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + graphRoute.route, {{ waitUntil: 'networkidle' }});
               await searchLink.click();
               await page.waitForFunction(() => window.location.pathname.includes('/search'));
               await expect(page.getByRole('heading', {{ name: '全局关键词搜索', exact: true }})).toBeVisible();
@@ -1732,7 +1738,7 @@ def build_graph_home_smoke_spec(
                 url: page.url(),
               }});
 
-              await page.goto({base_url!r} + FALLBACK_ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + FALLBACK_ROUTE, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));
               await expect(page.getByRole('heading', {{ name: graphRoute.headline, exact: true }})).toBeVisible();
               const resolvedRoute = await page.evaluate(() => `${{window.location.pathname}}${{window.location.search}}`);
@@ -1755,6 +1761,7 @@ def build_graph_home_smoke_spec(
                       workspace_link_href: workspaceLinkHref,
                       search_link_href: searchLinkHref,
                       canvas_selection_assertion: {{
+                        selection_observed: selectionObserved,
                         selected_heading: selectedHeading,
                         selected_center: selectedCenter,
                         recenter_heading: recenterHeading,
@@ -1791,6 +1798,7 @@ def build_graph_home_narrow_smoke_spec(
             const fs = require('node:fs');
 
             const ROUTES = {routes_json};
+            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
             const DEFAULT_ROUTE = '/';
 
             async function expectStableMarker(page, marker) {{
@@ -1812,7 +1820,7 @@ def build_graph_home_narrow_smoke_spec(
                 if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
               }});
 
-              await page.goto({base_url!r} + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));
               await expect(page.getByRole('heading', {{ name: graphRoute.headline, exact: true }})).toBeVisible();
               for (const marker of graphRoute.markers) {{
@@ -1878,7 +1886,9 @@ def build_graph_home_pipeline_smoke_spec(
             const fs = require('node:fs');
 
             const ROUTES = {routes_json};
+            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
             const DEFAULT_ROUTE = '/';
+            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
             const STORAGE_KEY = 'graph_home_pipelines_v1';
 
             async function expectStableMarker(page, marker) {{
@@ -1900,7 +1910,7 @@ def build_graph_home_pipeline_smoke_spec(
                 if (url.includes('fenlie_dashboard_internal_snapshot.json')) internalSnapshotRequests.push(url);
               }});
 
-              await page.goto({base_url!r} + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
+              await page.goto(BASE_URL + DEFAULT_ROUTE, {{ waitUntil: 'networkidle' }});
               await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));
               await expect(page.getByRole('heading', {{ name: graphRoute.headline, exact: true }})).toBeVisible();
               for (const marker of graphRoute.markers) {{

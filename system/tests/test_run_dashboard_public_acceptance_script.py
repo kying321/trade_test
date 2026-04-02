@@ -750,6 +750,86 @@ def test_run_acceptance_requires_graph_home_research_audit_link_assertions(monke
     assert graph_home_check["failure_reason"] == "missing_graph_home_research_audit_link_assertions"
 
 
+def test_run_acceptance_allows_explicit_empty_research_audit_degrade(monkeypatch, tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    system_root = workspace / "system"
+    review_dir = system_root / "output" / "review"
+    review_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(mod, "resolve_system_root", lambda value: system_root)
+
+    def fake_run_script(*, name: str, cmd: list[str], cwd: Path):
+        payload = {
+            "ok": True,
+            "status": "ok",
+            "change_class": "RESEARCH_ONLY",
+        }
+        if name == "workspace_routes_smoke":
+            payload = {
+                **payload,
+                "network_observation": {
+                    "public_snapshot_fetch_count": 5,
+                    "internal_snapshot_fetch_count": 0,
+                },
+                "artifacts_filter_assertion": {
+                    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "group": "research_cross_section",
+                    "search_scope": "title",
+                    "search": "orderflow",
+                    "source_available": True,
+                    "active_artifact": "intraday_orderflow_blueprint",
+                    "visible_artifacts": [
+                        "intraday_orderflow_blueprint",
+                        "intraday_orderflow_research_gate_blocker",
+                    ],
+                },
+                "research_audit_search_assertion": {
+                    "route": "/search",
+                    "cases_available": False,
+                    "cases": [],
+                },
+            }
+        elif name == "graph_home_smoke":
+            payload = {
+                **payload,
+                "graph_home_assertion": {
+                    "default_route": "/",
+                    "resolved_route": "/graph-home",
+                    "research_audit_link_assertions": [],
+                },
+            }
+        return {
+            "name": name,
+            "cmd": cmd,
+            "cwd": str(cwd),
+            "returncode": 0,
+            "stdout": json.dumps(payload, ensure_ascii=False),
+            "stderr": "",
+            "payload": payload,
+        }
+
+    monkeypatch.setattr(mod, "run_json_script", fake_run_script)
+
+    result = mod.run_acceptance(
+        workspace=workspace,
+        skip_workspace_build=True,
+        workspace_timeout_seconds=45.0,
+    )
+
+    assert result["ok"] is True
+    assert result["checks"]["workspace_routes_smoke"]["research_audit_search_assertion"] == {
+        "route": "/search",
+        "cases_available": False,
+        "cases": [],
+    }
+    assert result["checks"]["graph_home_smoke"]["graph_home_assertion"] == {
+        "default_route": "/",
+        "resolved_route": "/graph-home",
+        "research_audit_link_assertions": [],
+    }
+
+
 def test_run_acceptance_requires_contracts_acceptance_inspector_assertion(monkeypatch, tmp_path: Path) -> None:
     mod = load_module()
     workspace = tmp_path / "workspace"
