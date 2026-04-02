@@ -1,5 +1,6 @@
 import type {
   ArtifactPayloadEntry,
+  CatalogRow,
   ConversationFeedbackAction,
   ConversationFeedbackAnchor,
   ConversationFeedbackDomainGroup,
@@ -35,6 +36,7 @@ import { labelFor, surfaceLabel } from '../utils/dictionary';
 
 type Dict = Record<string, unknown>;
 type DisplayIntent = ReturnType<typeof resolveDisplayIntent>;
+type WorkspaceArtifactRow = CatalogRow & { id: string };
 const t = (key: string) => labelFor(key);
 
 function artifactEntry(snapshot: DashboardSnapshot, id: string): ArtifactPayloadEntry | null {
@@ -1331,8 +1333,15 @@ function pathStem(pathValue: string): string {
   return fileName.replace(/\.[^.]+$/, '');
 }
 
+function normalizeAppRoute(route: unknown): string | undefined {
+  const raw = safeDisplayValue(route);
+  if (!raw || raw === '—') return undefined;
+  if (raw.startsWith('#/')) return raw.slice(1);
+  return raw;
+}
+
 function routeQueryValue(route: unknown, key: string): string | undefined {
-  const raw = normalizedString(route);
+  const raw = normalizeAppRoute(route);
   if (!raw) return undefined;
   const queryIndex = raw.indexOf('?');
   if (queryIndex < 0) return undefined;
@@ -1361,8 +1370,8 @@ function deriveWorkspaceResearchAuditCases(snapshot: DashboardSnapshot): PublicA
         case_id: 'optimizer_trial_trade_journal',
         scope: 'artifact',
         query,
-        search_route: `#${buildSearchLink(query, 'artifact')}`,
-        workspace_route: `#${buildWorkspaceLink('artifacts', { artifact: resultArtifact })}`,
+        search_route: buildSearchLink(query, 'artifact'),
+        workspace_route: buildWorkspaceLink('artifacts', { artifact: resultArtifact }),
         raw_path: tradePath,
         result_artifact: resultArtifact,
       });
@@ -1402,8 +1411,8 @@ function deriveWorkspaceResearchAuditCases(snapshot: DashboardSnapshot): PublicA
         case_id: 'strategy_lab_candidate_trade_journal',
         scope: 'artifact',
         query,
-        search_route: `#${buildSearchLink(query, 'artifact')}`,
-        workspace_route: `#${buildWorkspaceLink('artifacts', { artifact: resultArtifact })}`,
+        search_route: buildSearchLink(query, 'artifact'),
+        workspace_route: buildWorkspaceLink('artifacts', { artifact: resultArtifact }),
         raw_path: tradePath,
         result_artifact: resultArtifact,
       });
@@ -1426,9 +1435,9 @@ function deriveGraphHomeResearchAuditCases(
   const derivedRows = rows.map((row) => {
     const caseId = safeDisplayValue(row.case_id) || undefined;
     const fallback = caseId ? fallbackByCaseId.get(caseId) : undefined;
-    const searchRoute = safeDisplayValue(row.search_link_href || fallback?.search_route) || undefined;
-    const workspaceRoute = safeDisplayValue(row.artifact_link_href || fallback?.workspace_route) || undefined;
-    const rawRoute = safeDisplayValue(row.raw_link_href);
+    const searchRoute = normalizeAppRoute(row.search_link_href || fallback?.search_route);
+    const workspaceRoute = normalizeAppRoute(row.artifact_link_href || fallback?.workspace_route);
+    const rawRoute = normalizeAppRoute(row.raw_link_href);
     return {
       case_id: caseId,
       scope: routeQueryValue(searchRoute, 'scope') || fallback?.scope || undefined,
@@ -1478,9 +1487,9 @@ function aggregatePublicAcceptanceResearchAuditCases(
   });
 }
 
-function deriveResearchAuditCatalogRows(snapshot: DashboardSnapshot): Array<Record<string, unknown>> {
+function deriveResearchAuditCatalogRows(snapshot: DashboardSnapshot): WorkspaceArtifactRow[] {
   const payloads = snapshot.artifact_payloads || {};
-  const rows: Array<Record<string, unknown>> = [];
+  const rows: WorkspaceArtifactRow[] = [];
 
   const pushRow = (options: {
     id: string;
@@ -1626,7 +1635,7 @@ function deriveResearchAuditCatalogRows(snapshot: DashboardSnapshot): Array<Reco
 
 function buildWorkspace(snapshot: DashboardSnapshot, surface: SurfaceView) {
   const experienceContract = toRecord<Dict>(snapshot.experience_contract) || {};
-  const baseArtifactRows = (snapshot.catalog || []).map((row, index) => ({ id: row.id || row.payload_key || `artifact-${index}`, ...row }));
+  const baseArtifactRows: WorkspaceArtifactRow[] = (snapshot.catalog || []).map((row, index) => ({ id: row.id || row.payload_key || `artifact-${index}`, ...row }));
   const artifactRows = [...baseArtifactRows, ...deriveResearchAuditCatalogRows(snapshot)];
   const researchAuditCases = deriveWorkspaceResearchAuditCases(snapshot);
   const workspaceHandoffs = buildWorkspaceArtifactHandoffs(snapshot, surface, artifactRows);
@@ -1670,7 +1679,7 @@ function buildFeedback(snapshot: DashboardSnapshot): {
 
   const summary = toRecord<Dict>(projectionRecord.summary) || {};
   const anchors = toArray<Dict>(projectionRecord.anchors).map<ConversationFeedbackAnchor>((row) => ({
-    route: safeDisplayValue(row.route) || undefined,
+    route: normalizeAppRoute(row.route),
     artifact: safeDisplayValue(row.artifact) || undefined,
     component: safeDisplayValue(row.component) || undefined,
   }));
@@ -1690,7 +1699,7 @@ function buildFeedback(snapshot: DashboardSnapshot): {
     confidence: typeof row.confidence === 'number' ? row.confidence : undefined,
     status: safeDisplayValue(row.status) || undefined,
     anchors: toArray<Dict>(row.anchors).map((anchor) => ({
-      route: safeDisplayValue(anchor.route) || undefined,
+      route: normalizeAppRoute(anchor.route),
       artifact: safeDisplayValue(anchor.artifact) || undefined,
       component: safeDisplayValue(anchor.component) || undefined,
     })),
@@ -1700,7 +1709,7 @@ function buildFeedback(snapshot: DashboardSnapshot): {
     recommended_action: safeDisplayValue(row.recommended_action) || undefined,
     impact_score: typeof row.impact_score === 'number' ? row.impact_score : undefined,
     anchors: toArray<Dict>(row.anchors).map((anchor) => ({
-      route: safeDisplayValue(anchor.route) || undefined,
+      route: normalizeAppRoute(anchor.route),
       artifact: safeDisplayValue(anchor.artifact) || undefined,
       component: safeDisplayValue(anchor.component) || undefined,
     })),
@@ -1802,8 +1811,8 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     case_id: safeDisplayValue(row.case_id) || undefined,
     scope: safeDisplayValue(row.scope) || undefined,
     query: safeDisplayValue(row.query) || undefined,
-    search_route: safeDisplayValue(row.search_route) || undefined,
-    workspace_route: safeDisplayValue(row.workspace_route) || undefined,
+    search_route: normalizeAppRoute(row.search_route),
+    workspace_route: normalizeAppRoute(row.workspace_route),
     raw_path: safeDisplayValue(row.raw_path) || undefined,
     result_artifact: safeDisplayValue(row.result_artifact) || undefined,
   })).filter((row) => (
@@ -1878,19 +1887,19 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     internal_snapshot_fetch_count: typeof workspaceNetwork.internal_snapshot_fetch_count === 'number' ? workspaceNetwork.internal_snapshot_fetch_count : undefined,
     root_contracts_screenshot_path: safeDisplayValue(topologyRootContractsBrowser.screenshot_path),
     pages_contracts_screenshot_path: safeDisplayValue(topologyPagesContractsBrowser.screenshot_path),
-    orderflow_filter_route: safeDisplayValue(workspaceArtifactsFilter.route),
+    orderflow_filter_route: normalizeAppRoute(workspaceArtifactsFilter.route),
     orderflow_source_available: orderflowSourceAvailable,
     orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
     orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
-    research_audit_search_route: aggregatedResearchAuditSearchRoute || safeDisplayValue(workspaceResearchAudit.route),
+    research_audit_search_route: aggregatedResearchAuditSearchRoute || normalizeAppRoute(workspaceResearchAudit.route),
     research_audit_cases_available: aggregatedResearchAuditCasesAvailable,
     research_audit_queries: aggregatedResearchAuditQueries || researchAuditQueries || undefined,
     research_audit_result_artifacts: aggregatedResearchAuditResultArtifacts || researchAuditResultArtifacts || undefined,
-    graph_home_resolved_route: safeDisplayValue(graphHomeAssertion.resolved_route),
+    graph_home_resolved_route: normalizeAppRoute(graphHomeAssertion.resolved_route),
     graph_home_default_center: safeDisplayValue(graphHomeAssertion.default_center),
-    graph_home_terminal_link_href: safeDisplayValue(graphHomeAssertion.terminal_link_href),
-    graph_home_workspace_link_href: safeDisplayValue(graphHomeAssertion.workspace_link_href),
-    graph_home_search_link_href: safeDisplayValue(graphHomeAssertion.search_link_href),
+    graph_home_terminal_link_href: normalizeAppRoute(graphHomeAssertion.terminal_link_href),
+    graph_home_workspace_link_href: normalizeAppRoute(graphHomeAssertion.workspace_link_href),
+    graph_home_search_link_href: normalizeAppRoute(graphHomeAssertion.search_link_href),
     graph_home_research_audit_case_ids: graphHomeResearchAuditCaseIds || undefined,
   };
 
@@ -1912,7 +1921,7 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       pages_overview_screenshot_path: safeDisplayValue(topologyPagesOverviewBrowser.screenshot_path),
       root_contracts_screenshot_path: safeDisplayValue(topologyRootContractsBrowser.screenshot_path),
       pages_contracts_screenshot_path: safeDisplayValue(topologyPagesContractsBrowser.screenshot_path),
-      inspector_route: safeDisplayValue(topologyInspector.route),
+      inspector_route: normalizeAppRoute(topologyInspector.route),
       ...(surface.effective === 'internal' && typeof topology.stdout === 'string' ? { stdout: topology.stdout } : {}),
       ...(surface.effective === 'internal' && typeof topology.stderr === 'string' ? { stderr: topology.stderr } : {}),
     },
@@ -1931,19 +1940,19 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       snapshot_endpoint_observed: safeDisplayValue(workspaceSurface.snapshot_endpoint_observed),
       public_snapshot_fetch_count: typeof workspaceNetwork.public_snapshot_fetch_count === 'number' ? workspaceNetwork.public_snapshot_fetch_count : undefined,
       internal_snapshot_fetch_count: typeof workspaceNetwork.internal_snapshot_fetch_count === 'number' ? workspaceNetwork.internal_snapshot_fetch_count : undefined,
-      orderflow_filter_route: safeDisplayValue(workspaceArtifactsFilter.route),
+      orderflow_filter_route: normalizeAppRoute(workspaceArtifactsFilter.route),
       orderflow_source_available: orderflowSourceAvailable,
       orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
       orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
-      research_audit_search_route: safeDisplayValue(workspaceResearchAudit.route),
+      research_audit_search_route: normalizeAppRoute(workspaceResearchAudit.route),
       research_audit_cases_available: researchAuditCasesAvailable,
       research_audit_queries: researchAuditQueries || undefined,
       research_audit_result_artifacts: researchAuditResultArtifacts || undefined,
       research_audit_cases: researchAuditCaseRows.length ? researchAuditCaseRows : undefined,
-      inspector_route: safeDisplayValue(workspaceRoutesInspector.route),
-      inspector_search_link_href: safeDisplayValue(workspaceRoutesInspector.search_link_href),
-      inspector_artifact_link_href: safeDisplayValue(workspaceRoutesInspector.artifact_link_href),
-      inspector_raw_link_href: safeDisplayValue(workspaceRoutesInspector.raw_link_href),
+      inspector_route: normalizeAppRoute(workspaceRoutesInspector.route),
+      inspector_search_link_href: normalizeAppRoute(workspaceRoutesInspector.search_link_href),
+      inspector_artifact_link_href: normalizeAppRoute(workspaceRoutesInspector.artifact_link_href),
+      inspector_raw_link_href: normalizeAppRoute(workspaceRoutesInspector.raw_link_href),
       ...(surface.effective === 'internal' && typeof workspaceRoutes.stdout === 'string' ? { stdout: workspaceRoutes.stdout } : {}),
       ...(surface.effective === 'internal' && typeof workspaceRoutes.stderr === 'string' ? { stderr: workspaceRoutes.stderr } : {}),
     },
@@ -1956,21 +1965,21 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       report_path: safeDisplayValue(graphHome.report_path),
       returncode: typeof graphHome.returncode === 'number' ? graphHome.returncode : undefined,
       failure_reason: safeDisplayValue(graphHome.failure_reason),
-      headline: safeDisplayValue(graphHomeAssertion.resolved_route || graphHomeAssertion.default_route),
-      graph_home_resolved_route: safeDisplayValue(graphHomeAssertion.resolved_route),
+      headline: normalizeAppRoute(graphHomeAssertion.resolved_route || graphHomeAssertion.default_route),
+      graph_home_resolved_route: normalizeAppRoute(graphHomeAssertion.resolved_route),
       graph_home_default_center: safeDisplayValue(graphHomeAssertion.default_center),
-      graph_home_terminal_link_href: safeDisplayValue(graphHomeAssertion.terminal_link_href),
-      graph_home_workspace_link_href: safeDisplayValue(graphHomeAssertion.workspace_link_href),
-      graph_home_search_link_href: safeDisplayValue(graphHomeAssertion.search_link_href),
+      graph_home_terminal_link_href: normalizeAppRoute(graphHomeAssertion.terminal_link_href),
+      graph_home_workspace_link_href: normalizeAppRoute(graphHomeAssertion.workspace_link_href),
+      graph_home_search_link_href: normalizeAppRoute(graphHomeAssertion.search_link_href),
       research_audit_cases_available: graphHomeResearchAuditCasesAvailable,
       research_audit_queries: graphHomeResearchAuditQueries || undefined,
       research_audit_result_artifacts: graphHomeResearchAuditResultArtifacts || undefined,
       research_audit_cases: graphHomeResearchAuditCaseRows.length ? graphHomeResearchAuditCaseRows : undefined,
       graph_home_research_audit_case_ids: graphHomeResearchAuditCaseIds || undefined,
-      inspector_route: safeDisplayValue(graphHomeInspector.route),
-      inspector_search_link_href: safeDisplayValue(graphHomeInspector.search_link_href),
-      inspector_artifact_link_href: safeDisplayValue(graphHomeInspector.artifact_link_href),
-      inspector_raw_link_href: safeDisplayValue(graphHomeInspector.raw_link_href),
+      inspector_route: normalizeAppRoute(graphHomeInspector.route),
+      inspector_search_link_href: normalizeAppRoute(graphHomeInspector.search_link_href),
+      inspector_artifact_link_href: normalizeAppRoute(graphHomeInspector.artifact_link_href),
+      inspector_raw_link_href: normalizeAppRoute(graphHomeInspector.raw_link_href),
       ...(surface.effective === 'internal' && typeof graphHome.stdout === 'string' ? { stdout: graphHome.stdout } : {}),
       ...(surface.effective === 'internal' && typeof graphHome.stderr === 'string' ? { stderr: graphHome.stderr } : {}),
     },
@@ -1993,27 +2002,27 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       cwd: safeDisplayValue(row.cwd),
       ...(id === 'graph_home_smoke'
         ? {
-            inspector_route: safeDisplayValue(graphHomeSubcommandInspector.route),
-            inspector_check_route: safeDisplayValue(graphHomeSubcommandInspector.check_route || graphHomeInspector.route),
-            inspector_search_link_href: safeDisplayValue(graphHomeSubcommandInspector.search_link_href),
-            inspector_artifact_link_href: safeDisplayValue(graphHomeSubcommandInspector.artifact_link_href),
-            inspector_raw_link_href: safeDisplayValue(graphHomeSubcommandInspector.raw_link_href),
+            inspector_route: normalizeAppRoute(graphHomeSubcommandInspector.route),
+            inspector_check_route: normalizeAppRoute(graphHomeSubcommandInspector.check_route || graphHomeInspector.route),
+            inspector_search_link_href: normalizeAppRoute(graphHomeSubcommandInspector.search_link_href),
+            inspector_artifact_link_href: normalizeAppRoute(graphHomeSubcommandInspector.artifact_link_href),
+            inspector_raw_link_href: normalizeAppRoute(graphHomeSubcommandInspector.raw_link_href),
           }
         : id === 'topology_smoke'
           ? {
-              inspector_route: safeDisplayValue(topologySubcommandInspector.route),
-              inspector_check_route: safeDisplayValue(topologySubcommandInspector.check_route || topologyInspector.route),
-              inspector_search_link_href: safeDisplayValue(topologySubcommandInspector.search_link_href),
-              inspector_artifact_link_href: safeDisplayValue(topologySubcommandInspector.artifact_link_href),
-              inspector_raw_link_href: safeDisplayValue(topologySubcommandInspector.raw_link_href),
+              inspector_route: normalizeAppRoute(topologySubcommandInspector.route),
+              inspector_check_route: normalizeAppRoute(topologySubcommandInspector.check_route || topologyInspector.route),
+              inspector_search_link_href: normalizeAppRoute(topologySubcommandInspector.search_link_href),
+              inspector_artifact_link_href: normalizeAppRoute(topologySubcommandInspector.artifact_link_href),
+              inspector_raw_link_href: normalizeAppRoute(topologySubcommandInspector.raw_link_href),
             }
         : id === 'workspace_routes_smoke'
           ? {
-              inspector_route: safeDisplayValue(workspaceRoutesSubcommandInspector.route),
-              inspector_check_route: safeDisplayValue(workspaceRoutesSubcommandInspector.check_route),
-              inspector_search_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.search_link_href),
-              inspector_artifact_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.artifact_link_href),
-              inspector_raw_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.raw_link_href),
+              inspector_route: normalizeAppRoute(workspaceRoutesSubcommandInspector.route),
+              inspector_check_route: normalizeAppRoute(workspaceRoutesSubcommandInspector.check_route),
+              inspector_search_link_href: normalizeAppRoute(workspaceRoutesSubcommandInspector.search_link_href),
+              inspector_artifact_link_href: normalizeAppRoute(workspaceRoutesSubcommandInspector.artifact_link_href),
+              inspector_raw_link_href: normalizeAppRoute(workspaceRoutesSubcommandInspector.raw_link_href),
             }
         : {}),
       ...(surface.effective === 'internal' && typeof row.stdout === 'string' ? { stdout: row.stdout } : {}),

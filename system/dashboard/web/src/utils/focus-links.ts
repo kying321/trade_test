@@ -49,7 +49,8 @@ export function buildTerminalLink(surface: SurfaceKey, focus: SharedFocusState =
     symbol: focus.symbol,
     window: focus.window,
   });
-  return `/terminal/${surface}${qs ? `?${qs}` : ''}`;
+  const basePath = surface === 'public' ? '/ops/risk' : '/terminal/internal';
+  return `${basePath}${qs ? `?${qs}` : ''}`;
 }
 
 export function buildWorkspaceLink(section: WorkspaceSection, focus: SharedFocusState = {}): string {

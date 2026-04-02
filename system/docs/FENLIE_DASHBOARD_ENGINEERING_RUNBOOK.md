@@ -250,6 +250,8 @@ npm run verify:release-checklist
 - `npm test` 当前结果：`25 files / 148 tests passed`
 - `npm run test:dashboard-python-contracts` 当前结果：`79 passed`
 
+> 当前文档统一使用 path-route 示例；`#/overview`、`#/terminal/public` 这类 hash route 只保留兼容桥接，不再作为工程与验收主契约。
+
 ### 5.6 workspace 多路由 smoke
 
 ```bash
@@ -258,12 +260,12 @@ npm run smoke:workspace-routes
 
 公开 workspace 路由矩阵烟测，默认验证：
 
-- `#/overview`
-- `#/workspace/artifacts`
-- `#/workspace/alignment`（公开锁定态）
-- `#/workspace/backtests`
-- `#/workspace/raw`
-- `#/workspace/contracts`
+- `/ops/overview`
+- `/workspace/artifacts`
+- `/workspace/alignment`（公开锁定态）
+- `/workspace/backtests`
+- `/workspace/raw`
+- `/workspace/contracts`
 
 ### 5.7 internal alignment 浏览器 smoke
 
@@ -273,7 +275,7 @@ npm run smoke:alignment-internal
 
 用途：
 
-- 真实浏览器验证 `#/workspace/alignment?view=internal`
+- 真实浏览器验证 `/workspace/alignment?view=internal`
 - 确认只拉取 internal snapshot
 - 确认页面能看到当前 projection headline / 顶部 event / 顶部 action
 
@@ -294,7 +296,7 @@ npm run smoke:alignment-internal-manual-probe
 
 - 临时注入一条高优先级 manual feedback probe 到 `conversation_feedback_events_internal.jsonl`
 - 自动执行 refresh，让 probe 进入 internal projection / internal snapshot
-- 用真实浏览器验证 `#/workspace/alignment?view=internal&page_section=alignment-summary`
+- 用真实浏览器验证 `/workspace/alignment?view=internal&page_section=alignment-summary`
 - 完成后自动恢复原 manual 文件并再次 refresh，避免污染当前主链
 
 最近会生成如下 review 工件：
@@ -312,7 +314,7 @@ npm run smoke:terminal-internal-focus
 
 用途：
 
-- 真实浏览器验证 `#/terminal/internal?panel=signal-risk&section=focus-slots`
+- 真实浏览器验证 `/terminal/internal?panel=signal-risk&section=focus-slots`
 - 确认 `DrilldownList` 的 focus CTA 只出现在 `.drill-card-actions`，不会回退到 `summary.drill-card-summary` 内
 - 点击首条 focus CTA 后，URL 会收敛到 `row=<slot>`，且按钮文案切换为“当前焦点”
 - 同时确认该路径只拉取 internal snapshot，不意外触发 public snapshot
@@ -332,8 +334,8 @@ npm run smoke:graph-home
 
 用途：
 
-- 真实浏览器验证 `#/` 默认落到 `#/graph-home`
-- 验证 `#/unknown-route` fallback 也会回到 graph-home
+- 真实浏览器验证 `/` 默认落到 `/graph-home`
+- 验证 `/unknown-route` fallback 也会回到 graph-home
 - 验证 graph-home 快捷入口能深跳到 terminal / workspace / search
 - 验证 graph canvas 节点点击后，右侧详情与顶部中心文案会同步切换，并能通过“回到交易中枢”恢复
 
@@ -474,7 +476,7 @@ echo '{"feedback_id":"manual_alignment_fix","headline":"人工结构化反馈：
 1. `publish_conversation_feedback_manual_internal.py`
 2. `run_operator_panel_refresh.py --workspace ../../..`
 
-适合把人工审核结论快速投射到 `#/workspace/alignment?view=internal`。
+适合把人工审核结论快速投射到 `/workspace/alignment?view=internal`。
 
 兼容别名：
 
@@ -575,13 +577,13 @@ http://127.0.0.1:5173/
 
 推荐手动检查页面：
 
-- `#/overview`
-- `#/terminal/public`
-- `#/terminal/internal`
-- `#/workspace/artifacts`
-- `#/workspace/backtests`
-- `#/workspace/raw`
-- `#/workspace/contracts`
+- `/ops/overview`
+- `/ops/risk`
+- `/terminal/internal`
+- `/workspace/artifacts`
+- `/workspace/backtests`
+- `/workspace/raw`
+- `/workspace/contracts`
 
 ---
 
@@ -623,20 +625,20 @@ npm run smoke:workspace-routes
 1. 先执行 `npm run build`
 2. 临时拉起静态服务
 3. 用真实浏览器依次访问：
-   - `#/overview`
-   - `#/workspace/artifacts`
-   - `#/workspace/backtests`
-   - `#/workspace/raw`
-   - `#/workspace/contracts`
+   - `/ops/overview`
+   - `/workspace/artifacts`
+   - `/workspace/backtests`
+   - `/workspace/raw`
+   - `/workspace/contracts`
 
 ### 10.1 它重点验证什么
 
-- `#/overview` 是否仍能看到 `研究主线摘要 / 国内商品推理线`
+- `/ops/overview` 是否仍能看到 `研究主线摘要 / 国内商品推理线`
 - 默认是否仍锚定 `price_action_breakout_pullback`
 - 路由切换是否触发新的 public snapshot GET
 - 是否错误拉取内部快照
 - contracts 页 section deep-link 是否还能展开子命令证据
-- `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow` 是否仍能命中：
+- `/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow` 是否仍能命中：
   - `artifacts_filter_assertion.source_available=true|false`
   - 当 `source_available=true` 时再校验 active artifact / visible artifacts
 
@@ -714,7 +716,9 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
   --allow-insecure-tls-fallback
 ```
 
-当前 topology smoke 除了 JSON 报告，还会额外落六张公开路由截图，便于审计根域与 Pages 回退入口是否都真实渲染出 `#/overview`、`#/workspace/contracts` 以及 contracts/source-head 深链的关键 marker：
+当前 topology smoke 除了 JSON 报告，还会额外落六张公开路由截图，便于审计根域与 Pages 回退入口是否都真实渲染出 `/ops/overview`、`/ops/audits` 以及 contracts/source-head 深链的关键 marker：
+
+> 说明：截图文件名中的 `overview/contracts` 仍沿用旧 artifact 命名；当前实际校验的公开 path 已分别切到 `/ops/overview` 与 `/ops/audits`。
 
 - `*_dashboard_public_topology_root_overview_browser.png`
 - `*_dashboard_public_topology_pages_overview_browser.png`
@@ -732,7 +736,7 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 - `回退链`
 
 其中 contracts/source-head 深链
-`#/workspace/contracts?page_section=contracts-source-head-operator_panel`
+`/workspace/contracts?page_section=contracts-source-head-operator_panel`
 要求真实浏览器同时看到：
 
 - `状态`
@@ -744,7 +748,7 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 
 ## 12. 第六步：聚合公开验收
 
-如果要一次性把“根域/Pages/旧 OpenClaw/gateway + workspace 五页面（含 `#/overview`）”一起验掉：
+如果要一次性把“根域/Pages/旧 OpenClaw/gateway + workspace 五页面（含 `/ops/overview`）”一起验掉：
 
 ```bash
 cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
@@ -781,7 +785,7 @@ node ./scripts/run-python.mjs ../../scripts/run_dashboard_public_acceptance.py \
 除了 root/pages/openclaw/gateway 入口拓扑与 workspace 五页面真实浏览器 smoke，当前聚合验收还会硬校验：
 
 - `artifacts_filter_assertion.route`
-  - `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
+  - `/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
 - `artifacts_filter_assertion.source_available`
   - `true` 或 `false`
 - 当 `source_available=true` 时，再校验：
@@ -881,11 +885,11 @@ npm run verify:public-surface -- --skip-workspace-build
 ### 15.2 页面与路由
 
 - [ ] `npm run smoke:workspace-routes`
-- [ ] `#/overview` 正常
-- [ ] `#/workspace/artifacts` 正常
-- [ ] `#/workspace/backtests` 正常
-- [ ] `#/workspace/raw` 正常
-- [ ] `#/workspace/contracts` 正常
+- [ ] `/ops/overview` 正常
+- [ ] `/workspace/artifacts` 正常
+- [ ] `/workspace/backtests` 正常
+- [ ] `/workspace/raw` 正常
+- [ ] `/workspace/contracts` 正常
 
 ### 15.3 公开入口
 

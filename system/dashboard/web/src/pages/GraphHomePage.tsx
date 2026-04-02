@@ -167,13 +167,6 @@ function shouldShowResearchAuditLinks(node: GraphNode | undefined) {
   return Boolean(node && ['trade-hub', 'pipeline-feedback', 'route-search', 'route-workspace-contracts', 'custom-pipeline'].includes(node.id));
 }
 
-function normalizeHashRoute(route: string | undefined): string {
-  const raw = String(route || '').trim();
-  if (!raw) return '';
-  if (raw.startsWith('#/')) return raw.slice(1);
-  return raw;
-}
-
 export function buildMissingSourceRepairHint(node: GraphNode) {
   if (node.kind === 'market') return '先核对契约层，再搜索节点来源';
   if (node.kind === 'route') return '先进入页面确认来源，再回查检索';
@@ -327,7 +320,7 @@ export function GraphHomePage({
       .filter((node): node is GraphNode => Boolean(node))
       .filter((node) => !node.detail?.sourceContract && !['strategy', 'pipeline_stage', 'custom_pipeline'].includes(node.kind));
   }, [focusState, nodes]);
-  const terminalLink = '/terminal/public';
+  const terminalLink = '/ops/risk';
   const workspaceLink = '/workspace/artifacts';
   const cpaLink = '/cpa';
   const searchLink = buildSearchLink();
@@ -502,8 +495,8 @@ export function GraphHomePage({
                 <div key={`${row.case_id || row.query || index}`} className="graph-home-audit-case">
                   <strong>{row.query || row.case_id || `case-${index + 1}`}</strong>
                   <div className="button-row workspace-handoff-links">
-                    {row.search_route ? <ActionLink to={normalizeHashRoute(row.search_route)}>检索 / {row.query || row.case_id || 'case'}</ActionLink> : null}
-                    {row.workspace_route ? <ActionLink to={normalizeHashRoute(row.workspace_route)}>工件 / {row.result_artifact || row.case_id || 'artifact'}</ActionLink> : null}
+                    {row.search_route ? <ActionLink to={row.search_route}>检索 / {row.query || row.case_id || 'case'}</ActionLink> : null}
+                    {row.workspace_route ? <ActionLink to={row.workspace_route}>工件 / {row.result_artifact || row.case_id || 'artifact'}</ActionLink> : null}
                     {row.raw_path ? <ActionLink to={`/workspace/raw?artifact=${encodeURIComponent(row.raw_path)}`}>原始层 / {row.raw_path}</ActionLink> : null}
                   </div>
                 </div>

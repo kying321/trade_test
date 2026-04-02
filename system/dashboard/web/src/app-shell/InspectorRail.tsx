@@ -121,12 +121,6 @@ function dedupeLinks(links: InspectorLink[]): InspectorLink[] {
   });
 }
 
-function normalizeRouterLink(value: string | undefined): string {
-  const raw = safeDisplayValue(value);
-  if (!raw || raw === '—') return '';
-  return raw.startsWith('#/') ? raw.slice(1) : raw;
-}
-
 function optionalInspectorValue(value: unknown): string {
   const raw = safeDisplayValue(value);
   return raw === '—' ? '' : raw;
@@ -414,28 +408,28 @@ export function InspectorRail({
         readonlyLinks.push({
           id: `contracts-check-audit-search-${activeAcceptanceCheck.id}`,
           label: '查看研究审计检索',
-          to: explicitCheckSearchLink ? normalizeRouterLink(explicitCheckSearchLink) : buildSearchLink(primaryResearchAuditCase?.query || '', 'artifact'),
+          to: explicitCheckSearchLink || buildSearchLink(primaryResearchAuditCase?.query || '', 'artifact'),
         });
       }
       if (!isTopologyCheck && (explicitCheckArtifactLink || primaryResearchAuditCase?.workspace_route)) {
         readonlyLinks.push({
           id: `contracts-check-audit-artifact-${activeAcceptanceCheck.id}`,
           label: '查看研究审计工件',
-          to: normalizeRouterLink(explicitCheckArtifactLink || primaryResearchAuditCase?.workspace_route),
+          to: explicitCheckArtifactLink || primaryResearchAuditCase?.workspace_route || '',
         });
       }
       if (!isTopologyCheck && (explicitCheckRawLink || primaryResearchAuditCase?.raw_path)) {
         readonlyLinks.push({
           id: `contracts-check-audit-raw-${activeAcceptanceCheck.id}`,
           label: '查看研究审计原始层',
-          to: explicitCheckRawLink ? normalizeRouterLink(explicitCheckRawLink) : buildWorkspaceLink('raw', { artifact: primaryResearchAuditCase?.raw_path }),
+          to: explicitCheckRawLink || buildWorkspaceLink('raw', { artifact: primaryResearchAuditCase?.raw_path }),
         });
       }
       if (activeAcceptanceCheck.graph_home_resolved_route) {
         readonlyLinks.push({
           id: `contracts-check-graph-home-${activeAcceptanceCheck.id}`,
           label: '查看图谱主页',
-          to: normalizeRouterLink(activeAcceptanceCheck.graph_home_resolved_route),
+          to: activeAcceptanceCheck.graph_home_resolved_route || '',
         });
       }
       sourceExtra = fallbackChain.length ? (
@@ -483,27 +477,27 @@ export function InspectorRail({
       readonlyLinks.push({
         id: `contracts-subcommand-check-${activeAcceptanceSubcommand.id}`,
         label: `查看${safeDisplayValue(linkedAcceptanceCheck?.label || activeAcceptanceSubcommand.label || '对应验收项')}`,
-        to: explicitSubcommandCheckRoute ? normalizeRouterLink(explicitSubcommandCheckRoute) : buildWorkspacePageLink('contracts', baseFocus, `contracts-check-${activeAcceptanceSubcommand.id}`),
+        to: explicitSubcommandCheckRoute || buildWorkspacePageLink('contracts', baseFocus, `contracts-check-${activeAcceptanceSubcommand.id}`),
       });
       if (!isTopologySubcommand && (explicitSubcommandSearchLink || primaryResearchAuditCase?.search_route)) {
         readonlyLinks.push({
           id: `contracts-subcommand-audit-search-${activeAcceptanceSubcommand.id}`,
           label: '查看研究审计检索',
-          to: explicitSubcommandSearchLink ? normalizeRouterLink(explicitSubcommandSearchLink) : buildSearchLink(primaryResearchAuditCase?.query || '', 'artifact'),
+          to: explicitSubcommandSearchLink || buildSearchLink(primaryResearchAuditCase?.query || '', 'artifact'),
         });
       }
       if (!isTopologySubcommand && (explicitSubcommandArtifactLink || primaryResearchAuditCase?.workspace_route)) {
         readonlyLinks.push({
           id: `contracts-subcommand-audit-artifact-${activeAcceptanceSubcommand.id}`,
           label: '查看研究审计工件',
-          to: normalizeRouterLink(explicitSubcommandArtifactLink || primaryResearchAuditCase?.workspace_route),
+          to: explicitSubcommandArtifactLink || primaryResearchAuditCase?.workspace_route || '',
         });
       }
       if (!isTopologySubcommand && (explicitSubcommandRawLink || primaryResearchAuditCase?.raw_path)) {
         readonlyLinks.push({
           id: `contracts-subcommand-audit-raw-${activeAcceptanceSubcommand.id}`,
           label: '查看研究审计原始层',
-          to: explicitSubcommandRawLink ? normalizeRouterLink(explicitSubcommandRawLink) : buildWorkspaceLink('raw', { artifact: primaryResearchAuditCase?.raw_path }),
+          to: explicitSubcommandRawLink || buildWorkspaceLink('raw', { artifact: primaryResearchAuditCase?.raw_path }),
         });
       }
       sourceExtra = fallbackChain.length ? (

@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Badge, ClampText, DrilldownSection, KeyValueGrid } from './components/ui-kit';
 import { useTerminalStore } from './store/use-terminal-store';
@@ -17,7 +17,7 @@ import { InspectorRail } from './app-shell/InspectorRail';
 import { useSidebarCollapse } from './hooks/use-sidebar-collapse';
 import { useUiTheme } from './hooks/use-ui-theme';
 import { PRIMARY_NAV, OPS_SURFACE_NAV, RESEARCH_LEGACY_NAV } from './navigation/nav-config';
-import { buildCpaLink, buildGraphHomeLink, buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from './navigation/route-contract';
+import { buildCpaLink, buildGraphHomeLink, buildOpsLegacyLink, buildOpsPageLink, buildOverviewLink, buildResearchLegacyLink, type OpsPageId } from './navigation/route-contract';
 import { getDefaultWorkspacePageSection, getWorkspacePageSections } from './navigation/workspace-sections';
 import { CpaPage } from './pages/CpaPage';
 import { GraphHomePage } from './pages/GraphHomePage';
@@ -26,6 +26,11 @@ import { OverviewPage } from './pages/OverviewPage';
 import { OpsPage } from './pages/OpsPage';
 import { ResearchPage } from './pages/ResearchPage';
 import { SearchPage } from './pages/SearchPage';
+import { OpsAuditsPage } from './pages/ops/OpsAuditsPage';
+import { OpsRiskPage } from './pages/ops/OpsRiskPage';
+import { OpsRunbooksPage } from './pages/ops/OpsRunbooksPage';
+import { OpsTracesPage } from './pages/ops/OpsTracesPage';
+import { OpsWorkflowPage } from './pages/ops/OpsWorkflowPage';
 import { buildSearchCatalog, searchCatalog } from './search/catalog';
 import { GlobalSearchOverlay } from './search/SearchOverlay';
 import { buildSearchLink } from './search/links';
@@ -152,11 +157,42 @@ function useSurfaceRefresh(requested: SurfaceKey, refreshKey?: string, allowFall
   }, [allowFallback, refresh, requested]);
 }
 
+function readLegacyHashRoute(hash: string | undefined): string {
+  const raw = String(hash || '').trim();
+  if (!raw.startsWith('#/')) return '';
+  return raw.slice(1);
+}
+
+function syncLegacyHashPathBeforeRouter() {
+  if (typeof window === 'undefined') return;
+  const next = readLegacyHashRoute(window.location.hash);
+  if (!next) return;
+  const current = `${window.location.pathname}${window.location.search}`;
+  if (current === next) return;
+  window.history.replaceState(window.history.state, '', next);
+}
+
+function useLegacyHashRedirect() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const syncLegacyHash = () => {
+      const next = readLegacyHashRoute(window.location.hash);
+      if (!next) return;
+      navigate(next, { replace: true });
+    };
+
+    syncLegacyHash();
+    window.addEventListener('hashchange', syncLegacyHash);
+    return () => window.removeEventListener('hashchange', syncLegacyHash);
+  }, [navigate]);
+}
+
 function buildPrimaryNav(focus: SharedFocusState, currentSurface: SurfaceKey) {
   return PRIMARY_NAV.map((item) => {
     if (item.id === 'overview') return { ...item, to: buildOverviewLink(focus) };
     if (item.id === 'graph') return { ...item, to: buildGraphHomeLink(focus) };
-    if (item.id === 'ops') return { ...item, to: buildOpsLegacyLink(currentSurface, focus) };
+    if (item.id === 'ops') return { ...item, to: buildOpsPageLink('risk', currentSurface === 'internal' ? focusWithout(focus, ['view']) : focus) };
     if (item.id === 'cpa') return { ...item, to: buildCpaLink({}) };
     return { ...item, to: buildResearchLegacyLink('artifacts', focus) };
   });
@@ -191,6 +227,51 @@ function buildTerminalPageMeta(requested: SurfaceKey) {
     headerBarKicker: isInternal ? '终端 / 深层证据' : '终端 / 运行态',
     headerBarTitle: isInternal ? '内部视图与深层证据' : '视图断言与运行状态',
     headerBarSubtitle: isInternal ? '内部字段 / 执行证据 / 只读边界' : '快照来源 / 刷新状态 / 只读回退',
+  };
+}
+
+function buildOpsRiskPageMeta() {
+  return {
+    sidebarTitle: '操作路由',
+    sidebarSubtitle: 'Observe / Diagnose / Act',
+    headerTitle: '风险驾驶舱',
+    headerSubtitle: 'Observe / Diagnose / Act',
+  };
+}
+
+function buildOpsAuditsPageMeta() {
+  return {
+    sidebarTitle: '操作路由',
+    sidebarSubtitle: 'Observe / Diagnose / Act',
+    headerTitle: '审计诊断',
+    headerSubtitle: 'route audit / calibration / dependency trend',
+  };
+}
+
+function buildOpsRunbooksPageMeta() {
+  return {
+    sidebarTitle: '操作路由',
+    sidebarSubtitle: 'Observe / Diagnose / Act',
+    headerTitle: '处置手册',
+    headerSubtitle: 'runbook / precheck / playbook bundle',
+  };
+}
+
+function buildOpsWorkflowPageMeta() {
+  return {
+    sidebarTitle: '操作路由',
+    sidebarSubtitle: 'Observe / Diagnose / Act',
+    headerTitle: '工作流',
+    headerSubtitle: 'proposal / approval / replay / rollback',
+  };
+}
+
+function buildOpsTracesPageMeta() {
+  return {
+    sidebarTitle: '操作路由',
+    sidebarSubtitle: 'Observe / Diagnose / Act',
+    headerTitle: '链路追踪',
+    headerSubtitle: 'trace context / event stream / artifacts',
   };
 }
 
@@ -285,7 +366,9 @@ function buildOpsSidebarItems(focus: SharedFocusState) {
   return OPS_SURFACE_NAV.map((item) => ({
     id: item.id,
     label: item.label,
-    to: item.id === 'terminal-internal' ? buildTerminalLink('internal', focus) : buildTerminalLink('public', focus),
+    to: item.page === 'risk'
+      ? buildTerminalLink('public', focus)
+      : buildOpsPageLink(item.page, focusWithout(focus, ['panel', 'section', 'row'])),
   }));
 }
 
@@ -499,6 +582,142 @@ function buildTerminalHeaderRhythm(
   };
 }
 
+function buildOpsRiskHeaderRhythm(
+  focus: SharedFocusState,
+  model: TerminalReadModel | null | undefined,
+) {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '关键告警', value: String(model?.orchestration.alerts.length || 0), detail: '当前公开面暴露的 operator alerts 数量。', tone: (model?.orchestration.alerts.length || 0) > 0 ? 'warning' as const : 'positive' as const },
+        { type: 'fact' as const, label: '门禁项', value: String(model?.signalRisk.gateScores.length || 0), detail: 'signal-risk gate score 当前总数。', tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'link' as const, label: '审计诊断', value: 'route audit / calibration', to: buildOpsPageLink('audits', focus) },
+        { type: 'link' as const, label: '处置手册', value: 'runbook / precheck', to: buildOpsPageLink('runbooks', focus) },
+        { type: 'link' as const, label: '工作流', value: 'proposal / rollback', to: buildOpsPageLink('workflow', focus) },
+        { type: 'link' as const, label: '链路追踪', value: 'trace / artifacts', to: buildOpsPageLink('traces', focus) },
+      ],
+    },
+  };
+}
+
+function buildOpsAuditsHeaderRhythm(
+  focus: SharedFocusState,
+  model: TerminalReadModel | null | undefined,
+) {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '拓扑节点', value: String(model?.workspace.publicTopology.length || 0), detail: '当前公开入口拓扑节点数。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: '验收检查', value: String(model?.workspace.publicAcceptance.checks.length || 0), detail: '公开验收 checks 当前总数。', tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'link' as const, label: '风险驾驶舱', value: '回风险观察', to: buildOpsPageLink('risk', focus) },
+        { type: 'link' as const, label: '处置手册', value: '进入动作域', to: buildOpsPageLink('runbooks', focus) },
+        { type: 'link' as const, label: '链路追踪', value: '进入 trace 域', to: buildOpsPageLink('traces', focus) },
+      ],
+    },
+  };
+}
+
+function buildOpsRunbooksHeaderRhythm(
+  focus: SharedFocusState,
+  model: TerminalReadModel | null | undefined,
+) {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '值班动作', value: String(model?.orchestration.actionLog.length || 0), detail: 'scheduler/action log 当前条数。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: '清单项', value: String(model?.orchestration.checklist.length || 0), detail: '人工待办 checklist 当前条数。', tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'link' as const, label: '风险驾驶舱', value: '回观察面', to: buildOpsPageLink('risk', focus) },
+        { type: 'link' as const, label: '工作流', value: '进入审批与回放', to: buildOpsPageLink('workflow', focus) },
+        { type: 'link' as const, label: '链路追踪', value: '进入 trace 域', to: buildOpsPageLink('traces', focus) },
+      ],
+    },
+  };
+}
+
+function buildOpsWorkflowHeaderRhythm(
+  focus: SharedFocusState,
+  model: TerminalReadModel | null | undefined,
+) {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '审批门禁', value: String(model?.signalRisk.gateScores.length || 0), detail: '当前 gate metrics 条数。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: '回退链', value: String(model?.workspace.fallbackChain.length || 0), detail: '当前 source-owned fallback 链节点数。', tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'link' as const, label: '风险驾驶舱', value: '回观察面', to: buildOpsPageLink('risk', focus) },
+        { type: 'link' as const, label: '处置手册', value: '回动作域', to: buildOpsPageLink('runbooks', focus) },
+        { type: 'link' as const, label: '链路追踪', value: '进入 trace 域', to: buildOpsPageLink('traces', focus) },
+      ],
+    },
+  };
+}
+
+function buildOpsTracesHeaderRhythm(
+  focus: SharedFocusState,
+  model: TerminalReadModel | null | undefined,
+) {
+  return {
+    stateSection: {
+      title: '当前状态',
+      items: [
+        { type: 'fact' as const, label: '证据跳转', value: String(model?.workspace.artifactHandoffs ? Object.keys(model.workspace.artifactHandoffs).length : 0), detail: '当前 artifactHandoffs 已暴露的工件数量。', tone: 'neutral' as const },
+        { type: 'fact' as const, label: '回退链', value: String(model?.workspace.fallbackChain.length || 0), detail: '当前 fallbackChain 节点数。', tone: 'neutral' as const },
+      ],
+    },
+    focusSection: {
+      title: '当前焦点',
+      items: buildFocusSection(focus).items,
+    },
+    actionSection: {
+      title: '下一步',
+      items: [
+        { type: 'link' as const, label: '风险驾驶舱', value: '回观察面', to: buildOpsPageLink('risk', focus) },
+        { type: 'link' as const, label: '工作流', value: '进入制度页', to: buildOpsPageLink('workflow', focus) },
+        { type: 'link' as const, label: '处置手册', value: '进入动作域', to: buildOpsPageLink('runbooks', focus) },
+      ],
+    },
+  };
+}
+
 function buildWorkspaceHeaderRhythm(
   focus: SharedFocusState,
   section: WorkspaceSection,
@@ -691,6 +910,83 @@ function SurfaceUnavailablePanel({
       <h3>{title}</h3>
       <p className="panel-note">{detail}</p>
     </section>
+  );
+}
+
+function PreserveQueryRedirect({ toPathname }: { toPathname: string }) {
+  const location = useLocation();
+  return <Navigate replace to={{ pathname: toPathname, search: location.search }} />;
+}
+
+const OPS_PLACEHOLDER_COPY: Record<Exclude<OpsPageId, 'overview' | 'risk'>, { title: string; subtitle: string; kicker: string; detail: string }> = {
+  audits: {
+    title: '审计诊断',
+    subtitle: 'route audit / calibration / dependency trend',
+    kicker: 'ops / diagnose',
+    detail: '第一阶段先落独立页面壳层，后续再把校准、依赖趋势、分诊漂移等深度模块从旧长页迁入。',
+  },
+  runbooks: {
+    title: '处置手册',
+    subtitle: 'runbook / precheck / playbook bundle',
+    kicker: 'ops / act',
+    detail: '第一阶段先把动作域从总览中分离成独立页面入口；后续再迁入 quick action、playbook bundle 与执行反馈。',
+  },
+  workflow: {
+    title: '工作流',
+    subtitle: 'proposal / approval / replay / rollback',
+    kicker: 'ops / governance',
+    detail: '第一阶段先建立审批与回放页面壳层；后续再迁入 workflow store、proposal detail 与 rollback 建议。',
+  },
+  traces: {
+    title: '链路追踪',
+    subtitle: 'trace context / event stream / artifacts',
+    kicker: 'ops / trace',
+    detail: '第一阶段先建立 trace 页骨架；后续再把 trace context、event stream 和 artifact drilldown 迁入此页。',
+  },
+};
+
+function OpsPlaceholderRoute({
+  page,
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps & { page: Exclude<OpsPageId, 'overview' | 'risk'> }) {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { model, error } = useTerminalStore();
+  const focus = parseFocus(searchParams);
+  const copy = OPS_PLACEHOLDER_COPY[page];
+
+  useSurfaceRefresh('public');
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, 'public')} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title="操作路由"
+          subtitle="Observe / Diagnose / Act"
+          items={buildOpsSidebarItems(focus)}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader compact title={copy.title} subtitle={copy.subtitle} breadcrumbs={[{ label: '操作域' }, { label: copy.title, current: true }]} {...buildTerminalHeaderRhythm(focus, 'public', 'public')} />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+      inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'terminal', surface: 'public' }} />}
+    >
+      <section className="panel-card">
+        <p className="panel-kicker">{copy.kicker}</p>
+        <h3>{copy.title}</h3>
+        <p className="panel-note">{copy.detail}</p>
+      </section>
+    </AppShell>
   );
 }
 
@@ -1226,6 +1522,261 @@ function WorkspaceRoute({
   );
 }
 
+function OpsRiskRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { model, loading, error, snapshotPath } = useTerminalStore();
+  const focus = parseFocus(searchParams);
+  const pageMeta = buildOpsRiskPageMeta();
+
+  useSurfaceRefresh('public');
+
+  useEffect(() => {
+    const anchorId = resolveSearchAnchorId(searchParams, focus);
+    const handle = window.requestAnimationFrame(() => {
+      if (anchorId && scrollToSearchAnchor(anchorId)) return;
+      safeResetWindowScroll();
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [focus, searchParams]);
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, 'public')} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title={pageMeta.sidebarTitle}
+          subtitle={pageMeta.sidebarSubtitle}
+          items={buildOpsSidebarItems(focus)}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader
+        compact
+        title={pageMeta.headerTitle}
+        subtitle={pageMeta.headerSubtitle}
+        breadcrumbs={[{ label: '操作域' }, { label: '风险驾驶舱', current: true }]}
+        actions={buildTerminalHeaderActions(focus, 'public', 'public')}
+        {...buildOpsRiskHeaderRhythm(focus, model)}
+      />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+      inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'terminal', surface: 'public' }} />}
+    >
+      {!model && loading ? <div className="loading-panel">{t('loading_terminal')}</div> : null}
+      {model ? (
+        <SurfaceShell>
+          <OpsContextStrip model={model} focus={focus} requested="public" snapshotPath={snapshotPath} />
+          <AttentionStack />
+          <OpsRiskPage model={model} focus={focus} />
+        </SurfaceShell>
+      ) : null}
+    </AppShell>
+  );
+}
+
+function OpsAuditsRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { model, loading, error } = useTerminalStore();
+  const focus = parseFocus(searchParams);
+  const pageMeta = buildOpsAuditsPageMeta();
+
+  useSurfaceRefresh('public');
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, 'public')} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title={pageMeta.sidebarTitle}
+          subtitle={pageMeta.sidebarSubtitle}
+          items={buildOpsSidebarItems(focus)}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader
+        compact
+        title={pageMeta.headerTitle}
+        subtitle={pageMeta.headerSubtitle}
+        breadcrumbs={[{ label: '操作域' }, { label: '审计诊断', current: true }]}
+        actions={buildTerminalHeaderActions(focus, 'public', 'public')}
+        {...buildOpsAuditsHeaderRhythm(focus, model)}
+      />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+      inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'workspace', section: 'contracts', surface: 'public' }} />}
+    >
+      {!model && loading ? <div className="loading-panel">加载审计页中…</div> : null}
+      {model ? <OpsAuditsPage model={model} focus={focus} /> : null}
+    </AppShell>
+  );
+}
+
+function OpsRunbooksRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { model, loading, error } = useTerminalStore();
+  const focus = parseFocus(searchParams);
+  const pageMeta = buildOpsRunbooksPageMeta();
+
+  useSurfaceRefresh('public');
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, 'public')} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title={pageMeta.sidebarTitle}
+          subtitle={pageMeta.sidebarSubtitle}
+          items={buildOpsSidebarItems(focus)}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader
+        compact
+        title={pageMeta.headerTitle}
+        subtitle={pageMeta.headerSubtitle}
+        breadcrumbs={[{ label: '操作域' }, { label: '处置手册', current: true }]}
+        actions={buildTerminalHeaderActions(focus, 'public', 'public')}
+        {...buildOpsRunbooksHeaderRhythm(focus, model)}
+      />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+      inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'terminal', surface: 'public' }} />}
+    >
+      {!model && loading ? <div className="loading-panel">加载处置手册中…</div> : null}
+      {model ? <OpsRunbooksPage model={model} focus={focus} /> : null}
+    </AppShell>
+  );
+}
+
+function OpsWorkflowRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { model, loading, error } = useTerminalStore();
+  const focus = parseFocus(searchParams);
+  const pageMeta = buildOpsWorkflowPageMeta();
+
+  useSurfaceRefresh('public');
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, 'public')} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title={pageMeta.sidebarTitle}
+          subtitle={pageMeta.sidebarSubtitle}
+          items={buildOpsSidebarItems(focus)}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader
+        compact
+        title={pageMeta.headerTitle}
+        subtitle={pageMeta.headerSubtitle}
+        breadcrumbs={[{ label: '操作域' }, { label: '工作流', current: true }]}
+        actions={buildTerminalHeaderActions(focus, 'public', 'public')}
+        {...buildOpsWorkflowHeaderRhythm(focus, model)}
+      />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+      inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'workspace', section: 'contracts', surface: 'public' }} />}
+    >
+      {!model && loading ? <div className="loading-panel">加载工作流中…</div> : null}
+      {model ? <OpsWorkflowPage model={model} focus={focus} /> : null}
+    </AppShell>
+  );
+}
+
+function OpsTracesRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { model, loading, error } = useTerminalStore();
+  const focus = parseFocus(searchParams);
+  const pageMeta = buildOpsTracesPageMeta();
+
+  useSurfaceRefresh('public');
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav(focus, 'public')} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title={pageMeta.sidebarTitle}
+          subtitle={pageMeta.sidebarSubtitle}
+          items={buildOpsSidebarItems(focus)}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink() }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader
+        compact
+        title={pageMeta.headerTitle}
+        subtitle={pageMeta.headerSubtitle}
+        breadcrumbs={[{ label: '操作域' }, { label: '链路追踪', current: true }]}
+        actions={buildTerminalHeaderActions(focus, 'public', 'public')}
+        {...buildOpsTracesHeaderRhythm(focus, model)}
+      />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+      inspector={<InspectorRail title="对象检查器" focus={focus} model={model} context={{ domain: 'terminal', surface: 'public' }} />}
+    >
+      {!model && loading ? <div className="loading-panel">加载链路追踪中…</div> : null}
+      {model ? <OpsTracesPage model={model} focus={focus} /> : null}
+    </AppShell>
+  );
+}
+
 function SearchRoute({
   themePreference,
   resolvedTheme,
@@ -1429,6 +1980,7 @@ function CpaRoute({
 function AppRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
+  useLegacyHashRedirect();
   const themeSearchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const themeOverride = themeSearchParams.get('theme');
   const { preference, resolvedTheme, setPreference } = useUiTheme(themeOverride);
@@ -1485,10 +2037,77 @@ function AppRoutes() {
     <>
       <Routes>
         <Route path="/" element={<Navigate to="/graph-home" replace />} />
+        <Route path="/overview" element={<PreserveQueryRedirect toPathname="/ops/overview" />} />
         <Route
-          path="/overview"
+          path="/ops/overview"
           element={(
             <OverviewRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route path="/terminal/public" element={<PreserveQueryRedirect toPathname="/ops/risk" />} />
+        <Route
+          path="/ops/risk"
+          element={(
+            <OpsRiskRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/ops/audits"
+          element={(
+            <OpsAuditsRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/ops/runbooks"
+          element={(
+            <OpsRunbooksRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/ops/workflow"
+          element={(
+            <OpsWorkflowRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/ops/traces"
+          element={(
+            <OpsTracesRoute
               themePreference={preference}
               resolvedTheme={resolvedTheme}
               onThemeChange={handleThemeChange}
@@ -1581,11 +2200,12 @@ function AppRoutes() {
 }
 
 export default function App() {
+  syncLegacyHashPathBeforeRouter();
   return (
     <ErrorBoundary>
-      <HashRouter>
+      <BrowserRouter>
         <AppRoutes />
-      </HashRouter>
+      </BrowserRouter>
     </ErrorBoundary>
   );
 }

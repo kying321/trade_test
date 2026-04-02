@@ -1,16 +1,21 @@
 import type { NavItem, ResearchLegacySection } from '../pages/page-types';
+import type { OpsPageId } from './route-contract';
 
 export const PRIMARY_NAV: NavItem[] = [
   { id: 'graph', label: '图谱主页', to: '/graph-home', description: '交易中枢 / 自定义管道 / 关系图谱' },
-  { id: 'overview', label: '总览', to: '/overview', description: '总状态 / 分流入口' },
-  { id: 'ops', label: '操作终端', to: '/terminal/public', description: '调度 / 门禁 / 风险链路' },
+  { id: 'overview', label: '总览', to: '/ops/overview', description: '90 秒总览 / 分流入口' },
+  { id: 'ops', label: '操作终端', to: '/ops/risk', description: '风险驾驶舱 / 诊断入口' },
   { id: 'research', label: '研究工作区', to: '/workspace/artifacts', description: '工件 / 回测 / 对比' },
   { id: 'cpa', label: 'CPA 管理', to: '/cpa', description: '认证文件 / 配额 / 删除保护' },
 ];
 
-export const OPS_SURFACE_NAV: NavItem[] = [
-  { id: 'terminal-public', label: '公开面', to: '/terminal/public', description: '安全摘要' },
-  { id: 'terminal-internal', label: '内部面', to: '/terminal/internal', description: '完整穿透' },
+export const OPS_SURFACE_NAV: Array<NavItem & { page: OpsPageId }> = [
+  { id: 'ops-overview', page: 'overview', label: '90 秒总览', to: '/ops/overview', description: '状态 / 分流入口' },
+  { id: 'ops-risk', page: 'risk', label: '风险驾驶舱', to: '/ops/risk', description: '观察 / 实时风险' },
+  { id: 'ops-audits', page: 'audits', label: '审计诊断', to: '/ops/audits', description: '校准 / 趋势 / 验收' },
+  { id: 'ops-runbooks', page: 'runbooks', label: '处置手册', to: '/ops/runbooks', description: '动作 / precheck / playbook' },
+  { id: 'ops-workflow', page: 'workflow', label: '工作流', to: '/ops/workflow', description: 'proposal / approval / rollback' },
+  { id: 'ops-traces', page: 'traces', label: '链路追踪', to: '/ops/traces', description: 'trace / event / artifact' },
 ];
 
 export const RESEARCH_LEGACY_NAV: Array<NavItem & { section: ResearchLegacySection }> = [

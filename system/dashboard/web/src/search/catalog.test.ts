@@ -18,8 +18,8 @@ const snapshot: DashboardSnapshot = {
   change_class: 'RESEARCH_ONLY',
   meta: { change_class: 'RESEARCH_ONLY' },
   ui_routes: {
-    terminal_public: '#/terminal/public',
-    workspace_artifacts: '#/workspace/artifacts',
+    terminal_public: '/ops/risk',
+    workspace_artifacts: '/workspace/artifacts',
   },
   experience_contract: { mode: 'read_only_snapshot', live_path_touched: false, fallback_chain: [] },
   catalog: [
@@ -110,8 +110,8 @@ describe('search catalog', () => {
   it('搜索国内商品推理线时返回总览与终端模块', () => {
     const model = buildTerminalReadModel(buildLoaded(snapshot));
     const results = searchCatalog(buildSearchCatalog(model), '国内商品推理线', 'all');
-    expect(results.some((row) => row.destination.includes('/overview'))).toBe(true);
-    expect(results.some((row) => row.destination.includes('/terminal/public'))).toBe(true);
+    expect(results.some((row) => row.destination.includes('/ops/overview'))).toBe(true);
+    expect(results.some((row) => row.destination.includes('/ops/risk'))).toBe(true);
   });
 
   it('搜索契约层时命中 workspace contracts 路由', () => {

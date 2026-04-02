@@ -80,8 +80,8 @@ def test_run_topology_smoke_reports_expected_public_entry(monkeypatch) -> None:
         )
         return {
             "name": name,
-            "route": f"{root_url}/#/{route_path}",
-            "final_url": f"{root_url}/#/{route_path}",
+            "route": f"{root_url}/{route_path}",
+            "final_url": f"{root_url}/{route_path}",
             "markers": markers,
             "screenshot_path": str(screenshot_path),
             "ok": True,
@@ -96,7 +96,7 @@ def test_run_topology_smoke_reports_expected_public_entry(monkeypatch) -> None:
         lambda *, name, root_url, timeout_seconds, screenshot_path: fake_browser_smoke(
             name=name,
             root_url=root_url,
-            route_path="overview",
+            route_path="ops/overview",
             markers=["研究主线摘要", "国内商品推理线"],
             timeout_seconds=timeout_seconds,
             screenshot_path=screenshot_path,
@@ -124,17 +124,16 @@ def test_run_topology_smoke_reports_expected_public_entry(monkeypatch) -> None:
     assert checks["pages_overview_browser"]["name"] == "pages_overview_browser"
     assert checks["root_contracts_browser"]["name"] == "root_contracts_browser"
     assert checks["pages_contracts_browser"]["name"] == "pages_contracts_browser"
-    assert checks["root_overview_browser"]["route"] == "https://fuuu.fun/#/overview"
-    assert checks["pages_overview_browser"]["route"] == "https://fenlie.fuuu.fun/#/overview"
-    assert checks["root_contracts_browser"]["route"] == "https://fuuu.fun/#/workspace/contracts"
-    assert checks["pages_contracts_browser"]["route"] == "https://fenlie.fuuu.fun/#/workspace/contracts"
+    assert checks["root_overview_browser"]["route"] == "https://fuuu.fun/ops/overview"
+    assert checks["pages_overview_browser"]["route"] == "https://fenlie.fuuu.fun/ops/overview"
+    assert checks["root_contracts_browser"]["route"] == "https://fuuu.fun/ops/audits"
+    assert checks["pages_contracts_browser"]["route"] == "https://fenlie.fuuu.fun/ops/audits"
     assert checks["root_overview_browser"]["markers"] == ["研究主线摘要", "国内商品推理线"]
     assert checks["root_contracts_browser"]["markers"] == [
+        "公开入口拓扑",
         "公开面验收",
         "穿透层 1 / 验收总览",
-        "接口目录",
-        "源头主线",
-        "回退链",
+        "穿透层 2 / 子链状态",
     ]
     assert checks["root_overview_browser"]["screenshot_path"].endswith(
         "20260321T095337Z_dashboard_public_topology_root_overview_browser.png"
@@ -161,10 +160,10 @@ def test_run_topology_smoke_reports_expected_public_entry(monkeypatch) -> None:
         "https://fenlie.fuuu.fun",
     ]
     assert [call["route_path"] for call in screenshot_calls] == [
-        "overview",
-        "overview",
-        "workspace/contracts",
-        "workspace/contracts",
+        "ops/overview",
+        "ops/overview",
+        "ops/audits",
+        "ops/audits",
     ]
     assert screenshot_calls[0]["screenshot_path"].endswith(
         "fenlie-review/20260321T095337Z_dashboard_public_topology_root_overview_browser.png"
@@ -174,7 +173,7 @@ def test_run_topology_smoke_reports_expected_public_entry(monkeypatch) -> None:
     )
     assert (
         screenshot_calls[2]["markers"]
-        == '["公开面验收", "穿透层 1 / 验收总览", "接口目录", "源头主线", "回退链"]'
+        == '["公开入口拓扑", "公开面验收", "穿透层 1 / 验收总览", "穿透层 2 / 子链状态"]'
     )
     assert screenshot_calls[2]["screenshot_path"].endswith(
         "fenlie-review/20260321T095337Z_dashboard_public_topology_root_contracts_browser.png"
@@ -234,8 +233,8 @@ def test_run_public_route_browser_smoke_uses_uncapped_navigation_timeout(monkeyp
         (temp_dir / "public-overview.result.json").write_text(
             json.dumps(
               {
-                "route": "https://fuuu.fun/#/overview",
-                "final_url": "https://fuuu.fun/#/overview",
+                "route": "https://fuuu.fun/ops/overview",
+                "final_url": "https://fuuu.fun/ops/overview",
                 "markers": ["研究主线摘要", "国内商品推理线"],
                 "screenshot_path": str(tmp_path / "shot.png"),
               },
@@ -250,7 +249,7 @@ def test_run_public_route_browser_smoke_uses_uncapped_navigation_timeout(monkeyp
     result = mod.run_public_route_browser_smoke(
         name="root_overview_browser",
         root_url="https://fuuu.fun",
-        route_path="overview",
+        route_path="ops/overview",
         markers=["研究主线摘要", "国内商品推理线"],
         timeout_seconds=30.0,
         screenshot_path=tmp_path / "shot.png",
@@ -276,8 +275,8 @@ def test_run_public_route_browser_smoke_keeps_a_30s_browser_timeout_floor(monkey
         (temp_dir / "public-overview.result.json").write_text(
             json.dumps(
                 {
-                    "route": "https://fuuu.fun/#/overview",
-                    "final_url": "https://fuuu.fun/#/overview",
+                    "route": "https://fuuu.fun/ops/overview",
+                    "final_url": "https://fuuu.fun/ops/overview",
                     "markers": ["研究主线摘要", "国内商品推理线"],
                     "screenshot_path": str(tmp_path / "shot.png"),
                 },
@@ -292,7 +291,7 @@ def test_run_public_route_browser_smoke_keeps_a_30s_browser_timeout_floor(monkey
     result = mod.run_public_route_browser_smoke(
         name="root_overview_browser",
         root_url="https://fuuu.fun",
-        route_path="overview",
+        route_path="ops/overview",
         markers=["研究主线摘要", "国内商品推理线"],
         timeout_seconds=5.0,
         screenshot_path=tmp_path / "shot.png",

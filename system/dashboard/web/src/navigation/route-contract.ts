@@ -37,8 +37,16 @@ function buildPreservedLink(basePath: string, focus: SharedQueryState = {}): str
   return `${basePath}${query ? `?${query}` : ''}`;
 }
 
+export type OpsPageId = 'overview' | 'risk' | 'audits' | 'runbooks' | 'workflow' | 'traces';
+
+export function buildOpsPageLink(page: OpsPageId, focus: SharedQueryState = {}): string {
+  return buildPreservedLink(`/ops/${page}`, focus);
+}
+
 export function buildOpsLegacyLink(surface: 'public' | 'internal', focus: SharedQueryState = {}): string {
-  return buildPreservedLink(`/terminal/${surface}`, focus);
+  return surface === 'public'
+    ? buildOpsPageLink('risk', focus)
+    : buildPreservedLink('/terminal/internal', focus);
 }
 
 export function buildResearchLegacyLink(
@@ -49,7 +57,7 @@ export function buildResearchLegacyLink(
 }
 
 export function buildOverviewLink(focus: SharedQueryState = {}): string {
-  return buildPreservedLink('/overview', focus);
+  return buildOpsPageLink('overview', focus);
 }
 
 export function buildGraphHomeLink(focus: SharedQueryState = {}): string {

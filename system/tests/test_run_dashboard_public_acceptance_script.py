@@ -50,7 +50,7 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
                     "internal_snapshot_fetch_count": 0,
                 },
                 "artifacts_filter_assertion": {
-                    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
@@ -62,16 +62,16 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
                     ],
                 },
                 "research_audit_search_assertion": {
-                    "route": "#/search",
+                    "route": "/search",
                     "cases_available": True,
                     "cases": [
                         {
                             "case_id": "optimizer_trial_trade_journal",
                             "scope": "artifact",
                             "query": "trial_001_ultra_short_trade_journal",
-                            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                             "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                             "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
                         }
                     ],
@@ -79,51 +79,51 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
                 "contracts_acceptance_inspector_assertion": {
                     "checks_by_id": {
                         "topology_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-check-topology_smoke",
                             "page_section": "contracts-check-topology_smoke",
                             "search_link_href": "",
                             "artifact_link_href": "",
                             "raw_link_href": "",
                         },
                         "workspace_routes_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
                             "page_section": "contracts-check-workspace_routes_smoke",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                         "graph_home_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
                             "page_section": "contracts-check-graph_home_smoke",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         }
                     },
                     "subcommands_by_id": {
                         "topology_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-subcommand-topology_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-subcommand-topology_smoke",
                             "page_section": "contracts-subcommand-topology_smoke",
-                            "check_route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                            "check_route": "/workspace/contracts?page_section=contracts-check-topology_smoke",
                             "search_link_href": "",
                             "artifact_link_href": "",
                             "raw_link_href": "",
                         },
                         "workspace_routes_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
                             "page_section": "contracts-subcommand-workspace_routes_smoke",
-                            "check_route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "check_route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                         "graph_home_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
                             "page_section": "contracts-subcommand-graph_home_smoke",
-                            "check_route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "check_route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         }
                     },
                 },
@@ -135,15 +135,15 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
                 "change_class": "RESEARCH_ONLY",
                 "report_path": "/tmp/graph-home.json",
                 "graph_home_assertion": {
-                    "default_route": "#/",
-                    "resolved_route": "#/graph-home",
+                    "default_route": "/",
+                    "resolved_route": "/graph-home",
                     "research_audit_link_assertions": [
                         {
                             "selected_heading": "交易中枢",
                             "case_id": "optimizer_trial_trade_journal",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                     ],
                 },
@@ -174,7 +174,7 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
     assert result["checks"]["workspace_routes_smoke"]["network_observation"]["public_snapshot_fetch_count"] == 4
     assert result["checks"]["workspace_routes_smoke"]["network_observation"]["internal_snapshot_fetch_count"] == 0
     assert result["checks"]["workspace_routes_smoke"]["artifacts_filter_assertion"] == {
-        "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+        "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
         "group": "research_cross_section",
         "search_scope": "title",
         "search": "orderflow",
@@ -186,16 +186,16 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
         ],
     }
     assert result["checks"]["workspace_routes_smoke"]["research_audit_search_assertion"] == {
-        "route": "#/search",
+        "route": "/search",
         "cases_available": True,
         "cases": [
             {
                 "case_id": "optimizer_trial_trade_journal",
                 "scope": "artifact",
                 "query": "trial_001_ultra_short_trade_journal",
-                "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                 "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                 "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
             }
         ],
@@ -203,51 +203,51 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
     assert result["checks"]["workspace_routes_smoke"]["contracts_acceptance_inspector_assertion"] == {
         "checks_by_id": {
             "topology_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                "route": "/workspace/contracts?page_section=contracts-check-topology_smoke",
                 "page_section": "contracts-check-topology_smoke",
                 "search_link_href": "",
                 "artifact_link_href": "",
                 "raw_link_href": "",
             },
             "workspace_routes_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                "route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
                 "page_section": "contracts-check-workspace_routes_smoke",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             },
             "graph_home_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                "route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
                 "page_section": "contracts-check-graph_home_smoke",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             }
         },
         "subcommands_by_id": {
             "topology_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-subcommand-topology_smoke",
+                "route": "/workspace/contracts?page_section=contracts-subcommand-topology_smoke",
                 "page_section": "contracts-subcommand-topology_smoke",
-                "check_route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                "check_route": "/workspace/contracts?page_section=contracts-check-topology_smoke",
                 "search_link_href": "",
                 "artifact_link_href": "",
                 "raw_link_href": "",
             },
             "workspace_routes_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
+                "route": "/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
                 "page_section": "contracts-subcommand-workspace_routes_smoke",
-                "check_route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "check_route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             },
             "graph_home_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
+                "route": "/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
                 "page_section": "contracts-subcommand-graph_home_smoke",
-                "check_route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "check_route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             }
         },
     }
@@ -255,9 +255,9 @@ def test_run_acceptance_aggregates_topology_and_workspace_results(monkeypatch, t
         {
             "selected_heading": "交易中枢",
             "case_id": "optimizer_trial_trade_journal",
-            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
         }
     ]
     assert seen_cmds["topology_smoke"][0] == "/opt/miniconda3/bin/python3"
@@ -340,7 +340,7 @@ def test_run_acceptance_preserves_failed_subcommand_audit_fields(monkeypatch, tm
                 "status": "ok",
                 "change_class": "RESEARCH_ONLY",
                 "artifacts_filter_assertion": {
-                    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
@@ -349,15 +349,15 @@ def test_run_acceptance_preserves_failed_subcommand_audit_fields(monkeypatch, tm
                     "visible_artifacts": [],
                 },
                 "research_audit_search_assertion": {
-                    "route": "#/search",
+                    "route": "/search",
                     "cases_available": True,
                     "cases": [
                         {
                             "case_id": "optimizer_trial_trade_journal",
                             "query": "trial_001_ultra_short_trade_journal",
-                            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                             "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                             "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
                         },
                     ],
@@ -378,14 +378,14 @@ def test_run_acceptance_preserves_failed_subcommand_audit_fields(monkeypatch, tm
                 "status": "ok",
                 "change_class": "RESEARCH_ONLY",
                 "graph_home_assertion": {
-                    "resolved_route": "#/graph-home",
+                    "resolved_route": "/graph-home",
                     "research_audit_link_assertions": [
                         {
                             "selected_heading": "交易中枢",
                             "case_id": "optimizer_trial_trade_journal",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                     ],
                 },
@@ -538,7 +538,7 @@ def test_run_acceptance_allows_orderflow_source_unavailable_degrade(monkeypatch,
                     "internal_snapshot_fetch_count": 0,
                 },
                 "artifacts_filter_assertion": {
-                    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
@@ -547,15 +547,15 @@ def test_run_acceptance_allows_orderflow_source_unavailable_degrade(monkeypatch,
                     "visible_artifacts": [],
                 },
                 "research_audit_search_assertion": {
-                    "route": "#/search",
+                    "route": "/search",
                     "cases_available": True,
                     "cases": [
                         {
                             "case_id": "optimizer_trial_trade_journal",
                             "query": "trial_001_ultra_short_trade_journal",
-                            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                             "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                             "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
                         },
                     ],
@@ -565,14 +565,14 @@ def test_run_acceptance_allows_orderflow_source_unavailable_degrade(monkeypatch,
             payload = {
                 **payload,
                 "graph_home_assertion": {
-                    "resolved_route": "#/graph-home",
+                    "resolved_route": "/graph-home",
                     "research_audit_link_assertions": [
                         {
                             "selected_heading": "交易中枢",
                             "case_id": "optimizer_trial_trade_journal",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                     ],
                 },
@@ -598,7 +598,7 @@ def test_run_acceptance_allows_orderflow_source_unavailable_degrade(monkeypatch,
     assert result["ok"] is True
     workspace_check = result["checks"]["workspace_routes_smoke"]
     assert workspace_check["artifacts_filter_assertion"] == {
-        "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+        "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
         "group": "research_cross_section",
         "search_scope": "title",
         "search": "orderflow",
@@ -631,7 +631,7 @@ def test_run_acceptance_requires_research_audit_search_assertion(monkeypatch, tm
                     "internal_snapshot_fetch_count": 0,
                 },
                 "artifacts_filter_assertion": {
-                    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
@@ -691,7 +691,7 @@ def test_run_acceptance_requires_graph_home_research_audit_link_assertions(monke
                     "internal_snapshot_fetch_count": 0,
                 },
                 "artifacts_filter_assertion": {
-                    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
@@ -703,15 +703,15 @@ def test_run_acceptance_requires_graph_home_research_audit_link_assertions(monke
                     ],
                 },
                 "research_audit_search_assertion": {
-                    "route": "#/search",
+                    "route": "/search",
                     "cases_available": True,
                     "cases": [
                         {
                             "case_id": "optimizer_trial_trade_journal",
                             "query": "trial_001_ultra_short_trade_journal",
-                            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                             "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                             "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
                         }
                     ],
@@ -721,8 +721,8 @@ def test_run_acceptance_requires_graph_home_research_audit_link_assertions(monke
             payload = {
                 **payload,
                 "graph_home_assertion": {
-                    "default_route": "#/",
-                    "resolved_route": "#/graph-home",
+                    "default_route": "/",
+                    "resolved_route": "/graph-home",
                 },
             }
         return {
@@ -773,7 +773,7 @@ def test_run_acceptance_requires_contracts_acceptance_inspector_assertion(monkey
                     "internal_snapshot_fetch_count": 0,
                 },
                 "artifacts_filter_assertion": {
-                    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
@@ -785,15 +785,15 @@ def test_run_acceptance_requires_contracts_acceptance_inspector_assertion(monkey
                     ],
                 },
                 "research_audit_search_assertion": {
-                    "route": "#/search",
+                    "route": "/search",
                     "cases_available": True,
                     "cases": [
                         {
                             "case_id": "optimizer_trial_trade_journal",
                             "query": "trial_001_ultra_short_trade_journal",
-                            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                             "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                             "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
                         }
                     ],
@@ -803,15 +803,15 @@ def test_run_acceptance_requires_contracts_acceptance_inspector_assertion(monkey
             payload = {
                 **payload,
                 "graph_home_assertion": {
-                    "default_route": "#/",
-                    "resolved_route": "#/graph-home",
+                    "default_route": "/",
+                    "resolved_route": "/graph-home",
                     "research_audit_link_assertions": [
                         {
                             "selected_heading": "交易中枢",
                             "case_id": "optimizer_trial_trade_journal",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                     ],
                 },
@@ -846,7 +846,7 @@ def test_validate_workspace_routes_payload_requires_topology_inspector_rows() ->
 
     payload = {
         "artifacts_filter_assertion": {
-            "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+            "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
             "group": "research_cross_section",
             "search_scope": "title",
             "search": "orderflow",
@@ -858,15 +858,15 @@ def test_validate_workspace_routes_payload_requires_topology_inspector_rows() ->
             ],
         },
         "research_audit_search_assertion": {
-            "route": "#/search",
+            "route": "/search",
             "cases_available": True,
             "cases": [
                 {
                     "case_id": "optimizer_trial_trade_journal",
                     "query": "trial_001_ultra_short_trade_journal",
-                    "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                    "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                     "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                    "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                    "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                     "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
                 }
             ],
@@ -874,36 +874,36 @@ def test_validate_workspace_routes_payload_requires_topology_inspector_rows() ->
         "contracts_acceptance_inspector_assertion": {
             "checks_by_id": {
                 "workspace_routes_smoke": {
-                    "route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                    "route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
                     "page_section": "contracts-check-workspace_routes_smoke",
-                    "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                    "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                    "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                    "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                    "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                    "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                 },
                 "graph_home_smoke": {
-                    "route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                    "route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
                     "page_section": "contracts-check-graph_home_smoke",
-                    "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                    "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                    "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                    "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                    "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                    "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                 },
             },
             "subcommands_by_id": {
                 "workspace_routes_smoke": {
-                    "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
+                    "route": "/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
                     "page_section": "contracts-subcommand-workspace_routes_smoke",
-                    "check_route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
-                    "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                    "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                    "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                    "check_route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                    "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                    "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                    "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                 },
                 "graph_home_smoke": {
-                    "route": "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
+                    "route": "/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
                     "page_section": "contracts-subcommand-graph_home_smoke",
-                    "check_route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
-                    "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                    "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                    "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                    "check_route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                    "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                    "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                    "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                 },
             },
         },

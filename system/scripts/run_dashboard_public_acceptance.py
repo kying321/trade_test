@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 CHANGE_CLASS = "RESEARCH_ONLY"
 ORDERFLOW_ARTIFACTS_FILTER_ASSERTION = {
-    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
     "group": "research_cross_section",
     "search_scope": "title",
     "search": "orderflow",
@@ -22,18 +22,18 @@ ORDERFLOW_ARTIFACTS_FILTER_ASSERTION = {
         "intraday_orderflow_research_gate_blocker",
     ],
 }
-RESEARCH_AUDIT_SEARCH_ROUTE = "#/search"
-GRAPH_HOME_ROUTE = "#/graph-home"
-CONTRACTS_ACCEPTANCE_INSPECTOR_CHECK_ROUTE = "#/workspace/contracts?page_section=contracts-check-graph_home_smoke"
-CONTRACTS_ACCEPTANCE_INSPECTOR_SUBCOMMAND_ROUTE = "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke"
+RESEARCH_AUDIT_SEARCH_ROUTE = "/search"
+GRAPH_HOME_ROUTE = "/graph-home"
+CONTRACTS_ACCEPTANCE_INSPECTOR_CHECK_ROUTE = "/workspace/contracts?page_section=contracts-check-graph_home_smoke"
+CONTRACTS_ACCEPTANCE_INSPECTOR_SUBCOMMAND_ROUTE = "/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke"
 
 
 def _expected_contracts_check_route(check_id: str) -> str:
-    return f"#/workspace/contracts?page_section=contracts-check-{check_id}"
+    return f"/workspace/contracts?page_section=contracts-check-{check_id}"
 
 
 def _expected_contracts_subcommand_route(check_id: str) -> str:
-    return f"#/workspace/contracts?page_section=contracts-subcommand-{check_id}"
+    return f"/workspace/contracts?page_section=contracts-subcommand-{check_id}"
 
 
 def _extract_contracts_inspector_rows(contracts_inspector: dict[str, Any], row_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -180,7 +180,7 @@ def validate_workspace_routes_payload(payload: dict[str, Any]) -> str | None:
             return "invalid_research_audit_search_assertion"
         if not search_route.startswith(f"{RESEARCH_AUDIT_SEARCH_ROUTE}?q=") or "&scope=artifact" not in search_route:
             return "invalid_research_audit_search_assertion"
-        if not workspace_route.startswith("#/workspace/artifacts?artifact="):
+        if not workspace_route.startswith("/workspace/artifacts?artifact="):
             return "invalid_research_audit_search_assertion"
         if "/" not in raw_path and "\\" not in raw_path:
             return "invalid_research_audit_search_assertion"
@@ -231,7 +231,7 @@ def validate_workspace_routes_payload(payload: dict[str, Any]) -> str | None:
 
 def _expected_graph_home_raw_href(raw_path: str) -> str:
     from urllib.parse import quote
-    return f"#/workspace/raw?artifact={quote(raw_path, safe='')}"
+    return f"/workspace/raw?artifact={quote(raw_path, safe='')}"
 
 
 def _same_artifact_route(lhs: str, rhs: str) -> bool:

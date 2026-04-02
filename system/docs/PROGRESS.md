@@ -1,5 +1,66 @@
 # Progress Handoff
 
+## Current State (2026-04-03)
+- Dashboard 前端已完成 path-routing 第一刀，范围限定在 `RESEARCH_ONLY`，未触碰 live path：
+  - `HashRouter -> BrowserRouter`
+  - 新增 `/ops/overview`、`/ops/risk`、`/ops/audits`、`/ops/runbooks`、`/ops/workflow`、`/ops/traces`
+  - `#/overview` 与 `#/terminal/public` 现通过 legacy hash bridge 自动落到 path route
+  - 主导航与图谱主页快捷入口已改为 path-based href，不再输出 `#/...`
+- `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
+  - header / sidebar 改成 `风险驾驶舱` + `操作路由`
+  - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`
+  - 动作入口固定分流到 `/ops/audits`、`/ops/runbooks`、`/ops/workflow`、`/ops/traces`
+  - 仍保留 `ops-context-strip` 与 source-owned read-model contract，不触碰 live path
+- `/ops/audits` 已从 placeholder 提升为可用 audit page：
+  - 直接承接现有 `公开入口拓扑`
+  - 直接承接现有 `公开面验收`
+  - 首轮包含 `穿透层 1 / 验收总览` 与 `穿透层 2 / 子链状态`
+  - 当前仍保留与旧 `workspace/contracts` 的兼容关系；更深的 interface/source-head/fallback 迁移留待后续切片
+- `/ops/runbooks` 已从 placeholder 提升为可用 action page：
+  - 直接承接 `scheduler action log`
+  - 直接承接 `action checklist`
+  - 直接承接 `priority repair plan` 与 optimization backlog
+  - 当前页面只做动作编排与证据汇总，不在前端直接下发 live execution
+- `/ops/workflow` 已从 placeholder 提升为可用 governance page：
+  - 直接承接 `hold_selection_handoff` 的基线/候选/推荐摘要
+  - 直接承接 `signalRisk.gateScores` 作为审批门禁
+  - 直接承接 `fallbackChain` 作为当前回退链表达
+  - 当前页面仍未接入更细的 workflow store / proposal approval history，只做 source-owned 最小制度页
+- `/ops/traces` 已从 placeholder 提升为可用 trace page：
+  - 直接承接当前 `panel / section / row / artifact` 穿透上下文
+  - 直接承接 `snapshotPath`、artifact/source-head path
+  - 直接承接 `artifactHandoffs` 与 `fallbackChain`
+  - 当前页面仍未接入更细的 event stream/trace store，只做只读 trace context 与证据跳转页
+- 发布验收链已开始从 hash-route 切到 path-route：
+  - `run_dashboard_public_topology_smoke.py` 已改为验证 `/ops/overview` 与 `/ops/audits`
+  - `run_dashboard_public_acceptance.py` 已接受 path-based `workspace/search/raw/contracts` 路由
+  - `run_dashboard_workspace_artifacts_smoke.py` 的 public workspace / graph-home / internal alignment / internal terminal focus smoke 已切到 path-based 主路径
+  - 当前 topology / workspace routes / public acceptance 三段 Python 验收测试都已通过
+  - 工程 runbook 已同步切到 path-route 示例；legacy hash bridge 当前只保留兼容入口，不再作为主文档契约
+- legacy sidecar 已完成下线：
+  - 生产入口固定为 `index.html -> src/main.tsx -> src/App.tsx`
+  - `src/main.legacy.jsx` 与 `src/App.legacy.jsx` 已删除
+  - legacy hook/lib data chain 与 legacy component subtree 已删除
+  - 新增 `src/legacy-isolation.test.js`，防止 active runtime import graph 重新连回 legacy sidecar
+  - 详细记录见 `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/LEGACY_SIDECAR_DECOMMISSION.md`
+- 本轮仓库内设计/计划文档：
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/superpowers/specs/2026-04-03-fenlie-dashboard-path-routing-ops-ia-design.md`
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/superpowers/plans/2026-04-03-fenlie-dashboard-path-routing-ops-ia-implementation-plan.md`
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/superpowers/plans/2026-04-03-fenlie-legacy-sidecar-decommission-plan.md`
+- 本轮最小验证已通过：
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/App.test.tsx -t "ops overview route|legacy overview hash entry|legacy terminal public entry" --reporter=dot`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/pages/GraphHomePage.test.tsx -t "shows localized filters|surfaces precise deep links" --reporter=dot`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/search/search-ui.test.tsx -t "path-based search route entry|result navigation|prefills /search route|scope switching explicit|preserves deep-link params" --reporter=dot`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx tsc --noEmit`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/App.test.tsx -t "renders ops risk as a dedicated cockpit route before entering workspace routes" --reporter=dot`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/App.test.tsx -t "renders ops audits as an audit-owned page with topology and acceptance content" --reporter=dot`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/App.test.tsx -t "renders ops runbooks as an action-owned page with action log, checklist, and repair plan" --reporter=dot`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/App.test.tsx -t "renders ops workflow as a governance page with proposal context, approval gates, and rollback path" --reporter=dot`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx vitest run src/App.test.tsx -t "renders ops traces as a trace page with context, evidence jumps, and fallback chain" --reporter=dot`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && node ./scripts/run-python.mjs -m pytest -q ../../tests/test_run_dashboard_public_topology_smoke_script.py`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && node ./scripts/run-python.mjs -m pytest -q ../../tests/test_run_dashboard_workspace_artifacts_smoke_script.py`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && node ./scripts/run-python.mjs -m pytest -q ../../tests/test_run_dashboard_public_acceptance_script.py`
+
 ## Current State (2026-03-21)
 - Priority execution plan (`/Users/jokenrobot/Downloads/Folders/fenlie/docs/superpowers/plans/2026-03-21-fenlie-priority-execution-plan.md`) 已完成当前 5 个主任务，范围保持在 `DOC_ONLY / RESEARCH_ONLY / SIM_ONLY`，未触碰 live capital、order routing、execution queue、fund scheduling。
 - Dashboard / public surface 当前可依赖的发布与验收链：
@@ -7,7 +68,7 @@
   - 最新公开拓扑 smoke：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_smoke.json`
   - 最新 workspace routes smoke：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113336Z_dashboard_workspace_routes_browser_smoke.json`
   - 最新公开验收：`/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113341Z_dashboard_public_acceptance.json`
-  - 当前 root/pages 双公开入口都已覆盖 `#/overview` 与 `#/workspace/contracts` 真实浏览器断言：`root_overview_browser`、`pages_overview_browser`、`root_contracts_browser`、`pages_contracts_browser`
+  - 历史工件阶段当时覆盖的是 `#/overview` 与 `#/workspace/contracts` 真实浏览器断言；当前 canonical public route 已迁到 `/ops/overview` 与 `/ops/audits`
   - 当前 topology smoke 还会落持久化截图：
     - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_root_overview_browser.png`
     - `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_pages_overview_browser.png`
@@ -74,7 +135,7 @@
   - 当前 public snapshot 已包含：
     - `intraday_orderflow_blueprint`
     - `intraday_orderflow_research_gate_blocker`
-  - 当前公开页 `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow` 已可见这两条 canonical 工件
+  - 当时公开页 `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow` 已可见这两条 canonical 工件；当前 canonical 写法对应 `/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
 - 2026-03-21 新增 active overview 顶层的 source-owned 研究主线摘要卡：
   - 页面：
     `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/pages/OverviewPage.tsx`
@@ -98,15 +159,15 @@
     `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111428Z_dashboard_workspace_routes_browser_smoke.json`
   - 最新公开拓扑工件：
     `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T111405Z_dashboard_public_topology_smoke.json`
-  - 当前 `workspace_routes_smoke` 已覆盖 `#/overview`，并对 `研究主线摘要 / hold24_zero` 做真实浏览器断言
+  - 当时 `workspace_routes_smoke` 已覆盖 `#/overview`，并对 `研究主线摘要 / hold24_zero` 做真实浏览器断言；当前 canonical public overview 已迁到 `/ops/overview`
   - 当前 `workspace_routes_smoke` 已覆盖 contracts 页新增 marker：`公开面验收 / root overview 截图 / pages overview 截图 / root contracts 截图 / pages contracts 截图 / 公开快照拉取次数 / 内部快照拉取次数`
-  - 当前 `topology_smoke` 已覆盖 `https://fuuu.fun/#/overview`、`https://fenlie.fuuu.fun/#/overview`、`https://fuuu.fun/#/workspace/contracts`、`https://fenlie.fuuu.fun/#/workspace/contracts`
+  - 当时 `topology_smoke` 已覆盖 `https://fuuu.fun/#/overview`、`https://fenlie.fuuu.fun/#/overview`、`https://fuuu.fun/#/workspace/contracts`、`https://fenlie.fuuu.fun/#/workspace/contracts`；当前 canonical public route 已迁到 `/ops/overview` 与 `/ops/audits`
   - 当前 `topology_smoke` 已分别通过 `root_overview_browser / pages_overview_browser / root_contracts_browser / pages_contracts_browser`
   - 当前 `topology_smoke` 已为 `root/pages overview + contracts` 额外落地截图证据，便于后续审计与回归对比
   - 当前 contracts 公开验收区已透传 `root/pages overview + contracts` 截图路径，以及 `公开/内部快照拉取次数`，并把文案从 `工作区四路由烟测` 收敛为 `工作区五页面烟测`
   - 当前公开 artifacts 页已能通过 `group=research_cross_section&search=orderflow` 直接命中新接入的 orderflow canonical 工件
   - 当前 `workspace_routes_smoke` 已把该 orderflow 过滤路由固化为真实浏览器回归断言，并在 smoke payload 中新增：
-    - `artifacts_filter_assertion.route=#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
+    - 历史 `artifacts_filter_assertion.route=#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`；当前 canonical 写法对应 `/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
     - `artifacts_filter_assertion.active_artifact=intraday_orderflow_blueprint`
     - `artifacts_filter_assertion.visible_artifacts=[intraday_orderflow_blueprint, intraday_orderflow_research_gate_blocker]`
   - 当前 `run_dashboard_public_acceptance.py` 已把 `artifacts_filter_assertion` 升级为聚合验收硬门槛：

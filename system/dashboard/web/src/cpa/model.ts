@@ -96,7 +96,14 @@ function emptyLedgerEntry(): CpaLedgerEntry {
 }
 
 export function loadCpaErrorLedger(raw?: string | null): CpaLedgerStore {
-  if (raw !== undefined) {
+  if (raw === undefined) {
+    if (typeof window === 'undefined') return { version: 1, servers: {} };
+    return loadCpaErrorLedger(window.localStorage.getItem(CPA_ERROR_LEDGER_STORAGE_KEY));
+  }
+  if (raw === null) {
+    return { version: 1, servers: {} };
+  }
+  if (raw !== '') {
     try {
       const parsed = JSON.parse(raw) as CpaLedgerStore;
       if (parsed.version === 1 && parsed.servers && typeof parsed.servers === 'object') return parsed;
@@ -105,8 +112,7 @@ export function loadCpaErrorLedger(raw?: string | null): CpaLedgerStore {
     }
     return { version: 1, servers: {} };
   }
-  if (typeof window === 'undefined') return { version: 1, servers: {} };
-  return loadCpaErrorLedger(window.localStorage.getItem(CPA_ERROR_LEDGER_STORAGE_KEY));
+  return { version: 1, servers: {} };
 }
 
 export function persistCpaErrorLedger(ledger: CpaLedgerStore) {

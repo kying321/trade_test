@@ -57,7 +57,7 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
         route_assertions=route_assertions,
     )
 
-    assert "#/overview" in spec
+    assert "/ops/overview" in spec
     assert "系统状态 / 入口 / 路由总览" in spec
     assert "研究主线摘要" in spec
     assert "查看源头主线" in spec
@@ -67,16 +67,16 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "policy_relief_watch" in spec
     assert "policy_relief_chain" in spec
     assert "BU2606" in spec
-    assert "#/workspace/artifacts" in spec
+    assert "/workspace/artifacts" in spec
     assert "const defaultWorkspaceArtifact = String(workspaceStartRoute.expected_default_artifact || 'price_action_breakout_pullback');" in spec
     assert "const defaultWorkspacePanel = String(workspaceStartRoute.expected_focus_panel || 'lab-review');" in spec
     assert "const defaultWorkspaceSection = String(workspaceStartRoute.expected_focus_section || 'research-heads');" in spec
-    assert "await page.waitForFunction((artifactId) => window.location.hash.includes(`artifact=${artifactId}`), defaultWorkspaceArtifact);" in spec
-    assert "await page.waitForFunction((panelId) => window.location.hash.includes(`panel=${panelId}`), defaultWorkspacePanel);" in spec
-    assert "await page.waitForFunction((sectionId) => window.location.hash.includes(`section=${sectionId}`), defaultWorkspaceSection);" in spec
+    assert "await page.waitForFunction((artifactId) => `${window.location.pathname}${window.location.search}`.includes(`artifact=${artifactId}`), defaultWorkspaceArtifact);" in spec
+    assert "await page.waitForFunction((panelId) => `${window.location.pathname}${window.location.search}`.includes(`panel=${panelId}`), defaultWorkspacePanel);" in spec
+    assert "await page.waitForFunction((sectionId) => `${window.location.pathname}${window.location.search}`.includes(`section=${sectionId}`), defaultWorkspaceSection);" in spec
     assert "await expect(activeArtifactValue).toHaveAttribute('title', defaultWorkspaceArtifact);" in spec
     assert "工件池" in spec
-    assert "#/workspace/alignment" in spec
+    assert "/workspace/alignment" in spec
     assert "对齐页" in spec
     assert "仅内部可见" in spec
     assert "回测池" in spec
@@ -91,12 +91,12 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "源头主线" in spec
     assert "回退链" in spec
     assert "研究地图" in spec
-    assert "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow" in spec
+    assert "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow" in spec
     assert "intraday_orderflow_blueprint" in spec
     assert "intraday_orderflow_research_gate_blocker" in spec
     assert "source_available: orderflowArtifacts.length > 0" in spec
     assert "active_artifact: orderflowActiveArtifact" in spec
-    assert "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion" in spec
+    assert "/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion" in spec
     assert "await expectStableMarker(page, exitRiskReviewActiveArtifact);" in spec
     assert "source_available: exitRiskReviewArtifacts.length > 0" in spec
     assert "active_artifact: exitRiskReviewActiveArtifact" in spec
@@ -136,16 +136,16 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "查看研究审计原始层" in spec
     assert "let pageSectionActiveLabel = '';" in spec
     assert "let pageSectionAccordionState = '';" in spec
-    assert "await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-acceptance-subcommands'));" in spec
+    assert "await page.waitForFunction(() => `${window.location.pathname}${window.location.search}`.includes('page_section=contracts-acceptance-subcommands'));" in spec
     assert "active_label: pageSectionActiveLabel" in spec
     assert "accordion_state: pageSectionAccordionState" in spec
-    assert "#/workspace/contracts?page_section=contracts-source-head-operator_panel" in spec
+    assert "/workspace/contracts?page_section=contracts-source-head-operator_panel" in spec
     assert "data-accordion-id=\"contracts-source-head-operator_panel\"" in spec
     assert "状态" in spec
     assert "研究结论" in spec
     assert "生成时间" in spec
     assert "路径" in spec
-    assert "#/workspace/contracts?page_section=contracts-fallback" in spec
+    assert "/workspace/contracts?page_section=contracts-fallback" in spec
     assert "/data/fenlie_dashboard_snapshot.json" in spec
     assert "/operator_task_visual_panel.html" in spec
     assert "await expect(activeExitRiskReviewArtifact).toHaveAttribute('title', exitRiskReviewActiveArtifact);" in spec
@@ -289,20 +289,20 @@ def test_load_public_workspace_route_assertions_derives_research_audit_search_ca
             "case_id": "optimizer_trial_trade_journal",
             "scope": "artifact",
             "query": "trial_001_ultra_short_trade_journal",
-            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+            "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
             "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
             "result_label": "ultra_short / trial_001 / trade_journal",
-            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+            "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
             "raw_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
         },
         {
             "case_id": "strategy_lab_candidate_trade_journal",
             "scope": "artifact",
             "query": "candidate_02_report_momentum_02_trade_journal",
-            "search_route": "#/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
+            "search_route": "/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
             "result_artifact": "audit:strategy_lab_summary:report_momentum_02:trade_journal",
             "result_label": "report_momentum_02 / trade_journal",
-            "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
+            "workspace_route": "/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
             "raw_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
         },
     ]
@@ -335,15 +335,15 @@ def test_load_commodity_visibility_route_assertions_reads_public_snapshot_marker
 
     assert route_assertions == [
         {
-            "route": "#/overview",
+            "route": "/ops/overview",
             "nav_label": "总览",
             "headline": "总览",
             "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
         },
         {
-            "route": "#/terminal/public",
+            "route": "/ops/risk",
             "nav_label": "操作终端",
-            "headline": "执行穿透 / 调度与门禁",
+            "headline": "Observe / Diagnose / Act",
             "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
         },
     ]
@@ -360,22 +360,22 @@ def test_build_commodity_visibility_smoke_spec_covers_overview_and_terminal_publ
         result_path=result_path,
         route_assertions=[
             {
-                "route": "#/overview",
+                "route": "/ops/overview",
                 "nav_label": "总览",
                 "headline": "总览",
                 "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
             },
                 {
-                    "route": "#/terminal/public",
+                    "route": "/ops/risk",
                     "nav_label": "操作终端",
-                    "headline": "执行穿透 / 调度与门禁",
+                    "headline": "Observe / Diagnose / Act",
                     "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
                 },
             ],
     )
 
-    assert "#/overview" in spec
-    assert "#/terminal/public" in spec
+    assert "/ops/overview" in spec
+    assert "/ops/risk" in spec
     assert "国内商品推理线" in spec
     assert "policy_relief_watch" in spec
     assert "policy_relief_chain" in spec
@@ -400,20 +400,20 @@ def test_build_workspace_routes_smoke_spec_covers_research_audit_search_and_raw_
                     "case_id": "optimizer_trial_trade_journal",
                     "scope": "artifact",
                     "query": "trial_001_ultra_short_trade_journal",
-                    "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                    "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                     "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                     "result_label": "ultra_short / trial_001 / trade_journal",
-                    "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                    "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                     "raw_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
                 },
                 {
                     "case_id": "strategy_lab_candidate_trade_journal",
                     "scope": "artifact",
                     "query": "candidate_02_report_momentum_02_trade_journal",
-                    "search_route": "#/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
+                    "search_route": "/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
                     "result_artifact": "audit:strategy_lab_summary:report_momentum_02:trade_journal",
                     "result_label": "report_momentum_02 / trade_journal",
-                    "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                    "workspace_route": "/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
                     "raw_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
                 },
             ],
@@ -430,7 +430,7 @@ def test_build_workspace_routes_smoke_spec_covers_research_audit_search_and_raw_
 
     assert "const researchAuditCases = Array.isArray(workspaceStartRoute.research_audit_search_cases)" in spec
     assert "research_audit_search_assertion" in spec
-    assert "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact" in spec
+    assert "/search?q=trial_001_ultra_short_trade_journal&scope=artifact" in spec
     assert "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal" in spec
     assert "candidate_02_report_momentum_02_trade_journal" in spec
     assert "audit:strategy_lab_summary:report_momentum_02:trade_journal" in spec
@@ -456,7 +456,7 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
         result_path=result_path,
         route_assertions=[
             {
-                "route": "#/graph-home",
+                "route": "/graph-home",
                 "nav_label": "图谱主页",
                 "headline": "图谱化主页",
                 "markers": ["默认管道", "推荐下一跳", "回到交易中枢", "去操作终端", "去研究工作区", "打开全局搜索"],
@@ -464,9 +464,9 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
                     {
                         "case_id": "optimizer_trial_trade_journal",
                         "query": "trial_001_ultra_short_trade_journal",
-                        "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                        "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                         "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                        "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                        "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                         "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
                     }
                 ],
@@ -474,9 +474,9 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
         ],
     )
 
-    assert "#/" in spec
-    assert "#/unknown-route" in spec
-    assert "#/graph-home" in spec
+    assert "const DEFAULT_ROUTE = '/';" in spec
+    assert "const FALLBACK_ROUTE = '/unknown-route';" in spec
+    assert "/graph-home" in spec
     assert "图谱化主页" in spec
     assert "默认管道" in spec
     assert "推荐下一跳" in spec
@@ -485,7 +485,7 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
     assert "打开全局搜索" in spec
     assert "graph home smoke" in spec
     assert "graph_home_assertion" in spec
-    assert "const resolvedRoute = await page.evaluate(() => window.location.hash);" in spec
+    assert "const resolvedRoute = await page.evaluate(() => `${window.location.pathname}${window.location.search}`);" in spec
     assert "const graphCanvas = page.locator('canvas').first();" in spec
     assert "candidateOffsets" in spec
     assert "canvas_selection_assertion" in spec
@@ -496,13 +496,13 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
     assert "research_audit_link_assertion" in spec
     assert "research_audit_link_assertions" in spec
     assert "researchAuditLinkAssertions.push" in spec
-    assert "async function waitForHashRoute(page, expectedPathname, expectedParams = {})" in spec
+    assert "async function waitForRoute(page, expectedPathname, expectedParams = {})" in spec
     assert "selected_heading: String(defaultCenter || '').trim().replace(/^中心：/, '')" in spec
     assert "检索 / ${auditCase.query}" in spec
     assert "工件 / ${auditCase.result_artifact}" in spec
     assert "原始层 / ${auditCase.raw_path}" in spec
     assert "const auditResultArtifact = String(auditCase.result_artifact || '');" in spec
-    assert "await waitForHashRoute(page, '/workspace/artifacts', { artifact: auditResultArtifact });" in spec
+    assert "await waitForRoute(page, '/workspace/artifacts', { artifact: auditResultArtifact });" in spec
     assert str(result_path) in spec
 
 
@@ -525,23 +525,23 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
                     "requested_surface": "public",
                     "effective_surface": "public",
                     "visited_routes": [
-                        {"route": "#/graph-home", "headline": "图谱化主页"},
-                        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
-                        {"route": "#/workspace/artifacts", "headline": "工件目标池"},
-                        {"route": "#/search", "headline": "全局关键词搜索"},
+                        {"route": "/graph-home", "headline": "图谱化主页"},
+                        {"route": "/ops/risk", "headline": "Observe / Diagnose / Act"},
+                        {"route": "/workspace/artifacts", "headline": "工件目标池"},
+                        {"route": "/search", "headline": "全局关键词搜索"},
                     ],
                 "snapshot_requests": [
                     "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
                 ],
                 "internal_snapshot_requests": [],
                 "graph_home_assertion": {
-                    "default_route": "#/",
-                    "fallback_route": "#/unknown-route",
-                    "resolved_route": "#/graph-home",
+                    "default_route": "/",
+                    "fallback_route": "/unknown-route",
+                    "resolved_route": "/graph-home",
                     "default_center": "交易中枢",
-                    "terminal_link_href": "#/terminal/public",
-                    "workspace_link_href": "#/workspace/artifacts",
-                    "search_link_href": "#/search",
+                    "terminal_link_href": "/ops/risk",
+                    "workspace_link_href": "/workspace/artifacts",
+                    "search_link_href": "/search",
                     "canvas_selection_assertion": {
                         "selected_heading": "执行与风控",
                         "selected_center": "执行与风控",
@@ -551,16 +551,16 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
                         {
                             "selected_heading": "交易中枢",
                             "case_id": "optimizer_trial_trade_journal",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                         {
                             "selected_heading": "交易中枢",
                             "case_id": "strategy_lab_candidate_trade_journal",
-                            "search_link_href": "#/search?q=candidate_01_trend_convex_01_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:trend_convex_01:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2Fstrategy_lab_20260330_134050%2Fcandidate_01_trend_convex_01_trade_journal.csv",
+                            "search_link_href": "/search?q=candidate_01_trend_convex_01_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:strategy_lab_summary:trend_convex_01:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2Fstrategy_lab_20260330_134050%2Fcandidate_01_trend_convex_01_trade_journal.csv",
                         },
                     ],
                 },
@@ -570,7 +570,7 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
         mode="graph_home",
         expected_route_markers=[
             {
-                "route": "#/graph-home",
+                "route": "/graph-home",
                 "nav_label": "图谱主页",
                 "headline": "图谱化主页",
                 "markers": ["默认管道", "推荐下一跳", "回到交易中枢", "去操作终端", "去研究工作区", "打开全局搜索"],
@@ -581,19 +581,19 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
     assert payload["action"] == "dashboard_graph_home_browser_smoke"
     assert payload["ok"] is True
     assert payload["routes"] == [
-        {"route": "#/graph-home", "headline": "图谱化主页"},
-        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
-        {"route": "#/workspace/artifacts", "headline": "工件目标池"},
-        {"route": "#/search", "headline": "全局关键词搜索"},
+        {"route": "/graph-home", "headline": "图谱化主页"},
+        {"route": "/ops/risk", "headline": "Observe / Diagnose / Act"},
+        {"route": "/workspace/artifacts", "headline": "工件目标池"},
+        {"route": "/search", "headline": "全局关键词搜索"},
     ]
     assert payload["graph_home_assertion"] == {
-        "default_route": "#/",
-        "fallback_route": "#/unknown-route",
-        "resolved_route": "#/graph-home",
+        "default_route": "/",
+        "fallback_route": "/unknown-route",
+        "resolved_route": "/graph-home",
         "default_center": "交易中枢",
-        "terminal_link_href": "#/terminal/public",
-        "workspace_link_href": "#/workspace/artifacts",
-        "search_link_href": "#/search",
+        "terminal_link_href": "/ops/risk",
+        "workspace_link_href": "/workspace/artifacts",
+        "search_link_href": "/search",
         "canvas_selection_assertion": {
             "selected_heading": "执行与风控",
             "selected_center": "执行与风控",
@@ -603,16 +603,16 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
             {
                 "selected_heading": "交易中枢",
                 "case_id": "optimizer_trial_trade_journal",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             },
             {
                 "selected_heading": "交易中枢",
                 "case_id": "strategy_lab_candidate_trade_journal",
-                "search_link_href": "#/search?q=candidate_01_trend_convex_01_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:trend_convex_01:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2Fstrategy_lab_20260330_134050%2Fcandidate_01_trend_convex_01_trade_journal.csv",
+                "search_link_href": "/search?q=candidate_01_trend_convex_01_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:strategy_lab_summary:trend_convex_01:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=system%2Foutput%2Fresearch%2Fstrategy_lab_20260330_134050%2Fcandidate_01_trend_convex_01_trade_journal.csv",
             },
         ],
     }
@@ -629,7 +629,7 @@ def test_build_graph_home_narrow_smoke_spec_covers_small_shell_tier_and_sidebar_
         result_path=result_path,
         route_assertions=[
             {
-                "route": "#/graph-home",
+                "route": "/graph-home",
                 "nav_label": "图谱主页",
                 "headline": "图谱化主页",
                 "markers": ["默认管道", "推荐下一跳", "去操作终端", "去研究工作区", "打开全局搜索"],
@@ -638,6 +638,9 @@ def test_build_graph_home_narrow_smoke_spec_covers_small_shell_tier_and_sidebar_
     )
 
     assert "graph home narrow smoke" in spec
+    assert "const DEFAULT_ROUTE = '/';" in spec
+    assert "await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));" in spec
+    assert "const resolvedRoute = await page.evaluate(() => window.location.pathname);" in spec
     assert "viewport: { width: 390, height: 844 }" in spec
     assert "data-shell-tier" in spec
     assert "sidebar_toggle_visible" in spec
@@ -665,18 +668,18 @@ def test_build_artifact_payload_reports_graph_home_narrow_surface(tmp_path: Path
                 "requested_surface": "public",
                 "effective_surface": "public",
                 "visited_routes": [
-                    {"route": "#/graph-home", "headline": "图谱化主页"},
+                    {"route": "/graph-home", "headline": "图谱化主页"},
                 ],
                 "snapshot_requests": [
                     "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
                 ],
                 "internal_snapshot_requests": [],
                 "graph_home_assertion": {
-                    "default_route": "#/",
-                    "resolved_route": "#/graph-home",
+                    "default_route": "/",
+                    "resolved_route": "/graph-home",
                     "shell_tier": "s",
                     "sidebar_toggle_visible": False,
-                    "sidebar_utility_link_href": "#/search",
+                    "sidebar_utility_link_href": "/search",
                 },
             },
         },
@@ -684,7 +687,7 @@ def test_build_artifact_payload_reports_graph_home_narrow_surface(tmp_path: Path
         mode="graph_home_narrow",
         expected_route_markers=[
             {
-                "route": "#/graph-home",
+                "route": "/graph-home",
                 "nav_label": "图谱主页",
                 "headline": "图谱化主页",
                 "markers": ["默认管道", "推荐下一跳", "去操作终端", "去研究工作区", "打开全局搜索"],
@@ -695,11 +698,11 @@ def test_build_artifact_payload_reports_graph_home_narrow_surface(tmp_path: Path
     assert payload["action"] == "dashboard_graph_home_narrow_browser_smoke"
     assert payload["ok"] is True
     assert payload["graph_home_assertion"] == {
-        "default_route": "#/",
-        "resolved_route": "#/graph-home",
+        "default_route": "/",
+        "resolved_route": "/graph-home",
         "shell_tier": "s",
         "sidebar_toggle_visible": False,
-        "sidebar_utility_link_href": "#/search",
+        "sidebar_utility_link_href": "/search",
     }
 
 
@@ -714,7 +717,7 @@ def test_build_graph_home_pipeline_smoke_spec_covers_drag_reorder_and_refresh_pe
         result_path=result_path,
         route_assertions=[
             {
-                "route": "#/graph-home",
+                "route": "/graph-home",
                 "nav_label": "图谱主页",
                 "headline": "图谱化主页",
                 "markers": ["加入自定义管道", "创建默认管道"],
@@ -723,6 +726,9 @@ def test_build_graph_home_pipeline_smoke_spec_covers_drag_reorder_and_refresh_pe
     )
 
     assert "graph home pipeline smoke" in spec
+    assert "const DEFAULT_ROUTE = '/';" in spec
+    assert "await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));" in spec
+    assert "const resolvedRoute = await page.evaluate(() => window.location.pathname);" in spec
     assert "graph_home_pipelines_v1" in spec
     assert "dragTo" in spec
     assert "pipeline_persistence_assertion" in spec
@@ -750,15 +756,15 @@ def test_build_artifact_payload_reports_graph_home_pipeline_surface(tmp_path: Pa
                 "requested_surface": "public",
                 "effective_surface": "public",
                 "visited_routes": [
-                    {"route": "#/graph-home", "headline": "图谱化主页"},
+                    {"route": "/graph-home", "headline": "图谱化主页"},
                 ],
                 "snapshot_requests": [
                     "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
                 ],
                 "internal_snapshot_requests": [],
                 "graph_home_assertion": {
-                    "default_route": "#/",
-                    "resolved_route": "#/graph-home",
+                    "default_route": "/",
+                    "resolved_route": "/graph-home",
                     "pipeline_persistence_assertion": {
                         "selected_heading": "执行与风控",
                         "initial_order": ["交易中枢", "执行与风控"],
@@ -772,7 +778,7 @@ def test_build_artifact_payload_reports_graph_home_pipeline_surface(tmp_path: Pa
         mode="graph_home_pipeline",
         expected_route_markers=[
             {
-                "route": "#/graph-home",
+                "route": "/graph-home",
                 "nav_label": "图谱主页",
                 "headline": "图谱化主页",
                 "markers": ["加入自定义管道", "创建默认管道"],
@@ -783,8 +789,8 @@ def test_build_artifact_payload_reports_graph_home_pipeline_surface(tmp_path: Pa
     assert payload["action"] == "dashboard_graph_home_pipeline_browser_smoke"
     assert payload["ok"] is True
     assert payload["graph_home_assertion"] == {
-        "default_route": "#/",
-        "resolved_route": "#/graph-home",
+        "default_route": "/",
+        "resolved_route": "/graph-home",
         "pipeline_persistence_assertion": {
             "selected_heading": "执行与风控",
             "initial_order": ["交易中枢", "执行与风控"],
@@ -813,8 +819,8 @@ def test_build_artifact_payload_reports_commodity_visibility_surface(tmp_path: P
                 "requested_surface": "public",
                 "effective_surface": "public",
                 "visited_routes": [
-                    {"route": "#/overview", "headline": "总览"},
-                    {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+                    {"route": "/ops/overview", "headline": "总览"},
+                    {"route": "/ops/risk", "headline": "Observe / Diagnose / Act"},
                 ],
                 "snapshot_requests": [
                     "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
@@ -826,15 +832,15 @@ def test_build_artifact_payload_reports_commodity_visibility_surface(tmp_path: P
         mode="commodity_visibility",
         expected_route_markers=[
             {
-                "route": "#/overview",
+                "route": "/ops/overview",
                 "nav_label": "总览",
                 "headline": "总览",
                 "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
             },
                 {
-                    "route": "#/terminal/public",
+                    "route": "/ops/risk",
                     "nav_label": "操作终端",
-                    "headline": "执行穿透 / 调度与门禁",
+                    "headline": "Observe / Diagnose / Act",
                     "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
                 },
             ],
@@ -845,20 +851,20 @@ def test_build_artifact_payload_reports_commodity_visibility_surface(tmp_path: P
     assert payload["surface_assertion"]["requested_surface"] == "public"
     assert payload["surface_assertion"]["effective_surface"] == "public"
     assert payload["routes"] == [
-        {"route": "#/overview", "headline": "总览"},
-        {"route": "#/terminal/public", "headline": "执行穿透 / 调度与门禁"},
+        {"route": "/ops/overview", "headline": "总览"},
+        {"route": "/ops/risk", "headline": "Observe / Diagnose / Act"},
     ]
     assert payload["expected_route_markers"] == [
         {
-            "route": "#/overview",
+            "route": "/ops/overview",
             "nav_label": "总览",
             "headline": "总览",
             "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
         },
         {
-            "route": "#/terminal/public",
+            "route": "/ops/risk",
             "nav_label": "操作终端",
-            "headline": "执行穿透 / 调度与门禁",
+            "headline": "Observe / Diagnose / Act",
             "markers": ["国内商品推理线", "policy_relief_watch", "policy_relief_chain", "BU2606"],
         },
     ]
@@ -883,12 +889,12 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                 "requested_surface": "public",
                 "effective_surface": "public",
                 "visited_routes": [
-                    {"route": "#/overview", "headline": "总览"},
-                    {"route": "#/workspace/artifacts", "headline": "工件目标池"},
-                    {"route": "#/workspace/alignment", "headline": "方向对齐投射"},
-                    {"route": "#/workspace/backtests", "headline": "回测主池"},
-                    {"route": "#/workspace/raw", "headline": "原始快照"},
-                    {"route": "#/workspace/contracts", "headline": "公开入口拓扑"},
+                    {"route": "/ops/overview", "headline": "总览"},
+                    {"route": "/workspace/artifacts", "headline": "工件目标池"},
+                    {"route": "/workspace/alignment", "headline": "方向对齐投射"},
+                    {"route": "/workspace/backtests", "headline": "回测主池"},
+                    {"route": "/workspace/raw", "headline": "原始快照"},
+                    {"route": "/workspace/contracts", "headline": "公开入口拓扑"},
                 ],
                 "snapshot_requests": [
                     "http://127.0.0.1:4173/data/fenlie_dashboard_snapshot.json?ts=1",
@@ -899,18 +905,18 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                 ],
                 "internal_snapshot_requests": [],
                 "theme_assertion": {
-                    "route": "#/workspace/contracts?theme=light",
+                    "route": "/workspace/contracts?theme=light",
                     "requested_theme": "light",
                     "resolved_theme": "light",
                 },
                 "page_section_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-acceptance-subcommands",
+                    "route": "/workspace/contracts?page_section=contracts-acceptance-subcommands",
                     "page_section": "contracts-acceptance-subcommands",
                     "active_label": "子命令证据",
                     "accordion_state": "",
                 },
                 "contracts_source_head_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-source-head-operator_panel",
+                    "route": "/workspace/contracts?page_section=contracts-source-head-operator_panel",
                     "page_section": "contracts-source-head-operator_panel",
                     "source_head_id": "operator_panel",
                     "accordion_state": "open",
@@ -922,16 +928,16 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     ],
                 },
                 "contracts_source_gap_assertion": {
-                    "route": "#/workspace/contracts?page_section=contracts-fallback",
+                    "route": "/workspace/contracts?page_section=contracts-fallback",
                     "page_section": "contracts-fallback",
                     "visible_markers": [
-                        "#/workspace/raw",
+                        "/workspace/raw",
                         "/data/fenlie_dashboard_snapshot.json",
                         "/operator_task_visual_panel.html",
                     ],
                 },
                 "artifacts_filter_assertion": {
-                    "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+                    "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
                     "group": "research_cross_section",
                     "search_scope": "title",
                     "search": "orderflow",
@@ -943,7 +949,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     ],
                 },
                 "artifacts_exit_risk_review_assertion": {
-                    "route": "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
+                    "route": "/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
                     "group": "research_exit_risk",
                     "search_scope": "title",
                     "search": "",
@@ -966,25 +972,25 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                     ],
                 },
                 "research_audit_search_assertion": {
-                    "route": "#/search",
+                    "route": "/search",
                     "cases_available": True,
                     "cases": [
                         {
                             "case_id": "optimizer_trial_trade_journal",
                             "scope": "artifact",
                             "query": "trial_001_ultra_short_trade_journal",
-                            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                             "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                             "raw_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
                         },
                         {
                             "case_id": "strategy_lab_candidate_trade_journal",
                             "scope": "artifact",
                             "query": "candidate_02_report_momentum_02_trade_journal",
-                            "search_route": "#/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
+                            "search_route": "/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
                             "result_artifact": "audit:strategy_lab_summary:report_momentum_02:trade_journal",
-                            "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                            "workspace_route": "/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
                             "raw_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
                         },
                     ],
@@ -992,36 +998,36 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                 "contracts_acceptance_inspector_assertion": {
                     "checks_by_id": {
                         "workspace_routes_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
                             "page_section": "contracts-check-workspace_routes_smoke",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                         "graph_home_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
                             "page_section": "contracts-check-graph_home_smoke",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         }
                     },
                     "subcommands_by_id": {
                         "workspace_routes_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
                             "page_section": "contracts-subcommand-workspace_routes_smoke",
-                            "check_route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "check_route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         },
                         "graph_home_smoke": {
-                            "route": "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
+                            "route": "/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
                             "page_section": "contracts-subcommand-graph_home_smoke",
-                            "check_route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
-                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                            "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                            "check_route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                            "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
                         }
                     },
                 },
@@ -1034,32 +1040,32 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
     assert payload["ok"] is True
     assert payload["change_class"] == "RESEARCH_ONLY"
     assert [row["route"] for row in payload["routes"]] == [
-        "#/overview",
-        "#/workspace/artifacts",
-        "#/workspace/alignment",
-        "#/workspace/backtests",
-        "#/workspace/raw",
-        "#/workspace/contracts",
+        "/ops/overview",
+        "/workspace/artifacts",
+        "/workspace/alignment",
+        "/workspace/backtests",
+        "/workspace/raw",
+        "/workspace/contracts",
     ]
     assert payload["network_observation"]["public_snapshot_fetch_count"] == 5
     assert payload["network_observation"]["internal_snapshot_fetch_count"] == 0
     assert payload["surface_assertion"]["requested_surface"] == "public"
     assert payload["surface_assertion"]["effective_surface"] == "public"
     assert payload["theme_assertion"] == {
-        "route": "#/workspace/contracts?theme=light",
+        "route": "/workspace/contracts?theme=light",
         "requested_theme": "light",
         "resolved_theme": "light",
     }
     assert payload["page_section_assertion"] == {
         "applicable": True,
-        "route": "#/workspace/contracts?page_section=contracts-acceptance-subcommands",
+        "route": "/workspace/contracts?page_section=contracts-acceptance-subcommands",
         "page_section": "contracts-acceptance-subcommands",
         "active_label": "子命令证据",
         "accordion_state": "",
     }
     assert payload["contracts_source_head_assertion"] == {
         "applicable": True,
-        "route": "#/workspace/contracts?page_section=contracts-source-head-operator_panel",
+        "route": "/workspace/contracts?page_section=contracts-source-head-operator_panel",
         "page_section": "contracts-source-head-operator_panel",
         "source_head_id": "operator_panel",
         "accordion_state": "open",
@@ -1072,17 +1078,17 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
     }
     assert payload["contracts_source_gap_assertion"] == {
         "applicable": True,
-        "route": "#/workspace/contracts?page_section=contracts-fallback",
+        "route": "/workspace/contracts?page_section=contracts-fallback",
         "page_section": "contracts-fallback",
         "visible_markers": [
-            "#/workspace/raw",
+            "/workspace/raw",
             "/data/fenlie_dashboard_snapshot.json",
             "/operator_task_visual_panel.html",
         ],
     }
     assert payload["artifacts_filter_assertion"] == {
         "applicable": True,
-        "route": "#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
+        "route": "/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow",
         "group": "research_cross_section",
         "search_scope": "title",
         "search": "orderflow",
@@ -1095,7 +1101,7 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
     }
     assert payload["artifacts_exit_risk_review_assertion"] == {
         "applicable": True,
-        "route": "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
+        "route": "/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
         "group": "research_exit_risk",
         "search_scope": "title",
         "search": "",
@@ -1119,25 +1125,25 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
     }
     assert payload["research_audit_search_assertion"] == {
         "applicable": True,
-        "route": "#/search",
+        "route": "/search",
         "cases_available": True,
         "cases": [
             {
                 "case_id": "optimizer_trial_trade_journal",
                 "scope": "artifact",
                 "query": "trial_001_ultra_short_trade_journal",
-                "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "search_route": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
                 "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "workspace_route": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
                 "raw_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
             },
             {
                 "case_id": "strategy_lab_candidate_trade_journal",
                 "scope": "artifact",
                 "query": "candidate_02_report_momentum_02_trade_journal",
-                "search_route": "#/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
+                "search_route": "/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
                 "result_artifact": "audit:strategy_lab_summary:report_momentum_02:trade_journal",
-                "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                "workspace_route": "/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
                 "raw_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
             },
         ],
@@ -1146,51 +1152,51 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
         "applicable": True,
         "checks_by_id": {
             "topology_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                "route": "/workspace/contracts?page_section=contracts-check-topology_smoke",
                 "page_section": "contracts-check-topology_smoke",
                 "search_link_href": "",
                 "artifact_link_href": "",
                 "raw_link_href": "",
             },
             "workspace_routes_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                "route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
                 "page_section": "contracts-check-workspace_routes_smoke",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             },
             "graph_home_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                "route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
                 "page_section": "contracts-check-graph_home_smoke",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             }
         },
         "subcommands_by_id": {
             "topology_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-subcommand-topology_smoke",
+                "route": "/workspace/contracts?page_section=contracts-subcommand-topology_smoke",
                 "page_section": "contracts-subcommand-topology_smoke",
-                "check_route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                "check_route": "/workspace/contracts?page_section=contracts-check-topology_smoke",
                 "search_link_href": "",
                 "artifact_link_href": "",
                 "raw_link_href": "",
             },
             "workspace_routes_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
+                "route": "/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
                 "page_section": "contracts-subcommand-workspace_routes_smoke",
-                "check_route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "check_route": "/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             },
             "graph_home_smoke": {
-                "route": "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
+                "route": "/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
                 "page_section": "contracts-subcommand-graph_home_smoke",
-                "check_route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
-                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
-                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
-                "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                "check_route": "/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                "search_link_href": "/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
             }
         },
     }
@@ -1210,7 +1216,7 @@ def test_build_internal_alignment_smoke_spec_uses_internal_snapshot_projection_m
         top_action="先刷新 internal snapshot 并验证对齐页，再收紧 internal fallback 语义。",
     )
 
-    assert "#/workspace/alignment?view=internal&page_section=alignment-summary" in spec
+    assert "/workspace/alignment?view=internal&page_section=alignment-summary" in spec
     assert "方向对齐投射" in spec
     assert "将高价值对话反馈投射到内部对齐页" in spec
     assert "拆分研究工作区左栏四控件" in spec
@@ -1264,7 +1270,7 @@ def test_load_internal_terminal_focus_expectations_reads_focus_slot_source_row(t
     assert expectations["focus_row_label"] == "主槽位"
     assert expectations["route_assertions"] == [
         {
-            "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+            "route": "/terminal/internal?panel=signal-risk&section=focus-slots",
             "nav_label": "信号发生器与风险节流阀",
             "headline": "信号发生器与风险节流阀",
             "markers": [
@@ -1301,7 +1307,7 @@ def test_build_internal_terminal_focus_smoke_spec_asserts_drilldown_focus_link_o
         ],
     )
 
-    assert "#/terminal/internal?panel=signal-risk&section=focus-slots" in spec
+    assert "/terminal/internal?panel=signal-risk&section=focus-slots" in spec
     assert "信号发生器与风险节流阀" in spec
     assert "穿透层 3 / 焦点槽位" in spec
     assert "主槽位" in spec
@@ -1342,7 +1348,7 @@ def test_build_artifact_payload_reports_internal_alignment_surface(tmp_path: Pat
                 "effective_surface": "internal",
                 "visited_routes": [
                     {
-                        "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
+                        "route": "/workspace/alignment?view=internal&page_section=alignment-summary",
                         "headline": "方向对齐投射",
                     }
                 ],
@@ -1361,7 +1367,7 @@ def test_build_artifact_payload_reports_internal_alignment_surface(tmp_path: Pat
         mode="internal_alignment",
         expected_route_markers=[
             {
-                "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
+                "route": "/workspace/alignment?view=internal&page_section=alignment-summary",
                 "nav_label": "对齐页",
                 "headline": "方向对齐投射",
                 "markers": [
@@ -1429,7 +1435,7 @@ def test_build_artifact_payload_reports_internal_alignment_surface(tmp_path: Pat
     }
     assert payload["expected_route_markers"] == [
         {
-            "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
+            "route": "/workspace/alignment?view=internal&page_section=alignment-summary",
             "nav_label": "对齐页",
             "headline": "方向对齐投射",
             "markers": [
@@ -1460,7 +1466,7 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                 "effective_surface": "internal",
                 "visited_routes": [
                     {
-                        "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+                        "route": "/terminal/internal?panel=signal-risk&section=focus-slots",
                         "headline": "信号发生器与风险节流阀",
                     }
                 ],
@@ -1469,7 +1475,7 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
                     "http://127.0.0.1:4173/data/fenlie_dashboard_internal_snapshot.json?ts=1",
                 ],
                 "terminal_drilldown_assertion": {
-                    "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+                    "route": "/terminal/internal?panel=signal-risk&section=focus-slots",
                     "panel": "signal-risk",
                     "section": "focus-slots",
                     "focus_row_id": "primary",
@@ -1485,7 +1491,7 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
         mode="internal_terminal_focus",
         expected_route_markers=[
             {
-                "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+                "route": "/terminal/internal?panel=signal-risk&section=focus-slots",
                 "nav_label": "信号发生器与风险节流阀",
                 "headline": "信号发生器与风险节流阀",
                 "markers": [
@@ -1553,7 +1559,7 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
         "visible_markers": [],
     }
     assert payload["terminal_drilldown_assertion"] == {
-        "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+        "route": "/terminal/internal?panel=signal-risk&section=focus-slots",
         "panel": "signal-risk",
         "section": "focus-slots",
         "focus_row_id": "primary",
@@ -1565,7 +1571,7 @@ def test_build_artifact_payload_reports_internal_terminal_focus_surface(tmp_path
     }
     assert payload["expected_route_markers"] == [
         {
-            "route": "#/terminal/internal?panel=signal-risk&section=focus-slots",
+            "route": "/terminal/internal?panel=signal-risk&section=focus-slots",
             "nav_label": "信号发生器与风险节流阀",
             "headline": "信号发生器与风险节流阀",
             "markers": [
@@ -1600,7 +1606,7 @@ def test_build_artifact_payload_reports_internal_alignment_manual_probe_surface(
                 "effective_surface": "internal",
                 "visited_routes": [
                     {
-                        "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
+                        "route": "/workspace/alignment?view=internal&page_section=alignment-summary",
                         "headline": "方向对齐投射",
                     }
                 ],
@@ -1619,7 +1625,7 @@ def test_build_artifact_payload_reports_internal_alignment_manual_probe_surface(
         mode="internal_alignment_manual_probe",
         expected_route_markers=[
             {
-                "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
+                "route": "/workspace/alignment?view=internal&page_section=alignment-summary",
                 "nav_label": "对齐页",
                 "headline": "方向对齐投射",
                 "markers": [
@@ -1663,7 +1669,7 @@ def test_build_artifact_payload_keeps_failure_assertion_for_manual_probe_failure
         mode="internal_alignment_manual_probe",
         expected_route_markers=[
             {
-                "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
+                "route": "/workspace/alignment?view=internal&page_section=alignment-summary",
                 "nav_label": "对齐页",
                 "headline": "方向对齐投射",
                 "markers": [],
@@ -1847,7 +1853,7 @@ def test_main_writes_failure_artifact_when_manual_probe_restore_fails(tmp_path: 
             "top_action": "Manual probe action",
             "route_assertions": [
                 {
-                    "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
+                    "route": "/workspace/alignment?view=internal&page_section=alignment-summary",
                     "nav_label": "对齐页",
                     "headline": "方向对齐投射",
                     "markers": ["Manual probe headline", "Manual probe action"],
@@ -1867,7 +1873,7 @@ def test_main_writes_failure_artifact_when_manual_probe_restore_fails(tmp_path: 
                 "effective_surface": "internal",
                 "visited_routes": [
                     {
-                        "route": "#/workspace/alignment?view=internal&page_section=alignment-summary",
+                        "route": "/workspace/alignment?view=internal&page_section=alignment-summary",
                         "headline": "方向对齐投射",
                     }
                 ],

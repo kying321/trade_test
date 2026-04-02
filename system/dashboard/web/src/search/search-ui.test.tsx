@@ -27,9 +27,9 @@ const snapshot: DashboardSnapshot = {
     change_class: 'RESEARCH_ONLY',
   },
   ui_routes: {
-    terminal_public: '#/terminal/public',
-    terminal_internal: '#/terminal/internal',
-    workspace_artifacts: '#/workspace/artifacts',
+    terminal_public: '/ops/risk',
+    terminal_internal: '/terminal/internal',
+    workspace_artifacts: '/workspace/artifacts',
     operator_panel: '/operator_task_visual_panel.html',
   },
   experience_contract: {
@@ -130,6 +130,10 @@ async function renderApp() {
   return view;
 }
 
+function currentRoute() {
+  return `${window.location.pathname}${window.location.search}`;
+}
+
 async function openSearchAndQuery(value: string) {
   await act(async () => {
     fireEvent.keyDown(window, { key: 'k', metaKey: true });
@@ -143,7 +147,8 @@ beforeEach(() => {
   mockedThemePreference = 'system';
   mockedResolvedTheme = 'dark';
   mockSetThemePreference.mockReset();
-  window.location.hash = '#/overview';
+  window.history.replaceState({}, '', '/ops/overview');
+  window.location.hash = '';
   installPassiveStore();
 });
 
@@ -152,6 +157,14 @@ afterEach(() => {
 });
 
 describe('global search ui', () => {
+  it('supports path-based search route entry', async () => {
+    window.history.replaceState({}, '', '/search?q=hold_selection_handoff&scope=artifact');
+    await renderApp();
+
+    expect(await screen.findByRole('textbox')).toBeTruthy();
+    expect(currentRoute()).toBe('/search?q=hold_selection_handoff&scope=artifact');
+  });
+
   it('topbar 仅暴露全局契约，不再混入页面职责芯片', async () => {
     await renderApp();
     const topbar = document.querySelector<HTMLElement>('header.global-topbar');
@@ -241,13 +254,13 @@ describe('global search ui', () => {
     });
 
     await waitFor(() => {
-      expect(window.location.hash).toContain('/terminal/public');
-      expect(window.location.hash).toContain('anchor=terminal-commodity-reasoning');
+      expect(currentRoute()).toContain('/ops/risk');
+      expect(currentRoute()).toContain('anchor=terminal-commodity-reasoning');
     });
   });
 
   it('prefills /search route and jumps from result list', async () => {
-    window.location.hash = '#/search?q=hold_selection_handoff&scope=artifact';
+    window.history.replaceState({}, '', '/search?q=hold_selection_handoff&scope=artifact');
     await renderApp();
 
     const input = screen.getByRole('textbox');
@@ -258,8 +271,8 @@ describe('global search ui', () => {
     });
 
     await waitFor(() => {
-      expect(window.location.hash).toContain('/workspace/artifacts');
-      expect(window.location.hash).toContain('artifact=hold_selection_handoff');
+      expect(currentRoute()).toContain('/workspace/artifacts');
+      expect(currentRoute()).toContain('artifact=hold_selection_handoff');
     });
   });
 
@@ -284,36 +297,36 @@ describe('global search ui', () => {
   });
 
   it('keeps scope switching explicit between all/module/route/artifact', async () => {
-    window.location.hash = '#/search';
+    window.history.replaceState({}, '', '/search');
     await renderApp();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '模块' }));
     });
     await waitFor(() => {
-      expect(window.location.hash).toContain('scope=module');
+      expect(currentRoute()).toContain('scope=module');
     });
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '路由' }));
     });
     await waitFor(() => {
-      expect(window.location.hash).toContain('scope=route');
+      expect(currentRoute()).toContain('scope=route');
     });
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '工件' }));
     });
     await waitFor(() => {
-      expect(window.location.hash).toContain('scope=artifact');
+      expect(currentRoute()).toContain('scope=artifact');
     });
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '全部' }));
     });
     await waitFor(() => {
-      expect(window.location.hash).toContain('/search');
-      expect(window.location.hash).not.toContain('scope=');
+      expect(currentRoute()).toContain('/search');
+      expect(currentRoute()).not.toContain('scope=');
     });
   });
 
@@ -325,11 +338,11 @@ describe('global search ui', () => {
       fireEvent.click(screen.getByRole('button', { name: '路由' }));
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /总览/i }));
+      fireEvent.click(screen.getAllByRole('button', { name: /总览/i })[0]);
     });
     await waitFor(() => {
-      expect(window.location.hash).toContain('/overview');
-      expect(window.location.hash).not.toContain('anchor=');
+      expect(currentRoute()).toContain('/ops/overview');
+      expect(currentRoute()).not.toContain('anchor=');
     });
 
     await openSearchAndQuery('国内商品推理线');
@@ -340,8 +353,8 @@ describe('global search ui', () => {
       fireEvent.click(screen.getAllByRole('button', { name: /国内商品推理线/i })[0]);
     });
     await waitFor(() => {
-      expect(window.location.hash).toContain('anchor=');
-      expect(window.location.hash).toContain('/overview');
+      expect(currentRoute()).toContain('anchor=');
+      expect(currentRoute()).toContain('/ops/overview');
     });
 
     await openSearchAndQuery('hold_selection_handoff');
@@ -352,8 +365,8 @@ describe('global search ui', () => {
       fireEvent.click(screen.getAllByRole('button', { name: /持有选择主头/i })[0]);
     });
     await waitFor(() => {
-      expect(window.location.hash).toContain('/workspace/artifacts');
-      expect(window.location.hash).toContain('artifact=hold_selection_handoff');
+      expect(currentRoute()).toContain('/workspace/artifacts');
+      expect(currentRoute()).toContain('artifact=hold_selection_handoff');
     });
   });
 });

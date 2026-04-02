@@ -25,15 +25,14 @@ DEFAULT_ROOT_URL = "https://fuuu.fun"
 DEFAULT_PAGES_URL = "https://fenlie.fuuu.fun"
 DEFAULT_OPENCLAW_URL = "http://43.153.148.242:3001"
 DEFAULT_GATEWAY_URL = "http://43.153.148.242:8787"
-PUBLIC_OVERVIEW_ROUTE_PATH = "overview"
-PUBLIC_CONTRACTS_ROUTE_PATH = "workspace/contracts"
+PUBLIC_OVERVIEW_ROUTE_PATH = "ops/overview"
+PUBLIC_CONTRACTS_ROUTE_PATH = "ops/audits"
 PUBLIC_OVERVIEW_MARKERS = ["研究主线摘要", "国内商品推理线"]
 PUBLIC_CONTRACTS_MARKERS = [
+    "公开入口拓扑",
     "公开面验收",
     "穿透层 1 / 验收总览",
-    "接口目录",
-    "源头主线",
-    "回退链",
+    "穿透层 2 / 子链状态",
 ]
 
 
@@ -220,7 +219,7 @@ def build_public_route_browser_spec(
             const fs = require('node:fs');
 
             const ROOT_URL = {root_url!r};
-            const ROUTE = `${{ROOT_URL.replace(/\\/$/, '')}}/#/{route_path}`;
+            const ROUTE = `${{ROOT_URL.replace(/\\/$/, '')}}/{route_path}`;
             const MARKERS = {markers_json};
             const NAVIGATION_TIMEOUT_MS = {navigation_timeout_ms};
             const RENDER_TIMEOUT_MS = {render_timeout_ms};
@@ -325,7 +324,7 @@ def run_public_route_browser_smoke(
         result_payload = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
         return {
             "name": name,
-            "route": str(result_payload.get("route") or f"{root_url.rstrip('/')}/#/{route_path}"),
+            "route": str(result_payload.get("route") or f"{root_url.rstrip('/')}/{route_path}"),
             "final_url": str(result_payload.get("final_url") or ""),
             "markers": list(result_payload.get("markers") or markers),
             "screenshot_path": str(result_payload.get("screenshot_path") or screenshot_path),
