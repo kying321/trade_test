@@ -1015,6 +1015,10 @@ describe('Fenlie terminal console', () => {
     expect(commodityCard?.textContent || '').toContain('supply_chain_tightening');
     expect(commodityCard?.textContent || '').toContain('feedstock_cost_push_chain');
     expect(commodityCard?.textContent || '').toContain('BU2606');
+    const cpaEntry = screen.getByRole('link', { name: '进入 CPA 管理' });
+    expect(cpaEntry.getAttribute('href')).toBe('#/cpa');
+    expect(cpaEntry.textContent || '').toContain('CPA 管理');
+    expect(cpaEntry.textContent || '').toContain('认证文件');
     expect(textOf('.global-topbar-inner')).not.toContain('请求视图');
     expect(textOf('.global-topbar-inner')).not.toContain('实际视图');
     expect(textOf('.global-summary-strip')).toContain('模式：只读快照');

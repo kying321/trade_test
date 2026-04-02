@@ -226,6 +226,7 @@ describe('GraphHomePage', () => {
     expect(screen.getAllByRole('button', { name: '自定义管道' }).length).toBeGreaterThan(0);
     expect(screen.getByRole('link', { name: '去操作终端' }).getAttribute('href')).toBe('#/terminal/public');
     expect(screen.getByRole('link', { name: '去研究工作区' }).getAttribute('href')).toBe('#/workspace/artifacts');
+    expect(screen.getByRole('link', { name: '去 CPA 管理' }).getAttribute('href')).toBe('#/cpa');
     expect(screen.getByRole('link', { name: '打开全局搜索' }).getAttribute('href')).toBe('#/search');
     expect(screen.getByText('为什么现在看它')).toBeTruthy();
 

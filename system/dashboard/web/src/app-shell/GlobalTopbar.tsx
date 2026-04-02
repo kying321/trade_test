@@ -1,4 +1,4 @@
-import { ActionButton, DomainTab, SegmentedOption } from '../components/control-primitives';
+import { ActionButton, ActionLink, DomainTab, SegmentedOption } from '../components/control-primitives';
 import { ClampText } from '../components/ui-kit';
 import type { NavItem } from '../pages/page-types';
 
@@ -92,6 +92,9 @@ export function GlobalTopbar({
               搜索 / ⌘K
             </ActionButton>
           ) : null}
+          <ActionLink className="chip-button global-cpa-trigger" aria-label="打开 CPA 管理" to="/cpa">
+            打开 CPA 管理
+          </ActionLink>
         </section>
         <section className="global-summary-strip" aria-label="global-summary">
           {globalSummary.chips?.map((chip) => (

@@ -205,6 +205,11 @@ export function OverviewPage({ model }: OverviewPageProps) {
             <strong>契约验收</strong>
             <span>查看公开面验收与入口拓扑</span>
           </Link>
+          <Link className="panel-card overview-entry-card overview-entry-card-emphasis" to="/cpa" aria-label="进入 CPA 管理">
+            <p className="panel-kicker">高频管理</p>
+            <strong>CPA 管理</strong>
+            <span>认证文件 / 配额 / 删除保护，直接处理 auth-files 与误删防护。</span>
+          </Link>
         </div>
       </section>
       {requestedInternal ? (

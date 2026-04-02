@@ -1,0 +1,5 @@
+timestamp_utc	iteration	vector	result	severity	status	notes
+2026-04-02T16:44:57.548903+00:00	1	secret-pattern-scan	kept	none	logged	confirmed_no_real_secret_patterns_found
+2026-04-02T16:44:57.548903+00:00	2	public-doc-entry-scan	kept	medium	logged	confirmed_absolute_path_leak_on_public_entry_docs
+2026-04-02T16:44:57.548903+00:00	3	provider-constant-review	kept	low	logged	constants_need_manual_provenance_review
+2026-04-02T16:44:57.548903+00:00	4	placeholder-token-review	kept	info	logged	confirmed_test_and_ui_placeholders_only
