@@ -133,9 +133,11 @@ EOF
 
 当前最新公开验收工件：
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113313Z_dashboard_public_topology_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113336Z_dashboard_workspace_routes_browser_smoke.json`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113341Z_dashboard_public_acceptance.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062149Z_dashboard_public_topology_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062219Z_dashboard_workspace_routes_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062139Z_dashboard_internal_alignment_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062143Z_dashboard_internal_terminal_focus_browser_smoke.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062226Z_dashboard_public_acceptance.json`
 
 
 ## 当前入口拓扑
@@ -175,32 +177,47 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 - 两侧快照 JSON 的 `frontend_public` 都等于 `https://fuuu.fun`
 - `http://43.153.148.242:3001` 返回 `OpenClaw Control`
 - `http://43.153.148.242:8787` 返回 `404 Not Found`
-- `https://fuuu.fun/#/overview` 与 `https://fenlie.fuuu.fun/#/overview` 都能看到 `研究主线摘要 / hold24_zero`
-- `https://fuuu.fun/#/workspace/contracts` 与 `https://fenlie.fuuu.fun/#/workspace/contracts` 都能看到 `公开面验收 / root overview 截图 / pages overview 截图 / root contracts 截图 / pages contracts 截图 / 公开快照拉取次数 / 内部快照拉取次数`
+- `https://fuuu.fun/#/overview` 与 `https://fenlie.fuuu.fun/#/overview` 都能看到 `研究主线摘要 / 国内商品推理线`
+- `https://fuuu.fun/#/workspace/contracts` 与 `https://fenlie.fuuu.fun/#/workspace/contracts` 都能看到 `公开面验收 / 穿透层 1 / 验收总览 / 接口目录 / 源头主线 / 回退链`
+- `https://fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-operator_panel`
+  与
+  `https://fenlie.fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-operator_panel`
+  都能看到：
+  - `状态`
+  - `研究结论`
+  - `生成时间`
+  - `路径`
 - 会落 root/pages 双路由截图证据：
   - `*_dashboard_public_topology_root_overview_browser.png`
   - `*_dashboard_public_topology_pages_overview_browser.png`
   - `*_dashboard_public_topology_root_contracts_browser.png`
   - `*_dashboard_public_topology_pages_contracts_browser.png`
+  - `*_dashboard_public_topology_root_contracts_source_head_browser.png`
+  - `*_dashboard_public_topology_pages_contracts_source_head_browser.png`
 
 当前最新截图证据前缀：
 
-- `20260321T113313Z_dashboard_public_topology_root_overview_browser.png`
-- `20260321T113313Z_dashboard_public_topology_pages_overview_browser.png`
-- `20260321T113313Z_dashboard_public_topology_root_contracts_browser.png`
-- `20260321T113313Z_dashboard_public_topology_pages_contracts_browser.png`
+- `20260325T062149Z_dashboard_public_topology_root_overview_browser.png`
+- `20260325T062149Z_dashboard_public_topology_pages_overview_browser.png`
+- `20260325T062149Z_dashboard_public_topology_root_contracts_browser.png`
+- `20260325T062149Z_dashboard_public_topology_pages_contracts_browser.png`
+
+当前最新 source-head 深链截图证据前缀：
+
+- `20260325T062149Z_dashboard_public_topology_root_contracts_source_head_browser.png`
+- `20260325T062149Z_dashboard_public_topology_pages_contracts_source_head_browser.png`
 
 本轮额外确认：
 
-- `#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow` 公开面已能直接看到：
-  - `intraday_orderflow_blueprint`
-  - `intraday_orderflow_research_gate_blocker`
-- 说明当前 public snapshot 已纳入最新 research-only orderflow 主证据，而不是继续停留在 2026-03-18 的旧 latest 链。
 - `workspace_routes_smoke` 现已把这条 orderflow 过滤路由纳入真实浏览器回归断言，并在 smoke payload 中固化：
   - `artifacts_filter_assertion.route=#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
-  - `artifacts_filter_assertion.active_artifact=intraday_orderflow_blueprint`
-  - `artifacts_filter_assertion.visible_artifacts=[intraday_orderflow_blueprint, intraday_orderflow_research_gate_blocker]`
-- `dashboard_public_acceptance` 现已把 `artifacts_filter_assertion` 升级为聚合验收硬门槛；若 workspace smoke 缺失该字段或值不匹配，公开验收会直接失败，而不是继续误报 `ok=true`。
+  - `artifacts_filter_assertion.source_available=true|false`
+  - `artifacts_filter_assertion.active_artifact`
+  - `artifacts_filter_assertion.visible_artifacts`
+- 当当前 source snapshot 缺失 orderflow canonical 工件时，公开验收接受：
+  - `source_available=false`
+  - `active_artifact=""`
+  - `visible_artifacts=[]`
 
 ## 工作区多路由烟测
 
@@ -221,7 +238,7 @@ npm run smoke:workspace-routes
 
 并断言：
 
-- 默认仍锚定 `price_action_breakout_pullback`
+- workspace 默认焦点跟随 source-owned `workspace_default_focus`
 - route change 每次都会触发新的 public snapshot GET
 - 不会请求 `/data/fenlie_dashboard_internal_snapshot.json`
 
@@ -243,6 +260,21 @@ cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
 npm run verify:public-surface -- --skip-workspace-build
 ```
 
+等价的 npm Python 启动链为：
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+node ./scripts/run-python.mjs ../../scripts/run_dashboard_public_acceptance.py --workspace ../../.. --strict-topology-tls --skip-workspace-build
+```
+
+解释器约束：
+
+- `verify:public-surface` 不再直接假设裸 `python3`
+- dashboard npm 下的 Python 入口统一走 `node ./scripts/run-python.mjs`
+- 启动器优先选择 `CONDA_PREFIX/bin/python3`
+- 若 `CONDA_PREFIX` 不可用，才 fallback 到 PATH 里的 `python3`
+- 如果你要在 `system/dashboard/web` 目录手工复现 npm 子进程行为，优先使用这条 launcher 命令，避免本机 shell 与 npm PATH/证书链不一致
+
 输出会聚合两条只读验收链：
 
 1. `run_dashboard_public_topology_smoke.py`
@@ -254,7 +286,7 @@ npm run verify:public-surface -- --skip-workspace-build
 
 最新已验证通过的聚合工件：
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260321T113341Z_dashboard_public_acceptance.json`
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/output/review/20260325T062226Z_dashboard_public_acceptance.json`
 
 当前本地还新增了单一上架前验证入口：
 
@@ -268,8 +300,26 @@ npm run verify:release-checklist
 - `npm run build`
 - `npm test`
 - `npx tsc --noEmit`
+- `npm run test:dashboard-python-contracts`
 - `npm run smoke:workspace-routes -- --skip-build`
+- `npm run smoke:alignment-internal -- --skip-build`
+- `npm run smoke:terminal-internal-focus -- --skip-build`
+- `npm run smoke:graph-home -- --skip-build`
+- `npm run smoke:graph-home-narrow -- --skip-build`
+- `npm run smoke:graph-home-pipeline -- --skip-build`
 - `npm run verify:public-surface -- --skip-workspace-build`
+
+当前本地已验证结果（graph-home 三条 smoke 已纳入 `verify:release-checklist` 候选链并单独通过）：
+
+- `25 files / 148 tests passed`
+- `dashboard python contracts => 79 passed`
+- `workspace routes smoke => ok = true`
+- `internal alignment smoke => ok = true`
+- `terminal/internal focus browser smoke => ok = true`
+- `graph-home browser smoke => ok = true`
+- `graph-home narrow browser smoke => ok = true`
+- `graph-home pipeline browser smoke => ok = true`
+- `public acceptance => ok = true`
 
 用途：减少上架前人工串命令导致的漏跑/顺序漂移。
 

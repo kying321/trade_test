@@ -1,9 +1,11 @@
 import type { NavItem, ResearchLegacySection } from '../pages/page-types';
 
 export const PRIMARY_NAV: NavItem[] = [
+  { id: 'graph', label: '图谱主页', to: '/graph-home', description: '交易中枢 / 自定义管道 / 关系图谱' },
   { id: 'overview', label: '总览', to: '/overview', description: '总状态 / 分流入口' },
   { id: 'ops', label: '操作终端', to: '/terminal/public', description: '调度 / 门禁 / 风险链路' },
   { id: 'research', label: '研究工作区', to: '/workspace/artifacts', description: '工件 / 回测 / 对比' },
+  { id: 'cpa', label: 'CPA 管理', to: '/cpa', description: '认证文件 / 配额 / 删除保护' },
 ];
 
 export const OPS_SURFACE_NAV: NavItem[] = [

@@ -3,6 +3,7 @@ import { preserveSharedQuery } from '../navigation/route-contract';
 import { safeDisplayValue } from './formatters';
 
 export type TerminalFocusState = {
+  anchor?: string;
   panel?: string;
   section?: string;
   row?: string;
@@ -37,6 +38,7 @@ export function buildTerminalLink(surface: SurfaceKey, focus: SharedFocusState =
     artifact: focus.artifact,
     domain: focus.domain,
     tone: focus.tone,
+    anchor: focus.anchor,
     search: focus.search,
     search_scope: focus.search_scope,
     panel: focus.panel,
@@ -55,6 +57,7 @@ export function buildWorkspaceLink(section: WorkspaceSection, focus: SharedFocus
     artifact: focus.artifact,
     domain: focus.domain,
     tone: focus.tone,
+    anchor: focus.anchor,
     search: focus.search,
     search_scope: focus.search_scope,
     panel: focus.panel,

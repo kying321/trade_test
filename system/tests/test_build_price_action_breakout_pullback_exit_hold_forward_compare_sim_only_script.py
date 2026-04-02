@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,6 +14,11 @@ SCRIPT_PATH = (
     / "scripts"
     / "build_price_action_breakout_pullback_exit_hold_forward_compare_sim_only.py"
 )
+
+MODULE_SPEC = importlib.util.spec_from_file_location("fenlie_exit_hold_forward_compare_script", SCRIPT_PATH)
+assert MODULE_SPEC is not None and MODULE_SPEC.loader is not None
+SCRIPT_MODULE = importlib.util.module_from_spec(MODULE_SPEC)
+MODULE_SPEC.loader.exec_module(SCRIPT_MODULE)
 
 
 def _build_fixture_rows(total_bars: int = 2880) -> list[dict[str, object]]:
@@ -97,6 +103,20 @@ def _write_base_artifact(path: Path) -> None:
     path.write_text(json.dumps(base_artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def test_classify_research_decision_reflects_actual_winner_mix() -> None:
+    assert SCRIPT_MODULE.classify_research_decision(
+        aggregate_return_winner="hold_16_zero_risk",
+        aggregate_objective_winner="hold_16_zero_risk",
+        slice_majority_return_winner="hold_16_zero_risk",
+        slice_majority_objective_winner="tie",
+    ) == "mixed_forward_profile_agg_ret_hold16_agg_obj_hold16_slice_ret_hold16_slice_obj_tie"
+
+
+def test_validation_window_mode_reflects_overlap() -> None:
+    assert SCRIPT_MODULE.validation_window_mode(step_days=5, validation_days=10) == "overlapping"
+    assert SCRIPT_MODULE.validation_window_mode(step_days=10, validation_days=10) == "non_overlapping"
+
+
 def test_forward_compare_defaults_fail_on_30d_fixture_window(tmp_path: Path) -> None:
     review_dir = tmp_path / "review"
     review_dir.mkdir(parents=True, exist_ok=True)
@@ -174,6 +194,7 @@ def test_forward_compare_runs_with_explicit_20_5_5_window(tmp_path: Path) -> Non
     assert payload["train_days"] == 20
     assert payload["validation_days"] == 5
     assert payload["step_days"] == 5
+    assert payload["validation_window_mode"] == "non_overlapping"
     assert payload["research_decision"]
     assert len(payload["forward_slices"]) == 2
     assert set(payload["aggregate_validation_metrics_by_config"].keys()) == {

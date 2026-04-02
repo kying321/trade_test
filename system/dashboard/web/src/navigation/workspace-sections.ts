@@ -12,6 +12,13 @@ export type WorkspacePageSectionItem = {
   accordionItemId?: string;
 };
 
+const DEFAULT_WORKSPACE_PAGE_SECTION_IDS: Partial<Record<WorkspaceSection, string>> = {
+  alignment: 'alignment-summary',
+  backtests: 'backtests-overview',
+  contracts: 'contracts-topology',
+  raw: 'raw-summary',
+};
+
 function buildBacktestsSections(): WorkspacePageSectionItem[] {
   return [
     { id: 'backtests-overview', label: '回测总览', level: 1 },
@@ -38,6 +45,14 @@ function buildAlignmentSections(model: TerminalReadModel): WorkspacePageSectionI
 }
 
 function buildContractsSections(model: TerminalReadModel): WorkspacePageSectionItem[] {
+  const prioritizedSourceHeads = [
+    model.workspace.sourceHeads.find((row) => safeDisplayValue(row.id) === 'operator_panel'),
+    ...model.workspace.sourceHeads,
+  ].filter((row, index, rows): row is NonNullable<typeof row> => (
+    Boolean(row)
+    && rows.findIndex((candidate) => safeDisplayValue(candidate?.id) === safeDisplayValue(row.id)) === index
+  ));
+
   return [
     { id: 'contracts-topology', label: '公开入口拓扑', level: 1, groupId: 'contracts-acceptance', groupLabel: '验收链' },
     { id: 'contracts-acceptance-summary', label: '验收总览', level: 1, groupId: 'contracts-acceptance', groupLabel: '验收链' },
@@ -64,7 +79,7 @@ function buildContractsSections(model: TerminalReadModel): WorkspacePageSectionI
     { id: 'contracts-surfaces', label: '数据面断言', level: 1, groupId: 'contracts-data', groupLabel: '数据面' },
     { id: 'contracts-interface', label: '接口目录', level: 1, groupId: 'contracts-data', groupLabel: '数据面' },
     { id: 'contracts-source-heads', label: '主线总览', level: 1, groupId: 'contracts-source-heads', groupLabel: '源头主线' },
-    ...model.workspace.sourceHeads.slice(0, 3).map((row) => ({
+    ...prioritizedSourceHeads.slice(0, 3).map((row) => ({
       id: `contracts-source-head-${safeDisplayValue(row.id)}`,
       label: safeDisplayValue(row.label || row.id),
       level: 2 as const,
@@ -78,7 +93,18 @@ function buildContractsSections(model: TerminalReadModel): WorkspacePageSectionI
 }
 
 function buildRawSections(model: TerminalReadModel): WorkspacePageSectionItem[] {
-  const focusLabel = safeDisplayValue(model.workspace.artifactRows[0]?.payload_key || model.workspace.artifactRows[0]?.label || model.workspace.artifactRows[0]?.id || '焦点工件原始层');
+  const defaultFocusArtifact = safeDisplayValue(model.workspace.defaultFocus?.artifact);
+  const focusedRow = model.workspace.artifactRows.find((row) => {
+    const target = safeDisplayValue(defaultFocusArtifact);
+    if (!target || target === '—') return false;
+    return safeDisplayValue(row.id) === target || safeDisplayValue(row.payload_key) === target;
+  });
+  const canonicalMainlineRow = model.workspace.artifactRows.find((row) => (
+    safeDisplayValue(row.artifact_group) === 'research_mainline'
+    && safeDisplayValue(row.artifact_layer) !== 'archive'
+  ));
+  const rawFocusRow = focusedRow || canonicalMainlineRow || model.workspace.artifactRows[0];
+  const focusLabel = safeDisplayValue(rawFocusRow?.payload_key || rawFocusRow?.label || rawFocusRow?.id || '焦点工件原始层');
   return [
     { id: 'raw-summary', label: '原始摘要', level: 1 },
     { id: 'raw-focus', label: focusLabel || '焦点工件原始层', level: 1 },
@@ -92,6 +118,19 @@ export function getWorkspacePageSections(section: WorkspaceSection, model: Termi
   if (section === 'contracts') return buildContractsSections(model);
   if (section === 'raw') return buildRawSections(model);
   return [];
+}
+
+export function getDefaultWorkspacePageSection(
+  section: WorkspaceSection,
+  model: TerminalReadModel,
+): WorkspacePageSectionItem | null {
+  const sections = getWorkspacePageSections(section, model);
+  const preferredId = DEFAULT_WORKSPACE_PAGE_SECTION_IDS[section];
+  if (preferredId) {
+    const preferred = sections.find((item) => item.id === preferredId);
+    if (preferred) return preferred;
+  }
+  return sections[0] || null;
 }
 
 export function findWorkspacePageSection(

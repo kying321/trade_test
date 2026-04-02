@@ -1,17 +1,9 @@
-import { NavLink } from 'react-router-dom';
+import { ActionButton, DomainTab, SegmentedOption } from '../components/control-primitives';
 import { ClampText } from '../components/ui-kit';
 import type { NavItem } from '../pages/page-types';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
 export type ResolvedTheme = 'dark' | 'light';
-export type TopbarDomainTone = 'overview' | 'ops' | 'research';
-
-export type GlobalTopbarDomainContext = {
-  kicker: string;
-  title: string;
-  detail: string;
-  tone: TopbarDomainTone;
-};
 
 type GlobalTopbarProps = {
   primaryNav: NavItem[];
@@ -23,7 +15,7 @@ type GlobalTopbarProps = {
   themePreference: ThemePreference;
   resolvedTheme: ResolvedTheme;
   onThemeChange: (next: ThemePreference) => void;
-  domainContext: GlobalTopbarDomainContext;
+  onOpenSearch?: () => void;
 };
 
 const THEME_OPTIONS: Array<{ id: ThemePreference; label: string; ariaLabel: string }> = [
@@ -36,6 +28,15 @@ function resolvedThemeLabel(theme: ResolvedTheme): string {
   return theme === 'light' ? '白天' : '夜间';
 }
 
+function isPrimaryNavActive(item: NavItem, currentPath: string): boolean {
+  if (item.id === 'overview') return currentPath === '/overview' || currentPath === '/';
+  if (item.id === 'graph' || item.to.startsWith('/graph-home')) return currentPath.startsWith('/graph-home');
+  if (item.id === 'ops' || item.to.startsWith('/terminal/')) return currentPath.startsWith('/terminal/');
+  if (item.id === 'research' || item.to.startsWith('/workspace/')) return currentPath.startsWith('/workspace/');
+  if (item.id === 'cpa' || item.to.startsWith('/cpa')) return currentPath.startsWith('/cpa');
+  return currentPath === item.to;
+}
+
 export function GlobalTopbar({
   primaryNav,
   globalSummary,
@@ -43,59 +44,61 @@ export function GlobalTopbar({
   themePreference,
   resolvedTheme,
   onThemeChange,
-  domainContext,
+  onOpenSearch,
 }: GlobalTopbarProps) {
   return (
     <div className="global-topbar-inner">
-      <div className="global-topbar-row global-topbar-main">
+      <div className="global-topbar-row global-topbar-main global-topbar-global-only">
         <section className="global-brand" aria-label="global-brand-context">
           <p className="brand-kicker">Fenlie / 控制台</p>
           <strong><ClampText expandable={false} raw="只读操作与研究面">只读操作与研究面</ClampText></strong>
         </section>
-        <section className="global-control-deck" aria-label="global-control-deck">
+        <nav className="primary-nav" aria-label="primary-domains">
+          {primaryNav.map((item) => (
+            <DomainTab
+              key={item.id}
+              className="primary-nav-link"
+              active={isPrimaryNavActive(item, currentPath)}
+              to={item.to}
+            >
+              <span>{item.label}</span>
+            </DomainTab>
+          ))}
+        </nav>
+        <section className="global-control-deck" aria-label="global-tool-strip">
           <div className="theme-switcher" role="group" aria-label="theme-switcher">
             <span className="theme-switcher-label">主题</span>
             <div className="theme-switcher-segment">
               {THEME_OPTIONS.map((option) => (
-                <button
+                <SegmentedOption
                   key={option.id}
-                  type="button"
                   className={`theme-switcher-button ${themePreference === option.id ? 'active' : ''}`.trim()}
                   aria-label={option.ariaLabel}
-                  aria-pressed={themePreference === option.id}
+                  active={themePreference === option.id}
                   onClick={() => onThemeChange(option.id)}
                 >
                   {option.label}
-                </button>
+                </SegmentedOption>
               ))}
             </div>
             <span className="theme-switcher-state">当前：{resolvedThemeLabel(resolvedTheme)}</span>
           </div>
-          <div className="global-summary-strip" aria-label="global-summary">
-            {globalSummary.chips?.map((chip) => (
-              <span className="summary-chip" key={`${chip.label}-${chip.value}`}>{chip.label}：{chip.value}</span>
-            ))}
-            <span className="summary-chip summary-chip-emphasis">变更级别：{globalSummary.changeClass}</span>
-          </div>
-        </section>
-      </div>
-      <div className="global-topbar-row global-topbar-domain">
-          <section className={`domain-context domain-context-${domainContext.tone}`.trim()} aria-label="global-domain-context">
-          <span className="domain-context-kicker">{domainContext.kicker}</span>
-          <strong><ClampText expandable={false} raw={domainContext.title}>{domainContext.title}</ClampText></strong>
-          <small><ClampText expandable={false} raw={domainContext.detail}>{domainContext.detail}</ClampText></small>
-        </section>
-        <nav className="primary-nav" aria-label="primary-domains">
-          {primaryNav.map((item) => (
-            <NavLink
-              key={item.id}
-              className={({ isActive }) => `primary-nav-link ${isActive || currentPath === item.to ? 'active' : ''}`.trim()}
-              to={item.to}
+          {onOpenSearch ? (
+            <ActionButton
+              className="chip-button global-search-trigger"
+              aria-label="打开全局搜索"
+              onClick={onOpenSearch}
             >
-              <span>{item.label}</span>
-            </NavLink>
+              搜索 / ⌘K
+            </ActionButton>
+          ) : null}
+        </section>
+        <section className="global-summary-strip" aria-label="global-summary">
+          {globalSummary.chips?.map((chip) => (
+            <span className="summary-chip" key={`${chip.label}-${chip.value}`}>{chip.label}：{chip.value}</span>
           ))}
-        </nav>
+          <span className="summary-chip summary-chip-emphasis">变更级别：{globalSummary.changeClass}</span>
+        </section>
       </div>
     </div>
   );

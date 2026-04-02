@@ -6,9 +6,7 @@ import sys
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(
-    "/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_dashboard_frontend_snapshot.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "build_dashboard_frontend_snapshot.py"
 
 
 def load_module():
@@ -87,6 +85,143 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "change_class": "SIM_ONLY",
             "generated_at_utc": "2026-03-15T10:50:00Z",
             "research_decision": "no_edge",
+        },
+    )
+    event_regime_path = review_dir / "latest_event_regime_snapshot.json"
+    write_json(
+        event_regime_path,
+        {
+            "event_severity_score": 0.78,
+            "systemic_risk_score": 0.63,
+            "regime_state": "sector_stress",
+            "top_risk_assets": ["BTC", "ETH", "GOLD"],
+            "headline_drivers": ["credit_liquidity_stress"],
+        },
+    )
+    event_analogy_path = review_dir / "latest_event_crisis_analogy.json"
+    write_json(
+        event_analogy_path,
+        {
+            "top_analogues": [
+                {
+                    "archetype_id": "gfc_2008",
+                    "similarity_score": 0.82,
+                    "match_axes": ["contagion", "credit"],
+                    "mismatch_axes": ["policy"],
+                },
+            ],
+        },
+    )
+    event_game_state_path = review_dir / "latest_event_game_state_snapshot.json"
+    write_json(
+        event_game_state_path,
+        {
+            "game_state": "financial_pressure",
+            "primary_theater": "usd_liquidity_and_sanctions",
+        },
+    )
+    event_transmission_path = review_dir / "latest_event_transmission_chain_map.json"
+    write_json(
+        event_transmission_path,
+        {
+            "dominant_chain": "credit_intermediary_chain",
+            "primary_theater": "usd_liquidity_and_sanctions",
+            "chains": [
+                {"chain_id": "credit_intermediary_chain", "status": "dominant"},
+            ],
+        },
+    )
+    event_shock_map_path = review_dir / "latest_event_asset_shock_map.json"
+    write_json(
+        event_shock_map_path,
+        {
+            "assets": [
+                {
+                    "asset": "BTC",
+                    "class": "crypto",
+                    "shock_direction_bias": "down",
+                    "expected_volatility_rank": "high",
+                    "contagion_sensitivity": "strong",
+                    "risk_1d": "elevated",
+                    "risk_3d": "elevated",
+                    "risk_7d": "elevated",
+                }
+            ],
+        },
+    )
+    event_safety_margin_path = review_dir / "latest_event_safety_margin_snapshot.json"
+    write_json(
+        event_safety_margin_path,
+        {
+            "system_margin_score": 0.42,
+            "hard_boundaries": {
+                "canary_hard_block": False,
+                "new_risk_hard_block": True,
+                "shadow_only_boundary": False,
+            },
+            "boundary_reasons": ["system_margin_low"],
+        },
+    )
+    event_operator_summary_path = review_dir / "latest_event_crisis_operator_summary.json"
+    write_json(
+        event_operator_summary_path,
+        {
+            "status": "watch",
+            "change_class": "RESEARCH_ONLY",
+            "summary": "event crisis watch",
+            "takeaway": "monitor private credit flow",
+            "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+            "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+            "event_crisis_safety_margin_brief": "system_margin=0.42",
+            "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+        },
+    )
+    commodity_scenario_path = review_dir / "latest_commodity_reasoning_scenario_tree.json"
+    write_json(
+        commodity_scenario_path,
+        {
+            "primary_scenario": "supply_chain_tightening",
+            "contract_focus": "BU2606",
+        },
+    )
+    commodity_transmission_path = review_dir / "latest_commodity_reasoning_transmission_map.json"
+    write_json(
+        commodity_transmission_path,
+        {
+            "primary_chain": "feedstock_cost_push_chain",
+            "chains": [
+                {
+                    "contract": "BU2606",
+                    "sector": "energy_chemicals",
+                    "commodity": "asphalt",
+                }
+            ],
+        },
+    )
+    commodity_boundary_path = review_dir / "latest_commodity_reasoning_boundary_strength.json"
+    write_json(
+        commodity_boundary_path,
+        {
+            "range_summary": "contract_focused",
+            "boundary_rows": [
+                {
+                    "target_id": "BU2606",
+                    "boundary_strength": "tight",
+                    "fragility_flags": ["basis_weak"],
+                }
+            ],
+        },
+    )
+    commodity_summary_path = review_dir / "latest_commodity_reasoning_summary.json"
+    write_json(
+        commodity_summary_path,
+        {
+            "primary_scenario_brief": "supply_chain_tightening",
+            "primary_chain_brief": "feedstock_cost_push_chain",
+            "range_scope_brief": "contract_focused",
+            "boundary_strength_brief": "tight",
+            "invalidator_brief": "basis_weak",
+            "contracts_in_focus": ["BU2606"],
         },
     )
 
@@ -212,6 +347,43 @@ def test_selected_artifact_uses_alias_as_catalog_id(tmp_path: Path) -> None:
 
     cross_section_row = next(row for row in snapshot["catalog"] if row.get("payload_key") == "cross_section_backtest")
     assert cross_section_row["artifact_group"] == "research_cross_section"
+
+
+def test_event_crisis_artifacts_exposed(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    assert "event_game_state_snapshot" in payloads
+    assert "event_transmission_chain_map" in payloads
+    assert "event_regime_snapshot" in payloads
+    assert "event_crisis_analogy" in payloads
+    assert "event_asset_shock_map" in payloads
+    assert "event_safety_margin_snapshot" in payloads
+    assert "event_crisis_operator_summary" in payloads
+    for artifact_id, suffix in [
+        ("event_game_state_snapshot", "latest_event_game_state_snapshot.json"),
+        ("event_transmission_chain_map", "latest_event_transmission_chain_map.json"),
+        ("event_regime_snapshot", "latest_event_regime_snapshot.json"),
+        ("event_crisis_analogy", "latest_event_crisis_analogy.json"),
+        ("event_asset_shock_map", "latest_event_asset_shock_map.json"),
+        ("event_safety_margin_snapshot", "latest_event_safety_margin_snapshot.json"),
+        ("event_crisis_operator_summary", "latest_event_crisis_operator_summary.json"),
+    ]:
+        assert payloads[artifact_id]["path"].endswith(f"review/{suffix}")
+
+
+def test_dashboard_snapshot_exposes_commodity_reasoning_artifacts(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    for artifact_id, suffix in [
+        ("commodity_reasoning_scenario_tree", "latest_commodity_reasoning_scenario_tree.json"),
+        ("commodity_reasoning_transmission_map", "latest_commodity_reasoning_transmission_map.json"),
+        ("commodity_reasoning_boundary_strength", "latest_commodity_reasoning_boundary_strength.json"),
+        ("commodity_reasoning_summary", "latest_commodity_reasoning_summary.json"),
+    ]:
+        assert artifact_id in payloads
+        assert payloads[artifact_id]["path"].endswith(f"review/{suffix}")
 
 
 def test_public_catalog_dedupes_selected_artifact_against_same_review_file(tmp_path: Path) -> None:
@@ -374,6 +546,75 @@ def test_internal_snapshot_sets_feedback_projection_null_when_missing(tmp_path: 
     assert internal_snapshot["conversation_feedback_projection"] is None
 
 
+def test_workspace_path_visibility_respects_surface(tmp_path: Path) -> None:
+    public_snapshot, internal_snapshot = build_dual_snapshots(tmp_path)
+
+    assert not Path(str(public_snapshot["workspace"])).is_absolute()
+    assert Path(str(internal_snapshot["workspace"])).is_absolute()
+
+
+def test_public_snapshot_sanitizes_nested_payload_paths(tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "system" / "output" / "review"
+    artifacts_dir = workspace / "system" / "output" / "artifacts"
+    public_dir = workspace / "system" / "dashboard" / "web" / "public"
+    review_dir.mkdir(parents=True)
+    artifacts_dir.mkdir(parents=True)
+    public_dir.mkdir(parents=True)
+    (public_dir / "data").mkdir(parents=True)
+
+    write_json(
+        review_dir / "latest_event_regime_snapshot.json",
+        {
+            "status": "watch",
+            "report_path": str(workspace / "system" / "output" / "review" / "report.json"),
+            "nested": {"source_artifact": str(workspace / "system" / "output" / "review" / "nested.json")},
+            "items": [{"path": str(workspace / "system" / "output" / "artifacts" / "foo.json")}],
+        },
+    )
+
+    for surface in (
+        mod.SurfaceSpec(
+            key="public",
+            output_name="fenlie_dashboard_snapshot.json",
+            expose_absolute_paths=False,
+            redaction_level="public_summary",
+        ),
+        mod.SurfaceSpec(
+            key="internal",
+            output_name="fenlie_dashboard_internal_snapshot.json",
+            expose_absolute_paths=True,
+            redaction_level="full_internal",
+        ),
+    ):
+        mod.build_surface_snapshot(
+            surface=surface,
+            workspace=workspace,
+            public_dir=public_dir,
+            review_dir=review_dir,
+            artifacts_dir=artifacts_dir,
+            selected_paths={},
+            route_contract={"ui_routes": {}, "surface_contracts": {}, "experience_contract": {}},
+            source_head_contract={"source_heads": []},
+            max_catalog=10,
+            max_backtests=0,
+            max_equity_points=0,
+        )
+
+    public_snapshot = json.loads((public_dir / "data" / "fenlie_dashboard_snapshot.json").read_text(encoding="utf-8"))
+    internal_snapshot = json.loads((public_dir / "data" / "fenlie_dashboard_internal_snapshot.json").read_text(encoding="utf-8"))
+    public_payload = public_snapshot["artifact_payloads"]["event_regime_snapshot"]["payload"]
+    internal_payload = internal_snapshot["artifact_payloads"]["event_regime_snapshot"]["payload"]
+
+    assert not Path(public_payload["report_path"]).is_absolute()
+    assert not Path(public_payload["nested"]["source_artifact"]).is_absolute()
+    assert not Path(public_payload["items"][0]["path"]).is_absolute()
+    assert Path(internal_payload["report_path"]).is_absolute()
+    assert Path(internal_payload["nested"]["source_artifact"]).is_absolute()
+    assert Path(internal_payload["items"][0]["path"]).is_absolute()
+
+
 def test_repo_route_contract_uses_custom_pages_fallback_domain() -> None:
     route_contract_path = Path(
         "/Users/jokenrobot/Downloads/Folders/fenlie/system/config/dashboard_snapshot_ui_routes.json"
@@ -417,3 +658,112 @@ def test_artifact_selection_includes_orderflow_blueprint_and_gate_blocker() -> N
     assert blocker["category"] == "research"
     assert blocker["path_mode"] == "review_path"
     assert blocker["value"] == "latest_intraday_orderflow_research_gate_blocker_report.json"
+
+
+def test_snapshot_merges_optimizer_and_strategy_lab_summary_artifacts(tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "system" / "output" / "review"
+    artifacts_dir = workspace / "system" / "output" / "artifacts"
+    research_dir = workspace / "system" / "output" / "research"
+    public_dir = workspace / "system" / "dashboard" / "web" / "public"
+    review_dir.mkdir(parents=True)
+    artifacts_dir.mkdir(parents=True)
+    public_dir.mkdir(parents=True)
+    (public_dir / "data").mkdir(parents=True)
+
+    breakout_path = review_dir / "20260319T103100Z_price_action_breakout_pullback_sim_only.json"
+    write_json(
+        breakout_path,
+        {
+            "status": "ok",
+            "generated_at_utc": "2026-03-19T10:31:00Z",
+        },
+    )
+    comparison_path = review_dir / "20260330T080000Z_recent_strategy_backtest_comparison_report.json"
+    write_json(
+        comparison_path,
+        {
+            "rows": [{"strategy_id_canonical": "eth_breakout_pullback", "recommendation": "keep"}],
+            "status": "ok",
+        },
+    )
+
+    optimizer_run = research_dir / "20260330_120000"
+    strategy_lab_run = research_dir / "strategy_lab_20260330_120500"
+    optimizer_run.mkdir(parents=True)
+    strategy_lab_run.mkdir(parents=True)
+    write_json(
+        optimizer_run / "summary.json",
+        {
+            "mode_summaries": [
+                {
+                    "mode": "ultra_short",
+                    "trial_artifacts": [
+                        {
+                            "trial": 1,
+                            "mode": "ultra_short",
+                            "score": 0.42,
+                            "trade_journal_path": str(optimizer_run / "ultra_short" / "trial_001_ultra_short_trade_journal.csv"),
+                            "holding_exposure_path": str(optimizer_run / "ultra_short" / "trial_001_ultra_short_holding_daily_symbol_exposure.csv"),
+                        }
+                    ],
+                }
+            ],
+            "best_trade_journal_path": str(optimizer_run / "ultra_short" / "best_trade_journal.csv"),
+            "best_holding_exposure_path": str(optimizer_run / "ultra_short" / "best_holding_daily_symbol_exposure.csv"),
+        },
+    )
+    write_json(
+        strategy_lab_run / "summary.json",
+        {
+            "best_candidate": {
+                "name": "balanced_flow_04",
+                "trade_journal_path": str(strategy_lab_run / "best_trade_journal.csv"),
+                "holding_exposure_path": str(strategy_lab_run / "best_holding_daily_symbol_exposure.csv"),
+            },
+            "candidates": [
+                {
+                    "name": "balanced_flow_04",
+                    "trade_journal_path": str(strategy_lab_run / "candidate_01_balanced_flow_04_trade_journal.csv"),
+                    "holding_exposure_path": str(strategy_lab_run / "candidate_01_balanced_flow_04_holding_daily_symbol_exposure.csv"),
+                }
+            ],
+        },
+    )
+
+    selected_paths = {
+        "recent_strategy_backtests": (comparison_path, "backtest", "system_anchor"),
+        "price_action_breakout_pullback": (breakout_path, "sim-only", "research_mainline"),
+    }
+
+    mod.build_surface_snapshot(
+        surface=mod.SurfaceSpec(
+            key="public",
+            output_name="fenlie_dashboard_snapshot.json",
+            expose_absolute_paths=False,
+            redaction_level="public_summary",
+        ),
+        workspace=workspace,
+        public_dir=public_dir,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        selected_paths=selected_paths,
+        route_contract={"ui_routes": {}, "surface_contracts": {}, "experience_contract": {}},
+        source_head_contract={"source_heads": []},
+        max_catalog=20,
+        max_backtests=0,
+        max_equity_points=0,
+    )
+
+    snapshot = json.loads((public_dir / "data" / "fenlie_dashboard_snapshot.json").read_text(encoding="utf-8"))
+    payloads = snapshot["artifact_payloads"]
+    assert "recent_strategy_backtests" in payloads
+    assert payloads["recent_strategy_backtests"]["payload"]["mode_summaries"][0]["trial_artifacts"][0]["trade_journal_path"].endswith(
+        "trial_001_ultra_short_trade_journal.csv"
+    )
+    assert "strategy_lab_summary" in payloads
+    assert payloads["strategy_lab_summary"]["payload"]["best_candidate"]["trade_journal_path"].endswith("best_trade_journal.csv")
+
+    catalog_ids = {row["id"] for row in snapshot["catalog"]}
+    assert "strategy_lab_summary" in catalog_ids

@@ -14,6 +14,11 @@
 - `CLOUD_PROJECT_DIR` (default: `/home/ubuntu/openclaw-system`)
 - `CLOUD_PASS` (optional if key auth is configured)
 - `FENLIE_SYSTEM_ROOT` (recommended for launchd: `/Users/jokenrobot/.openclaw/workspaces/pi/fenlie-system`)
+- `INFRA_CANARY_SYMBOL` (default: `BTCUSDT`, 固定 infra canary symbol)
+- `INFRA_CANARY_QUOTE_USDT` (default: `10`, 目标 round-trip quote)
+- `INFRA_CANARY_SINGLE_RUN_CAP_USDT` (default: `12`, 动态最小可回平金额的单次上限)
+- `INFRA_CANARY_DAILY_BUDGET_CAP_USDT` (default: `20`, autopilot/budget guard)
+- `INFRA_CANARY_ALLOW_DUST` (default: `true`, 允许 dust residual but must be audited)
 
 ## Keychain secret governance (recommended)
 - 避免在 LaunchAgent plist 明文注入 `CLOUD_PASS`。
@@ -50,6 +55,9 @@ scripts/openclaw_cloud_bridge.sh live-takeover-probe
 scripts/openclaw_cloud_bridge.sh live-takeover-canary
 scripts/openclaw_cloud_bridge.sh live-takeover-ready-check
 scripts/openclaw_cloud_bridge.sh live-takeover-autopilot
+scripts/openclaw_cloud_bridge.sh infra-canary-probe
+scripts/openclaw_cloud_bridge.sh infra-canary-run
+scripts/openclaw_cloud_bridge.sh infra-canary-autopilot
 scripts/openclaw_cloud_bridge.sh sample-whitelist
 scripts/openclaw_cloud_bridge.sh sample-whitelist-gate
 scripts/openclaw_cloud_bridge.sh assert-whitelist-gate
@@ -128,11 +136,24 @@ LIVE_TAKEOVER_MARKET=spot \
 scripts/openclaw_cloud_bridge.sh live-takeover-autopilot
 ```
 - 产物：
-  - `output/review/*_binance_live_takeover.json`
-  - `output/artifacts/evomap/*_strategy.json`
-  - `output/artifacts/broker_live_inbox/YYYY-MM-DD.json`（仅在 Binance signed 凭据完整时生成）
-  - `output/artifacts/binance_live_trades/YYYY-MM-DD.json`
-  - `output/artifacts/binance_live_income/YYYY-MM-DD.json`
+- `output/review/*_binance_live_takeover.json`
+- `output/artifacts/evomap/*_strategy.json`
+- `output/artifacts/broker_live_inbox/YYYY-MM-DD.json`（仅在 Binance signed 凭据完整时生成）
+- `output/artifacts/binance_live_trades/YYYY-MM-DD.json`
+- `output/artifacts/binance_live_income/YYYY-MM-DD.json`
+
+## Infra canary (独立执行基础设施探活)
+- 所有 infra canary 命令都是对 `scripts/binance_infra_canary.py` 的封装，默认：`symbol=BTCUSDT`、`market=spot`、`requested_quote_usdt=10`、`single_run_cap_usdt=12`、`allow_dust=true`、`daily_budget_cap_usdt=20`。
+- `infra-canary-probe` 在云端只校验 credentials、账户余额、budget/idempotency ledger、panic/transport guard，它永远不读取策略 ticket 数据，也不下单。
+- `infra-canary-run` 执行一次 round-trip（买入 `BTCUSDT`；目标 quote 默认 `10 USDT`，若交易所约束要求更高则自动抬高到 `required_round_trip_quote_usdt`；若所需金额超过 `12 USDT` 则 graceful skip），并把 `dust`、`budget`、`idempotency`、`steps` 产物写入 `output/state` 和 `output/review` 目录。
+- `infra-canary-autopilot` 会先调用 `binance_infra_canary.py --mode autopilot-check`，只有当返回的 JSON 同时满足 `ok=true` 和 `autopilot_allowed=true` 才继续触发 `infra-canary-run`，否则输出 `skipped_not_ready`/`ready_to_run` 等结构化 payload 并优雅退出，不会放行策略路径。
+- `autopilot_allowed` 必须是 bool；非 bool 会被视为 gate error，整体 run 直接跳过。即便 `autopilot_allowed=true`，仍然受 daily budget、幂等、mutex、panic guard 限制。
+- Infra canary 成功只证明 execution plumbing 没问题，**不代表策略 ready**；操作文档/brief 必须写明 `infra canary success ≠ strategy ready`。
+- 历史残留提示：旧版固定 `5 USDT` canary 若已留下 `needs_recovery / sell_exchange_reject`，仍以 `output/state/infra_canary_idempotency.json` 为准，不会因新版动态金额合同自动清除。
+
+## TradingView Basis Arbitrage 路径
+- 需要 TradingView 信号触发的基差套利请参考 `system/docs/TRADINGVIEW_BASIS_ARB_RUNBOOK.md`，内含 webhook payload、entry/exit gate、状态账本、恢复流程与 smoke 命令。
+- 同样强调：**套利成功 ≠ infra canary 成功 ≠ strategy ticket ready**，只有 gate/pass、artifact 不留 `needs_recovery`、state 账本干净之后才算策略真正就绪。
 
 ## Sync policy
 - Sync scope: `src/`, `scripts/`, `docs/`, `tests/`, `config.yaml`, `pyproject.toml`

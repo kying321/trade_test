@@ -60,6 +60,9 @@ def text(value: Any) -> str:
 
 
 def select_latest_price_action_artifact(review_dir: Path) -> Path:
+    latest_alias = review_dir / "latest_price_action_breakout_pullback_sim_only.json"
+    if latest_alias.exists():
+        return latest_alias
     candidates = sorted(review_dir.glob("*_price_action_breakout_pullback_sim_only.json"))
     if not candidates:
         raise FileNotFoundError("no_price_action_breakout_pullback_sim_only_artifact_found")
@@ -433,9 +436,22 @@ def main() -> int:
 
     json_path = review_dir / f"{args.stamp}_price_action_breakout_pullback_exit_risk_sim_only.json"
     md_path = review_dir / f"{args.stamp}_price_action_breakout_pullback_exit_risk_sim_only.md"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    latest_json_path = review_dir / "latest_price_action_breakout_pullback_exit_risk_sim_only.json"
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    json_path.write_text(encoded, encoding="utf-8")
     md_path.write_text(render_markdown(payload), encoding="utf-8")
-    print(json.dumps({"json_path": str(json_path), "md_path": str(md_path), "symbol": symbol}, ensure_ascii=False))
+    latest_json_path.write_text(encoded, encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "json_path": str(json_path),
+                "md_path": str(md_path),
+                "latest_json_path": str(latest_json_path),
+                "symbol": symbol,
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

@@ -82,6 +82,47 @@ function buildFeedbackMetrics(projection: ConversationFeedbackProjection): Metri
   ];
 }
 
+function buildCommodityReasoningMetrics(model: TerminalReadModel | null): MetricItem[] {
+  if (!model) return [];
+  const micro = model.dataRegime.microCapture.filter((metric) =>
+    ['commodity-scenario', 'commodity-chain', 'commodity-range'].includes(metric.id),
+  );
+  const repair = model.signalRisk.repairPlan.filter((metric) =>
+    ['commodity-summary', 'commodity-boundary'].includes(metric.id),
+  );
+  return [...micro, ...repair];
+}
+
+function buildOverviewStateMetrics(model: TerminalReadModel | null): MetricItem[] {
+  if (!model) return [];
+  return [
+    {
+      id: 'overview-state-surface',
+      label: '当前视图',
+      value: model.surface.effectiveLabel || '—',
+      tone: statusTone(model.surface.effective),
+    },
+    {
+      id: 'overview-state-change-class',
+      label: '变更级别',
+      value: labelFor(String(model.meta.change_class || 'RESEARCH_ONLY')),
+      tone: statusTone(model.meta.change_class),
+    },
+    {
+      id: 'overview-state-artifacts',
+      label: '工件数',
+      value: model.workspace.artifactRows.length,
+      tone: statusTone(model.workspace.artifactRows.length > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'overview-state-source-heads',
+      label: '源头主头',
+      value: model.workspace.sourceHeads.length,
+      tone: statusTone(model.workspace.sourceHeads.length > 0 ? 'positive' : 'warning'),
+    },
+  ];
+}
+
 export function OverviewPage({ model }: OverviewPageProps) {
   const holdSelectionHandoff = model?.workspace.sourceHeads.find((row) => row.id === 'hold_selection_handoff')
     || model?.workspace.sourceHeads[0]
@@ -100,6 +141,8 @@ export function OverviewPage({ model }: OverviewPageProps) {
     { view: 'internal' },
     'alignment-summary',
   );
+  const commodityReasoningMetrics = buildCommodityReasoningMetrics(model);
+  const overviewStateMetrics = buildOverviewStateMetrics(model);
 
   return (
     <section className="overview-page">
@@ -107,53 +150,84 @@ export function OverviewPage({ model }: OverviewPageProps) {
         <h2>总览</h2>
         <p>先看系统态势，再分流进入操作终端或研究工作区。</p>
       </div>
-      <div className="overview-entry-grid">
-        <Link className="panel-card overview-entry-card" to="/terminal/public">
-          <p className="panel-kicker">一级域</p>
-          <strong>操作终端</strong>
-          <span>{model?.orchestration.topMetrics[3]?.value ? `当前值：${String(model.orchestration.topMetrics[3].value)}` : '进入调度 / 门禁 / 风险链路'}</span>
-        </Link>
-        <Link className="panel-card overview-entry-card" to="/workspace/artifacts">
-          <p className="panel-kicker">一级域</p>
-          <strong>研究工作区</strong>
-          <span>{model?.workspace.artifactRows.length ? `工件数：${model.workspace.artifactRows.length}` : '进入工件 / 回测 / 比较'}</span>
-        </Link>
-        <Link className="panel-card overview-entry-card" to="/workspace/contracts">
-          <p className="panel-kicker">入口</p>
-          <strong>契约验收</strong>
-          <span>查看公开面验收与入口拓扑</span>
-        </Link>
-      </div>
-      <PanelCard
-        title="研究主线摘要"
-        kicker="source-owned / canonical"
-        meta={holdSelectionHandoff
-          ? `${safeDisplayValue(holdSelectionHandoff.label || holdSelectionHandoff.id)} ｜ ${compactPath(holdSelectionHandoff.path, 4)}`
-          : '当前快照未暴露 hold_selection_handoff 主头'}
-        actions={<Link className="button" to={sourceHeadLink}>查看源头主线</Link>}
-      >
-        {holdSelectionHandoff ? (
-          <MetricStrip items={buildHoldSelectionMetrics(holdSelectionHandoff)} />
-        ) : (
-          <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
-        )}
-      </PanelCard>
+      <section className="overview-rhythm-band" aria-label="overview-rhythm-state">
+        <h3>当前状态</h3>
+        <p>系统状态 / 入口 / 路由总览</p>
+        {overviewStateMetrics.length ? <MetricStrip items={overviewStateMetrics} /> : null}
+      </section>
+      <section className="overview-rhythm-band" aria-label="overview-rhythm-focus">
+        <h3>当前焦点</h3>
+        <p>国内商品推理线和主线冲突统一在同一焦点带，避免首屏并列抢占。</p>
+        <div data-search-anchor="overview-mainline-summary" id="overview-mainline-summary">
+          <PanelCard
+            title="当前焦点"
+            kicker="研究主线摘要"
+            meta={holdSelectionHandoff
+              ? `${safeDisplayValue(holdSelectionHandoff.label || holdSelectionHandoff.id)} ｜ ${compactPath(holdSelectionHandoff.path, 4)}`
+              : '当前快照未暴露 hold_selection_handoff 主头'}
+            actions={<Link className="button" to={sourceHeadLink}>查看源头主线</Link>}
+          >
+            {holdSelectionHandoff ? (
+              <MetricStrip items={buildHoldSelectionMetrics(holdSelectionHandoff)} />
+            ) : (
+              <div className="empty-block">未找到研究主线主头，请先刷新 source heads 快照。</div>
+            )}
+          </PanelCard>
+        </div>
+        {commodityReasoningMetrics.length ? (
+        <div data-search-anchor="overview-commodity-reasoning" id="overview-commodity-reasoning">
+          <PanelCard
+            title="国内商品推理线"
+            kicker="reasoning / visible-priority"
+            meta="首屏固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
+          >
+            <MetricStrip items={commodityReasoningMetrics} showRawValues />
+          </PanelCard>
+        </div>
+        ) : null}
+      </section>
+      <section className="overview-rhythm-band" aria-label="overview-rhythm-action">
+        <h3>下一步</h3>
+        <p>选择入口进入操作终端、研究工作区或契约验收。</p>
+        <div className="overview-entry-grid">
+          <Link className="panel-card overview-entry-card" to="/terminal/public">
+            <p className="panel-kicker">一级域</p>
+            <strong>操作终端</strong>
+            <span>{model?.orchestration.topMetrics[3]?.value ? `当前值：${String(model.orchestration.topMetrics[3].value)}` : '进入调度 / 门禁 / 风险链路'}</span>
+          </Link>
+          <Link className="panel-card overview-entry-card" to="/workspace/artifacts">
+            <p className="panel-kicker">一级域</p>
+            <strong>研究工作区</strong>
+            <span>{model?.workspace.artifactRows.length ? `工件数：${model.workspace.artifactRows.length}` : '进入工件 / 回测 / 比较'}</span>
+          </Link>
+          <Link className="panel-card overview-entry-card" to="/workspace/contracts">
+            <p className="panel-kicker">入口</p>
+            <strong>契约验收</strong>
+            <span>查看公开面验收与入口拓扑</span>
+          </Link>
+        </div>
+      </section>
       {requestedInternal ? (
-        <PanelCard
-          title="方向对齐投射"
-          kicker="internal_only / feedback_projection"
-          meta={model.surface.effective === 'internal' ? '内部高价值反馈摘要' : '仅内部可见'}
-          actions={<Link className="button" to={feedbackLink}>进入对齐页</Link>}
-        >
-          {model.surface.effective === 'internal' && feedbackProjection ? (
-            <>
-              <MetricStrip items={buildFeedbackMetrics(feedbackProjection)} />
-              <div className="empty-block">{safeDisplayValue(feedbackProjection.summary.headline || '暂无高价值反馈')}</div>
-            </>
-          ) : (
-            <div className="empty-block">内部对齐投射暂不可用</div>
-          )}
-        </PanelCard>
+        <section className="overview-rhythm-band" aria-label="overview-rhythm-evidence">
+          <h3>证据</h3>
+        <div data-search-anchor="overview-alignment-projection" id="overview-alignment-projection">
+          <PanelCard
+            title="方向对齐投射"
+            kicker="internal_only / feedback_projection"
+            meta={model.surface.effective === 'internal' ? '内部高价值反馈摘要' : '仅内部可见'}
+            actions={<Link className="button" to={feedbackLink}>进入对齐页</Link>}
+          >
+            {model.surface.effective === 'internal' && feedbackProjection ? (
+              <>
+                <MetricStrip items={buildFeedbackMetrics(feedbackProjection)} />
+                <div className="empty-block">{safeDisplayValue(feedbackProjection.summary.headline || '暂无高价值反馈')}</div>
+              </>
+            ) : (
+              <div className="empty-block">内部对齐投射暂不可用</div>
+            )}
+          </PanelCard>
+        </div>
+        </section>
       ) : null}
     </section>
   );

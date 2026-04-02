@@ -1,12 +1,14 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { findWorkspacePageSection, getWorkspacePageSections } from '../navigation/workspace-sections';
-import type { OperatorAlertLink, TerminalReadModel, ViewFieldSchema } from '../types/contracts';
+import { findWorkspacePageSection, getDefaultWorkspacePageSection, getWorkspacePageSections } from '../navigation/workspace-sections';
+import { buildSearchLink } from '../search/links';
+import type { OperatorAlertLink, PublicAcceptanceResearchAuditCase, TerminalReadModel, ViewFieldSchema } from '../types/contracts';
 import { labelFor } from '../utils/dictionary';
-import { buildTerminalLink, buildWorkspaceLink, type SharedFocusState } from '../utils/focus-links';
+import { buildTerminalLink, buildWorkspaceLink, buildWorkspacePageLink, type SharedFocusState } from '../utils/focus-links';
 import { compactPath, safeDisplayValue, statusTone } from '../utils/formatters';
-import { AccordionCard, Badge, DenseTable, DrilldownSection, JsonBlock, KeyValueGrid, PanelCard, PathText, ValueText } from './ui-kit';
+import { ActionLink, EntityRowButton } from './control-primitives';
+import { AccordionCard, Badge, DenseTable, DrilldownSection, JsonBlock, KeyValueGrid, PanelCard, PathText, ValueText, toneClass } from './ui-kit';
 
 const t = (key: string) => labelFor(key);
 const c = (key: string, labelKey?: string) => ({ key, label: t(labelKey || key) });
@@ -228,21 +230,19 @@ function renderArtifactButton({
   const id = safeDisplayValue(row.id);
   const layer = artifactLayer(row);
   return (
-    <button
+    <EntityRowButton
       key={id}
-      className={`stack-button artifact-button artifact-button-${layer} ${selected ? 'active' : ''}`.trim()}
+      className={`artifact-button artifact-button-${layer} ${selected ? 'active' : ''}`.trim()}
+      title={<ValueText value={titleFor(row)} showRaw={showRawTitle} expandable={false} />}
+      subtitle={labelFor(row.category as string | undefined)}
+      active={selected}
       onClick={() => onSelect(id)}
     >
-      <strong>
-        <ValueText
-          value={titleFor(row)}
-          showRaw={showRawTitle}
-        />
-      </strong>
-      <span>{labelFor(row.category as string | undefined)}</span>
       <Badge value={row.research_decision || row.status} />
-      <PathText value={row.path} showRaw={showRawPath} />
-    </button>
+      <small className="control-entity-row-subtitle">
+        <PathText value={row.path} showRaw={showRawPath} expandable={false} />
+      </small>
+    </EntityRowButton>
   );
 }
 
@@ -265,6 +265,84 @@ function ArtifactHandoffs({
       </div>
     </DrilldownSection>
   );
+}
+
+function buildResearchAuditCaseLinks(
+  cases: PublicAcceptanceResearchAuditCase[] | undefined,
+  idPrefix: string,
+): OperatorAlertLink[] {
+  if (!cases?.length) return [];
+  const links: OperatorAlertLink[] = [];
+  cases.forEach((row, index) => {
+    const query = safeDisplayValue(row.query);
+    const resultArtifact = safeDisplayValue(row.result_artifact);
+    const rawPath = safeDisplayValue(row.raw_path);
+    const searchRoute = safeDisplayValue(row.search_route) || (query !== '—' ? buildSearchLink(query, 'artifact') : '');
+    const workspaceRoute = safeDisplayValue(row.workspace_route)
+      || (resultArtifact !== '—' ? buildWorkspaceLink('artifacts', { artifact: resultArtifact }) : '');
+    const rawRoute = rawPath !== '—' ? buildWorkspaceLink('raw', { artifact: rawPath }) : '';
+    if (searchRoute) {
+      links.push({
+        id: `${idPrefix}-${index}-search`,
+        label: `检索 / ${query !== '—' ? query : safeDisplayValue(row.case_id)}`,
+        to: searchRoute,
+      });
+    }
+    if (workspaceRoute) {
+      links.push({
+        id: `${idPrefix}-${index}-artifact`,
+        label: `工件 / ${resultArtifact !== '—' ? resultArtifact : safeDisplayValue(row.case_id)}`,
+        to: workspaceRoute,
+      });
+    }
+    if (rawRoute) {
+      links.push({
+        id: `${idPrefix}-${index}-raw`,
+        label: `原始层 / ${rawPath !== '—' ? compactPath(rawPath) : safeDisplayValue(row.case_id)}`,
+        to: rawRoute,
+      });
+    }
+  });
+  return links;
+}
+
+function aggregateResearchAuditCasesFromChecks(
+  checks: Array<{ research_audit_cases?: PublicAcceptanceResearchAuditCase[] }>,
+): PublicAcceptanceResearchAuditCase[] {
+  const seen = new Set<string>();
+  return checks.flatMap((row) => row.research_audit_cases || []).filter((row) => {
+    const key = [
+      safeDisplayValue(row.case_id),
+      safeDisplayValue(row.search_route),
+      safeDisplayValue(row.workspace_route),
+      safeDisplayValue(row.raw_path),
+    ].join('|');
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function preferredContractsAccordionId(rows: Array<{ id?: string }>, preferredId: string): string {
+  const preferred = rows.find((row) => safeDisplayValue(row.id) === preferredId);
+  if (preferred) return safeDisplayValue(preferred.id);
+  return safeDisplayValue(rows[0]?.id);
+}
+
+function normalizeAcceptanceRouteLink(route: string | undefined): string {
+  const raw = safeDisplayValue(route);
+  if (raw.startsWith('#/')) return raw.slice(1);
+  return raw;
+}
+
+function preferredFeedbackEventId(
+  feedback: TerminalReadModel['feedback']['projection'] | null | undefined,
+): string {
+  const actionFeedbackId = safeDisplayValue(feedback?.actions.find((row) => safeDisplayValue(row.feedback_id) !== '—')?.feedback_id);
+  if (actionFeedbackId !== '—' && feedback?.events.some((row) => safeDisplayValue(row.feedback_id) === actionFeedbackId)) {
+    return actionFeedbackId;
+  }
+  return safeDisplayValue(feedback?.events[0]?.feedback_id);
 }
 
 export function WorkspacePanels({
@@ -345,11 +423,14 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
 
   const selectedId = useMemo(() => {
     if (focusedId && filteredRows.some((row) => safeDisplayValue(row.id) === focusedId)) return focusedId;
+    const primary = primaryRows[activeGroup];
+    if (!focusedId && !search.trim() && toneFilter === 'all' && primary && filteredRows.some((row) => safeDisplayValue(row.id) === safeDisplayValue(primary.id))) {
+      return safeDisplayValue(primary.id);
+    }
     if (filteredRows.length) return safeDisplayValue(filteredRows[0]?.id);
     if (focusedId && focusedRowGroup === activeGroup) return focusedId;
-    const primary = primaryRows[activeGroup];
     return primary ? safeDisplayValue(primary.id) : '';
-  }, [focusedId, filteredRows, focusedRowGroup, activeGroup, primaryRows]);
+  }, [focusedId, filteredRows, focusedRowGroup, activeGroup, primaryRows, search, toneFilter]);
 
   useEffect(() => {
     const next = new URLSearchParams(searchParams);
@@ -445,7 +526,9 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
           : []),
       ]
     : [];
-  const focusLinks = handoffLinks.length ? handoffLinks : fallbackFocusLinks;
+  const focusLinks = [...handoffLinks, ...fallbackFocusLinks].filter(
+    (link, index, rows) => rows.findIndex((candidate) => candidate.to === link.to) === index,
+  );
 
   const setArtifactQuery = (artifactId: string | undefined, overrides: Record<string, string | undefined> = {}) => {
     const next = new URLSearchParams(searchParams);
@@ -491,7 +574,9 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
 
   return (
     <div className="workspace-grid artifacts-grid">
-      <div className="workspace-left-rail">
+      <section className="workspace-left-rail workspace-rhythm-band workspace-rhythm-state" aria-label="workspace-rhythm-state">
+          <h3>当前状态</h3>
+        <div data-search-anchor="workspace-artifacts-map-panel" id="workspace-artifacts-map-panel">
         <PanelCard title={t('workspace_artifacts_map_title')} kicker={t('workspace_artifacts_map_kicker')} meta={t('workspace_artifacts_map_meta')}>
           <div className="stack-list">
             {ARTIFACT_GROUP_ORDER.map((group) => {
@@ -512,7 +597,9 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             })}
           </div>
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="workspace-artifacts-status-panel" id="workspace-artifacts-status-panel">
         <PanelCard title={t('workspace_artifacts_status_title')} kicker={t('workspace_artifacts_status_kicker')} meta={`${artifactGroupLabel(activeGroup)} ｜ ${t('workspace_artifacts_status_meta')}`}>
           <div className="stack-list">
             <button className={`stack-button artifact-status-button ${toneFilter === 'all' ? 'active' : ''}`.trim()} onClick={() => setArtifactQuery(selectedId || undefined, { tone: undefined })}>
@@ -531,7 +618,9 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             ))}
           </div>
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="workspace-artifacts-search-panel" id="workspace-artifacts-search-panel">
         <PanelCard title={t('workspace_artifacts_search_panel_title')} kicker={t('workspace_artifacts_search_panel_kicker')} meta={t('workspace_artifacts_search_panel_meta')}>
           <div className="chip-row artifact-search-scope-row">
             {(['title', 'artifact', 'path'] as ArtifactSearchScope[]).map((scope) => (
@@ -551,124 +640,145 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             placeholder={t('workspace_artifacts_search_placeholder')}
           />
         </PanelCard>
+        </div>
+      </section>
 
+      <div className="workspace-rhythm-main">
+        <section className="workspace-rhythm-band workspace-rhythm-focus" aria-label="workspace-rhythm-focus">
+          <h3>当前焦点</h3>
+        <div data-search-anchor="workspace-artifacts-focus-panel" id="workspace-artifacts-focus-panel">
         <PanelCard title={t('workspace_artifacts_focus_title')} kicker={t('workspace_artifacts_focus_kicker')} meta={t('workspace_artifacts_focus_meta')}>
           {selectedRow ? (
-            <>
-              <KeyValueGrid
-                rows={[
-                  { ...c('artifact_title', 'workspace_artifacts_focus_field_title'), value: artifactTitle(selectedRow) },
-                  { ...c('artifact_group', 'workspace_artifacts_focus_field_group'), value: artifactGroupLabel(activeGroup) },
-                  { ...c('category', 'category'), value: selectedRow.category || '—' },
-                  { ...c('status', 'status'), value: selectedRow.research_decision || selectedRow.status || '—', kind: 'badge' as const },
-                  { ...c('path', 'path'), value: selectedArtifactPath, kind: 'path' as const, showRaw: true },
-                  ...(selectedPayloadKey && selectedPayloadKey !== selectedRowId
-                    ? [{ ...c('payload_key', 'payload_key'), value: selectedPayloadKey }]
-                    : []),
-                ]}
-              />
-              <div className="button-row workspace-handoff-links">
-                {focusLinks.map((link) => (
-                  <Link key={link.id} className={`button ${link.tone === 'negative' ? 'button-primary' : ''}`.trim()} to={link.to}>
-                    {link.label}
-                  </Link>
-                ))}
-              </div>
-            </>
+            <KeyValueGrid
+              rows={[
+                { ...c('artifact_title', 'workspace_artifacts_focus_field_title'), value: artifactTitle(selectedRow), critical: true },
+                { ...c('artifact_group', 'workspace_artifacts_focus_field_group'), value: artifactGroupLabel(activeGroup) },
+                { ...c('category', 'category'), value: selectedRow.category || '—' },
+                { ...c('status', 'status'), value: selectedRow.research_decision || selectedRow.status || '—', kind: 'badge' as const },
+                { ...c('path', 'path'), value: selectedArtifactPath, kind: 'path' as const, showRaw: true },
+                ...(selectedPayloadKey && selectedPayloadKey !== selectedRowId
+                  ? [{ ...c('payload_key', 'payload_key'), value: selectedPayloadKey }]
+                  : []),
+              ]}
+            />
           ) : (
             <div className="empty-block">{t('workspace_artifacts_focus_empty')}</div>
           )}
         </PanelCard>
-      </div>
-
-      <PanelCard
-        title={t('workspace_artifacts_target_pool_title')}
-        kicker={t('workspace_artifacts_target_pool_kicker')}
-        meta={`${artifactGroupLabel(activeGroup)} ｜ ${t('workspace_artifacts_filtered_prefix')} ${filteredRows.length} ${t('workspace_artifacts_target_pool_meta_suffix')}`}
-      >
-        <div className="scroll-region">
-          <DrilldownSection
-            title={artifactGroupLabel(activeGroup)}
-            summary={`${filteredRows.length} ${labelFor('unit_items')} ｜ ${t(`workspace_artifacts_map_${activeGroup}_summary`)}`}
-            className={`artifact-layer-section ${artifactGroupClass(activeGroup)}`}
-            defaultOpen
-          >
-            <div className="stack-list">
-              {filteredRows.length ? filteredRows.map((row) => renderArtifactButton({
-                row,
-                selected: selectedId === safeDisplayValue(row.id),
-                onSelect: (id) => setArtifactQuery(id),
-                showRawTitle: view.list.titleField.showRaw ?? false,
-                showRawPath: view.list.pathField.showRaw ?? false,
-                titleFor: artifactTitle,
-              })) : <div className="empty-block">{t('workspace_artifacts_no_matches')}</div>}
-            </div>
-          </DrilldownSection>
         </div>
-      </PanelCard>
+        </section>
 
-      <PanelCard
-        title={(
-          <ValueText
-            value={artifactTitle(selectedRow)}
-            showRaw={view.inspector.titleField.showRaw}
-          />
-        )}
-        kicker={t('workspace_artifacts_inspector_kicker')}
-        meta={(
-          <PathText
-            value={selectedRow?.path || t('workspace_artifacts_unselected')}
-            showRaw={view.inspector.pathField.showRaw}
-          />
-        )}
-      >
-        {selectedRow ? (
-          <>
-            <DrilldownSection title={t('workspace_artifacts_meta_title')} summary={labelFor(safeDisplayValue(selectedRow.status || selectedRow.research_decision))} defaultOpen>
-              <KeyValueGrid
-                rows={[
-                  ...bindFieldValues(view.metaFields, {
-                    category: selectedRow.category || '—',
-                    status: selectedRow.status || selectedRow.research_decision || '—',
-                    change_class: selectedRow.change_class || '—',
-                    generated_at_utc: selectedRow.generated_at_utc || '—',
-                    payload_key: selectedRow.payload_key || '—',
-                  }),
-                  { ...c('path'), value: compactPath(selectedArtifactPath) },
-                ]}
-              />
-            </DrilldownSection>
-            <DrilldownSection title={t('workspace_artifacts_top_keys_title')} summary={Array.isArray(selectedRow.top_level_keys) ? `${selectedRow.top_level_keys.length} ${t('workspace_summary_keys_suffix')}` : t('workspace_summary_none')} defaultOpen>
-              <div className="empty-block">
-                {Array.isArray(selectedRow.top_level_keys) && selectedRow.top_level_keys.length ? (
-                  selectedRow.top_level_keys.map((key, index) => (
-                    <span key={`${key}-${index}`}>
-                      {index > 0 ? ' ｜ ' : null}
-                      <ValueText value={key} showRaw={view.topLevelKeyField.showRaw} />
-                    </span>
-                  ))
-                ) : t('workspace_artifacts_no_keys')}
+        <section className="workspace-rhythm-band workspace-rhythm-action" aria-label="workspace-rhythm-action">
+          <h3>下一步</h3>
+        <PanelCard title="下一步动作" kicker="handoff / action" meta={selectedRow ? artifactTitle(selectedRow) : t('workspace_artifacts_focus_empty')}>
+          {selectedRow ? (
+            <div className="button-row workspace-handoff-links">
+              {focusLinks.map((link) => (
+                <Link key={link.id} className={`button ${link.tone === 'negative' ? 'button-primary' : ''}`.trim()} to={link.to}>
+                  {link.label}
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-block">{t('workspace_artifacts_focus_empty')}</div>
+          )}
+        </PanelCard>
+        </section>
+
+        <section className="workspace-rhythm-band workspace-rhythm-evidence" aria-label="workspace-rhythm-evidence">
+          <h3>证据</h3>
+        <div data-search-anchor="workspace-artifacts-target-pool" id="workspace-artifacts-target-pool">
+        <PanelCard
+          title={t('workspace_artifacts_target_pool_title')}
+          kicker={t('workspace_artifacts_target_pool_kicker')}
+          meta={`${artifactGroupLabel(activeGroup)} ｜ ${t('workspace_artifacts_filtered_prefix')} ${filteredRows.length} ${t('workspace_artifacts_target_pool_meta_suffix')}`}
+        >
+          <div className="scroll-region">
+            <DrilldownSection
+              title={artifactGroupLabel(activeGroup)}
+              summary={`${filteredRows.length} ${labelFor('unit_items')} ｜ ${t(`workspace_artifacts_map_${activeGroup}_summary`)}`}
+              className={`artifact-layer-section ${artifactGroupClass(activeGroup)}`}
+              defaultOpen
+            >
+              <div className="stack-list">
+                {filteredRows.length ? filteredRows.map((row) => renderArtifactButton({
+                  row,
+                  selected: selectedId === safeDisplayValue(row.id),
+                  onSelect: (id) => setArtifactQuery(id),
+                  showRawTitle: view.list.titleField.showRaw ?? false,
+                  showRawPath: view.list.pathField.showRaw ?? false,
+                  titleFor: artifactTitle,
+                })) : <div className="empty-block">{t('workspace_artifacts_no_matches')}</div>}
               </div>
             </DrilldownSection>
-            <DrilldownSection title={t('workspace_artifacts_payload_title')} summary={`${Object.keys(payloadRecord).length} ${t('workspace_summary_payload_fields_suffix')}`} defaultOpen>
-              {Object.keys(payloadRecord).length ? (
+          </div>
+        </PanelCard>
+        </div>
+
+        <PanelCard
+          title={(
+            <ValueText
+              value={artifactTitle(selectedRow)}
+              showRaw={view.inspector.titleField.showRaw}
+            />
+          )}
+          kicker={t('workspace_artifacts_inspector_kicker')}
+          meta={(
+            <PathText
+              value={selectedRow?.path || t('workspace_artifacts_unselected')}
+              showRaw={view.inspector.pathField.showRaw}
+            />
+          )}
+        >
+          {selectedRow ? (
+            <>
+              <DrilldownSection title={t('workspace_artifacts_meta_title')} summary={labelFor(safeDisplayValue(selectedRow.status || selectedRow.research_decision))} defaultOpen>
                 <KeyValueGrid
-                  rows={Object.entries(payloadRecord)
-                    .slice(0, 16)
-                    .map(([key, value]) => ({ ...view.payloadField, key, label: labelFor(key), value }))}
+                  rows={[
+                    ...bindFieldValues(view.metaFields, {
+                      category: selectedRow.category || '—',
+                      status: selectedRow.status || selectedRow.research_decision || '—',
+                      change_class: selectedRow.change_class || '—',
+                      generated_at_utc: selectedRow.generated_at_utc || '—',
+                      payload_key: selectedRow.payload_key || '—',
+                    }),
+                    { ...c('path'), value: compactPath(selectedArtifactPath) },
+                  ]}
                 />
-              ) : (
-                <div className="empty-block">{t('workspace_artifacts_no_payload')}</div>
-              )}
-            </DrilldownSection>
-            <DrilldownSection title={t('workspace_artifacts_raw_title')} summary={t('workspace_artifacts_final_fallback')} defaultOpen={false}>
-              <JsonBlock value={payload || selectedRow} />
-            </DrilldownSection>
-          </>
-        ) : (
-          <div className="empty-block">{t('workspace_artifacts_no_matches')}</div>
-        )}
-      </PanelCard>
+              </DrilldownSection>
+              <DrilldownSection title={t('workspace_artifacts_top_keys_title')} summary={Array.isArray(selectedRow.top_level_keys) ? `${selectedRow.top_level_keys.length} ${t('workspace_summary_keys_suffix')}` : t('workspace_summary_none')} defaultOpen>
+                <div className="empty-block">
+                  {Array.isArray(selectedRow.top_level_keys) && selectedRow.top_level_keys.length ? (
+                    selectedRow.top_level_keys.map((key, index) => (
+                      <span key={`${key}-${index}`}>
+                        {index > 0 ? ' ｜ ' : null}
+                        <ValueText value={key} showRaw={view.topLevelKeyField.showRaw} />
+                      </span>
+                    ))
+                  ) : t('workspace_artifacts_no_keys')}
+                </div>
+              </DrilldownSection>
+              <DrilldownSection title={t('workspace_artifacts_payload_title')} summary={`${Object.keys(payloadRecord).length} ${t('workspace_summary_payload_fields_suffix')}`} defaultOpen>
+                {Object.keys(payloadRecord).length ? (
+                  <KeyValueGrid
+                    rows={Object.entries(payloadRecord)
+                      .slice(0, 16)
+                      .map(([key, value]) => ({ ...view.payloadField, key, label: labelFor(key), value }))}
+                  />
+                ) : (
+                  <div className="empty-block">{t('workspace_artifacts_no_payload')}</div>
+                )}
+              </DrilldownSection>
+              <DrilldownSection title={t('workspace_artifacts_raw_title')} summary={t('workspace_artifacts_final_fallback')} defaultOpen={false}>
+                <JsonBlock value={payload || selectedRow} />
+              </DrilldownSection>
+            </>
+          ) : (
+            <div className="empty-block">{t('workspace_artifacts_no_matches')}</div>
+          )}
+        </PanelCard>
+        </section>
+      </div>
     </div>
   );
 }
@@ -703,14 +813,15 @@ function AlignmentWorkspace({ model, pageSectionId }: { model: TerminalReadModel
   const pageSections = useMemo(() => getWorkspacePageSections('alignment', model), [model]);
   const feedback = model.feedback.projection;
   const isInternal = model.surface.requested === 'internal' && model.surface.effective === 'internal';
-  const [openEventId, setOpenEventId] = useState(safeDisplayValue(feedback?.events[0]?.feedback_id));
+  const defaultEventId = preferredFeedbackEventId(feedback);
+  const [openEventId, setOpenEventId] = useState(defaultEventId);
 
   useEffect(() => {
-    setOpenEventId(safeDisplayValue(feedback?.events[0]?.feedback_id));
-  }, [feedback?.events]);
+    setOpenEventId(defaultEventId);
+  }, [defaultEventId]);
 
   useEffect(() => {
-    const target = findWorkspacePageSection('alignment', model, pageSectionId) || (!pageSectionId ? pageSections[0] : null);
+    const target = findWorkspacePageSection('alignment', model, pageSectionId) || (!pageSectionId ? getDefaultWorkspacePageSection('alignment', model) : null);
     if (!target) return;
     const handle = window.requestAnimationFrame(() => {
       scrollToWorkspaceSection(target.id);
@@ -843,7 +954,7 @@ function BacktestsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
   const comparisonCount = model.labReview.comparisonRows.length;
 
   useEffect(() => {
-    const target = findWorkspacePageSection('backtests', model, pageSectionId) || (!pageSectionId ? pageSections[0] : null);
+    const target = findWorkspacePageSection('backtests', model, pageSectionId) || (!pageSectionId ? getDefaultWorkspacePageSection('backtests', model) : null);
     if (!target) return;
     const handle = window.requestAnimationFrame(() => {
       scrollToWorkspaceSection(target.id);
@@ -897,6 +1008,7 @@ function BacktestsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
 
 function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalReadModel; focus?: WorkspaceFocus; pageSectionId?: string }) {
   const view = model.view.workspace.contracts;
+  const [searchParams, setSearchParams] = useSearchParams();
   const surfaceContracts = useMemo(
     () => [...model.workspace.surfaceContracts].sort((left, right) => surfaceOrder(left.id) - surfaceOrder(right.id)),
     [model.workspace.surfaceContracts],
@@ -906,22 +1018,25 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
   const interfaceGroups = useMemo(() => buildInterfaceGroups(model.workspace.interfaces), [model.workspace.interfaces]);
   const internalSurface = model.surface.effective === 'internal';
   const pageSections = useMemo(() => getWorkspacePageSections('contracts', model), [model]);
+  const defaultAcceptanceCheckId = preferredContractsAccordionId(publicAcceptance.checks, 'workspace_routes_smoke');
+  const defaultAcceptanceSubcommandId = preferredContractsAccordionId(publicAcceptance.subcommands, 'workspace_routes_smoke');
+  const defaultSourceHeadId = preferredContractsAccordionId(model.workspace.sourceHeads, 'operator_panel');
   const [openAccordion, setOpenAccordion] = useState({
-    checks: safeDisplayValue(publicAcceptance.checks[0]?.id),
-    subcommands: safeDisplayValue(publicAcceptance.subcommands[0]?.id),
-    sourceHeads: safeDisplayValue(model.workspace.sourceHeads[0]?.id),
+    checks: defaultAcceptanceCheckId,
+    subcommands: defaultAcceptanceSubcommandId,
+    sourceHeads: defaultSourceHeadId,
   });
 
   useEffect(() => {
     setOpenAccordion((current) => ({
-      checks: current.checks || safeDisplayValue(publicAcceptance.checks[0]?.id),
-      subcommands: current.subcommands || safeDisplayValue(publicAcceptance.subcommands[0]?.id),
-      sourceHeads: current.sourceHeads || safeDisplayValue(model.workspace.sourceHeads[0]?.id),
+      checks: current.checks || defaultAcceptanceCheckId,
+      subcommands: current.subcommands || defaultAcceptanceSubcommandId,
+      sourceHeads: current.sourceHeads || defaultSourceHeadId,
     }));
-  }, [model.workspace.sourceHeads, publicAcceptance.checks, publicAcceptance.subcommands]);
+  }, [defaultAcceptanceCheckId, defaultAcceptanceSubcommandId, defaultSourceHeadId]);
 
   useEffect(() => {
-    const target = findWorkspacePageSection('contracts', model, pageSectionId) || (!pageSectionId ? pageSections[0] : null);
+    const target = findWorkspacePageSection('contracts', model, pageSectionId) || (!pageSectionId ? getDefaultWorkspacePageSection('contracts', model) : null);
     if (!target) return;
     if (target.accordionGroup === 'contracts-acceptance-checks' && target.accordionItemId) {
       setOpenAccordion((current) => ({ ...current, checks: target.accordionItemId || current.checks }));
@@ -1008,7 +1123,92 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
       >
         {publicAcceptance.summary ? (
           <>
+            <div className="contracts-acceptance-status-strip" data-testid="contracts-acceptance-status-strip">
+              <div className="metric-strip">
+                {publicAcceptance.checks.map((row) => {
+                  const rowId = safeDisplayValue(row.id);
+                  const active = openAccordion.checks === rowId;
+                  const subcommandTarget = publicAcceptance.subcommands.find((item) => safeDisplayValue(item.id) === rowId);
+                  const explicitCheckRoute = safeDisplayValue(row.inspector_route);
+                  const explicitSubcommandRoute = safeDisplayValue(subcommandTarget?.inspector_route);
+                  const checkRoute = explicitCheckRoute !== '—'
+                    ? explicitCheckRoute
+                    : buildWorkspacePageLink('contracts', {}, `contracts-check-${rowId}`);
+                  const subcommandRoute = explicitSubcommandRoute !== '—'
+                    ? explicitSubcommandRoute
+                    : buildWorkspacePageLink('contracts', {}, `contracts-subcommand-${rowId}`);
+                  const researchAuditTarget = (row.research_audit_cases || [])[0];
+                  const screenshotActionVisible = rowId === 'topology_smoke' && Boolean(
+                    row.root_overview_screenshot_path
+                    || row.pages_overview_screenshot_path
+                    || row.root_contracts_screenshot_path
+                    || row.pages_contracts_screenshot_path,
+                  );
+                  return (
+                    <article
+                      key={row.id}
+                      className={`metric-tile contracts-acceptance-status-card ${toneClass(statusTone(row.status))} ${active ? 'active' : ''}`.trim()}
+                    >
+                      <button
+                        type="button"
+                        className="contracts-acceptance-status-button"
+                        onClick={() => {
+                          const next = new URLSearchParams(searchParams);
+                          next.set('page_section', `contracts-check-${rowId}`);
+                          setSearchParams(next, { replace: true });
+                          setOpenAccordion((current) => ({ ...current, checks: rowId }));
+                          window.requestAnimationFrame(() => {
+                            scrollToWorkspaceSection(`contracts-check-${rowId}`);
+                          });
+                        }}
+                      >
+                        <span className="metric-label">{row.label}</span>
+                        <strong className="metric-value">{labelFor(safeDisplayValue(row.status || '—'))}</strong>
+                        <span className="metric-hint">{safeDisplayValue(row.generated_at_utc || row.headline || row.report_path)}</span>
+                      </button>
+                      {subcommandTarget ? (
+                        <div className="button-row contracts-acceptance-status-actions">
+                          {screenshotActionVisible ? (
+                            <ActionLink to={normalizeAcceptanceRouteLink(checkRoute)}>
+                              {`${row.label} / 查看截图`}
+                            </ActionLink>
+                          ) : null}
+                          {rowId !== 'topology_smoke' && researchAuditTarget?.search_route ? (
+                            <ActionLink to={normalizeAcceptanceRouteLink(researchAuditTarget.search_route)}>
+                              {`${row.label} / 查看研究审计`}
+                            </ActionLink>
+                          ) : null}
+                          <ActionLink to={normalizeAcceptanceRouteLink(subcommandRoute)}>
+                            {`${row.label} / 查看子命令`}
+                          </ActionLink>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
             <SectionAnchor id="contracts-acceptance-summary">
+              {(() => {
+                const aggregatedResearchAuditCases = aggregateResearchAuditCasesFromChecks(publicAcceptance.checks);
+                const aggregatedResearchAuditQueries = aggregatedResearchAuditCases
+                  .map((row) => safeDisplayValue(row.query))
+                  .filter((value) => value && value !== '—')
+                  .join(' ｜ ');
+                const aggregatedResearchAuditArtifacts = aggregatedResearchAuditCases
+                  .map((row) => safeDisplayValue(row.result_artifact))
+                  .filter((value) => value && value !== '—')
+                  .join(' ｜ ');
+                const aggregatedResearchAuditSearchRoute = aggregatedResearchAuditCases
+                  .map((row) => safeDisplayValue(row.search_route))
+                  .find((value) => value && value !== '—');
+                const summaryResearchAuditValues = {
+                  research_audit_search_route: aggregatedResearchAuditSearchRoute,
+                  research_audit_cases_available: aggregatedResearchAuditCases.length ? true : undefined,
+                  research_audit_queries: aggregatedResearchAuditQueries || undefined,
+                  research_audit_result_artifacts: aggregatedResearchAuditArtifacts || undefined,
+                };
+                return (
               <DrilldownSection
                 title={t('workspace_contracts_acceptance_summary_title')}
                 summary={`${safeDisplayValue(publicAcceptance.summary.status)} ｜ ${safeDisplayValue(publicAcceptance.summary.generated_at_utc)}`}
@@ -1024,25 +1224,42 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
                     c('artifact_path', 'path'),
                     c('topology_status', 'workspace_contracts_acceptance_topology_status'),
                     c('workspace_status', 'workspace_contracts_acceptance_workspace_status'),
+                    c('graph_home_status', 'workspace_contracts_acceptance_graph_home_status'),
                     c('topology_generated_at_utc', 'workspace_contracts_acceptance_topology_generated_at'),
                     c('workspace_generated_at_utc', 'workspace_contracts_acceptance_workspace_generated_at'),
+                    c('graph_home_generated_at_utc', 'workspace_contracts_acceptance_graph_home_generated_at'),
                     c('frontend_public', 'workspace_contracts_acceptance_frontend_public'),
                     c('root_public_entry', 'workspace_contracts_acceptance_root_header'),
                     c('public_snapshot_fetch_count', 'workspace_contracts_acceptance_public_fetches'),
                     c('internal_snapshot_fetch_count', 'workspace_contracts_acceptance_internal_fetches'),
                     c('orderflow_filter_route', 'workspace_contracts_acceptance_orderflow_route'),
+                    c('orderflow_source_available', 'workspace_contracts_acceptance_orderflow_source_available'),
                     c('orderflow_active_artifact', 'workspace_contracts_acceptance_orderflow_active_artifact'),
                     c('orderflow_visible_artifacts', 'workspace_contracts_acceptance_orderflow_visible_artifacts'),
+                    c('research_audit_search_route', 'workspace_contracts_acceptance_research_audit_route'),
+                    c('research_audit_cases_available', 'workspace_contracts_acceptance_research_audit_cases_available'),
+                    c('research_audit_queries', 'workspace_contracts_acceptance_research_audit_queries'),
+                    c('research_audit_result_artifacts', 'workspace_contracts_acceptance_research_audit_artifacts'),
                     c('root_contracts_screenshot_path', 'workspace_contracts_acceptance_root_contracts_screenshot'),
                     c('pages_contracts_screenshot_path', 'workspace_contracts_acceptance_pages_contracts_screenshot'),
                   ].map((field) => ({
                     ...field,
                     kind: field.key.includes('path') ? 'path' : undefined,
                     showRaw: field.key.includes('path'),
-                    value: publicAcceptance.summary?.[field.key as keyof typeof publicAcceptance.summary] ?? '—',
+                    value: (
+                      field.key in summaryResearchAuditValues
+                        ? summaryResearchAuditValues[field.key as keyof typeof summaryResearchAuditValues]
+                        : publicAcceptance.summary?.[field.key as keyof typeof publicAcceptance.summary]
+                    ) ?? '—',
                   }))}
                 />
+                <ArtifactHandoffs
+                  links={buildResearchAuditCaseLinks(aggregatedResearchAuditCases, 'contracts-acceptance-summary-audit')}
+                  title="穿透层 1.5 / 研究审计直达"
+                />
               </DrilldownSection>
+                );
+              })()}
             </SectionAnchor>
 
             <SectionAnchor id="contracts-acceptance-checks">
@@ -1082,8 +1299,19 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
                       { ...c('public_snapshot_fetch_count', 'workspace_contracts_acceptance_public_fetches'), value: row.public_snapshot_fetch_count ?? '—', kind: 'number' as const },
                       { ...c('internal_snapshot_fetch_count', 'workspace_contracts_acceptance_internal_fetches'), value: row.internal_snapshot_fetch_count ?? '—', kind: 'number' as const },
                       { ...c('orderflow_filter_route', 'workspace_contracts_acceptance_orderflow_route'), value: row.orderflow_filter_route || '—', kind: 'path' as const, showRaw: true },
+                      { ...c('orderflow_source_available', 'workspace_contracts_acceptance_orderflow_source_available'), value: row.orderflow_source_available ?? '—' },
                       { ...c('orderflow_active_artifact', 'workspace_contracts_acceptance_orderflow_active_artifact'), value: row.orderflow_active_artifact || '—' },
                       { ...c('orderflow_visible_artifacts', 'workspace_contracts_acceptance_orderflow_visible_artifacts'), value: row.orderflow_visible_artifacts || '—', showRaw: true },
+                      { ...c('research_audit_search_route', 'workspace_contracts_acceptance_research_audit_route'), value: row.research_audit_search_route || '—', kind: 'path' as const, showRaw: true },
+                      { ...c('research_audit_cases_available', 'workspace_contracts_acceptance_research_audit_cases_available'), value: row.research_audit_cases_available ?? '—' },
+                      { ...c('research_audit_queries', 'workspace_contracts_acceptance_research_audit_queries'), value: row.research_audit_queries || '—', showRaw: true },
+                      { ...c('research_audit_result_artifacts', 'workspace_contracts_acceptance_research_audit_artifacts'), value: row.research_audit_result_artifacts || '—', showRaw: true },
+                      { ...c('graph_home_resolved_route', 'workspace_contracts_acceptance_graph_home_route'), value: row.graph_home_resolved_route || '—', kind: 'path' as const, showRaw: true },
+                      { ...c('graph_home_default_center', 'workspace_contracts_acceptance_graph_home_center'), value: row.graph_home_default_center || '—' },
+                      { ...c('graph_home_terminal_link_href', 'workspace_contracts_acceptance_graph_home_terminal_link'), value: row.graph_home_terminal_link_href || '—', kind: 'path' as const, showRaw: true },
+                      { ...c('graph_home_workspace_link_href', 'workspace_contracts_acceptance_graph_home_workspace_link'), value: row.graph_home_workspace_link_href || '—', kind: 'path' as const, showRaw: true },
+                      { ...c('graph_home_search_link_href', 'workspace_contracts_acceptance_graph_home_search_link'), value: row.graph_home_search_link_href || '—', kind: 'path' as const, showRaw: true },
+                      { ...c('graph_home_research_audit_case_ids', 'workspace_contracts_acceptance_graph_home_cases'), value: row.graph_home_research_audit_case_ids || '—', showRaw: true },
                       { ...c('failure_reason', 'failure_reason'), value: row.failure_reason || '—' },
                     ];
                     return (
@@ -1100,6 +1328,10 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
                           }))}
                         >
                           <KeyValueGrid rows={detailRows} />
+                          <ArtifactHandoffs
+                            links={buildResearchAuditCaseLinks(row.research_audit_cases, `contracts-check-${safeDisplayValue(row.id)}-audit`)}
+                            title="研究审计直达"
+                          />
                         </AccordionCard>
                       </SectionAnchor>
                     );
@@ -1234,8 +1466,8 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
                 <SectionAnchor id={`contracts-source-head-${safeDisplayValue(row.id)}`} key={String(row.id)}>
                   <AccordionCard
                     id={`contracts-source-head-${safeDisplayValue(row.id)}`}
-                    title={<ValueText value={safeDisplayValue(row.label || row.id)} showRaw={view.sourceHeadSummaryFields.label.showRaw} />}
-                    summary={<ValueText value={safeDisplayValue(row.summary || row.research_decision || row.status)} showRaw={view.sourceHeadSummaryFields.summary.showRaw} />}
+                    title={<ValueText value={safeDisplayValue(row.label || row.id)} showRaw={view.sourceHeadSummaryFields.label.showRaw} expandable={false} />}
+                    summary={<ValueText value={safeDisplayValue(row.summary || row.research_decision || row.status)} showRaw={view.sourceHeadSummaryFields.summary.showRaw} expandable={false} />}
                     meta={<Badge value={row.status as string | undefined} />}
                     open={openAccordion.sourceHeads === safeDisplayValue(row.id)}
                     onToggle={() => setOpenAccordion((current) => ({
@@ -1324,7 +1556,7 @@ function RawWorkspace({ model, focus, pageSectionId }: { model: TerminalReadMode
   const pageSections = useMemo(() => getWorkspacePageSections('raw', model), [model]);
 
   useEffect(() => {
-    const target = findWorkspacePageSection('raw', model, pageSectionId) || (!pageSectionId ? pageSections[0] : null);
+    const target = findWorkspacePageSection('raw', model, pageSectionId) || (!pageSectionId ? getDefaultWorkspacePageSection('raw', model) : null);
     if (!target) return;
     const handle = window.requestAnimationFrame(() => {
       scrollToWorkspaceSection(target.id);

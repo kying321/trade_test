@@ -15,6 +15,7 @@ import type {
   OperatorAlertLink,
   OperatorAlertSection,
   PublicAcceptanceCheckRow,
+  PublicAcceptanceResearchAuditCase,
   PublicAcceptanceSubcommandRow,
   PublicAcceptanceSummary,
   ResearchCandidateRow,
@@ -26,6 +27,7 @@ import type {
   ViewDrilldownSchema,
   ViewFieldSchema,
 } from '../types/contracts';
+import { buildSearchLink } from '../search/links';
 import { resolveDisplayIntent } from '../utils/display-policy';
 import { ageMinutes, freshnessState, safeDisplayValue, statusTone, toArray, toRecord } from '../utils/formatters';
 import { buildDrilldownRowId, buildTerminalFocusKey, buildTerminalLink, buildWorkspaceLink } from '../utils/focus-links';
@@ -41,6 +43,16 @@ function artifactEntry(snapshot: DashboardSnapshot, id: string): ArtifactPayload
 
 function artifactPayload(snapshot: DashboardSnapshot, id: string): Dict {
   return toRecord<Dict>(artifactEntry(snapshot, id)?.payload) || {};
+}
+
+function eventArtifact(snapshot: DashboardSnapshot, id: string): Dict {
+  return toRecord<Dict>(artifactPayload(snapshot, id)) || {};
+}
+
+function normalizedString(value: unknown): string | undefined {
+  const text = safeDisplayValue(value);
+  if (!text || text === '—') return undefined;
+  return text;
 }
 
 function nested(source: unknown, path: string): unknown {
@@ -129,6 +141,7 @@ function artifactAlertLinks(options: {
   artifact?: unknown;
   rawArtifact?: unknown;
   includeContracts?: boolean;
+  allowRaw?: boolean;
   terminalFocus?: { surface: SurfaceView['effective']; panel?: string; section?: string; row?: string };
   tone?: OperatorAlertLink['tone'];
 }): OperatorAlertLink[] {
@@ -138,7 +151,7 @@ function artifactAlertLinks(options: {
   if (artifact !== '—') {
     links.push(alertLink(`${options.idPrefix}-artifact`, 'alert_link_view_artifact', buildWorkspaceLink('artifacts', { artifact }), options.tone));
   }
-  if (rawArtifact !== '—') {
+  if (options.allowRaw && rawArtifact !== '—') {
     links.push(alertLink(`${options.idPrefix}-raw`, 'alert_link_view_raw', buildWorkspaceLink('raw', { artifact: rawArtifact }), options.tone));
   }
   if (options.terminalFocus?.panel) {
@@ -315,7 +328,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
             ),
           ],
           links: [
-            alertLink('live-path-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'negative'),
+            ...(showRawPaths ? [alertLink('live-path-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'negative')] : []),
             alertLink('live-path-terminal', 'alert_link_view_terminal', buildTerminalLink(surface.effective, {
               panel: 'orchestration',
               section: 'guards',
@@ -381,6 +394,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
               row: surface.effective === 'internal' ? buildDrilldownRowId({ stage: 'risk' }, ['stage']) : undefined,
             },
             tone: guardianTone,
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -449,6 +463,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
                 : undefined,
             },
             tone: statusTone(controlChainBlocker.source_status || controlChainBlocker.source_decision || controlChainBlocker.blocking_reason),
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -506,6 +521,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
               section: 'action-log',
             },
             tone: 'negative',
+            allowRaw: showRawPaths,
           }),
         }]
       : []),
@@ -597,6 +613,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
                 section: 'freshness',
               },
               tone: 'warning',
+              allowRaw: showRawPaths,
             }),
           }]
         : []),
@@ -632,7 +649,7 @@ function buildOrchestration(snapshot: DashboardSnapshot, surface: SurfaceView) {
           ],
           links: [
             alertLink('surface-fallback-contracts', 'alert_link_view_contracts', buildWorkspaceLink('contracts'), 'warning'),
-            alertLink('surface-fallback-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'warning'),
+            ...(showRawPaths ? [alertLink('surface-fallback-raw', 'alert_link_view_raw', buildWorkspaceLink('raw'), 'warning')] : []),
             alertLink('surface-fallback-terminal', 'alert_link_view_terminal', buildTerminalLink(surface.effective), 'warning'),
           ],
         }]
@@ -663,6 +680,18 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
   const latestSummary = toRecord<Dict>(latestResult.summary) || {};
   const rolling = toRecord<Dict>(latestResult.rolling_7d) || {};
 
+  const eventRegime = eventArtifact(snapshot, 'event_regime_snapshot');
+  const eventAnalogy = eventArtifact(snapshot, 'event_crisis_analogy');
+  const eventGameState = eventArtifact(snapshot, 'event_game_state_snapshot');
+  const eventTransmission = eventArtifact(snapshot, 'event_transmission_chain_map');
+  const eventAssetShockMap = eventArtifact(snapshot, 'event_asset_shock_map');
+  const eventSafetyMargin = eventArtifact(snapshot, 'event_safety_margin_snapshot');
+  const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
+  const commodityScenario = eventArtifact(snapshot, 'commodity_reasoning_scenario_tree');
+  const commodityTransmission = eventArtifact(snapshot, 'commodity_reasoning_transmission_map');
+  const commodityBoundary = eventArtifact(snapshot, 'commodity_reasoning_boundary_strength');
+  const commoditySummary = eventArtifact(snapshot, 'commodity_reasoning_summary');
+
   const sourceConfidence: MetricItem[] = [
     toMetric('schema-ok-ratio', 'data_schema_ok_ratio', latestSummary.selected_schema_ok_ratio, t('selected_schema_ok_ratio')),
     toMetric('time-sync-ratio', 'data_time_sync_ok_ratio', latestSummary.selected_time_sync_ok_ratio, t('selected_time_sync_ok_ratio')),
@@ -681,6 +710,167 @@ function buildDataRegime(snapshot: DashboardSnapshot) {
     toMetric('rolling-cross-source-fail', 'data_rolling_cross_source_fail_7d', rolling.avg_cross_source_fail_ratio, t('rolling_7d.avg_cross_source_fail_ratio')),
   ];
 
+  const addEventMetric = (metric: MetricItem) => {
+    microCapture.push(metric);
+  };
+
+  const regimeState = normalizedString(eventRegime.regime_state);
+  const headlineDrivers = toArray<unknown>(eventRegime.headline_drivers)
+    .map((value) => normalizedString(value))
+    .filter((value): value is string => Boolean(value));
+  const regimeDriversHint = headlineDrivers.length ? headlineDrivers.join(', ') : undefined;
+  const analogyHint = (() => {
+    const analogues = toArray<Dict>(eventAnalogy.top_analogues ?? []);
+    const ids = analogues
+      .map((analogy) => normalizedString(analogy.archetype_id))
+      .filter((value): value is string => Boolean(value));
+    return ids.length ? `analogues=${ids.join(',')}` : undefined;
+  })();
+
+  if (eventRegime.event_severity_score !== undefined) {
+    addEventMetric(
+      toMetric(
+        'event-severity',
+        'event_severity_score',
+        eventRegime.event_severity_score,
+        regimeDriversHint,
+        regimeState,
+      ),
+    );
+  }
+  if (eventRegime.systemic_risk_score !== undefined) {
+    addEventMetric(
+      toMetric(
+        'event-systemic-risk',
+        'systemic_risk_score',
+        eventRegime.systemic_risk_score,
+        regimeState,
+        regimeState,
+      ),
+    );
+  }
+  if (eventRegime.regime_state) {
+    addEventMetric(
+      toMetric(
+        'event-regime-state',
+        'event_regime_state',
+        regimeState,
+        analogyHint,
+      ),
+    );
+  }
+  const primaryTheater = normalizedString(
+    eventGameState.primary_theater ?? eventTransmission.primary_theater,
+  );
+  if (eventGameState.game_state) {
+    addEventMetric(
+      toMetric(
+        'event-game-state',
+        'event_game_state',
+        normalizedString(eventGameState.game_state),
+        primaryTheater,
+      ),
+    );
+  }
+  if (eventTransmission.dominant_chain) {
+    const hotChains = toArray<unknown>(eventTransmission.chains)
+      .map((entry) => toRecord<Dict>(entry))
+      .filter((row): row is Dict => Boolean(row))
+      .filter((row) => ['active', 'dominant'].includes(String(row.status || '')))
+      .map((row) => normalizedString(row.chain_id))
+      .filter((value): value is string => Boolean(value));
+    addEventMetric(
+      toMetric(
+        'event-dominant-chain',
+        'dominant_chain',
+        normalizedString(eventTransmission.dominant_chain),
+        hotChains.length ? `hot=${hotChains.join(',')}` : primaryTheater,
+      ),
+    );
+  }
+  const analogyRows = toArray<unknown>(eventAnalogy.top_analogues ?? [])
+    .map((analogy) => toRecord<Dict>(analogy))
+    .filter((row): row is Dict => Boolean(row));
+  const analogyCandidates = analogyRows
+    .map((row) => ({
+      row,
+      id: normalizedString(row.archetype_id),
+    }))
+    .filter((candidate): candidate is { row: Dict; id: string } => Boolean(candidate.id));
+  const firstAnalogyCandidate = analogyCandidates[0];
+  if (firstAnalogyCandidate) {
+    const firstAnalogy = firstAnalogyCandidate.row;
+    const analogyHintParts: string[] = [];
+    if (firstAnalogy.similarity_score !== undefined) {
+      analogyHintParts.push(`score=${safeDisplayValue(firstAnalogy.similarity_score)}`);
+    }
+    const matchAxes = toArray<unknown>(firstAnalogy.match_axes ?? [])
+      .map((value) => normalizedString(value))
+      .filter((value): value is string => Boolean(value));
+    if (matchAxes.length) {
+      analogyHintParts.push(`match=${matchAxes.join(',')}`);
+    }
+    addEventMetric(
+      toMetric(
+        'event-analogy',
+        'event_crisis_analogy',
+        normalizedString(firstAnalogy.archetype_id),
+        analogyHintParts.join(' / ') || undefined,
+      ),
+    );
+  }
+  const assetRows = toArray<unknown>(eventAssetShockMap.assets ?? [])
+    .map((entry) => toRecord<Dict>(entry))
+    .filter((row): row is Dict => Boolean(row));
+  const assetCandidates = assetRows
+    .map((row) => ({
+      row,
+      asset: normalizedString(row.asset),
+    }))
+    .filter((candidate): candidate is { row: Dict; asset: string } => Boolean(candidate.asset));
+  const assetNames = assetCandidates.map((candidate) => candidate.asset);
+  if (assetNames.length) {
+    addEventMetric(
+      toMetric(
+        'event-shock-map',
+        'event_asset_shock_map',
+        assetNames.join(' ｜ '),
+        `assets=${assetNames.slice(0, 3).join(',')}`,
+      ),
+    );
+  }
+  if (commodityScenario.primary_scenario) {
+    addEventMetric(
+      toMetric(
+        'commodity-scenario',
+        'commodity_reasoning_scenario',
+        normalizedString(commodityScenario.primary_scenario),
+        normalizedString(commodityScenario.contract_focus),
+      ),
+    );
+  }
+  if (commodityTransmission.primary_chain) {
+    const firstCommodityChain = toRecord<Dict>(toArray<Dict>(commodityTransmission.chains)[0]) || {};
+    addEventMetric(
+      toMetric(
+        'commodity-chain',
+        'commodity_reasoning_chain',
+        normalizedString(commodityTransmission.primary_chain),
+        normalizedString(firstCommodityChain.contract || firstCommodityChain.commodity),
+      ),
+    );
+  }
+  if (commodityBoundary.range_summary) {
+    addEventMetric(
+      toMetric(
+        'commodity-range',
+        'commodity_reasoning_range',
+        normalizedString(commodityBoundary.range_summary),
+        normalizedString(commoditySummary.boundary_strength_brief),
+      ),
+    );
+  }
+
   return {
     sourceConfidence,
     microCapture,
@@ -693,6 +883,9 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
   const operatorPanel = artifactPayload(snapshot, 'operator_panel');
   const summary = toRecord<Dict>(operatorPanel.summary) || {};
   const repairPlan = toRecord<Dict>(operatorPanel.priority_repair_plan) || {};
+  const eventSafetyMargin = eventArtifact(snapshot, 'event_safety_margin_snapshot');
+  const eventOperatorSummary = eventArtifact(snapshot, 'event_crisis_operator_summary');
+  const commoditySummary = eventArtifact(snapshot, 'commodity_reasoning_summary');
 
   const gateScores: MetricItem[] = [
     toMetric('guardian-clearance', 'signal_guardian_clearance', summary.openclaw_guardian_clearance_status, buildAssignmentHint('score', summary.openclaw_guardian_clearance_score)),
@@ -713,6 +906,63 @@ function buildSignalRisk(snapshot: DashboardSnapshot, surface: SurfaceView) {
     toMetric('repair-verify', 'signal_repair_verify', summary.priority_repair_verification_brief, displayValue(summary.priority_repair_verification_artifact)),
     toMetric('remote-diagnosis', 'signal_remote_diagnosis', summary.remote_live_diagnosis_brief, displayValue(summary.remote_live_history_brief)),
   ];
+  if (eventOperatorSummary.summary || eventOperatorSummary.status) {
+    repairMetrics.push(
+      toMetric(
+        'event-crisis-summary',
+        'event_crisis_operator_summary',
+        normalizedString(eventOperatorSummary.summary || eventOperatorSummary.status),
+        normalizedString(eventOperatorSummary.takeaway),
+        normalizedString(eventOperatorSummary.status),
+      ),
+    );
+  }
+  if (eventOperatorSummary.event_crisis_safety_margin_brief || eventSafetyMargin.system_margin_score !== undefined) {
+    repairMetrics.push(
+      toMetric(
+        'event-safety-margin',
+        'system_margin_score',
+        normalizedString(eventOperatorSummary.event_crisis_safety_margin_brief)
+          ?? eventSafetyMargin.system_margin_score,
+        normalizedString(eventOperatorSummary.event_crisis_primary_theater_brief),
+      ),
+    );
+  }
+  if (eventOperatorSummary.event_crisis_hard_boundary_brief || eventSafetyMargin.hard_boundaries) {
+    const hardBoundaries = toRecord<Dict>(eventSafetyMargin.hard_boundaries) || {};
+    const activeBoundaries = Object.entries(hardBoundaries)
+      .filter(([, value]) => Boolean(value))
+      .map(([key]) => key);
+    repairMetrics.push(
+      toMetric(
+        'event-hard-boundary',
+        'hard_boundaries',
+        normalizedString(eventOperatorSummary.event_crisis_hard_boundary_brief)
+          ?? (activeBoundaries.length ? activeBoundaries.join(',') : 'none'),
+        normalizedString(eventOperatorSummary.event_crisis_dominant_chain_brief),
+      ),
+    );
+  }
+  if (commoditySummary.primary_scenario_brief || commoditySummary.primary_chain_brief) {
+    repairMetrics.push(
+      toMetric(
+        'commodity-summary',
+        'commodity_reasoning_summary',
+        normalizedString(commoditySummary.primary_scenario_brief),
+        normalizedString(commoditySummary.primary_chain_brief),
+      ),
+    );
+  }
+  if (commoditySummary.boundary_strength_brief || commoditySummary.range_scope_brief) {
+    repairMetrics.push(
+      toMetric(
+        'commodity-boundary',
+        'commodity_reasoning_boundary',
+        normalizedString(commoditySummary.boundary_strength_brief),
+        normalizedString(commoditySummary.range_scope_brief),
+      ),
+    );
+  }
 
   return {
     laneCards: toArray(snapshot.artifact_payloads?.operator_panel?.payload && operatorPanel.lane_cards) as TerminalReadModel['signalRisk']['laneCards'],
@@ -961,6 +1211,7 @@ function buildTerminalWorkspaceHandoffs(snapshot: DashboardSnapshot, surface: Su
   const focusSlots = toArray<Dict>(operatorPanel.focus_slots);
   const actionQueue = toArray<Dict>(operatorPanel.action_queue);
   const summary = toRecord<Dict>(operatorPanel.summary) || {};
+  const showRawPaths = surface.effective === 'internal';
   const handoffs: Record<string, OperatorAlertLink[]> = {};
   const primaryArtifact: Record<string, string> = {};
   const seen = new Set<string>();
@@ -996,7 +1247,7 @@ function buildTerminalWorkspaceHandoffs(snapshot: DashboardSnapshot, surface: Su
         tone,
       }, artifactValue);
     }
-    if (rawValue && rawValue !== '—') {
+    if (showRawPaths && rawValue && rawValue !== '—') {
       push(focus, {
         id: `${idPrefix}-raw`,
         label: `${t('alert_link_view_raw')} / ${displayValue(rawValue)}`,
@@ -1071,9 +1322,313 @@ function buildTerminalWorkspaceHandoffs(snapshot: DashboardSnapshot, surface: Su
   return { handoffs, primaryArtifact };
 }
 
+function auditArtifactLabel(parts: string[]): string {
+  return parts.filter(Boolean).join(' / ');
+}
+
+function pathStem(pathValue: string): string {
+  const fileName = pathValue.split(/[\\/]/).pop() || pathValue;
+  return fileName.replace(/\.[^.]+$/, '');
+}
+
+function routeQueryValue(route: unknown, key: string): string | undefined {
+  const raw = normalizedString(route);
+  if (!raw) return undefined;
+  const queryIndex = raw.indexOf('?');
+  if (queryIndex < 0) return undefined;
+  const query = raw.slice(queryIndex + 1);
+  const value = new URLSearchParams(query).get(key);
+  return normalizedString(value) || undefined;
+}
+
+function deriveWorkspaceResearchAuditCases(snapshot: DashboardSnapshot): PublicAcceptanceResearchAuditCase[] {
+  const payloads = snapshot.artifact_payloads || {};
+  const cases: PublicAcceptanceResearchAuditCase[] = [];
+
+  const recentBacktests = toRecord<Dict>((payloads.recent_strategy_backtests as ArtifactPayloadEntry | undefined)?.payload) || {};
+  const recentModeSummaries = toArray<Dict>(recentBacktests.mode_summaries);
+  for (const modeSummary of recentModeSummaries) {
+    const defaultMode = safeDisplayValue(modeSummary.mode);
+    for (const artifact of toArray<Dict>(modeSummary.trial_artifacts)) {
+      const tradePath = normalizedString(artifact.trade_journal_path);
+      if (!tradePath) continue;
+      const modeName = safeDisplayValue(artifact.mode) || defaultMode;
+      const trialRaw = normalizedString(artifact.trial) || '';
+      const trialLabel = trialRaw ? `trial_${trialRaw.padStart(3, '0')}` : 'trial';
+      const query = pathStem(tradePath);
+      const resultArtifact = `audit:recent_strategy_backtests:${modeName}:${trialLabel}:trade_journal`;
+      cases.push({
+        case_id: 'optimizer_trial_trade_journal',
+        scope: 'artifact',
+        query,
+        search_route: `#${buildSearchLink(query, 'artifact')}`,
+        workspace_route: `#${buildWorkspaceLink('artifacts', { artifact: resultArtifact })}`,
+        raw_path: tradePath,
+        result_artifact: resultArtifact,
+      });
+      break;
+    }
+    if (cases.length) break;
+  }
+
+  const strategyLab = toRecord<Dict>((payloads.strategy_lab_summary as ArtifactPayloadEntry | undefined)?.payload) || {};
+  const candidates = toArray<Dict>(strategyLab.candidates);
+  const bestCandidate = toRecord<Dict>(strategyLab.best_candidate) || {};
+  const bestTradePath = normalizedString(bestCandidate.trade_journal_path);
+  const bestName = safeDisplayValue(bestCandidate.name) || 'best_candidate';
+  let selectedCandidate: Dict | null = null;
+  for (const candidate of candidates) {
+    const tradePath = normalizedString(candidate.trade_journal_path);
+    if (!tradePath) continue;
+    const candidateName = safeDisplayValue(candidate.name) || 'candidate';
+    if (!bestTradePath || candidateName !== bestName || tradePath !== bestTradePath) {
+      selectedCandidate = candidate;
+      break;
+    }
+  }
+  if (!selectedCandidate && candidates.length) {
+    selectedCandidate = candidates[0];
+  }
+  if (!selectedCandidate && bestTradePath) {
+    selectedCandidate = bestCandidate;
+  }
+  if (selectedCandidate) {
+    const tradePath = normalizedString(selectedCandidate.trade_journal_path);
+    const candidateName = safeDisplayValue(selectedCandidate.name) || bestName;
+    if (tradePath) {
+      const query = pathStem(tradePath);
+      const resultArtifact = `audit:strategy_lab_summary:${candidateName}:trade_journal`;
+      cases.push({
+        case_id: 'strategy_lab_candidate_trade_journal',
+        scope: 'artifact',
+        query,
+        search_route: `#${buildSearchLink(query, 'artifact')}`,
+        workspace_route: `#${buildWorkspaceLink('artifacts', { artifact: resultArtifact })}`,
+        raw_path: tradePath,
+        result_artifact: resultArtifact,
+      });
+    }
+  }
+
+  return cases;
+}
+
+function deriveGraphHomeResearchAuditCases(
+  rows: Dict[],
+  fallbackCases: PublicAcceptanceResearchAuditCase[],
+): PublicAcceptanceResearchAuditCase[] {
+  const fallbackByCaseId = new Map(
+    fallbackCases
+      .map((row) => [safeDisplayValue(row.case_id), row] as const)
+      .filter(([caseId]) => caseId && caseId !== '—'),
+  );
+
+  const derivedRows = rows.map((row) => {
+    const caseId = safeDisplayValue(row.case_id) || undefined;
+    const fallback = caseId ? fallbackByCaseId.get(caseId) : undefined;
+    const searchRoute = safeDisplayValue(row.search_link_href || fallback?.search_route) || undefined;
+    const workspaceRoute = safeDisplayValue(row.artifact_link_href || fallback?.workspace_route) || undefined;
+    const rawRoute = safeDisplayValue(row.raw_link_href);
+    return {
+      case_id: caseId,
+      scope: routeQueryValue(searchRoute, 'scope') || fallback?.scope || undefined,
+      query: routeQueryValue(searchRoute, 'q') || fallback?.query || undefined,
+      search_route: searchRoute,
+      workspace_route: workspaceRoute,
+      raw_path: routeQueryValue(rawRoute, 'artifact') || fallback?.raw_path || undefined,
+      result_artifact: routeQueryValue(workspaceRoute, 'artifact') || fallback?.result_artifact || undefined,
+    };
+  }).filter((row) => (
+    row.case_id
+    || row.query
+    || row.search_route
+    || row.workspace_route
+    || row.raw_path
+    || row.result_artifact
+  ));
+
+  const seen = new Set<string>();
+  return derivedRows.filter((row) => {
+    const dedupeKey = [
+      safeDisplayValue(row.case_id),
+      safeDisplayValue(row.search_route),
+      safeDisplayValue(row.workspace_route),
+      safeDisplayValue(row.raw_path),
+    ].join('|');
+    if (!dedupeKey || seen.has(dedupeKey)) return false;
+    seen.add(dedupeKey);
+    return true;
+  });
+}
+
+function aggregatePublicAcceptanceResearchAuditCases(
+  groups: PublicAcceptanceResearchAuditCase[][],
+): PublicAcceptanceResearchAuditCase[] {
+  const seen = new Set<string>();
+  return groups.flat().filter((row) => {
+    const dedupeKey = [
+      safeDisplayValue(row.case_id),
+      safeDisplayValue(row.search_route),
+      safeDisplayValue(row.workspace_route),
+      safeDisplayValue(row.raw_path),
+    ].join('|');
+    if (!dedupeKey || seen.has(dedupeKey)) return false;
+    seen.add(dedupeKey);
+    return true;
+  });
+}
+
+function deriveResearchAuditCatalogRows(snapshot: DashboardSnapshot): Array<Record<string, unknown>> {
+  const payloads = snapshot.artifact_payloads || {};
+  const rows: Array<Record<string, unknown>> = [];
+
+  const pushRow = (options: {
+    id: string;
+    label: string;
+    path: string;
+    payloadKey: string;
+    status?: unknown;
+    researchDecision?: unknown;
+  }) => {
+    rows.push({
+      id: options.id,
+      label: options.label,
+      path: options.path,
+      payload_key: options.payloadKey,
+      artifact_layer: 'archive',
+      artifact_group: 'archive',
+      category: 'research-audit',
+      status: safeDisplayValue(options.status),
+      research_decision: safeDisplayValue(options.researchDecision),
+    });
+  };
+
+  Object.entries(payloads).forEach(([payloadKey, entry]) => {
+    const payload = toRecord<Dict>((entry as ArtifactPayloadEntry | undefined)?.payload) || {};
+    const summary = toRecord<Dict>((entry as ArtifactPayloadEntry | undefined)?.summary) || {};
+    const status = summary.status ?? payload.status;
+    const researchDecision = summary.research_decision ?? payload.research_decision;
+
+    const bestTradeJournalPath = normalizedString(payload.best_trade_journal_path);
+    const bestHoldingExposurePath = normalizedString(payload.best_holding_exposure_path);
+    if (bestTradeJournalPath) {
+      pushRow({
+        id: `audit:${payloadKey}:best:trade_journal`,
+        label: auditArtifactLabel([payloadKey, 'best', 'trade_journal']),
+        path: bestTradeJournalPath,
+        payloadKey,
+        status,
+        researchDecision,
+      });
+    }
+    if (bestHoldingExposurePath) {
+      pushRow({
+        id: `audit:${payloadKey}:best:holding_exposure`,
+        label: auditArtifactLabel([payloadKey, 'best', 'holding_exposure']),
+        path: bestHoldingExposurePath,
+        payloadKey,
+        status,
+        researchDecision,
+      });
+    }
+
+    toArray<Dict>(payload.mode_summaries).forEach((modeSummary) => {
+      const mode = safeDisplayValue(modeSummary.mode);
+      toArray<Dict>(modeSummary.trial_artifacts).forEach((artifact) => {
+        const modeName = safeDisplayValue(artifact.mode) || mode;
+        const trialNumRaw = normalizedString(artifact.trial);
+        const trialLabel = trialNumRaw ? `trial_${trialNumRaw.padStart(3, '0')}` : 'trial';
+        const tradePath = normalizedString(artifact.trade_journal_path);
+        const holdingPath = normalizedString(artifact.holding_exposure_path);
+        if (tradePath) {
+          pushRow({
+            id: `audit:${payloadKey}:${modeName}:${trialLabel}:trade_journal`,
+            label: auditArtifactLabel([modeName, trialLabel, 'trade_journal']),
+            path: tradePath,
+            payloadKey,
+            status,
+            researchDecision,
+          });
+        }
+        if (holdingPath) {
+          pushRow({
+            id: `audit:${payloadKey}:${modeName}:${trialLabel}:holding_exposure`,
+            label: auditArtifactLabel([modeName, trialLabel, 'holding_exposure']),
+            path: holdingPath,
+            payloadKey,
+            status,
+            researchDecision,
+          });
+        }
+      });
+    });
+
+    const bestCandidate = toRecord<Dict>(payload.best_candidate) || {};
+    const bestCandidateName = safeDisplayValue(bestCandidate.name) || 'best_candidate';
+    const bestCandidateTradePath = normalizedString(bestCandidate.trade_journal_path);
+    const bestCandidateHoldingPath = normalizedString(bestCandidate.holding_exposure_path);
+    if (bestCandidateTradePath) {
+      pushRow({
+        id: `audit:${payloadKey}:best_candidate:trade_journal`,
+        label: auditArtifactLabel([bestCandidateName, 'trade_journal']),
+        path: bestCandidateTradePath,
+        payloadKey,
+        status,
+        researchDecision,
+      });
+    }
+    if (bestCandidateHoldingPath) {
+      pushRow({
+        id: `audit:${payloadKey}:best_candidate:holding_exposure`,
+        label: auditArtifactLabel([bestCandidateName, 'holding_exposure']),
+        path: bestCandidateHoldingPath,
+        payloadKey,
+        status,
+        researchDecision,
+      });
+    }
+
+    toArray<Dict>(payload.candidates).forEach((candidate, index) => {
+      const name = safeDisplayValue(candidate.name) || `candidate_${index + 1}`;
+      const tradePath = normalizedString(candidate.trade_journal_path);
+      const holdingPath = normalizedString(candidate.holding_exposure_path);
+      if (tradePath) {
+        pushRow({
+          id: `audit:${payloadKey}:${name}:trade_journal`,
+          label: auditArtifactLabel([name, 'trade_journal']),
+          path: tradePath,
+          payloadKey,
+          status,
+          researchDecision,
+        });
+      }
+      if (holdingPath) {
+        pushRow({
+          id: `audit:${payloadKey}:${name}:holding_exposure`,
+          label: auditArtifactLabel([name, 'holding_exposure']),
+          path: holdingPath,
+          payloadKey,
+          status,
+          researchDecision,
+        });
+      }
+    });
+  });
+
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = safeDisplayValue(row.id);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function buildWorkspace(snapshot: DashboardSnapshot, surface: SurfaceView) {
   const experienceContract = toRecord<Dict>(snapshot.experience_contract) || {};
-  const artifactRows = (snapshot.catalog || []).map((row, index) => ({ id: row.id || row.payload_key || `artifact-${index}`, ...row }));
+  const baseArtifactRows = (snapshot.catalog || []).map((row, index) => ({ id: row.id || row.payload_key || `artifact-${index}`, ...row }));
+  const artifactRows = [...baseArtifactRows, ...deriveResearchAuditCatalogRows(snapshot)];
+  const researchAuditCases = deriveWorkspaceResearchAuditCases(snapshot);
   const workspaceHandoffs = buildWorkspaceArtifactHandoffs(snapshot, surface, artifactRows);
   const defaultFocusRecord = toRecord<Dict>(snapshot.workspace_default_focus) || {};
   return {
@@ -1081,6 +1636,7 @@ function buildWorkspace(snapshot: DashboardSnapshot, surface: SurfaceView) {
     interfaces: snapshot.interface_catalog || [],
     publicTopology: snapshot.public_topology || [],
     publicAcceptance: buildPublicAcceptance(snapshot, surface),
+    researchAuditCases,
     surfaceContracts: Object.entries(snapshot.surface_contracts || {}).map(([id, row]) => ({ id, ...row })),
     fallbackChain: toArray<string>(experienceContract.fallback_chain),
     sourceHeads: Object.entries(snapshot.source_heads || {}).map(([id, row]) => ({ id, ...row })),
@@ -1218,14 +1774,90 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
   const topologyPagesContractsBrowser = toRecord<Dict>(topologyChecks.pages_contracts_browser) || {};
   const topologyEntrypoints = toRecord<Dict>(topology.entrypoints) || {};
   const workspaceRoutes = toRecord<Dict>(checks.workspace_routes_smoke) || {};
+  const graphHome = toRecord<Dict>(checks.graph_home_smoke) || {};
+  const graphHomeAssertion = toRecord<Dict>(graphHome.graph_home_assertion) || {};
   const workspaceSurface = toRecord<Dict>(workspaceRoutes.surface_assertion) || {};
   const workspaceNetwork = toRecord<Dict>(workspaceRoutes.network_observation) || {};
   const workspaceArtifactsFilter = toRecord<Dict>(workspaceRoutes.artifacts_filter_assertion) || {};
+  const workspaceResearchAudit = toRecord<Dict>(workspaceRoutes.research_audit_search_assertion) || {};
+  const workspaceContractsInspector = toRecord<Dict>(workspaceRoutes.contracts_acceptance_inspector_assertion) || {};
+  const workspaceContractsInspectorChecks = toRecord<Dict>(workspaceContractsInspector.checks_by_id) || {};
+  const workspaceContractsInspectorSubcommands = toRecord<Dict>(workspaceContractsInspector.subcommands_by_id) || {};
+  const topologyInspector = toRecord<Dict>(workspaceContractsInspectorChecks.topology_smoke) || {};
+  const topologySubcommandInspector = toRecord<Dict>(workspaceContractsInspectorSubcommands.topology_smoke) || {};
+  const graphHomeInspector = toRecord<Dict>(workspaceContractsInspectorChecks.graph_home_smoke) || {};
+  const graphHomeSubcommandInspector = toRecord<Dict>(workspaceContractsInspectorSubcommands.graph_home_smoke) || {};
+  const workspaceRoutesInspector = toRecord<Dict>(workspaceContractsInspectorChecks.workspace_routes_smoke) || {};
+  const workspaceRoutesSubcommandInspector = toRecord<Dict>(workspaceContractsInspectorSubcommands.workspace_routes_smoke) || {};
+  const orderflowSourceAvailable = typeof workspaceArtifactsFilter.source_available === 'boolean'
+    ? workspaceArtifactsFilter.source_available
+    : undefined;
   const subcommands = toRecord<Dict>(payload.subcommands) || {};
   const orderflowVisibleArtifacts = toArray<string>(workspaceArtifactsFilter.visible_artifacts)
     .map((value) => safeDisplayValue(value))
     .filter((value) => value && value !== '—')
     .join(' ｜ ');
+  const researchAuditCases = toArray<Dict>(workspaceResearchAudit.cases);
+  const researchAuditCaseRows: PublicAcceptanceResearchAuditCase[] = researchAuditCases.map((row) => ({
+    case_id: safeDisplayValue(row.case_id) || undefined,
+    scope: safeDisplayValue(row.scope) || undefined,
+    query: safeDisplayValue(row.query) || undefined,
+    search_route: safeDisplayValue(row.search_route) || undefined,
+    workspace_route: safeDisplayValue(row.workspace_route) || undefined,
+    raw_path: safeDisplayValue(row.raw_path) || undefined,
+    result_artifact: safeDisplayValue(row.result_artifact) || undefined,
+  })).filter((row) => (
+    row.case_id
+    || row.query
+    || row.search_route
+    || row.workspace_route
+    || row.raw_path
+    || row.result_artifact
+  ));
+  const researchAuditCasesAvailable = typeof workspaceResearchAudit.cases_available === 'boolean'
+    ? workspaceResearchAudit.cases_available
+    : undefined;
+  const researchAuditQueries = researchAuditCaseRows
+    .map((row) => safeDisplayValue(row.query))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const researchAuditResultArtifacts = researchAuditCaseRows
+    .map((row) => safeDisplayValue(row.result_artifact))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const graphHomeResearchAuditLinkAssertions = toArray<Dict>(graphHomeAssertion.research_audit_link_assertions);
+  const graphHomeResearchAuditCaseRows = deriveGraphHomeResearchAuditCases(graphHomeResearchAuditLinkAssertions, researchAuditCaseRows);
+  const graphHomeResearchAuditCasesAvailable = graphHomeResearchAuditCaseRows.length ? true : undefined;
+  const graphHomeResearchAuditQueries = graphHomeResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.query))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const graphHomeResearchAuditResultArtifacts = graphHomeResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.result_artifact))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const graphHomeResearchAuditCaseIds = graphHomeResearchAuditLinkAssertions
+    .map((row) => safeDisplayValue(row.case_id))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const aggregatedResearchAuditCaseRows = aggregatePublicAcceptanceResearchAuditCases([
+    researchAuditCaseRows,
+    graphHomeResearchAuditCaseRows,
+  ]);
+  const aggregatedResearchAuditCasesAvailable = aggregatedResearchAuditCaseRows.length
+    ? true
+    : researchAuditCasesAvailable;
+  const aggregatedResearchAuditQueries = aggregatedResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.query))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const aggregatedResearchAuditResultArtifacts = aggregatedResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.result_artifact))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const aggregatedResearchAuditSearchRoute = aggregatedResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.search_route))
+    .find((value) => value && value !== '—');
 
   const summary: PublicAcceptanceSummary = {
     artifact_id: 'dashboard_public_acceptance',
@@ -1236,8 +1868,10 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     artifact_path: safeDisplayValue(entry?.path),
     topology_status: safeDisplayValue(topology.status),
     workspace_status: safeDisplayValue(workspaceRoutes.status),
+    graph_home_status: safeDisplayValue(graphHome.status),
     topology_generated_at_utc: safeDisplayValue(topology.generated_at_utc),
     workspace_generated_at_utc: safeDisplayValue(workspaceRoutes.generated_at_utc),
+    graph_home_generated_at_utc: safeDisplayValue(graphHome.generated_at_utc),
     frontend_public: safeDisplayValue(topologyRootSnapshot.frontend_public),
     root_public_entry: safeDisplayValue(topologyRootPublic.header_public_entry),
     public_snapshot_fetch_count: typeof workspaceNetwork.public_snapshot_fetch_count === 'number' ? workspaceNetwork.public_snapshot_fetch_count : undefined,
@@ -1245,8 +1879,19 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     root_contracts_screenshot_path: safeDisplayValue(topologyRootContractsBrowser.screenshot_path),
     pages_contracts_screenshot_path: safeDisplayValue(topologyPagesContractsBrowser.screenshot_path),
     orderflow_filter_route: safeDisplayValue(workspaceArtifactsFilter.route),
+    orderflow_source_available: orderflowSourceAvailable,
     orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
     orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
+    research_audit_search_route: aggregatedResearchAuditSearchRoute || safeDisplayValue(workspaceResearchAudit.route),
+    research_audit_cases_available: aggregatedResearchAuditCasesAvailable,
+    research_audit_queries: aggregatedResearchAuditQueries || researchAuditQueries || undefined,
+    research_audit_result_artifacts: aggregatedResearchAuditResultArtifacts || researchAuditResultArtifacts || undefined,
+    graph_home_resolved_route: safeDisplayValue(graphHomeAssertion.resolved_route),
+    graph_home_default_center: safeDisplayValue(graphHomeAssertion.default_center),
+    graph_home_terminal_link_href: safeDisplayValue(graphHomeAssertion.terminal_link_href),
+    graph_home_workspace_link_href: safeDisplayValue(graphHomeAssertion.workspace_link_href),
+    graph_home_search_link_href: safeDisplayValue(graphHomeAssertion.search_link_href),
+    graph_home_research_audit_case_ids: graphHomeResearchAuditCaseIds || undefined,
   };
 
   const checkRows: PublicAcceptanceCheckRow[] = [
@@ -1267,6 +1912,7 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       pages_overview_screenshot_path: safeDisplayValue(topologyPagesOverviewBrowser.screenshot_path),
       root_contracts_screenshot_path: safeDisplayValue(topologyRootContractsBrowser.screenshot_path),
       pages_contracts_screenshot_path: safeDisplayValue(topologyPagesContractsBrowser.screenshot_path),
+      inspector_route: safeDisplayValue(topologyInspector.route),
       ...(surface.effective === 'internal' && typeof topology.stdout === 'string' ? { stdout: topology.stdout } : {}),
       ...(surface.effective === 'internal' && typeof topology.stderr === 'string' ? { stderr: topology.stderr } : {}),
     },
@@ -1286,10 +1932,47 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       public_snapshot_fetch_count: typeof workspaceNetwork.public_snapshot_fetch_count === 'number' ? workspaceNetwork.public_snapshot_fetch_count : undefined,
       internal_snapshot_fetch_count: typeof workspaceNetwork.internal_snapshot_fetch_count === 'number' ? workspaceNetwork.internal_snapshot_fetch_count : undefined,
       orderflow_filter_route: safeDisplayValue(workspaceArtifactsFilter.route),
+      orderflow_source_available: orderflowSourceAvailable,
       orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
       orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
+      research_audit_search_route: safeDisplayValue(workspaceResearchAudit.route),
+      research_audit_cases_available: researchAuditCasesAvailable,
+      research_audit_queries: researchAuditQueries || undefined,
+      research_audit_result_artifacts: researchAuditResultArtifacts || undefined,
+      research_audit_cases: researchAuditCaseRows.length ? researchAuditCaseRows : undefined,
+      inspector_route: safeDisplayValue(workspaceRoutesInspector.route),
+      inspector_search_link_href: safeDisplayValue(workspaceRoutesInspector.search_link_href),
+      inspector_artifact_link_href: safeDisplayValue(workspaceRoutesInspector.artifact_link_href),
+      inspector_raw_link_href: safeDisplayValue(workspaceRoutesInspector.raw_link_href),
       ...(surface.effective === 'internal' && typeof workspaceRoutes.stdout === 'string' ? { stdout: workspaceRoutes.stdout } : {}),
       ...(surface.effective === 'internal' && typeof workspaceRoutes.stderr === 'string' ? { stderr: workspaceRoutes.stderr } : {}),
+    },
+    {
+      id: 'graph_home_smoke',
+      label: t('workspace_contracts_acceptance_graph_home_label'),
+      status: safeDisplayValue(graphHome.status),
+      ok: Boolean(graphHome.ok),
+      generated_at_utc: safeDisplayValue(graphHome.generated_at_utc),
+      report_path: safeDisplayValue(graphHome.report_path),
+      returncode: typeof graphHome.returncode === 'number' ? graphHome.returncode : undefined,
+      failure_reason: safeDisplayValue(graphHome.failure_reason),
+      headline: safeDisplayValue(graphHomeAssertion.resolved_route || graphHomeAssertion.default_route),
+      graph_home_resolved_route: safeDisplayValue(graphHomeAssertion.resolved_route),
+      graph_home_default_center: safeDisplayValue(graphHomeAssertion.default_center),
+      graph_home_terminal_link_href: safeDisplayValue(graphHomeAssertion.terminal_link_href),
+      graph_home_workspace_link_href: safeDisplayValue(graphHomeAssertion.workspace_link_href),
+      graph_home_search_link_href: safeDisplayValue(graphHomeAssertion.search_link_href),
+      research_audit_cases_available: graphHomeResearchAuditCasesAvailable,
+      research_audit_queries: graphHomeResearchAuditQueries || undefined,
+      research_audit_result_artifacts: graphHomeResearchAuditResultArtifacts || undefined,
+      research_audit_cases: graphHomeResearchAuditCaseRows.length ? graphHomeResearchAuditCaseRows : undefined,
+      graph_home_research_audit_case_ids: graphHomeResearchAuditCaseIds || undefined,
+      inspector_route: safeDisplayValue(graphHomeInspector.route),
+      inspector_search_link_href: safeDisplayValue(graphHomeInspector.search_link_href),
+      inspector_artifact_link_href: safeDisplayValue(graphHomeInspector.artifact_link_href),
+      inspector_raw_link_href: safeDisplayValue(graphHomeInspector.raw_link_href),
+      ...(surface.effective === 'internal' && typeof graphHome.stdout === 'string' ? { stdout: graphHome.stdout } : {}),
+      ...(surface.effective === 'internal' && typeof graphHome.stderr === 'string' ? { stderr: graphHome.stderr } : {}),
     },
   ].filter((row) => row.status && row.status !== '—');
 
@@ -1297,13 +1980,42 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     const row = toRecord<Dict>(value) || {};
     return {
       id,
-      label: id === 'topology_smoke' ? t('workspace_contracts_acceptance_topology_command_label') : t('workspace_contracts_acceptance_workspace_command_label'),
+      label: id === 'topology_smoke'
+        ? t('workspace_contracts_acceptance_topology_command_label')
+        : id === 'graph_home_smoke'
+          ? t('workspace_contracts_acceptance_graph_home_command_label')
+          : t('workspace_contracts_acceptance_workspace_command_label'),
       returncode: typeof row.returncode === 'number' ? row.returncode : undefined,
       payload_present: typeof row.payload_present === 'boolean' ? row.payload_present : undefined,
       stdout_bytes: typeof row.stdout_bytes === 'number' ? row.stdout_bytes : undefined,
       stderr_bytes: typeof row.stderr_bytes === 'number' ? row.stderr_bytes : undefined,
       cmd: Array.isArray(row.cmd) ? row.cmd.map((item) => safeDisplayValue(item)).join(' ') : safeDisplayValue(row.cmd),
       cwd: safeDisplayValue(row.cwd),
+      ...(id === 'graph_home_smoke'
+        ? {
+            inspector_route: safeDisplayValue(graphHomeSubcommandInspector.route),
+            inspector_check_route: safeDisplayValue(graphHomeSubcommandInspector.check_route || graphHomeInspector.route),
+            inspector_search_link_href: safeDisplayValue(graphHomeSubcommandInspector.search_link_href),
+            inspector_artifact_link_href: safeDisplayValue(graphHomeSubcommandInspector.artifact_link_href),
+            inspector_raw_link_href: safeDisplayValue(graphHomeSubcommandInspector.raw_link_href),
+          }
+        : id === 'topology_smoke'
+          ? {
+              inspector_route: safeDisplayValue(topologySubcommandInspector.route),
+              inspector_check_route: safeDisplayValue(topologySubcommandInspector.check_route || topologyInspector.route),
+              inspector_search_link_href: safeDisplayValue(topologySubcommandInspector.search_link_href),
+              inspector_artifact_link_href: safeDisplayValue(topologySubcommandInspector.artifact_link_href),
+              inspector_raw_link_href: safeDisplayValue(topologySubcommandInspector.raw_link_href),
+            }
+        : id === 'workspace_routes_smoke'
+          ? {
+              inspector_route: safeDisplayValue(workspaceRoutesSubcommandInspector.route),
+              inspector_check_route: safeDisplayValue(workspaceRoutesSubcommandInspector.check_route),
+              inspector_search_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.search_link_href),
+              inspector_artifact_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.artifact_link_href),
+              inspector_raw_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.raw_link_href),
+            }
+        : {}),
       ...(surface.effective === 'internal' && typeof row.stdout === 'string' ? { stdout: row.stdout } : {}),
       ...(surface.effective === 'internal' && typeof row.stderr === 'string' ? { stderr: row.stderr } : {}),
     };

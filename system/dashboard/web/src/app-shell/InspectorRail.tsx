@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { buildOverviewLink } from '../navigation/route-contract';
+import { buildSearchLink } from '../search/links';
 import type { SurfaceKey, TerminalReadModel } from '../types/contracts';
 import { Badge, DrilldownSection, KeyValueGrid } from '../components/ui-kit';
-import { buildTerminalFocusKey, buildTerminalLink, buildWorkspaceLink, type SharedFocusState, type WorkspaceSection } from '../utils/focus-links';
+import { buildTerminalFocusKey, buildTerminalLink, buildWorkspaceLink, buildWorkspacePageLink, type SharedFocusState, type WorkspaceSection } from '../utils/focus-links';
 import { safeDisplayValue } from '../utils/formatters';
 import { labelFor } from '../utils/dictionary';
 
@@ -11,6 +12,7 @@ type InspectorContext = {
   domain: 'overview' | 'terminal' | 'workspace';
   surface?: SurfaceKey;
   section?: WorkspaceSection;
+  activeSectionId?: string;
 };
 
 type InspectorRailProps = {
@@ -18,6 +20,9 @@ type InspectorRailProps = {
   focus?: SharedFocusState;
   model?: TerminalReadModel | null;
   context?: InspectorContext;
+  mode?: 'rail' | 'drawer' | 'inline';
+  collapsed?: boolean;
+  shellTier?: 'xl' | 'l' | 'm' | 's';
 };
 
 type InspectorLink = {
@@ -116,12 +121,37 @@ function dedupeLinks(links: InspectorLink[]): InspectorLink[] {
   });
 }
 
+function normalizeRouterLink(value: string | undefined): string {
+  const raw = safeDisplayValue(value);
+  if (!raw || raw === '—') return '';
+  return raw.startsWith('#/') ? raw.slice(1) : raw;
+}
+
+function optionalInspectorValue(value: unknown): string {
+  const raw = safeDisplayValue(value);
+  return raw === '—' ? '' : raw;
+}
+
 export function InspectorRail({
   title = '对象检查器',
   focus,
   model,
   context = { domain: 'overview', surface: 'public' },
+  mode = 'rail',
+  collapsed = false,
+  shellTier = 'l',
 }: InspectorRailProps) {
+  if (!model) {
+    return (
+      <div className="inspector-rail-inner" data-mode={mode} data-shell-tier={shellTier} data-collapsed={collapsed ? 'true' : 'false'}>
+        <div className="inspector-title-block">
+          <h3>{title}</h3>
+          <p>暂无可检查对象，先在主舞台选择工件或终端焦点。</p>
+        </div>
+      </div>
+    );
+  }
+
   const artifactId = resolveArtifactId(model, focus, context);
   const artifactRow = artifactId ? model?.workspace.artifactRows.find((row) => artifactRefMatches(row, artifactId)) : null;
   const canonicalArtifactId = safeDisplayValue(artifactRow?.id || artifactId);
@@ -185,6 +215,28 @@ export function InspectorRail({
     });
   }
 
+  const activeContractsCheckId = context.domain === 'workspace'
+    && context.section === 'contracts'
+    && context.activeSectionId?.startsWith('contracts-check-')
+    ? context.activeSectionId.slice('contracts-check-'.length)
+    : undefined;
+  const activeContractsSubcommandId = context.domain === 'workspace'
+    && context.section === 'contracts'
+    && context.activeSectionId?.startsWith('contracts-subcommand-')
+    ? context.activeSectionId.slice('contracts-subcommand-'.length)
+    : undefined;
+  const activeAcceptanceCheck = activeContractsCheckId
+    ? model.workspace.publicAcceptance.checks.find((row) => row.id === activeContractsCheckId) || null
+    : null;
+  const activeAcceptanceSubcommand = activeContractsSubcommandId
+    ? model.workspace.publicAcceptance.subcommands.find((row) => row.id === activeContractsSubcommandId) || null
+    : null;
+  const linkedAcceptanceCheck = activeContractsSubcommandId
+    ? model.workspace.publicAcceptance.checks.find((row) => row.id === activeContractsSubcommandId) || null
+    : null;
+  const primaryResearchAuditCase = activeAcceptanceCheck?.research_audit_cases?.[0]
+    || linkedAcceptanceCheck?.research_audit_cases?.[0]
+    || null;
   const readonlyLinks: InspectorLink[] = [];
   if (canonicalArtifactId) {
     readonlyLinks.push({
@@ -220,7 +272,6 @@ export function InspectorRail({
       });
     }
   }
-  const dedupedReadonlyLinks = dedupeLinks(readonlyLinks);
 
   let focusTitle = '当前焦点';
   let focusSummary = artifactId || focus?.panel || '未选中对象';
@@ -253,7 +304,7 @@ export function InspectorRail({
       { key: 'row', label: '当前行焦点', value: focus?.row || '未选择' },
       { key: 'artifact', label: '关联工件', value: artifactId || '未绑定' },
       { key: 'focus-key', label: '穿透键', value: focusKey || '未生成' },
-      { key: 'handoffs', label: '可跳转动作', value: dedupedReadonlyLinks.length, kind: 'number' },
+      { key: 'handoffs', label: '可跳转动作', value: dedupeLinks(readonlyLinks).length, kind: 'number' },
     ];
     sourceTitle = artifactRow || sourceHead ? '执行证据' : '下一跳建议';
     sourceSummary = safeDisplayValue(sourceHead?.label || artifactRow?.label || focus?.section || focus?.panel || '等待穿透定位');
@@ -268,7 +319,7 @@ export function InspectorRail({
           { key: 'panel', label: '下一步面板', value: focus?.panel || '先从左侧选择面板' },
           { key: 'section', label: '下一步分层', value: focus?.section || '再进入分层/段落' },
           { key: 'row', label: '下一步行焦点', value: focus?.row || '必要时再落到行焦点' },
-          { key: 'handoffs', label: '证据动作', value: dedupedReadonlyLinks.length, kind: 'number' },
+          { key: 'handoffs', label: '证据动作', value: dedupeLinks(readonlyLinks).length, kind: 'number' },
         ];
     sourceExtra = null;
     titleDescription = artifactId
@@ -313,33 +364,182 @@ export function InspectorRail({
 
   if (context.domain === 'workspace' && context.section === 'contracts') {
     const acceptanceSummary = model?.workspace.publicAcceptance.summary;
-    const acceptanceCheck = model?.workspace.publicAcceptance.checks[0];
-    const topology = model?.workspace.publicTopology[0];
-    focusTitle = '契约验收摘要';
-    focusSummary = safeDisplayValue(acceptanceSummary?.status || '未生成');
-    focusRows = [
-      { key: 'status', label: '验收状态', value: acceptanceSummary?.status || '—', kind: 'badge' },
-      { key: 'generated', label: '生成时间', value: acceptanceSummary?.generated_at_utc || '—' },
-      { key: 'topology', label: '拓扑状态', value: acceptanceSummary?.topology_status || '—', kind: 'badge' },
-      { key: 'workspace', label: '工作区状态', value: acceptanceSummary?.workspace_status || '—', kind: 'badge' },
-      { key: 'change-class', label: '变更级别', value: acceptanceSummary?.change_class || model?.meta.change_class || 'RESEARCH_ONLY' },
-    ];
-    focusMeta = <Badge value={acceptanceSummary?.status || 'unknown'}>{safeDisplayValue(acceptanceSummary?.status || '未生成')}</Badge>;
-    sourceTitle = '公开面链路';
-    sourceSummary = safeDisplayValue(acceptanceCheck?.label || topology?.label || snapshotPath);
-    sourceRows = [
-      { key: 'check', label: '检查项', value: acceptanceCheck?.label || '—' },
-      { key: 'report-path', label: '验收报告', value: acceptanceSummary?.report_path || acceptanceCheck?.report_path || '—', kind: 'path', showRaw: true },
-      { key: 'public-url', label: '公开入口', value: topology?.url || '—', kind: 'path', showRaw: true },
-      { key: 'public-fetch', label: '公开拉取次数', value: acceptanceCheck?.public_snapshot_fetch_count ?? '—', kind: 'number' },
-      { key: 'snapshot-endpoint', label: '快照端点', value: acceptanceCheck?.snapshot_endpoint_observed || snapshotPath, kind: 'path', showRaw: true },
-    ];
-    sourceExtra = fallbackChain.length ? (
-      <div className="inspector-fallback-strip">
-        <span>契约回退链</span>
-        <strong>{fallbackChain.join(' → ')}</strong>
-      </div>
-    ) : null;
+    const acceptanceCheck = model?.workspace.publicAcceptance.checks.find((row) => row.id === 'workspace-routes-smoke')
+      || model?.workspace.publicAcceptance.checks[0];
+    const topology = model?.workspace.publicTopology.find((row) => normalizedInspectorRef((row as unknown as Record<string, unknown>).role) === 'public')
+      || model?.workspace.publicTopology[0];
+    const explicitCheckRoute = optionalInspectorValue(activeAcceptanceCheck?.inspector_route);
+    const explicitCheckSearchLink = optionalInspectorValue(activeAcceptanceCheck?.inspector_search_link_href);
+    const explicitCheckArtifactLink = optionalInspectorValue(activeAcceptanceCheck?.inspector_artifact_link_href);
+    const explicitCheckRawLink = optionalInspectorValue(activeAcceptanceCheck?.inspector_raw_link_href);
+    const explicitSubcommandRoute = optionalInspectorValue(activeAcceptanceSubcommand?.inspector_route);
+    const explicitSubcommandCheckRoute = optionalInspectorValue(activeAcceptanceSubcommand?.inspector_check_route || linkedAcceptanceCheck?.inspector_route);
+    const explicitSubcommandSearchLink = optionalInspectorValue(activeAcceptanceSubcommand?.inspector_search_link_href);
+    const explicitSubcommandArtifactLink = optionalInspectorValue(activeAcceptanceSubcommand?.inspector_artifact_link_href);
+    const explicitSubcommandRawLink = optionalInspectorValue(activeAcceptanceSubcommand?.inspector_raw_link_href);
+    if (activeAcceptanceCheck) {
+      const isTopologyCheck = activeAcceptanceCheck.id === 'topology_smoke';
+      focusTitle = '当前验收项';
+      focusSummary = safeDisplayValue(activeAcceptanceCheck.label || activeContractsCheckId || '未选验收项');
+      focusRows = [
+        { key: 'check', label: '验收项', value: activeAcceptanceCheck.label || '—' },
+        { key: 'status', label: '状态', value: activeAcceptanceCheck.status || '—', kind: 'badge' },
+        { key: 'generated', label: '生成时间', value: activeAcceptanceCheck.generated_at_utc || '—' },
+        { key: 'report-path', label: '报告路径', value: activeAcceptanceCheck.report_path || '—', kind: 'path', showRaw: true },
+      ];
+      focusMeta = <Badge value={activeAcceptanceCheck.status || 'unknown'}>{safeDisplayValue(activeAcceptanceCheck.status || '未生成')}</Badge>;
+      sourceTitle = '验收证据';
+      sourceSummary = safeDisplayValue(activeAcceptanceCheck.headline || activeAcceptanceCheck.report_path || activeAcceptanceCheck.label || '—');
+      sourceRows = isTopologyCheck
+        ? [
+            { key: 'report-path', label: '验收报告', value: activeAcceptanceCheck.report_path || '—', kind: 'path', showRaw: true },
+            { key: 'frontend-public', label: '公开前端', value: activeAcceptanceCheck.frontend_public || '—', kind: 'path', showRaw: true },
+            { key: 'root-public-entry', label: 'root public entry', value: activeAcceptanceCheck.root_public_entry || '—' },
+            { key: 'root-overview-screenshot', label: '根总览截图', value: activeAcceptanceCheck.root_overview_screenshot_path || '—', kind: 'path', showRaw: true },
+            { key: 'pages-overview-screenshot', label: 'pages 总览截图', value: activeAcceptanceCheck.pages_overview_screenshot_path || '—', kind: 'path', showRaw: true },
+            { key: 'root-contracts-screenshot', label: '根契约截图', value: activeAcceptanceCheck.root_contracts_screenshot_path || '—', kind: 'path', showRaw: true },
+            { key: 'pages-contracts-screenshot', label: 'pages 契约截图', value: activeAcceptanceCheck.pages_contracts_screenshot_path || '—', kind: 'path', showRaw: true },
+            { key: 'snapshot-endpoint', label: '快照端点', value: activeAcceptanceCheck.snapshot_endpoint_observed || snapshotPath, kind: 'path', showRaw: true },
+          ]
+        : [
+            { key: 'report-path', label: '验收报告', value: activeAcceptanceCheck.report_path || '—', kind: 'path', showRaw: true },
+            { key: 'research-audit-route', label: '研究审计检索', value: explicitCheckSearchLink || primaryResearchAuditCase?.search_route || activeAcceptanceCheck.research_audit_search_route || '—', kind: 'path', showRaw: true },
+            { key: 'research-audit-artifact-route', label: '研究审计工件', value: explicitCheckArtifactLink || primaryResearchAuditCase?.workspace_route || '—', kind: 'path', showRaw: true },
+            { key: 'research-audit-raw-route', label: '研究审计原始层', value: explicitCheckRawLink || (primaryResearchAuditCase?.raw_path ? buildWorkspaceLink('raw', { artifact: primaryResearchAuditCase.raw_path }) : '—'), kind: 'path', showRaw: true },
+            { key: 'graph-home-route', label: '图谱主页路由', value: activeAcceptanceCheck.graph_home_resolved_route || '—', kind: 'path', showRaw: true },
+            { key: 'graph-home-default-center', label: '图谱主页默认中心', value: activeAcceptanceCheck.graph_home_default_center || '—' },
+            { key: 'snapshot-endpoint', label: '快照端点', value: activeAcceptanceCheck.snapshot_endpoint_observed || snapshotPath, kind: 'path', showRaw: true },
+          ];
+      if (!isTopologyCheck && (explicitCheckSearchLink || primaryResearchAuditCase?.search_route)) {
+        readonlyLinks.push({
+          id: `contracts-check-audit-search-${activeAcceptanceCheck.id}`,
+          label: '查看研究审计检索',
+          to: explicitCheckSearchLink ? normalizeRouterLink(explicitCheckSearchLink) : buildSearchLink(primaryResearchAuditCase?.query || '', 'artifact'),
+        });
+      }
+      if (!isTopologyCheck && (explicitCheckArtifactLink || primaryResearchAuditCase?.workspace_route)) {
+        readonlyLinks.push({
+          id: `contracts-check-audit-artifact-${activeAcceptanceCheck.id}`,
+          label: '查看研究审计工件',
+          to: normalizeRouterLink(explicitCheckArtifactLink || primaryResearchAuditCase?.workspace_route),
+        });
+      }
+      if (!isTopologyCheck && (explicitCheckRawLink || primaryResearchAuditCase?.raw_path)) {
+        readonlyLinks.push({
+          id: `contracts-check-audit-raw-${activeAcceptanceCheck.id}`,
+          label: '查看研究审计原始层',
+          to: explicitCheckRawLink ? normalizeRouterLink(explicitCheckRawLink) : buildWorkspaceLink('raw', { artifact: primaryResearchAuditCase?.raw_path }),
+        });
+      }
+      if (activeAcceptanceCheck.graph_home_resolved_route) {
+        readonlyLinks.push({
+          id: `contracts-check-graph-home-${activeAcceptanceCheck.id}`,
+          label: '查看图谱主页',
+          to: normalizeRouterLink(activeAcceptanceCheck.graph_home_resolved_route),
+        });
+      }
+      sourceExtra = fallbackChain.length ? (
+        <div className="inspector-fallback-strip">
+          <span>契约回退链</span>
+          <strong>{fallbackChain.join(' → ')}</strong>
+        </div>
+      ) : null;
+      titleDescription = '当前已锁定到契约验收项，显示报告、研究审计入口与相关路由证据。';
+    } else if (activeAcceptanceSubcommand) {
+      const isTopologySubcommand = activeAcceptanceSubcommand.id === 'topology_smoke';
+      focusTitle = '当前子命令';
+      focusSummary = safeDisplayValue(activeAcceptanceSubcommand.label || activeContractsSubcommandId || '未选子命令');
+      focusRows = [
+        { key: 'subcommand', label: '子命令', value: activeAcceptanceSubcommand.label || '—' },
+        { key: 'returncode', label: 'returncode', value: activeAcceptanceSubcommand.returncode ?? '—', kind: 'number' },
+        { key: 'payload-present', label: 'payload_present', value: activeAcceptanceSubcommand.payload_present ?? '—' },
+        { key: 'stdout-bytes', label: 'stdout_bytes', value: activeAcceptanceSubcommand.stdout_bytes ?? '—', kind: 'number' },
+        { key: 'stderr-bytes', label: 'stderr_bytes', value: activeAcceptanceSubcommand.stderr_bytes ?? '—', kind: 'number' },
+      ];
+      focusMeta = <Badge value={typeof activeAcceptanceSubcommand.returncode === 'number' && activeAcceptanceSubcommand.returncode === 0 ? 'ok' : 'warning'}>
+        {safeDisplayValue(activeAcceptanceSubcommand.returncode ?? '—')}
+      </Badge>;
+      sourceTitle = '子命令证据';
+      sourceSummary = safeDisplayValue(activeAcceptanceSubcommand.cmd || activeAcceptanceSubcommand.label || '—');
+      sourceRows = isTopologySubcommand
+        ? [
+            { key: 'cmd', label: 'cmd', value: activeAcceptanceSubcommand.cmd || '—', showRaw: true },
+            { key: 'cwd', label: 'cwd', value: activeAcceptanceSubcommand.cwd || '—', kind: 'path', showRaw: true },
+            { key: 'report-path', label: '关联验收报告', value: linkedAcceptanceCheck?.report_path || '—', kind: 'path', showRaw: true },
+            { key: 'root-overview-screenshot', label: '根总览截图', value: linkedAcceptanceCheck?.root_overview_screenshot_path || '—', kind: 'path', showRaw: true },
+            { key: 'pages-overview-screenshot', label: 'pages 总览截图', value: linkedAcceptanceCheck?.pages_overview_screenshot_path || '—', kind: 'path', showRaw: true },
+            { key: 'root-contracts-screenshot', label: '根契约截图', value: linkedAcceptanceCheck?.root_contracts_screenshot_path || '—', kind: 'path', showRaw: true },
+            { key: 'pages-contracts-screenshot', label: 'pages 契约截图', value: linkedAcceptanceCheck?.pages_contracts_screenshot_path || '—', kind: 'path', showRaw: true },
+          ]
+        : [
+            { key: 'cmd', label: 'cmd', value: activeAcceptanceSubcommand.cmd || '—', showRaw: true },
+            { key: 'cwd', label: 'cwd', value: activeAcceptanceSubcommand.cwd || '—', kind: 'path', showRaw: true },
+            { key: 'report-path', label: '关联验收报告', value: linkedAcceptanceCheck?.report_path || '—', kind: 'path', showRaw: true },
+            { key: 'research-audit-route', label: '研究审计检索', value: explicitSubcommandSearchLink || primaryResearchAuditCase?.search_route || '—', kind: 'path', showRaw: true },
+            { key: 'research-audit-artifact-route', label: '研究审计工件', value: explicitSubcommandArtifactLink || primaryResearchAuditCase?.workspace_route || '—', kind: 'path', showRaw: true },
+            { key: 'research-audit-raw-route', label: '研究审计原始层', value: explicitSubcommandRawLink || (primaryResearchAuditCase?.raw_path ? buildWorkspaceLink('raw', { artifact: primaryResearchAuditCase.raw_path }) : '—'), kind: 'path', showRaw: true },
+            { key: 'graph-home-route', label: '图谱主页路由', value: linkedAcceptanceCheck?.graph_home_resolved_route || '—', kind: 'path', showRaw: true },
+          ];
+      readonlyLinks.push({
+        id: `contracts-subcommand-check-${activeAcceptanceSubcommand.id}`,
+        label: `查看${safeDisplayValue(linkedAcceptanceCheck?.label || activeAcceptanceSubcommand.label || '对应验收项')}`,
+        to: explicitSubcommandCheckRoute ? normalizeRouterLink(explicitSubcommandCheckRoute) : buildWorkspacePageLink('contracts', baseFocus, `contracts-check-${activeAcceptanceSubcommand.id}`),
+      });
+      if (!isTopologySubcommand && (explicitSubcommandSearchLink || primaryResearchAuditCase?.search_route)) {
+        readonlyLinks.push({
+          id: `contracts-subcommand-audit-search-${activeAcceptanceSubcommand.id}`,
+          label: '查看研究审计检索',
+          to: explicitSubcommandSearchLink ? normalizeRouterLink(explicitSubcommandSearchLink) : buildSearchLink(primaryResearchAuditCase?.query || '', 'artifact'),
+        });
+      }
+      if (!isTopologySubcommand && (explicitSubcommandArtifactLink || primaryResearchAuditCase?.workspace_route)) {
+        readonlyLinks.push({
+          id: `contracts-subcommand-audit-artifact-${activeAcceptanceSubcommand.id}`,
+          label: '查看研究审计工件',
+          to: normalizeRouterLink(explicitSubcommandArtifactLink || primaryResearchAuditCase?.workspace_route),
+        });
+      }
+      if (!isTopologySubcommand && (explicitSubcommandRawLink || primaryResearchAuditCase?.raw_path)) {
+        readonlyLinks.push({
+          id: `contracts-subcommand-audit-raw-${activeAcceptanceSubcommand.id}`,
+          label: '查看研究审计原始层',
+          to: explicitSubcommandRawLink ? normalizeRouterLink(explicitSubcommandRawLink) : buildWorkspaceLink('raw', { artifact: primaryResearchAuditCase?.raw_path }),
+        });
+      }
+      sourceExtra = fallbackChain.length ? (
+        <div className="inspector-fallback-strip">
+          <span>契约回退链</span>
+          <strong>{fallbackChain.join(' → ')}</strong>
+        </div>
+      ) : null;
+      titleDescription = '当前已锁定到契约子命令，显示命令参数、回报码与关联验收证据。';
+    } else {
+      focusTitle = '契约验收摘要';
+      focusSummary = safeDisplayValue(acceptanceSummary?.status || '未生成');
+      focusRows = [
+        { key: 'status', label: '验收状态', value: acceptanceSummary?.status || '—', kind: 'badge' },
+        { key: 'generated', label: '生成时间', value: acceptanceSummary?.generated_at_utc || '—' },
+        { key: 'topology', label: '拓扑状态', value: acceptanceSummary?.topology_status || '—', kind: 'badge' },
+        { key: 'workspace', label: '工作区状态', value: acceptanceSummary?.workspace_status || '—', kind: 'badge' },
+        { key: 'change-class', label: '变更级别', value: acceptanceSummary?.change_class || model?.meta.change_class || 'RESEARCH_ONLY' },
+      ];
+      focusMeta = <Badge value={acceptanceSummary?.status || 'unknown'}>{safeDisplayValue(acceptanceSummary?.status || '未生成')}</Badge>;
+      sourceTitle = '公开面链路';
+      sourceSummary = safeDisplayValue(acceptanceCheck?.label || topology?.label || snapshotPath);
+      sourceRows = [
+        { key: 'check', label: '检查项', value: acceptanceCheck?.label || '—' },
+        { key: 'report-path', label: '验收报告', value: acceptanceSummary?.report_path || acceptanceCheck?.report_path || '—', kind: 'path', showRaw: true },
+        { key: 'public-url', label: '公开入口', value: topology?.url || '—', kind: 'path', showRaw: true },
+        { key: 'public-fetch', label: '公开拉取次数', value: acceptanceCheck?.public_snapshot_fetch_count ?? '—', kind: 'number' },
+        { key: 'snapshot-endpoint', label: '快照端点', value: acceptanceCheck?.snapshot_endpoint_observed || snapshotPath, kind: 'path', showRaw: true },
+      ];
+      sourceExtra = fallbackChain.length ? (
+        <div className="inspector-fallback-strip">
+          <span>契约回退链</span>
+          <strong>{fallbackChain.join(' → ')}</strong>
+        </div>
+      ) : null;
+    }
   }
 
   if (context.domain === 'workspace' && context.section === 'raw') {
@@ -368,8 +568,10 @@ export function InspectorRail({
     );
   }
 
+  const dedupedReadonlyLinks = dedupeLinks(readonlyLinks);
+
   return (
-    <div className="inspector-rail-inner">
+    <div className="inspector-rail-inner" data-mode={mode} data-shell-tier={shellTier} data-collapsed={collapsed ? 'true' : 'false'}>
       <div className="inspector-title-block">
         <h3>{title}</h3>
         <p>{titleDescription}</p>

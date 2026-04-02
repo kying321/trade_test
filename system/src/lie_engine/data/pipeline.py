@@ -132,6 +132,35 @@ class DataBus:
         return deduped
 
     @staticmethod
+    def _attach_macro_features(feature_df: pd.DataFrame, macro_df: pd.DataFrame | None) -> pd.DataFrame:
+        if feature_df.empty or macro_df is None or macro_df.empty or "ts" not in feature_df.columns or "date" not in macro_df.columns:
+            return feature_df
+
+        macro_feature = macro_df.copy()
+        macro_feature["date"] = pd.to_datetime(macro_feature["date"], errors="coerce").dt.normalize()
+        macro_feature = macro_feature.dropna(subset=["date"]).sort_values("date").drop_duplicates(subset=["date"], keep="last")
+        if macro_feature.empty:
+            return feature_df
+
+        drop_cols = [c for c in macro_feature.columns if c == "source" or str(c).endswith("_source")]
+        macro_feature = macro_feature.drop(columns=drop_cols, errors="ignore")
+
+        feature = feature_df.copy()
+        feature["date"] = pd.to_datetime(feature["ts"], errors="coerce").dt.normalize()
+        feature["__orig_order__"] = np.arange(len(feature))
+        macro_cols = ["date"] + [c for c in macro_feature.columns if c != "date" and c not in feature.columns]
+        macro_feature = macro_feature[macro_cols].sort_values("date")
+
+        merged = pd.merge_asof(
+            feature.sort_values("date"),
+            macro_feature,
+            on="date",
+            direction="backward",
+        )
+        merged = merged.sort_values("__orig_order__").drop(columns=["__orig_order__", "date"], errors="ignore").reset_index(drop=True)
+        return merged
+
+    @staticmethod
     def _source_reliability(source: str) -> float:
         src = (source or "").lower()
         official_keys = ("gov", "official", "exchange", "stats", "pbc", "ministry")
@@ -460,10 +489,16 @@ class DataBus:
         if not feature_df.empty:
             feature_df["ret_1d"] = feature_df.groupby("symbol")["close"].pct_change().fillna(0.0)
             feature_df["vol_chg"] = feature_df.groupby("symbol")["volume"].pct_change().fillna(0.0)
+            feature_df = self._attach_macro_features(feature_df, result.macro)
         write_parquet_optional(feat_path, feature_df)
 
-        append_sqlite(self.sqlite_path, "bars_normalized", result.normalized_bars)
-        append_sqlite(self.sqlite_path, "macro", result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"]))
+        append_sqlite(self.sqlite_path, "bars_normalized", result.normalized_bars, key_columns=["ts", "symbol"])
+        append_sqlite(
+            self.sqlite_path,
+            "macro",
+            result.macro if not result.macro.empty else pd.DataFrame(columns=["date", "cpi_yoy", "ppi_yoy", "lpr_1y", "source"]),
+            key_columns=["date", "source"],
+        )
         news_rows = [n.to_dict() | {"as_of": dstr} for n in result.news]
         append_sqlite(
             self.sqlite_path,
@@ -487,6 +522,7 @@ class DataBus:
                     ]
                 )
             ),
+            key_columns=["event_id"],
         )
         sentiment_rows = []
         for key, value in result.sentiment.items():
@@ -505,9 +541,10 @@ class DataBus:
                 if sentiment_rows
                 else pd.DataFrame(columns=["as_of", "key", "value"])
             ),
+            key_columns=["as_of", "key"],
         )
         source_conf_df = pd.DataFrame([d.to_dict() | {"as_of": dstr} for d in result.source_confidence.details])
         if source_conf_df.empty:
             source_conf_df = pd.DataFrame(columns=["source", "score", "base_reliability", "bar_consistency", "bar_coverage", "macro_consistency", "macro_coverage", "news_confidence", "sentiment_coverage", "bars_rows", "macro_rows", "news_events", "sentiment_factors", "as_of"])
-        append_sqlite(self.sqlite_path, "source_confidence", source_conf_df)
-        append_sqlite(self.sqlite_path, "quality", pd.DataFrame([result.quality.to_dict() | {"as_of": dstr}]))
+        append_sqlite(self.sqlite_path, "source_confidence", source_conf_df, key_columns=["as_of", "source"])
+        append_sqlite(self.sqlite_path, "quality", pd.DataFrame([result.quality.to_dict() | {"as_of": dstr}]), key_columns=["as_of"])

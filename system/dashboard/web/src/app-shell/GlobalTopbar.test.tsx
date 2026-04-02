@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { GlobalTopbar, type GlobalTopbarDomainContext, type ThemePreference } from './GlobalTopbar';
+import { GlobalTopbar, type ThemePreference } from './GlobalTopbar';
 
 function renderTopbar({
   currentPath = '/overview',
@@ -10,13 +10,6 @@ function renderTopbar({
   currentPath?: string;
   themePreference?: ThemePreference;
 } = {}) {
-  const domainContext: GlobalTopbarDomainContext = {
-    kicker: '研究域',
-    title: 'ETHUSDT 15m 主线',
-    detail: '聚焦 breakout-pullback 与退出/风险验证',
-    tone: 'research',
-  };
-
   return render(
     <MemoryRouter>
       <GlobalTopbar
@@ -28,40 +21,48 @@ function renderTopbar({
         globalSummary={{
           changeClass: 'RESEARCH_ONLY',
           chips: [
-            { label: '公开面', value: 'fuuu.fun' },
-            { label: '快照', value: '只读轮询' },
+            { label: '模式', value: '只读快照' },
+            { label: '快照', value: 'generated:2026-03-28T03:00:00Z' },
           ],
         }}
         themePreference={themePreference}
         resolvedTheme="dark"
         onThemeChange={vi.fn()}
-        domainContext={domainContext}
+        onOpenSearch={vi.fn()}
       />,
     </MemoryRouter>,
   );
 }
 
 describe('GlobalTopbar', () => {
-  it('将品牌、全局控制和域上下文拆成独立层级区域', () => {
+  it('仅承载全局职责并暴露稳定语义契约', () => {
+    renderTopbar();
+
+    expect(screen.queryByText('职责')).toBeNull();
+    expect(screen.getByRole('navigation', { name: 'primary-domains' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开全局搜索' })).toBeTruthy();
+    expect(screen.getByLabelText('global-summary').textContent || '').toMatch(/快照|只读|generated/i);
+  });
+
+  it('将品牌、主域导航、全局工具与环境条拆成独立层级区域', () => {
     renderTopbar();
 
     const brandRegion = screen.getByRole('region', { name: 'global-brand-context' });
     expect(within(brandRegion).getByText('Fenlie / 控制台')).toBeTruthy();
     expect(within(brandRegion).getByText('只读操作与研究面')).toBeTruthy();
 
-    const controlDeck = screen.getByRole('region', { name: 'global-control-deck' });
+    const controlDeck = screen.getByRole('region', { name: 'global-tool-strip' });
     expect(within(controlDeck).getByRole('group', { name: 'theme-switcher' })).toBeTruthy();
-    expect(within(controlDeck).getByText('变更级别：RESEARCH_ONLY')).toBeTruthy();
-    expect(within(controlDeck).getByText('公开面：fuuu.fun')).toBeTruthy();
+    expect(within(controlDeck).getByRole('button', { name: '打开全局搜索' })).toBeTruthy();
 
-    const domainRegion = screen.getByRole('region', { name: 'global-domain-context' });
-    expect(within(domainRegion).getByText('研究域')).toBeTruthy();
-    expect(within(domainRegion).getByText('ETHUSDT 15m 主线')).toBeTruthy();
-    expect(within(domainRegion).getByText('聚焦 breakout-pullback 与退出/风险验证')).toBeTruthy();
+    const summaryStrip = screen.getByLabelText('global-summary');
+    expect(within(summaryStrip).getByText('模式：只读快照')).toBeTruthy();
+    expect(within(summaryStrip).getByText('快照：generated:2026-03-28T03:00:00Z')).toBeTruthy();
+    expect(within(summaryStrip).getByText('变更级别：RESEARCH_ONLY')).toBeTruthy();
   });
 
   it('为主导航保留当前激活态并暴露为独立导航区', () => {
-    renderTopbar({ currentPath: '/workspace/artifacts', themePreference: 'dark' });
+    renderTopbar({ currentPath: '/workspace/backtests', themePreference: 'dark' });
 
     const nav = screen.getByRole('navigation', { name: 'primary-domains' });
     expect(within(nav).getByRole('link', { name: '总览' })).toBeTruthy();

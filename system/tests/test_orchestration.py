@@ -122,6 +122,24 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(out.trade_blocked)
         self.assertTrue(any("BTC" in x for x in out.black_swan_items))
 
+    def test_build_guard_assessment_adds_event_overlay_reason_when_canary_frozen(self) -> None:
+        overlay = {"canary_freeze": True, "override_reason_codes": ["event_crisis_contagion"]}
+        out = build_guard_assessment(
+            as_of=date(2026, 2, 13),
+            regime=RegimeLabel.STRONG_TREND,
+            atr_z=0.1,
+            quality_passed=True,
+            sentiment={},
+            news=[],
+            recent_trades=pd.DataFrame({"pnl": [1.0, 0.5]}),
+            lookback_hours=24,
+            cooldown_losses=3,
+            black_swan_threshold=70.0,
+            event_overlay=overlay,
+        )
+        self.assertTrue(out.trade_blocked)
+        self.assertTrue(any("event" in reason.lower() for reason in out.non_trade_reasons))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -151,3 +151,8 @@ def test_build_price_action_breakout_pullback_exit_risk_sim_only_runs_with_fixtu
     assert payload["baseline_validation_status"]
     assert payload["selected_validation_status"]
     assert payload["ranking"]
+
+    latest_json_path = review_dir / "latest_price_action_breakout_pullback_exit_risk_sim_only.json"
+    assert latest_json_path.exists()
+    latest_payload = json.loads(latest_json_path.read_text(encoding="utf-8"))
+    assert latest_payload == payload

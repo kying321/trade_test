@@ -103,6 +103,27 @@ def latest_review_suffix(review_dir: Path, suffix: str) -> Path | None:
     return latest_by_glob(review_dir, f"*_{suffix}")
 
 
+def latest_research_summary(research_dir: Path, kind: str) -> Path | None:
+    if not research_dir.exists():
+        return None
+    candidates: list[Path] = []
+    for child in research_dir.iterdir():
+        if not child.is_dir():
+            continue
+        name = child.name
+        if kind == "optimizer" and not re.fullmatch(r"\d{8}_\d{6}", name):
+            continue
+        if kind == "strategy_lab" and not name.startswith("strategy_lab_"):
+            continue
+        summary_path = child / "summary.json"
+        if summary_path.is_file():
+            candidates.append(summary_path)
+    if not candidates:
+        return None
+    candidates.sort(key=sort_key, reverse=True)
+    return candidates[0]
+
+
 def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -140,6 +161,47 @@ def sanitize_value(value: Any) -> Any:
     if isinstance(value, list):
         return [sanitize_value(item) for item in value]
     return value
+
+
+def sanitize_surface_value(
+    value: Any,
+    *,
+    surface: SurfaceSpec,
+    workspace: Path,
+    review_dir: Path,
+    artifacts_dir: Path,
+    public_dir: Path,
+) -> Any:
+    sanitized = sanitize_value(value)
+    if isinstance(sanitized, dict):
+        return {
+            key: sanitize_surface_value(
+                child,
+                surface=surface,
+                workspace=workspace,
+                review_dir=review_dir,
+                artifacts_dir=artifacts_dir,
+                public_dir=public_dir,
+            )
+            for key, child in sanitized.items()
+        }
+    if isinstance(sanitized, list):
+        return [
+            sanitize_surface_value(
+                item,
+                surface=surface,
+                workspace=workspace,
+                review_dir=review_dir,
+                artifacts_dir=artifacts_dir,
+                public_dir=public_dir,
+            )
+            for item in sanitized
+        ]
+    if isinstance(sanitized, str) and not surface.expose_absolute_paths:
+        candidate = Path(sanitized)
+        if candidate.is_absolute():
+            return path_locator(candidate, workspace, review_dir, artifacts_dir, public_dir)
+    return sanitized
 
 
 def path_locator(path: Path, workspace: Path, review_dir: Path, artifacts_dir: Path, public_dir: Path) -> str:
@@ -248,7 +310,14 @@ def payload_entry(
     if path is None or not path.exists() or path_is_sensitive(path):
         return None
     raw = load_json(path)
-    payload = sanitize_value(raw)
+    payload = sanitize_surface_value(
+        raw,
+        surface=surface,
+        workspace=workspace,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        public_dir=public_dir,
+    )
     display_path = surface_path(path, surface, workspace, review_dir, artifacts_dir, public_dir)
     key = label
     return key, {
@@ -409,6 +478,91 @@ def build_source_heads(artifact_payloads: dict[str, dict[str, Any]], source_head
     return result
 
 
+def ensure_event_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    event_artifacts = [
+        ("event_game_state_snapshot", "research", "event_insight", "event_game_state_snapshot.json"),
+        ("event_transmission_chain_map", "research", "event_insight", "event_transmission_chain_map.json"),
+        ("event_regime_snapshot", "research", "event_insight", "event_regime_snapshot.json"),
+        ("event_crisis_analogy", "research", "event_insight", "event_crisis_analogy.json"),
+        ("event_asset_shock_map", "research", "event_insight", "event_asset_shock_map.json"),
+        ("event_safety_margin_snapshot", "research", "event_insight", "event_safety_margin_snapshot.json"),
+        ("event_crisis_operator_summary", "research", "event_insight", "event_crisis_operator_summary.json"),
+    ]
+    for artifact_id, category, artifact_group, suffix in event_artifacts:
+        if artifact_id in selected_paths:
+            continue
+        candidate = latest_review_suffix(review_dir, suffix)
+        if candidate:
+            selected_paths[artifact_id] = (candidate, category, artifact_group)
+
+
+def ensure_commodity_reasoning_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    commodity_artifacts = [
+        ("commodity_reasoning_scenario_tree", "research", "commodity_reasoning", "commodity_reasoning_scenario_tree.json"),
+        ("commodity_reasoning_transmission_map", "research", "commodity_reasoning", "commodity_reasoning_transmission_map.json"),
+        ("commodity_reasoning_boundary_strength", "research", "commodity_reasoning", "commodity_reasoning_boundary_strength.json"),
+        ("commodity_reasoning_summary", "research", "commodity_reasoning", "commodity_reasoning_summary.json"),
+    ]
+    for artifact_id, category, artifact_group, suffix in commodity_artifacts:
+        if artifact_id in selected_paths:
+            continue
+        candidate = latest_review_suffix(review_dir, suffix)
+        if candidate:
+            selected_paths[artifact_id] = (candidate, category, artifact_group)
+
+
+def merge_payload_entry(
+    existing: dict[str, Any] | None,
+    *,
+    label: str,
+    path: Path,
+    category: str,
+    artifact_group: str,
+    surface: SurfaceSpec,
+    workspace: Path,
+    review_dir: Path,
+    artifacts_dir: Path,
+    public_dir: Path,
+) -> dict[str, Any]:
+    entry = payload_entry(
+        label,
+        path,
+        category,
+        artifact_group,
+        surface=surface,
+        workspace=workspace,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        public_dir=public_dir,
+    )
+    if entry is None:
+        return existing or {}
+    _, new_entry = entry
+    if not existing:
+        return new_entry
+
+    merged = copy.deepcopy(existing)
+    existing_payload = merged.get("payload") if isinstance(merged.get("payload"), dict) else {}
+    new_payload = new_entry.get("payload") if isinstance(new_entry.get("payload"), dict) else {}
+    payload_out = dict(existing_payload)
+    for key, value in new_payload.items():
+        if key not in payload_out or payload_out.get(key) in (None, "", [], {}):
+            payload_out[key] = value
+    merged["payload"] = payload_out
+
+    existing_summary = merged.get("summary") if isinstance(merged.get("summary"), dict) else {}
+    new_summary = new_entry.get("summary") if isinstance(new_entry.get("summary"), dict) else {}
+    summary_out = dict(existing_summary)
+    for key, value in new_summary.items():
+        if key not in summary_out or summary_out.get(key) in (None, "", [], {}):
+            summary_out[key] = value
+    merged["summary"] = summary_out
+    merged.setdefault("label", new_entry.get("label"))
+    merged.setdefault("category", new_entry.get("category"))
+    merged.setdefault("path", new_entry.get("path"))
+    return merged
+
+
 def build_backtests(
     artifacts_dir: Path,
     max_backtests: int,
@@ -538,6 +692,8 @@ def build_surface_snapshot(
     max_backtests: int,
     max_equity_points: int,
 ) -> dict[str, Any]:
+    ensure_event_artifacts(selected_paths, review_dir)
+    ensure_commodity_reasoning_artifacts(selected_paths, review_dir)
     generated_at = utc_now()
     artifact_payloads: dict[str, dict[str, Any]] = {}
     for label, (path, category, artifact_group) in selected_paths.items():
@@ -554,6 +710,37 @@ def build_surface_snapshot(
         )
         if entry:
             artifact_payloads[entry[0]] = entry[1]
+
+    research_dir = workspace / "system" / "output" / "research"
+    optimizer_summary = latest_research_summary(research_dir, "optimizer")
+    if optimizer_summary is not None:
+        artifact_payloads["recent_strategy_backtests"] = merge_payload_entry(
+            artifact_payloads.get("recent_strategy_backtests"),
+            label="recent_strategy_backtests",
+            path=optimizer_summary,
+            category="backtest",
+            artifact_group="system_anchor",
+            surface=surface,
+            workspace=workspace,
+            review_dir=review_dir,
+            artifacts_dir=artifacts_dir,
+            public_dir=public_dir,
+        )
+
+    strategy_lab_summary = latest_research_summary(research_dir, "strategy_lab")
+    if strategy_lab_summary is not None:
+        artifact_payloads["strategy_lab_summary"] = merge_payload_entry(
+            artifact_payloads.get("strategy_lab_summary"),
+            label="strategy_lab_summary",
+            path=strategy_lab_summary,
+            category="research",
+            artifact_group="research_mainline",
+            surface=surface,
+            workspace=workspace,
+            review_dir=review_dir,
+            artifacts_dir=artifacts_dir,
+            public_dir=public_dir,
+        )
 
     catalog = build_catalog(
         review_dir,
@@ -587,7 +774,7 @@ def build_surface_snapshot(
         "change_class": "RESEARCH_ONLY",
         "surface": surface.key,
         "generated_at_utc": generated_at,
-        "workspace": str(workspace),
+        "workspace": str(workspace) if surface.expose_absolute_paths else workspace.name,
         "ui_routes": ui_routes,
         "meta": {
             "generated_at_utc": generated_at,

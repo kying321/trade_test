@@ -203,6 +203,274 @@ class BacktestTests(unittest.TestCase):
             bt_mod.scan_signals = original_scan  # type: ignore[assignment]
             bt_mod.derive_regime_consensus = original_regime  # type: ignore[assignment]
 
+    def test_backtest_result_exposes_trade_journal_with_entry_and_exit_dates(self) -> None:
+        import lie_engine.backtest.engine as bt_mod
+
+        bars = pd.concat(
+            [
+                make_bars("BTCUSDT", n=260, trend=0.05, seed=301, asset_class="crypto"),
+                make_bars("ETHUSDT", n=260, trend=0.04, seed=302, asset_class="crypto"),
+            ],
+            ignore_index=True,
+        )
+
+        original_scan = bt_mod.scan_signals
+        original_regime = bt_mod.derive_regime_consensus
+
+        def _fake_scan_signals(*, bars: pd.DataFrame, regime, cfg):  # noqa: ANN001
+            row = bars.sort_values("ts").iloc[-1]
+            px = float(row["close"])
+            return [
+                SignalCandidate(
+                    symbol=str(row["symbol"]),
+                    side=Side.LONG,
+                    regime=regime,
+                    position_score=1.0,
+                    structure_score=1.0,
+                    momentum_score=1.0,
+                    confidence=95.0,
+                    convexity_ratio=2.0,
+                    entry_price=px,
+                    stop_price=px * 0.99,
+                    target_price=px * 1.01,
+                    can_short=True,
+                )
+            ]
+
+        def _fake_regime(*, as_of, hurst, hmm_probs, atr_z, trend_thr, mean_thr, atr_extreme):  # noqa: ANN001
+            return RegimeState(
+                as_of=as_of,
+                hurst=float(hurst),
+                hmm_probs={"trend": 1.0},
+                atr_z=float(atr_z),
+                consensus=RegimeLabel.WEAK_TREND,
+                protection_mode=False,
+                rationale="test_force_trend",
+            )
+
+        bt_mod.scan_signals = _fake_scan_signals  # type: ignore[assignment]
+        bt_mod.derive_regime_consensus = _fake_regime  # type: ignore[assignment]
+        try:
+            result = run_event_backtest(
+                bars=bars,
+                start=date(2025, 1, 1),
+                end=date(2025, 9, 17),
+                cfg=BacktestConfig(
+                    max_daily_trades=1,
+                    hold_days=2,
+                    signal_confidence_min=0.0,
+                    convexity_min=0.0,
+                    signal_eval_interval=1,
+                    regime_recalc_interval=1,
+                    proxy_lookback=60,
+                ),
+                trend_thr=0.6,
+                mean_thr=0.4,
+                atr_extreme=2.0,
+            )
+            self.assertGreater(int(result.trades), 0)
+            self.assertTrue(len(result.trade_journal) > 0)
+            first = result.trade_journal[0]
+            self.assertIn("entry_date", first)
+            self.assertIn("exit_date", first)
+            self.assertIn("holding_days", first)
+            self.assertGreaterEqual(int(first["holding_days"]), 1)
+            self.assertGreaterEqual(str(first["exit_date"]), str(first["entry_date"]))
+        finally:
+            bt_mod.scan_signals = original_scan  # type: ignore[assignment]
+            bt_mod.derive_regime_consensus = original_regime  # type: ignore[assignment]
+
+    def test_backtest_holding_exposure_uses_actual_exit_date_when_target_hits_early(self) -> None:
+        import lie_engine.backtest.engine as bt_mod
+
+        dates = pd.date_range("2025-01-01", periods=90, freq="D")
+
+        def _mk(symbol: str, base: float) -> pd.DataFrame:
+            close = pd.Series([base * (1.02 ** i) for i in range(len(dates))], dtype=float)
+            open_ = close.shift(1).fillna(close.iloc[0] * 0.995)
+            high = close * 1.01
+            low = open_.where(open_ < close, close) * 0.995
+            return pd.DataFrame(
+                {
+                    "ts": dates,
+                    "symbol": symbol,
+                    "open": open_.to_numpy(),
+                    "high": high.to_numpy(),
+                    "low": low.to_numpy(),
+                    "close": close.to_numpy(),
+                    "volume": 1000.0,
+                    "source": "mock",
+                    "asset_class": "crypto",
+                }
+            )
+
+        bars = pd.concat([_mk("BTCUSDT", 100.0), _mk("ETHUSDT", 80.0)], ignore_index=True)
+
+        original_scan = bt_mod.scan_signals
+        original_regime = bt_mod.derive_regime_consensus
+
+        def _fake_scan_signals(*, bars: pd.DataFrame, regime, cfg):  # noqa: ANN001
+            row = bars.sort_values("ts").iloc[-1]
+            px = float(row["close"])
+            return [
+                SignalCandidate(
+                    symbol=str(row["symbol"]),
+                    side=Side.LONG,
+                    regime=regime,
+                    position_score=1.0,
+                    structure_score=1.0,
+                    momentum_score=1.0,
+                    confidence=95.0,
+                    convexity_ratio=2.0,
+                    entry_price=px,
+                    stop_price=px * 0.99,
+                    target_price=px * 1.005,
+                    can_short=True,
+                )
+            ]
+
+        def _fake_regime(*, as_of, hurst, hmm_probs, atr_z, trend_thr, mean_thr, atr_extreme):  # noqa: ANN001
+            return RegimeState(
+                as_of=as_of,
+                hurst=float(hurst),
+                hmm_probs={"trend": 1.0},
+                atr_z=float(atr_z),
+                consensus=RegimeLabel.WEAK_TREND,
+                protection_mode=False,
+                rationale="test_force_trend",
+            )
+
+        bt_mod.scan_signals = _fake_scan_signals  # type: ignore[assignment]
+        bt_mod.derive_regime_consensus = _fake_regime  # type: ignore[assignment]
+        try:
+            result = run_event_backtest(
+                bars=bars,
+                start=date(2025, 3, 15),
+                end=date(2025, 3, 25),
+                cfg=BacktestConfig(
+                    max_daily_trades=1,
+                    hold_days=3,
+                    signal_confidence_min=0.0,
+                    convexity_min=0.0,
+                    signal_eval_interval=1,
+                    regime_recalc_interval=1,
+                    proxy_lookback=60,
+                ),
+                trend_thr=0.6,
+                mean_thr=0.4,
+                atr_extreme=2.0,
+            )
+            self.assertGreater(int(result.trades), 0)
+            first = result.trade_journal[0]
+            self.assertTrue(bool(first["hit_target"]))
+            self.assertEqual(int(first["holding_days"]), 1)
+            entry_date = pd.to_datetime(first["entry_date"]).date()
+            exit_date = pd.to_datetime(first["exit_date"]).date()
+            self.assertEqual(exit_date, entry_date + pd.Timedelta(days=1))
+            exposure_dates = [pd.to_datetime(x["date"]).date() for x in result.holding_daily_symbol_exposure if x["symbol"] == first["symbol"]]
+            self.assertIn(entry_date, exposure_dates)
+            self.assertIn(exit_date, exposure_dates)
+        finally:
+            bt_mod.scan_signals = original_scan  # type: ignore[assignment]
+            bt_mod.derive_regime_consensus = original_regime  # type: ignore[assignment]
+
+    def test_backtest_marks_to_market_over_holding_days_instead_of_entry_day_lump_sum(self) -> None:
+        import lie_engine.backtest.engine as bt_mod
+
+        dates = pd.date_range("2025-01-01", periods=90, freq="D")
+
+        def _mk(symbol: str, base: float) -> pd.DataFrame:
+            close = pd.Series([base * (1.01 ** i) for i in range(len(dates))], dtype=float)
+            open_ = close.shift(1).fillna(close.iloc[0])
+            high = close * 1.002
+            low = open_ * 0.998
+            return pd.DataFrame(
+                {
+                    "ts": dates,
+                    "symbol": symbol,
+                    "open": open_.to_numpy(),
+                    "high": high.to_numpy(),
+                    "low": low.to_numpy(),
+                    "close": close.to_numpy(),
+                    "volume": 1000.0,
+                    "source": "mock",
+                    "asset_class": "crypto",
+                }
+            )
+
+        bars = pd.concat([_mk("BTCUSDT", 100.0), _mk("ETHUSDT", 80.0)], ignore_index=True)
+
+        original_scan = bt_mod.scan_signals
+        original_regime = bt_mod.derive_regime_consensus
+        state = {"used": False}
+
+        def _fake_scan_signals(*, bars: pd.DataFrame, regime, cfg):  # noqa: ANN001
+            if state["used"]:
+                return []
+            state["used"] = True
+            row = bars.sort_values("ts").iloc[-1]
+            px = float(row["close"])
+            return [
+                SignalCandidate(
+                    symbol=str(row["symbol"]),
+                    side=Side.LONG,
+                    regime=regime,
+                    position_score=1.0,
+                    structure_score=1.0,
+                    momentum_score=1.0,
+                    confidence=95.0,
+                    convexity_ratio=2.0,
+                    entry_price=px,
+                    stop_price=px * 0.90,
+                    target_price=px * 1.50,
+                    can_short=True,
+                )
+            ]
+
+        def _fake_regime(*, as_of, hurst, hmm_probs, atr_z, trend_thr, mean_thr, atr_extreme):  # noqa: ANN001
+            return RegimeState(
+                as_of=as_of,
+                hurst=float(hurst),
+                hmm_probs={"trend": 1.0},
+                atr_z=float(atr_z),
+                consensus=RegimeLabel.WEAK_TREND,
+                protection_mode=False,
+                rationale="test_force_trend",
+            )
+
+        bt_mod.scan_signals = _fake_scan_signals  # type: ignore[assignment]
+        bt_mod.derive_regime_consensus = _fake_regime  # type: ignore[assignment]
+        try:
+            result = run_event_backtest(
+                bars=bars,
+                start=date(2025, 3, 15),
+                end=date(2025, 3, 25),
+                cfg=BacktestConfig(
+                    max_daily_trades=1,
+                    hold_days=3,
+                    signal_confidence_min=0.0,
+                    convexity_min=0.0,
+                    signal_eval_interval=1,
+                    regime_recalc_interval=1,
+                    proxy_lookback=60,
+                ),
+                trend_thr=0.6,
+                mean_thr=0.4,
+                atr_extreme=2.0,
+            )
+            self.assertGreater(int(result.trades), 0)
+            first = result.trade_journal[0]
+            entry_date = pd.to_datetime(first["entry_date"]).date()
+            curve = {
+                pd.to_datetime(row["date"]).date(): float(row["equity"])
+                for row in result.equity_curve
+            }
+            self.assertAlmostEqual(curve[entry_date], 1.0, places=6)
+            self.assertGreater(curve[entry_date + pd.Timedelta(days=1)], curve[entry_date])
+        finally:
+            bt_mod.scan_signals = original_scan  # type: ignore[assignment]
+            bt_mod.derive_regime_consensus = original_regime  # type: ignore[assignment]
+
 
 if __name__ == "__main__":
     unittest.main()

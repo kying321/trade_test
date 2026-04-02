@@ -1,9 +1,10 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { OperatorAlertLink, SurfaceKey, TerminalReadModel, ViewDrilldownSchema } from '../types/contracts';
 import { labelFor } from '../utils/dictionary';
 import { safeDisplayValue, statusTone } from '../utils/formatters';
 import { buildDrilldownRowId, buildTerminalFocusKey, buildTerminalLink, buildWorkspaceLink, type SharedFocusState } from '../utils/focus-links';
-import { Badge, DenseTable, DrilldownList, DrilldownSection, FreshnessList, MetricStrip, PanelCard } from './ui-kit';
+import { Badge, ClampText, DenseTable, DrilldownList, DrilldownSection, FreshnessList, MetricStrip, PanelCard } from './ui-kit';
 
 const t = (key: string) => labelFor(key);
 
@@ -199,6 +200,15 @@ function buildPinnedArtifactWorkspaceHandoffs(model: TerminalReadModel, focus?: 
   return dedupeLinks(links);
 }
 
+function buildCommodityReasoningMetrics(model: TerminalReadModel) {
+  const microIds = new Set(['commodity-scenario', 'commodity-chain', 'commodity-range']);
+  const repairIds = new Set(['commodity-summary', 'commodity-boundary']);
+  return [
+    ...model.dataRegime.microCapture.filter((metric) => microIds.has(metric.id)),
+    ...model.signalRisk.repairPlan.filter((metric) => repairIds.has(metric.id)),
+  ];
+}
+
 function resolveTerminalTargetFocus(
   model: TerminalReadModel,
   current: TerminalFocus | undefined,
@@ -301,7 +311,9 @@ function TerminalBreadcrumbs({
         {focus?.row && rowLabel ? (
           <>
             <span className="terminal-breadcrumb-sep">/</span>
-            <span className="terminal-breadcrumb-current">{rowLabel}</span>
+            <span className="terminal-breadcrumb-current">
+              <ClampText raw={rowLabel} critical>{rowLabel}</ClampText>
+            </span>
           </>
         ) : null}
       </div>
@@ -356,6 +368,16 @@ function PanelSectionLinks({
   );
 }
 
+function TerminalPanelsGrid({
+  isInternal,
+  children,
+}: {
+  isInternal: boolean;
+  children: ReactNode;
+}) {
+  return <div className={`terminal-grid ${isInternal ? 'terminal-grid-internal' : 'terminal-grid-public'}`}>{children}</div>;
+}
+
 export function TerminalPanels({
   model,
   focus,
@@ -369,6 +391,7 @@ export function TerminalPanels({
   const focusSlotsRows = signalRisk.focusSlots as unknown as Array<Record<string, unknown>>;
   const controlChainRows = signalRisk.controlChain as unknown as Array<Record<string, unknown>>;
   const actionQueueRows = signalRisk.actionQueue as unknown as Array<Record<string, unknown>>;
+  const commodityReasoningMetrics = buildCommodityReasoningMetrics(model);
   const focusedRowLabel =
     focusedRowTitle(focus, 'signal-risk', 'focus-slots', focusSlotsRows, view.signalRisk.focusSlotsDrilldown)
     || focusedRowTitle(focus, 'signal-risk', 'control-chain', controlChainRows, view.signalRisk.controlChainDrilldown)
@@ -380,11 +403,23 @@ export function TerminalPanels({
     || model.navigation.terminalHandoffs[buildTerminalFocusKey({ panel: focus?.panel, section: focus?.section })]
     || [];
   return (
-    <>
-      <TerminalFocusRail model={model} surface={surface.effective} focus={focus} />
-      <TerminalBreadcrumbs model={model} surface={surface.effective} focus={focus} rowLabel={focusedRowLabel} />
-      <TerminalWorkspaceHandoffs links={focusedHandoffs} />
-      <div className={`terminal-grid ${isInternal ? 'terminal-grid-internal' : 'terminal-grid-public'}`}>
+    <section className="terminal-rhythm-layout" aria-label="terminal-rhythm-layout">
+      <section className="terminal-rhythm-band terminal-rhythm-state" aria-label="terminal-rhythm-state">
+        <h3>当前状态</h3>
+        <TerminalFocusRail model={model} surface={surface.effective} focus={focus} />
+      </section>
+      <section className="terminal-rhythm-band terminal-rhythm-focus" aria-label="terminal-rhythm-focus">
+        <h3>当前焦点</h3>
+        <TerminalBreadcrumbs model={model} surface={surface.effective} focus={focus} rowLabel={focusedRowLabel} />
+      </section>
+      <section className="terminal-rhythm-band terminal-rhythm-action" aria-label="terminal-rhythm-action">
+        <h3>下一步</h3>
+        <TerminalWorkspaceHandoffs links={focusedHandoffs} />
+      </section>
+      <section className="terminal-rhythm-band terminal-rhythm-evidence" aria-label="terminal-rhythm-evidence">
+        <h3>证据</h3>
+        <TerminalPanelsGrid isInternal={isInternal}>
+        <div data-search-anchor="terminal-orchestration" id="terminal-orchestration">
         <PanelCard
           title={t('terminal_panel_orchestration_title')}
           kicker="运行摘要 / 调度总线"
@@ -441,7 +476,9 @@ export function TerminalPanels({
             />
           </DrilldownSection>
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="terminal-data-regime" id="terminal-data-regime">
         <PanelCard
           title={t('terminal_panel_data_regime_title')}
           kicker={t('terminal_panel_data_regime_kicker')}
@@ -488,7 +525,9 @@ export function TerminalPanels({
             <DenseTable columns={view.dataRegime.regimeMatrixColumns} rows={dataRegime.regimeMatrix} />
           </DrilldownSection>
         </PanelCard>
+        </div>
 
+        <div data-search-anchor="terminal-signal-risk" id="terminal-signal-risk">
         <PanelCard
           title={t('terminal_panel_signal_risk_title')}
           kicker={t('terminal_panel_signal_risk_kicker')}
@@ -603,7 +642,22 @@ export function TerminalPanels({
             </div>
           </DrilldownSection>
         </PanelCard>
+        </div>
 
+        {commodityReasoningMetrics.length ? (
+          <div data-search-anchor="terminal-commodity-reasoning" id="terminal-commodity-reasoning">
+            <PanelCard
+              title="国内商品推理线"
+              kicker="reasoning / visible-priority"
+              meta="终端固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
+              className={surfacePanelClass(isInternal, false)}
+            >
+              <MetricStrip items={commodityReasoningMetrics} showRawValues />
+            </PanelCard>
+          </div>
+        ) : null}
+
+        <div data-search-anchor="terminal-lab-review" id="terminal-lab-review">
         <PanelCard
           title={t('terminal_panel_lab_review_title')}
           kicker={t('terminal_panel_lab_review_kicker')}
@@ -663,7 +717,9 @@ export function TerminalPanels({
             <DenseTable columns={view.labReview.stressSummaryColumns} rows={labReview.stressSummary} />
           </DrilldownSection>
         </PanelCard>
-      </div>
-    </>
+        </div>
+        </TerminalPanelsGrid>
+      </section>
+    </section>
   );
 }

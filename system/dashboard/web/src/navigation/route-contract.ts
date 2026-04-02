@@ -4,6 +4,7 @@ export const SHARED_QUERY_KEYS = [
   'artifact',
   'domain',
   'tone',
+  'anchor',
   'search',
   'search_scope',
   'panel',
@@ -49,4 +50,12 @@ export function buildResearchLegacyLink(
 
 export function buildOverviewLink(focus: SharedQueryState = {}): string {
   return buildPreservedLink('/overview', focus);
+}
+
+export function buildGraphHomeLink(focus: SharedQueryState = {}): string {
+  return buildPreservedLink('/graph-home', focus);
+}
+
+export function buildCpaLink(focus: SharedQueryState = {}): string {
+  return buildPreservedLink('/cpa', focus);
 }

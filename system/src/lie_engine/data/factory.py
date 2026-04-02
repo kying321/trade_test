@@ -8,6 +8,7 @@ from lie_engine.data.providers import (
     OpenSourcePrimaryProvider,
     OpenSourceSecondaryProvider,
     PaidProviderPlaceholder,
+    PublicInternetResearchProvider,
 )
 
 
@@ -17,6 +18,7 @@ SUPPORTED_PROVIDER_PROFILES = {
     "binance_spot_public",
     "bybit_spot_public",
     "dual_binance_bybit_public",
+    "public_research_binance_bybit",
     "hybrid_opensource_binance",
     "hybrid_opensource_binance_bybit",
     "hybrid_with_paid_placeholder",
@@ -36,6 +38,8 @@ def build_provider_stack(profile: str | None = None) -> list[Any]:
         return [BybitSpotPublicProvider()]
     if p == "dual_binance_bybit_public":
         return [BinanceSpotPublicProvider(), BybitSpotPublicProvider()]
+    if p == "public_research_binance_bybit":
+        return [PublicInternetResearchProvider(), BinanceSpotPublicProvider(), BybitSpotPublicProvider()]
     if p == "hybrid_opensource_binance":
         return [OpenSourcePrimaryProvider(), BinanceSpotPublicProvider()]
     if p == "hybrid_opensource_binance_bybit":

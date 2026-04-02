@@ -94,6 +94,18 @@ describe('ui-kit source-owned 审计显示', () => {
     expect(document.querySelector('.clamp-copy')?.className).not.toContain('is-clamped');
   });
 
+  it('critical 标签在溢出时即使默认不可展开也要给出展开能力', async () => {
+    mockClampOverflow({ overflows: true });
+    render(
+      <ClampText maxLines={2} raw="超长焦点对象标题" expandable={false} critical>
+        超长焦点对象标题超长焦点对象标题超长焦点对象标题
+      </ClampText>,
+    );
+
+    expect(await screen.findByRole('button', { name: '展开完整内容' })).toBeTruthy();
+    expect(document.querySelector('.clamp-copy')?.getAttribute('title')).toBe('超长焦点对象标题');
+  });
+
   it('没有真实溢出时不显示切换按钮', () => {
     mockClampOverflow({ overflows: false });
     render(

@@ -5,7 +5,7 @@ from pathlib import Path
 import json
 import sqlite3
 import time
-from typing import Any
+from typing import Any, Sequence
 
 import pandas as pd
 
@@ -59,7 +59,13 @@ def write_parquet_optional(path: Path, df: pd.DataFrame) -> bool:
         return False
 
 
-def append_sqlite(db_path: Path, table: str, df: pd.DataFrame) -> None:
+def append_sqlite(
+    db_path: Path,
+    table: str,
+    df: pd.DataFrame,
+    *,
+    key_columns: Sequence[str] | None = None,
+) -> None:
     if df is None or len(df.columns) == 0:
         return
     ensure_parent(db_path)
@@ -92,5 +98,30 @@ def append_sqlite(db_path: Path, table: str, df: pd.DataFrame) -> None:
                         data[col] = None
                 data = data[existing_cols]
 
-        data.to_sql(table, conn, if_exists="append", index=False)
-        conn.commit()
+            dedupe_keys = [str(col) for col in (key_columns or []) if str(col) in data.columns]
+            if dedupe_keys:
+                data = data.drop_duplicates(subset=dedupe_keys, keep="last").reset_index(drop=True)
+
+            if not dedupe_keys or not exists:
+                data.to_sql(table, conn, if_exists="append", index=False)
+                conn.commit()
+                return
+
+            stage_table = f"__stage_{str(table)}"
+            safe_stage = stage_table.replace('"', '""')
+            cur.execute(f'DROP TABLE IF EXISTS "{safe_stage}"')
+            data.to_sql(stage_table, conn, if_exists="replace", index=False)
+            join_predicates: list[str] = []
+            for col in dedupe_keys:
+                safe_col = str(col).replace('"', '""')
+                join_predicates.append(
+                    f'COALESCE(CAST("{table}"."{safe_col}" AS TEXT), \'\') = '
+                    f'COALESCE(CAST("{safe_stage}"."{safe_col}" AS TEXT), \'\')'
+                )
+            cur.execute(
+                f'DELETE FROM "{table}" WHERE EXISTS (SELECT 1 FROM "{safe_stage}" WHERE {" AND ".join(join_predicates)})'
+            )
+            quoted_cols = ", ".join(f'"{str(col).replace(chr(34), chr(34) * 2)}"' for col in data.columns)
+            cur.execute(f'INSERT INTO "{table}" ({quoted_cols}) SELECT {quoted_cols} FROM "{safe_stage}"')
+            cur.execute(f'DROP TABLE IF EXISTS "{safe_stage}"')
+            conn.commit()

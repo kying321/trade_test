@@ -24,16 +24,40 @@ export type ContextHeaderSection = {
   items: ContextHeaderSectionItem[];
 };
 
+type ContextHeaderRhythmSection = {
+  title?: string;
+  items: ContextHeaderSectionItem[];
+};
+
 type ContextHeaderProps = {
   title: string;
   subtitle: string;
   breadcrumbs?: Array<{ label: string; current?: boolean }>;
   actions?: ReactNode;
-  sections?: ContextHeaderSection[];
+  stateSection?: ContextHeaderRhythmSection;
+  focusSection?: ContextHeaderRhythmSection;
+  actionSection?: ContextHeaderRhythmSection;
+  evidenceSection?: ContextHeaderRhythmSection;
   compact?: boolean;
 };
 
-export function ContextHeader({ title, subtitle, breadcrumbs = [], actions, sections = [], compact = false }: ContextHeaderProps) {
+export function ContextHeader({
+  title,
+  subtitle,
+  breadcrumbs = [],
+  actions,
+  stateSection,
+  focusSection,
+  actionSection,
+  evidenceSection,
+  compact = false,
+}: ContextHeaderProps) {
+  const normalizedSections = [
+    stateSection ? { id: 'state', title: stateSection.title || '当前状态', items: stateSection.items } : null,
+    focusSection ? { id: 'focus', title: focusSection.title || '当前焦点', items: focusSection.items } : null,
+    actionSection ? { id: 'action', title: actionSection.title || '下一步', items: actionSection.items } : null,
+    evidenceSection ? { id: 'evidence', title: evidenceSection.title || '证据', items: evidenceSection.items } : null,
+  ].filter((section): section is ContextHeaderSection => Boolean(section));
   return (
     <section className={`context-header ${compact ? 'compact' : ''}`.trim()}>
       <div className="context-header-head">
@@ -55,9 +79,9 @@ export function ContextHeader({ title, subtitle, breadcrumbs = [], actions, sect
           {actions}
         </div>
       </div>
-      {sections.length ? (
+      {normalizedSections.length ? (
         <div className="context-header-controls">
-          {sections.map((section) => (
+          {normalizedSections.map((section) => (
             <section className="context-control-block" key={section.id}>
               <div className="context-control-head">
                 <span className="context-control-title">{section.title}</span>

@@ -151,8 +151,10 @@ export interface PublicAcceptanceSummary {
   artifact_path?: string;
   topology_status?: string;
   workspace_status?: string;
+  graph_home_status?: string;
   topology_generated_at_utc?: string;
   workspace_generated_at_utc?: string;
+  graph_home_generated_at_utc?: string;
   frontend_public?: string;
   root_public_entry?: string;
   public_snapshot_fetch_count?: number;
@@ -160,8 +162,19 @@ export interface PublicAcceptanceSummary {
   root_contracts_screenshot_path?: string;
   pages_contracts_screenshot_path?: string;
   orderflow_filter_route?: string;
+  orderflow_source_available?: boolean;
   orderflow_active_artifact?: string;
   orderflow_visible_artifacts?: string;
+  research_audit_search_route?: string;
+  research_audit_cases_available?: boolean;
+  research_audit_queries?: string;
+  research_audit_result_artifacts?: string;
+  graph_home_resolved_route?: string;
+  graph_home_default_center?: string;
+  graph_home_terminal_link_href?: string;
+  graph_home_workspace_link_href?: string;
+  graph_home_search_link_href?: string;
+  graph_home_research_audit_case_ids?: string;
 }
 
 export interface PublicAcceptanceCheckRow {
@@ -187,10 +200,36 @@ export interface PublicAcceptanceCheckRow {
   public_snapshot_fetch_count?: number;
   internal_snapshot_fetch_count?: number;
   orderflow_filter_route?: string;
+  orderflow_source_available?: boolean;
   orderflow_active_artifact?: string;
   orderflow_visible_artifacts?: string;
+  research_audit_search_route?: string;
+  research_audit_cases_available?: boolean;
+  research_audit_queries?: string;
+  research_audit_result_artifacts?: string;
+  research_audit_cases?: PublicAcceptanceResearchAuditCase[];
+  graph_home_resolved_route?: string;
+  graph_home_default_center?: string;
+  graph_home_terminal_link_href?: string;
+  graph_home_workspace_link_href?: string;
+  graph_home_search_link_href?: string;
+  graph_home_research_audit_case_ids?: string;
+  inspector_route?: string;
+  inspector_search_link_href?: string;
+  inspector_artifact_link_href?: string;
+  inspector_raw_link_href?: string;
   stdout?: string;
   stderr?: string;
+}
+
+export interface PublicAcceptanceResearchAuditCase {
+  case_id?: string;
+  scope?: string;
+  query?: string;
+  search_route?: string;
+  workspace_route?: string;
+  raw_path?: string;
+  result_artifact?: string;
 }
 
 export interface PublicAcceptanceSubcommandRow {
@@ -202,6 +241,11 @@ export interface PublicAcceptanceSubcommandRow {
   stderr_bytes?: number;
   cmd?: string;
   cwd?: string;
+  inspector_route?: string;
+  inspector_check_route?: string;
+  inspector_search_link_href?: string;
+  inspector_artifact_link_href?: string;
+  inspector_raw_link_href?: string;
   stdout?: string;
   stderr?: string;
 }
@@ -591,6 +635,7 @@ export interface TerminalReadModel {
       checks: PublicAcceptanceCheckRow[];
       subcommands: PublicAcceptanceSubcommandRow[];
     };
+    researchAuditCases?: PublicAcceptanceResearchAuditCase[];
     surfaceContracts: SurfaceContractEntry[];
     fallbackChain: string[];
     sourceHeads: Array<SourceHeadEntry & { id: string }>;

@@ -6,11 +6,21 @@ import { describe, expect, it } from 'vitest';
 
 const SCRIPT = join(process.cwd(), 'scripts', 'cloudflare-preflight.mjs');
 
+function missingEnvFilePath() {
+  const dir = mkdtempSync(join(tmpdir(), 'fenlie-cf-env-missing-'));
+  return join(dir, '.env.cloudflare.local');
+}
+
 function runPreflight(env = {}) {
   try {
-    const stdout = execFileSync('node', [SCRIPT], {
+    const stdout = execFileSync(process.execPath, [SCRIPT], {
       cwd: process.cwd(),
-      env: { ...process.env, ...env },
+      env: {
+        ...process.env,
+        CLOUDFLARE_API_TOKEN: '',
+        FENLIE_CLOUDFLARE_ENV_FILE: missingEnvFilePath(),
+        ...env,
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       encoding: 'utf8',
     });
