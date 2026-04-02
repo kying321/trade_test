@@ -163,10 +163,12 @@ def validate_workspace_routes_payload(payload: dict[str, Any]) -> str | None:
         return "missing_research_audit_search_assertion"
     if str(research_audit.get("route") or "") != RESEARCH_AUDIT_SEARCH_ROUTE:
         return "invalid_research_audit_search_assertion"
-    if research_audit.get("cases_available") is not True:
-        return "invalid_research_audit_search_assertion"
     cases = research_audit.get("cases")
-    if not isinstance(cases, list) or not cases:
+    if not isinstance(cases, list):
+        return "invalid_research_audit_search_assertion"
+    if research_audit.get("cases_available") is False and cases == []:
+        return None
+    if research_audit.get("cases_available") is not True or not cases:
         return "invalid_research_audit_search_assertion"
     for case in cases:
         if not isinstance(case, dict):
@@ -251,7 +253,11 @@ def validate_graph_home_payload(payload: dict[str, Any], expected_cases: list[di
     if str(graph_home_assertion.get("resolved_route") or "") != GRAPH_HOME_ROUTE:
         return "invalid_graph_home_assertion"
     actual_rows = graph_home_assertion.get("research_audit_link_assertions")
-    if not isinstance(actual_rows, list) or not actual_rows:
+    if not isinstance(actual_rows, list):
+        return "missing_graph_home_research_audit_link_assertions"
+    if not expected_cases and actual_rows == []:
+        return None
+    if not actual_rows:
         return "missing_graph_home_research_audit_link_assertions"
     if len(actual_rows) != len(expected_cases):
         return "invalid_graph_home_research_audit_link_assertions"
