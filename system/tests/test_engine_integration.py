@@ -9,6 +9,7 @@ import tempfile
 import json
 import sqlite3
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import yaml
 import pandas as pd
@@ -2826,6 +2827,80 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(len(eng.providers), 2)
         self.assertEqual(getattr(eng.providers[0], "name", ""), "binance_spot_public")
         self.assertEqual(getattr(eng.providers[1], "name", ""), "bybit_spot_public")
+
+    def test_engine_provider_profile_public_research_binance_bybit(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        tmp_root = Path(td.name)
+
+        cfg_data = yaml.safe_load((project_root / "config.yaml").read_text(encoding="utf-8"))
+        cfg_data["paths"] = {"output": "output", "sqlite": "output/artifacts/lie_engine.db"}
+        cfg_data["data"] = {"provider_profile": "public_research_binance_bybit"}
+        cfg_data["universe"] = {
+            "core": [
+                {"symbol": "BTCUSDT", "asset_class": "crypto", "theme": "crypto"},
+            ],
+            "max_dynamic_additions": 0,
+        }
+        cfg_path = tmp_root / "config.yaml"
+        cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
+
+        eng = LieEngine(config_path=cfg_path)
+        self.assertEqual(len(eng.providers), 3)
+        self.assertEqual(getattr(eng.providers[0], "name", ""), "public_macro_news")
+        self.assertEqual(getattr(eng.providers[1], "name", ""), "binance_spot_public")
+        self.assertEqual(getattr(eng.providers[2], "name", ""), "bybit_spot_public")
+
+    def test_run_ingestion_includes_domestic_futures_paper_in_persisted_universe_but_not_model_path(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        tmp_root = Path(td.name)
+
+        cfg_data = yaml.safe_load((project_root / "config.yaml").read_text(encoding="utf-8"))
+        cfg_data["paths"] = {"output": "output", "sqlite": "output/artifacts/lie_engine.db"}
+        cfg_data["data"] = {"provider_profile": "public_research_binance_bybit"}
+        cfg_data["universe"] = {
+            "core": [
+                {"symbol": "BTCUSDT", "asset_class": "crypto", "theme": "crypto"},
+            ],
+            "domestic_futures_paper": [
+                {"symbol": "BU2606", "asset_class": "future", "venue": "shfe", "theme": "国内能化"},
+            ],
+            "max_dynamic_additions": 0,
+        }
+        cfg_path = tmp_root / "config.yaml"
+        cfg_path.write_text(yaml.safe_dump(cfg_data, allow_unicode=True), encoding="utf-8")
+
+        eng = LieEngine(config_path=cfg_path)
+        captured: list[list[str]] = []
+        normalized = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2026-03-27", "2026-03-27"]),
+                "symbol": ["BTCUSDT", "BU2606"],
+                "open": [80000.0, 4500.0],
+                "high": [81000.0, 4550.0],
+                "low": [79000.0, 4450.0],
+                "close": [80500.0, 4520.0],
+                "volume": [1000.0, 2000.0],
+                "asset_class": ["crypto", "future"],
+                "source_count": [2, 1],
+                "data_conflict_flag": [0, 0],
+            }
+        )
+
+        def _fake_ingest(*, symbols, start, end, start_ts, end_ts, langs):  # noqa: ANN001
+            _ = (start, end, start_ts, end_ts, langs)
+            captured.append(list(symbols))
+            return SimpleNamespace(normalized_bars=normalized.copy())
+
+        eng.data_bus.ingest = _fake_ingest  # type: ignore[method-assign]
+        eng.data_bus.persist = lambda as_of, result: None  # type: ignore[method-assign]
+
+        bars, _ = eng._run_ingestion(date(2026, 3, 30), symbols=["BTCUSDT"])
+        self.assertEqual(captured, [["BTCUSDT", "BU2606"]])
+        self.assertEqual(set(bars["symbol"]), {"BTCUSDT"})
 
     def test_collect_micro_factor_map_uses_configured_symbols(self) -> None:
         eng, _ = self._make_engine()

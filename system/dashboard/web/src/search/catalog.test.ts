@@ -57,6 +57,47 @@ const snapshot: DashboardSnapshot = {
         contracts_in_focus: ['BU2606'],
       },
     },
+    recent_strategy_backtests: {
+      label: 'recent backtests',
+      path: '/tmp/recent.json',
+      summary: { status: 'ok', research_decision: 'keep_best' },
+      payload: {
+        rows: [],
+        mode_summaries: [
+          {
+            mode: 'ultra_short',
+            trial_artifacts: [
+              {
+                trial: 1,
+                mode: 'ultra_short',
+                score: 0.42,
+                trade_journal_path: '/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv',
+                holding_exposure_path: '/tmp/research/ultra_short/trial_001_ultra_short_holding_daily_symbol_exposure.csv',
+              },
+            ],
+          },
+        ],
+      },
+    },
+    strategy_lab_summary: {
+      label: 'strategy lab summary',
+      path: '/tmp/strategy_lab/summary.json',
+      summary: { status: 'ok', research_decision: 'selected' },
+      payload: {
+        best_candidate: {
+          name: 'balanced_flow_04',
+          trade_journal_path: '/tmp/strategy_lab/best_trade_journal.csv',
+          holding_exposure_path: '/tmp/strategy_lab/best_holding_daily_symbol_exposure.csv',
+        },
+        candidates: [
+          {
+            name: 'balanced_flow_04',
+            trade_journal_path: '/tmp/strategy_lab/candidate_01_balanced_flow_04_trade_journal.csv',
+            holding_exposure_path: '/tmp/strategy_lab/candidate_01_balanced_flow_04_holding_daily_symbol_exposure.csv',
+          },
+        ],
+      },
+    },
   },
   workspace_default_focus: {
     artifact: 'hold_selection_handoff',
@@ -85,5 +126,13 @@ describe('search catalog', () => {
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].category).toBe('artifact');
     expect(results[0].destination).toContain('/workspace/artifacts');
+  });
+
+  it('搜索 trial/candidate 审计工件时命中派生 artifact 结果', () => {
+    const model = buildTerminalReadModel(buildLoaded(snapshot));
+    const trial = searchCatalog(buildSearchCatalog(model), 'trial_001_ultra_short_trade_journal', 'artifact');
+    const candidate = searchCatalog(buildSearchCatalog(model), 'balanced_flow_04', 'artifact');
+    expect(trial.some((row) => row.id.includes('trial_001'))).toBe(true);
+    expect(candidate.some((row) => row.id.includes('balanced_flow_04'))).toBe(true);
   });
 });

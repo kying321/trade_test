@@ -2256,6 +2256,38 @@ button { cursor: pointer; }
   justify-content: space-between;
 }
 
+.contracts-acceptance-status-card {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.contracts-acceptance-status-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.contracts-acceptance-status-actions {
+  margin-top: 10px;
+}
+
+.contracts-acceptance-status-card:hover,
+.contracts-acceptance-status-card.active {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 1px rgba(242, 169, 59, 0.22);
+  transform: translateY(-1px);
+}
+
 .metric-label,
 .metric-hint,
 .freshness-meta,
@@ -2457,6 +2489,97 @@ button { cursor: pointer; }
   background: var(--search-bg);
   color: var(--text-1);
   padding: 10px 12px;
+}
+
+.cpa-page .panel-card {
+  overflow: visible;
+}
+
+.cpa-config-row,
+.cpa-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+
+.cpa-field,
+.cpa-inline-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.cpa-field {
+  flex: 1 1 220px;
+}
+
+.cpa-action-field {
+  flex: 0 0 auto;
+}
+
+.cpa-select {
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  background: var(--search-bg);
+  color: var(--text-1);
+  padding: 10px 12px;
+}
+
+.cpa-status-bar {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  background: var(--panel-bg);
+  color: var(--text-1);
+}
+
+.cpa-status-bar.info {
+  border-color: rgba(185, 117, 17, 0.24);
+  background: rgba(185, 117, 17, 0.08);
+}
+
+.cpa-status-bar.error {
+  border-color: rgba(224, 76, 76, 0.28);
+  background: rgba(224, 76, 76, 0.08);
+}
+
+.cpa-status-bar.success {
+  border-color: rgba(67, 160, 71, 0.28);
+  background: rgba(67, 160, 71, 0.08);
+}
+
+.cpa-summary-grid {
+  margin-bottom: 12px;
+}
+
+.cpa-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cpa-row-highlight {
+  outline: 1px solid rgba(242, 169, 59, 0.28);
+  background: rgba(242, 169, 59, 0.06);
+}
+
+.cpa-error-note {
+  margin-top: 4px;
+  color: var(--negative);
+  font-size: 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.cpa-metric-muted {
+  color: var(--text-3);
 }
 
 .artifact-button {

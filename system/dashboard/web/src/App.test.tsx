@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ResolvedTheme, ThemePreference } from './app-shell/GlobalTopbar';
 import App from './App';
 import { buildTerminalReadModel } from './adapters/read-model';
+import * as workspaceSections from './navigation/workspace-sections';
 import { useTerminalStore } from './store/use-terminal-store';
 import type { DashboardSnapshot, LoadedSurface, SurfaceKey } from './types/contracts';
 
@@ -564,6 +565,14 @@ function buildFeedbackSnapshot(overrides: Partial<DashboardSnapshot> = {}): Dash
   };
 }
 
+function buildInternalFeedbackSurface(snapshotOverrides: Partial<DashboardSnapshot> = {}): SurfaceFixture {
+  return {
+    snapshot: buildFeedbackSnapshot(snapshotOverrides),
+    effectiveSurface: 'internal',
+    snapshotPath: INTERNAL_SNAPSHOT_PATH,
+  };
+}
+
 type SurfaceFixture = {
   snapshot: DashboardSnapshot;
   effectiveSurface?: SurfaceKey;
@@ -735,6 +744,90 @@ function buildAcceptanceSnapshot() {
                 visible_artifacts: [],
                 visible_markers: [],
               },
+              research_audit_search_assertion: {
+                applicable: true,
+                route: '#/search',
+                cases_available: true,
+                cases: [
+                  {
+                    case_id: 'optimizer_trial_trade_journal',
+                    query: 'trial_001_ultra_short_trade_journal',
+                    search_route: '#/search?q=trial_001_ultra_short_trade_journal&scope=artifact',
+                    workspace_route: '#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal',
+                    raw_path: 'system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv',
+                    result_artifact: 'audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal',
+                  },
+                  {
+                    case_id: 'strategy_lab_candidate_trade_journal',
+                    query: 'candidate_01_trend_convex_01_trade_journal',
+                    search_route: '#/search?q=candidate_01_trend_convex_01_trade_journal&scope=artifact',
+                    workspace_route: '#/workspace/artifacts?artifact=audit:strategy_lab_summary:trend_convex_01:trade_journal',
+                    raw_path: 'system/output/research/strategy_lab_20260330_134050/candidate_01_trend_convex_01_trade_journal.csv',
+                    result_artifact: 'audit:strategy_lab_summary:trend_convex_01:trade_journal',
+                  },
+                ],
+              },
+              contracts_acceptance_inspector_assertion: {
+                checks_by_id: {
+                  topology_smoke: {
+                    route: '#/workspace/contracts?page_section=contracts-check-topology_smoke',
+                    page_section: 'contracts-check-topology_smoke',
+                    search_link_href: '',
+                    artifact_link_href: '',
+                    raw_link_href: '',
+                  },
+                  workspace_routes_smoke: {
+                    route: '#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
+                    page_section: 'contracts-check-workspace_routes_smoke',
+                    search_link_href: '#/search?q=explicit_workspace_routes_check&scope=artifact',
+                    artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:workspace_routes_check:trade_journal',
+                    raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_workspace_routes_check.csv',
+                  },
+                  graph_home_smoke: {
+                    route: '#/workspace/contracts?page_section=contracts-check-graph_home_smoke',
+                    page_section: 'contracts-check-graph_home_smoke',
+                    search_link_href: '#/search?q=explicit_graph_home_check&scope=artifact',
+                    artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:graph_home_check:trade_journal',
+                    raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_check.csv',
+                  },
+                },
+                subcommands_by_id: {
+                  topology_smoke: {
+                    route: '#/workspace/contracts?page_section=contracts-subcommand-topology_smoke',
+                    page_section: 'contracts-subcommand-topology_smoke',
+                    check_route: '#/workspace/contracts?page_section=contracts-check-topology_smoke',
+                    search_link_href: '',
+                    artifact_link_href: '',
+                    raw_link_href: '',
+                  },
+                  workspace_routes_smoke: {
+                    route: '#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke',
+                    page_section: 'contracts-subcommand-workspace_routes_smoke',
+                    check_route: '#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
+                    search_link_href: '#/search?q=explicit_workspace_routes_subcommand&scope=artifact',
+                    artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:workspace_routes_subcommand:trade_journal',
+                    raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_workspace_routes_subcommand.csv',
+                  },
+                  graph_home_smoke: {
+                    route: '#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke',
+                    page_section: 'contracts-subcommand-graph_home_smoke',
+                    check_route: '#/workspace/contracts?page_section=contracts-check-graph_home_smoke',
+                    search_link_href: '#/search?q=explicit_graph_home_subcommand&scope=artifact',
+                    artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:graph_home_subcommand:trade_journal',
+                    raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_subcommand.csv',
+                  },
+                },
+                check_route: '#/workspace/contracts?page_section=contracts-check-graph_home_smoke',
+                check_page_section: 'contracts-check-graph_home_smoke',
+                check_search_link_href: '#/search?q=explicit_graph_home_check&scope=artifact',
+                check_artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:graph_home_check:trade_journal',
+                check_raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_check.csv',
+                subcommand_route: '#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke',
+                subcommand_page_section: 'contracts-subcommand-graph_home_smoke',
+                subcommand_search_link_href: '#/search?q=explicit_graph_home_subcommand&scope=artifact',
+                subcommand_artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:graph_home_subcommand:trade_journal',
+                subcommand_raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_subcommand.csv',
+              },
               page_section_assertion: {
                 applicable: true,
                 route: '#/workspace/contracts?page_section=contracts-acceptance-subcommands',
@@ -757,6 +850,36 @@ function buildAcceptanceSnapshot() {
                 visible_markers: ['#/workspace/raw', '/data/fenlie_dashboard_snapshot.json', '/operator_task_visual_panel.html'],
               },
             },
+            graph_home_smoke: {
+              status: 'ok',
+              generated_at_utc: '2026-03-20T07:27:39Z',
+              report_path: 'review/20260320T072739Z_dashboard_graph_home_browser_smoke.json',
+              returncode: 0,
+              graph_home_assertion: {
+                default_route: '#/',
+                resolved_route: '#/graph-home',
+                default_center: '交易中枢',
+                terminal_link_href: '#/terminal/public',
+                workspace_link_href: '#/workspace/artifacts',
+                search_link_href: '#/search',
+                research_audit_link_assertions: [
+                  {
+                    selected_heading: '交易中枢',
+                    case_id: 'optimizer_trial_trade_journal',
+                    search_link_href: '#/search?q=trial_001_ultra_short_trade_journal&scope=artifact',
+                    artifact_link_href: '#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal',
+                    raw_link_href: '#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv',
+                  },
+                  {
+                    selected_heading: '交易中枢',
+                    case_id: 'strategy_lab_candidate_trade_journal',
+                    search_link_href: '#/search?q=candidate_01_trend_convex_01_trade_journal&scope=artifact',
+                    artifact_link_href: '#/workspace/artifacts?artifact=audit:strategy_lab_summary:trend_convex_01:trade_journal',
+                    raw_link_href: '#/workspace/raw?artifact=system%2Foutput%2Fresearch%2Fstrategy_lab_20260330_134050%2Fcandidate_01_trend_convex_01_trade_journal.csv',
+                  },
+                ],
+              },
+            },
           },
           subcommands: {
             topology_smoke: {
@@ -777,11 +900,52 @@ function buildAcceptanceSnapshot() {
               cmd: ['python3', 'run_dashboard_workspace_artifacts_smoke.py'],
               cwd: '/tmp',
             },
+            graph_home_smoke: {
+              returncode: 0,
+              payload_present: true,
+              stdout_bytes: 96,
+              stderr_bytes: 0,
+              cmd: ['python3', 'run_dashboard_workspace_artifacts_smoke.py', '--mode', 'graph_home'],
+              cwd: '/tmp',
+            },
           },
         },
       },
     },
   };
+}
+
+function getAcceptancePayload(snapshot: DashboardSnapshot) {
+  return ((snapshot as any).artifact_payloads?.dashboard_public_acceptance?.payload || {}) as any;
+}
+
+function clearWorkspaceRoutesResearchAuditSummary(snapshot: DashboardSnapshot) {
+  const publicAcceptancePayload = getAcceptancePayload(snapshot);
+  if (publicAcceptancePayload?.checks?.workspace_routes_smoke?.research_audit_search_assertion) {
+    publicAcceptancePayload.checks.workspace_routes_smoke.research_audit_search_assertion = {
+      applicable: true,
+      route: '#/search',
+      cases_available: false,
+      cases: [],
+    };
+  }
+  return snapshot;
+}
+
+async function renderContractsFromSnapshot(snapshot: DashboardSnapshot) {
+  await act(async () => {
+    installPassiveStore(snapshot);
+  });
+  window.location.hash = '#/workspace/contracts';
+  await renderApp();
+}
+
+function getContractsSummaryCard(): HTMLElement {
+  const node = document.querySelector('[data-workspace-section="contracts-acceptance-summary"]');
+  if (!(node instanceof HTMLElement)) {
+    throw new Error('contracts acceptance summary not found');
+  }
+  return node;
 }
 
 describe('Fenlie terminal console', () => {
@@ -869,11 +1033,95 @@ describe('Fenlie terminal console', () => {
       '总览',
       '操作终端',
       '研究工作区',
+      'CPA 管理',
     ]);
     expect(within(nav).getByRole('link', { name: '图谱主页' })).toBeTruthy();
     expect(textOf('.global-topbar-inner')).toContain('图谱主页');
     expect(screen.getByRole('button', { name: '回到交易中枢' })).toBeTruthy();
     expect(screen.getByRole('link', { name: '去操作终端' })).toBeTruthy();
+  });
+
+  it('renders cpa manager as a top-level route with primary navigation entry', async () => {
+    window.location.hash = '#/cpa';
+    await renderApp();
+
+    expect(await screen.findByRole('heading', { name: 'CPA 管理' })).toBeTruthy();
+    const nav = screen.getByRole('navigation', { name: 'primary-domains' });
+    expect(within(nav).getAllByRole('link').map((item) => item.textContent?.trim())).toEqual([
+      '图谱主页',
+      '总览',
+      '操作终端',
+      '研究工作区',
+      'CPA 管理',
+    ]);
+    expect(within(nav).getByRole('link', { name: 'CPA 管理' })).toBeTruthy();
+    expect(screen.getByPlaceholderText('请输入服务器地址')).toBeTruthy();
+    expect(screen.getByPlaceholderText('请输入管理员密码')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '开始连接' })).toBeTruthy();
+  });
+
+  it('syncs graph-home center and view mode with URL params', async () => {
+    window.location.hash = '#/graph-home?graph_center=queue-ethusdt&graph_view=focus';
+    await renderApp();
+
+    expect(await screen.findByRole('heading', { name: 'ETHUSDT' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '返回全图' })).toBeTruthy();
+
+    await clickAndFlush(screen.getByRole('button', { name: '返回全图' }));
+    await waitFor(() => {
+      expect(window.location.hash).toContain('graph_center=queue-ethusdt');
+      expect(window.location.hash).not.toContain('graph_view=focus');
+    });
+
+    await clickAndFlush(screen.getByRole('button', { name: '锁定当前链' }));
+    await waitFor(() => {
+      expect(window.location.hash).toContain('graph_center=queue-ethusdt');
+      expect(window.location.hash).toContain('graph_view=focus');
+    });
+  });
+
+  it('syncs graph-home query and kind filter with URL params', async () => {
+    window.location.hash = '#/graph-home?graph_query=ETH&graph_kind=artifact';
+    await renderApp();
+
+    expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
+    const queryInput = screen.getByPlaceholderText('过滤节点：标签 / 副标题') as HTMLInputElement;
+    expect(queryInput.value).toBe('ETH');
+    expect(screen.getByRole('button', { name: '研究工件' }).getAttribute('data-active')).toBe('true');
+
+    await changeAndFlush(queryInput, 'hold');
+    await waitFor(() => {
+      expect(window.location.hash).toContain('graph_query=hold');
+      expect(window.location.hash).toContain('graph_kind=artifact');
+    });
+
+    await clickAndFlush(screen.getByRole('button', { name: '全部' }));
+    await waitFor(() => {
+      expect(window.location.hash).toContain('graph_query=hold');
+      expect(window.location.hash).not.toContain('graph_kind=');
+    });
+  });
+
+  it('syncs graph-home legend layer toggles with URL params', async () => {
+    window.location.hash = '#/graph-home?graph_layer_focus=off&graph_layer_warning=off';
+    await renderApp();
+
+    expect(await screen.findByRole('heading', { name: '图谱化主页' })).toBeTruthy();
+    const legend = screen.getByTestId('graph-home-legend');
+    const focusToggle = within(legend).getByRole('button', { name: '当前链高亮' });
+    const warningToggle = within(legend).getByRole('button', { name: '缺失信源' });
+    const dimToggle = within(legend).getByRole('button', { name: '非当前链降噪' });
+
+    expect(focusToggle.getAttribute('data-active')).toBe('false');
+    expect(warningToggle.getAttribute('data-active')).toBe('false');
+    expect(dimToggle.getAttribute('data-active')).toBe('true');
+
+    await clickAndFlush(screen.getByRole('button', { name: '恢复默认图层' }));
+    await waitFor(() => {
+      expect(window.location.hash).not.toContain('graph_layer_focus=');
+      expect(window.location.hash).not.toContain('graph_layer_warning=');
+      expect(window.location.hash).not.toContain('graph_layer_dim=');
+    });
   });
 
   it('uses graph home as the default root route and fallback route', async () => {
@@ -893,11 +1141,7 @@ describe('Fenlie terminal console', () => {
   });
 
   it('renders internal feedback summary on overview when view=internal', async () => {
-    installPassiveStoreForSurface('internal', {
-      snapshot: buildFeedbackSnapshot(),
-      effectiveSurface: 'internal',
-      snapshotPath: INTERNAL_SNAPSHOT_PATH,
-    });
+    installPassiveStoreForSurface('internal', buildInternalFeedbackSurface());
     window.location.hash = '#/overview?view=internal';
 
     await renderApp();
@@ -1052,26 +1296,166 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByText('穿透层 3 / 子命令证据')).toBeTruthy();
     expect(screen.getAllByText('入口拓扑烟测').length).toBeGreaterThan(0);
     expect(screen.getAllByText('工作区五页面烟测').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('图谱主页烟测').length).toBeGreaterThan(0);
     expect(screen.getByText('root overview 截图')).toBeTruthy();
     expect(screen.getByText('pages overview 截图')).toBeTruthy();
     expect(screen.getAllByText('root contracts 截图').length).toBeGreaterThan(0);
     expect(screen.getAllByText('pages contracts 截图').length).toBeGreaterThan(0);
     expect(screen.getByText('TLS 回退')).toBeTruthy();
     expect(screen.getAllByText('是').length).toBeGreaterThan(0);
-    const summaryCard = screen.getByText('穿透层 1 / 验收总览').closest('section');
+    const summaryCard = document.querySelector('[data-workspace-section="contracts-acceptance-summary"]');
+    const acceptancePanel = screen.getByRole('heading', { name: '公开面验收' }).closest('section');
+    expect(acceptancePanel?.querySelectorAll('.metric-tile').length).toBe(3);
+    expect(acceptancePanel?.textContent || '').toContain('入口拓扑烟测');
+    expect(acceptancePanel?.textContent || '').toContain('工作区五页面烟测');
+    expect(acceptancePanel?.textContent || '').toContain('图谱主页烟测');
     expect(summaryCard?.textContent || '').toContain('review/root_contracts_browser.png');
     expect(summaryCard?.textContent || '').toContain('review/pages_contracts_browser.png');
     expect(summaryCard?.textContent || '').toContain('4');
     expect(summaryCard?.textContent || '').toContain('0');
     expect(summaryCard?.textContent || '').toContain('orderflow 过滤路由');
-    expect(summaryCard?.textContent || '').toContain('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow');
+    expect(within(summaryCard as HTMLElement).getAllByTitle('#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow').length).toBeGreaterThan(0);
     expect(summaryCard?.textContent || '').toContain('orderflow 源可用');
     expect(summaryCard?.textContent || '').toContain('否');
     expect(summaryCard?.textContent || '').toContain('orderflow 激活工件');
+    expect(summaryCard?.textContent || '').toContain('研究审计检索路由');
+    expect(within(summaryCard as HTMLElement).getAllByTitle('#/search?q=trial_001_ultra_short_trade_journal&scope=artifact').length).toBeGreaterThan(0);
+    expect(summaryCard?.textContent || '').toContain('研究审计 case 可用');
+    expect(summaryCard?.textContent || '').toContain('研究审计 queries');
+    expect(summaryCard?.textContent || '').toContain('trial_001_ultra_short_trade_journal');
+    expect(summaryCard?.textContent || '').toContain('candidate_01_trend_convex_01_trade_journal');
+    expect(summaryCard?.textContent || '').toContain('研究审计工件');
+    expect(summaryCard?.textContent || '').toContain('audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal');
+    expect(summaryCard?.textContent || '').toContain('audit:strategy_lab_summary:trend_convex_01:trade_journal');
+    expect(summaryCard?.textContent || '').toContain('图谱主页链状态');
+    expect(summaryCard?.textContent || '').toContain('图谱主页链时间');
+    const summaryLinks = Array.from(within(summaryCard as HTMLElement).getAllByRole('link'));
+    expect(summaryLinks.some((link) => (link.getAttribute('href') || '').includes('#/search?q=trial_001_ultra_short_trade_journal&scope=artifact'))).toBe(true);
+    expect(summaryLinks.some((link) => (link.getAttribute('href') || '').includes('#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal'))).toBe(true);
+    expect(summaryLinks.some((link) => (link.getAttribute('href') || '').includes('#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv'))).toBe(true);
     expect(summaryCard?.textContent || '').not.toContain('intraday_orderflow_blueprint');
     expect(summaryCard?.textContent || '').not.toContain('intraday_orderflow_research_gate_blocker');
     expect(screen.queryByText('root_public timeout')).toBeNull();
     expect(screen.queryByText('timeout')).toBeNull();
+
+    const statusStrip = screen.getByTestId('contracts-acceptance-status-strip');
+    await clickAndFlush(screen.getByRole('button', { name: '展开对象检查器' }));
+    const inspector = await screen.findByText('对象检查器');
+    const inspectorPanel = inspector.closest('.inspector-rail-inner') as HTMLElement;
+    await clickAndFlush(within(statusStrip).getByRole('button', { name: /图谱主页烟测/ }) as HTMLElement);
+    await waitFor(() => {
+      expect(window.location.hash).toContain('page_section=contracts-check-graph_home_smoke');
+      expect(document.querySelector('[aria-controls="contracts-check-graph_home_smoke-panel"]')?.getAttribute('aria-expanded')).toBe('true');
+      expect(textOf('.context-header-controls')).toContain('验收焦点');
+      expect(textOf('.context-header-controls')).toContain('图谱主页烟测');
+    });
+    expect(within(inspectorPanel).getByText('当前验收项')).toBeTruthy();
+    expect(within(inspectorPanel).getAllByText('图谱主页烟测').length).toBeGreaterThan(0);
+    expect(within(inspectorPanel).getAllByTitle('review/20260320T072739Z_dashboard_graph_home_browser_smoke.json').length).toBeGreaterThan(0);
+    expect(within(inspectorPanel).getByRole('link', { name: '查看研究审计检索' }).getAttribute('href')).toContain('#/search?q=explicit_graph_home_check&scope=artifact');
+    expect(within(inspectorPanel).getByRole('link', { name: '查看研究审计工件' }).getAttribute('href')).toContain('#/workspace/artifacts?artifact=audit:explicit:graph_home_check:trade_journal');
+    expect(within(inspectorPanel).getByRole('link', { name: '查看研究审计原始层' }).getAttribute('href')).toContain('#/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_check.csv');
+    expect(within(statusStrip).getByRole('link', { name: '图谱主页烟测 / 查看研究审计' }).getAttribute('href')).toContain('#/search?q=trial_001_ultra_short_trade_journal&scope=artifact');
+    await clickAndFlush(within(statusStrip).getByRole('link', { name: '图谱主页烟测 / 查看子命令' }) as HTMLElement);
+    await waitFor(() => {
+      expect(window.location.hash).toContain('page_section=contracts-subcommand-graph_home_smoke');
+      expect(document.querySelector('[aria-controls="contracts-subcommand-graph_home_smoke-panel"]')?.getAttribute('aria-expanded')).toBe('true');
+      expect(textOf('.context-header-controls')).toContain('图谱主页子命令');
+    });
+    expect(within(inspectorPanel).getByText('当前子命令')).toBeTruthy();
+    expect(within(inspectorPanel).getAllByText('图谱主页子命令').length).toBeGreaterThan(0);
+    expect(within(inspectorPanel).getByText('payload_present')).toBeTruthy();
+    expect(within(inspectorPanel).getByRole('link', { name: '查看研究审计检索' }).getAttribute('href')).toContain('#/search?q=explicit_graph_home_subcommand&scope=artifact');
+    expect(within(inspectorPanel).getByRole('link', { name: '查看研究审计工件' }).getAttribute('href')).toContain('#/workspace/artifacts?artifact=audit:explicit:graph_home_subcommand:trade_journal');
+    expect(within(inspectorPanel).getByRole('link', { name: '查看研究审计原始层' }).getAttribute('href')).toContain('#/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_subcommand.csv');
+    expect(within(inspectorPanel).getByRole('link', { name: '查看图谱主页烟测' }).getAttribute('href')).toContain('page_section=contracts-check-graph_home_smoke');
+    expect(within(statusStrip).getByRole('link', { name: '入口拓扑烟测 / 查看截图' }).getAttribute('href')).toContain('#/workspace/contracts?page_section=contracts-check-topology_smoke');
+    expect(within(statusStrip).getByRole('link', { name: '工作区五页面烟测 / 查看研究审计' }).getAttribute('href')).toContain('#/search?q=trial_001_ultra_short_trade_journal&scope=artifact');
+  });
+
+  it('keeps graph-home research-audit status action available from row-level cases when summary fallback is empty', async () => {
+    const acceptanceSnapshot = clearWorkspaceRoutesResearchAuditSummary(buildAcceptanceSnapshot() as DashboardSnapshot);
+    await renderContractsFromSnapshot(acceptanceSnapshot);
+
+    const statusStrip = await screen.findByTestId('contracts-acceptance-status-strip');
+    const graphHomeAuditLink = within(statusStrip).getByRole('link', { name: '图谱主页烟测 / 查看研究审计' });
+    expect(graphHomeAuditLink.getAttribute('href')).toContain('#/search?q=trial_001_ultra_short_trade_journal&scope=artifact');
+  });
+
+  it('keeps contracts acceptance summary research-audit links available from row-level cases when summary fallback is empty', async () => {
+    const acceptanceSnapshot = clearWorkspaceRoutesResearchAuditSummary(buildAcceptanceSnapshot() as DashboardSnapshot);
+    await renderContractsFromSnapshot(acceptanceSnapshot);
+
+    const summaryLinks = Array.from(within(getContractsSummaryCard()).getAllByRole('link')).map((link) => link.getAttribute('href') || '');
+    expect(summaryLinks.some((href) => href.includes('#/search?q=trial_001_ultra_short_trade_journal&scope=artifact'))).toBe(true);
+    expect(summaryLinks.some((href) => href.includes('#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal'))).toBe(true);
+  });
+
+  it('keeps contracts acceptance summary research-audit text metrics available from row-level cases when summary fallback is empty', async () => {
+    const acceptanceSnapshot = clearWorkspaceRoutesResearchAuditSummary(buildAcceptanceSnapshot() as DashboardSnapshot);
+    await renderContractsFromSnapshot(acceptanceSnapshot);
+
+    const summaryCard = getContractsSummaryCard();
+    const casesAvailableRow = within(summaryCard).getByText('研究审计 case 可用').closest('.kv-row');
+    const queriesRow = within(summaryCard).getByText('研究审计 queries').closest('.kv-row');
+    const artifactsRow = within(summaryCard).getByText('研究审计工件').closest('.kv-row');
+    expect(casesAvailableRow?.textContent || '').toContain('是');
+    expect(queriesRow?.textContent || '').toContain('trial001');
+    expect(queriesRow?.textContent || '').toContain('候选01');
+    expect(artifactsRow?.textContent || '').toContain('近期策略回测');
+    expect(artifactsRow?.textContent || '').toContain('trial_001');
+    expect(artifactsRow?.textContent || '').toContain('趋势convex01');
+  });
+
+  it('does not display stale summary research-audit metrics when row-level source-owned cases are absent', async () => {
+    const acceptanceSnapshot = buildAcceptanceSnapshot() as DashboardSnapshot;
+    await renderContractsFromSnapshot(acceptanceSnapshot);
+
+    const currentState = useTerminalStore.getState();
+    const model = currentState.model!;
+    Object.assign(model.workspace.publicAcceptance.summary as any, {
+      research_audit_search_route: '#/search?q=legacy_summary_query&scope=artifact',
+      research_audit_cases_available: true,
+      research_audit_queries: 'legacy_summary_query',
+      research_audit_result_artifacts: 'audit:legacy_summary_artifact',
+      research_audit_cases: [
+        {
+          case_id: 'legacy_summary_case',
+          query: 'legacy_summary_query',
+          search_route: '#/search?q=legacy_summary_query&scope=artifact',
+          workspace_route: '#/workspace/artifacts?artifact=audit:legacy_summary_artifact',
+          raw_path: '/tmp/legacy_summary.csv',
+          result_artifact: 'audit:legacy_summary_artifact',
+        },
+      ],
+    });
+    model.workspace.publicAcceptance.checks = model.workspace.publicAcceptance.checks.map((row) => (
+      row.id === 'workspace_routes_smoke' || row.id === 'graph_home_smoke'
+        ? {
+            ...row,
+            research_audit_search_route: undefined,
+            research_audit_cases_available: undefined,
+            research_audit_queries: undefined,
+            research_audit_result_artifacts: undefined,
+            research_audit_cases: [],
+          }
+        : row
+    ));
+    await act(async () => {
+      useTerminalStore.setState({ model });
+    });
+
+    window.location.hash = '#/workspace/contracts';
+    await renderApp();
+
+    const summaryCard = getContractsSummaryCard();
+    const casesAvailableRow = within(summaryCard).getByText('研究审计 case 可用').closest('.kv-row');
+    const queriesRow = within(summaryCard).getByText('研究审计 queries').closest('.kv-row');
+    const artifactsRow = within(summaryCard).getByText('研究审计工件').closest('.kv-row');
+    expect(casesAvailableRow?.textContent || '').not.toContain('是');
+    expect(queriesRow?.textContent || '').not.toContain('legacy_summary_query');
+    expect(artifactsRow?.textContent || '').not.toContain('audit:legacy_summary_artifact');
+    expect(within(summaryCard).queryByRole('link', { name: '检索 / legacy_summary_query' })).toBeNull();
   });
 
   it('renders workspace page toc and syncs contracts section deep link into nested accordion state', async () => {
@@ -1094,6 +1478,28 @@ describe('Fenlie terminal console', () => {
     await waitFor(() => {
       expect(window.location.hash).toContain('page_section=contracts-topology');
     });
+  });
+
+  it('keeps contracts default source-head focus source-owned by id instead of array order', async () => {
+    const acceptanceSnapshot = buildAcceptanceSnapshot();
+    (acceptanceSnapshot as any).source_heads = {
+      ...(acceptanceSnapshot as any).source_heads,
+      operator_panel: {
+        label: '操作面板',
+        status: 'ok',
+        summary: 'operator panel source head',
+        path: '/tmp/operator_panel.json',
+      },
+    };
+    installPassiveStore(acceptanceSnapshot as DashboardSnapshot);
+
+    window.location.hash = '#/workspace/contracts';
+    await renderApp();
+
+    await waitFor(() => {
+      expect(document.querySelector('[aria-controls="contracts-source-head-operator_panel-panel"]')?.getAttribute('aria-expanded')).toBe('true');
+    });
+    expect(document.querySelector('[aria-controls="contracts-source-head-system_scheduler_state-panel"]')?.getAttribute('aria-expanded')).not.toBe('true');
   });
 
   it('keeps contracts source-head accordion triggers free of nested clamp toggles when labels overflow', async () => {
@@ -1355,6 +1761,48 @@ describe('Fenlie terminal console', () => {
     });
   });
 
+  it('uses explicit default workspace page sections instead of the first section order inside app shell navigation', async () => {
+    const originalGetSections = workspaceSections.getWorkspacePageSections;
+    const sectionsSpy = vi.spyOn(workspaceSections, 'getWorkspacePageSections').mockImplementation((section, model) => {
+      if (section === 'contracts') {
+        return [
+          { id: 'contracts-acceptance-summary', label: '验收总览', level: 1 },
+          { id: 'contracts-topology', label: '公开入口拓扑', level: 1 },
+        ];
+      }
+      if (section === 'backtests') {
+        return [
+          { id: 'backtests-comparison', label: '近期比较行', level: 1 },
+          { id: 'backtests-overview', label: '回测总览', level: 1 },
+        ];
+      }
+      if (section === 'raw') {
+        return [
+          { id: 'raw-snapshot', label: '全量原始快照', level: 1 },
+          { id: 'raw-summary', label: '原始摘要', level: 1 },
+        ];
+      }
+      return originalGetSections(section, model);
+    });
+    const defaultSpy = vi.spyOn(workspaceSections, 'getDefaultWorkspacePageSection');
+
+    try {
+      window.location.hash = '#/workspace/artifacts';
+      await renderApp();
+
+      const contextNav = await screen.findByRole('navigation', { name: 'context-nav' });
+      expect(within(contextNav).getByRole('link', { name: '回测池' }).getAttribute('href')).toContain('page_section=backtests-overview');
+      expect(within(contextNav).getByRole('link', { name: '契约层' }).getAttribute('href')).toContain('page_section=contracts-topology');
+      expect(within(contextNav).getByRole('link', { name: '原始层' }).getAttribute('href')).toContain('page_section=raw-summary');
+      expect(defaultSpy).toHaveBeenCalledWith('contracts', expect.any(Object));
+      expect(defaultSpy).toHaveBeenCalledWith('backtests', expect.any(Object));
+      expect(defaultSpy).toHaveBeenCalledWith('raw', expect.any(Object));
+    } finally {
+      sectionsSpy.mockRestore();
+      defaultSpy.mockRestore();
+    }
+  });
+
   it('supports panel / section / row 三层穿透 URL 焦点与回退路径', async () => {
     window.location.hash = '#/terminal/internal?panel=signal-risk&section=focus-slots&row=primary';
     primeStore('internal', {
@@ -1513,6 +1961,35 @@ describe('Fenlie terminal console', () => {
       expect(window.location.hash).toContain('artifact=price_action_breakout_pullback');
       expect(window.location.hash).toContain('group=research_mainline');
       expect(window.location.hash).toContain('search_scope=title');
+    });
+  });
+
+  it('prefers canonical artifact over archive rows for default workspace selection when no explicit focus is present', async () => {
+    installPassiveStore({
+      ...mockSnapshot,
+      workspace_default_focus: {},
+      catalog: [
+        {
+          id: '20260319T103100Z_price_action_breakout_pullback_sim_only',
+          payload_key: 'price_action_breakout_pullback',
+          artifact_layer: 'archive',
+          artifact_group: 'research_mainline',
+          category: 'sim-only',
+          label: '20260319T103100Z_price_action_breakout_pullback_sim_only',
+          status: 'ok',
+          path: 'review/20260319T103100Z_price_action_breakout_pullback_sim_only.json',
+        },
+        ...mockSnapshot.catalog,
+      ],
+    } as DashboardSnapshot);
+    window.location.hash = '#/workspace/artifacts';
+    await renderApp();
+
+    await waitFor(() => {
+      expect(document.querySelector('.artifact-group-button.active')?.textContent || '').toMatch(/核心研究主线|研究主线/);
+      expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/price_action_breakout_pullback|ETH 15m 主线/);
+      expect(window.location.hash).toContain('artifact=price_action_breakout_pullback');
+      expect(window.location.hash).not.toContain('20260319T103100Z_price_action_breakout_pullback_sim_only');
     });
   });
 
@@ -1765,11 +2242,7 @@ describe('Fenlie terminal console', () => {
   });
 
   it('renders internal alignment workspace page with toc and feedback evidence', async () => {
-    installPassiveStoreForSurface('internal', {
-      snapshot: buildFeedbackSnapshot(),
-      effectiveSurface: 'internal',
-      snapshotPath: INTERNAL_SNAPSHOT_PATH,
-    });
+    installPassiveStoreForSurface('internal', buildInternalFeedbackSurface());
     window.location.hash = '#/workspace/alignment?view=internal';
 
     await renderApp();
@@ -1778,6 +2251,38 @@ describe('Fenlie terminal console', () => {
     expect(screen.getByRole('navigation', { name: 'page-sections-nav' })).toBeTruthy();
     expect(document.body.textContent || '').toContain('拆分研究工作区左栏四控件');
     expect(document.body.textContent || '').toContain('完成左栏职责拆分');
+  });
+
+  it('keeps alignment default open event source-owned by action feedback_id instead of event array order', async () => {
+    installPassiveStoreForSurface('internal', buildInternalFeedbackSurface({
+      conversation_feedback_projection: {
+        ...feedbackProjection,
+        events: [
+          {
+            feedback_id: 'secondary_feedback',
+            created_at_utc: '2026-03-20T12:05:00Z',
+            source: 'manual',
+            domain: 'research',
+            headline: '次级事件',
+            summary: '次级摘要',
+            recommended_action: '次级动作',
+            impact_score: 40,
+            confidence: 0.55,
+            status: 'watch',
+            anchors: [],
+          },
+          ...feedbackProjection.events,
+        ],
+      },
+    }));
+    window.location.hash = '#/workspace/alignment?view=internal';
+
+    await renderApp();
+
+    await waitFor(() => {
+      expect(document.querySelector('[aria-controls="alignment-event-ui_density_split-panel"]')?.getAttribute('aria-expanded')).toBe('true');
+    });
+    expect(document.querySelector('[aria-controls="alignment-event-secondary_feedback-panel"]')?.getAttribute('aria-expanded')).not.toBe('true');
   });
 
   it('shows locked state on public alignment route without exposing internal feedback details', async () => {
@@ -2078,6 +2583,46 @@ describe('Fenlie terminal console', () => {
     expect(terminalLink.getAttribute('href') || '').toContain('#/terminal/public?artifact=intraday_orderflow_blueprint');
     expect(terminalLink.getAttribute('href') || '').toContain('panel=lab-review');
     expect(terminalLink.getAttribute('href') || '').toContain('section=research-heads');
+  });
+
+  it('keeps raw deep link visible for audit artifacts even when terminal handoffs exist', async () => {
+    const auditRawPath = 'system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv';
+    const auditSnapshot = {
+      ...workspaceArtifactsSmokeSnapshot,
+      artifact_payloads: {
+        ...workspaceArtifactsSmokeSnapshot.artifact_payloads,
+        recent_strategy_backtests: {
+          ...(workspaceArtifactsSmokeSnapshot.artifact_payloads?.recent_strategy_backtests || {}),
+          payload: {
+            ...((workspaceArtifactsSmokeSnapshot.artifact_payloads?.recent_strategy_backtests?.payload as Record<string, unknown>) || {}),
+            mode_summaries: [
+              {
+                mode: 'ultra_short',
+                trial_artifacts: [
+                  {
+                    trial: 1,
+                    mode: 'ultra_short',
+                    trade_journal_path: auditRawPath,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    installPassiveStore(auditSnapshot as DashboardSnapshot);
+    window.location.hash = '#/workspace/artifacts?artifact=audit%3Arecent_strategy_backtests%3Aultra_short%3Atrial_001%3Atrade_journal&group=archive&search_scope=title&panel=lab-review&section=comparison-wall';
+    await renderApp();
+
+    await screen.findAllByText(auditRawPath);
+    const actionCard = panelHeading('下一步动作').closest('section');
+    expect(actionCard).toBeTruthy();
+    const rawLink = Array.from(within(actionCard as HTMLElement).getAllByRole('link'))
+      .find((link) => (link.getAttribute('href') || '').includes(`#/workspace/raw?artifact=${encodeURIComponent(auditRawPath)}`));
+    expect(rawLink).toBeTruthy();
+    expect(rawLink?.textContent || '').toContain('查看原始层');
+    expect(actionCard?.textContent || '').toContain('查看终端层');
   });
 
   it('syncs terminal focus navigation into the url', async () => {

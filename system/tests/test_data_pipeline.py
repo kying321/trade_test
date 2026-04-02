@@ -9,7 +9,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lie_engine.data.pipeline import DataBus
+from lie_engine.data.pipeline import DataBus, IngestionResult
+from lie_engine.data.quality import DataQualityReport, SourceConfidenceItem, SourceConfidenceReport
 from lie_engine.models import NewsEvent
 
 
@@ -51,6 +52,213 @@ class _MiniProvider:
 
 
 class DataPipelineTests(unittest.TestCase):
+    def test_persist_is_idempotent_for_source_owned_tables(self) -> None:
+        from tempfile import TemporaryDirectory
+        import sqlite3
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            bus = DataBus(
+                providers=[],
+                output_dir=root,
+                sqlite_path=root / "artifacts" / "lie_engine.db",
+                completeness_min=0.99,
+                conflict_max=0.005,
+            )
+            result = IngestionResult(
+                raw_bars=pd.DataFrame(
+                    {
+                        "ts": pd.to_datetime(["2026-03-30"]),
+                        "symbol": ["BTCUSDT"],
+                        "open": [100.0],
+                        "high": [101.0],
+                        "low": [99.0],
+                        "close": [100.0],
+                        "volume": [1000.0],
+                        "source": ["binance_spot_public"],
+                        "asset_class": ["crypto"],
+                    }
+                ),
+                normalized_bars=pd.DataFrame(
+                    {
+                        "ts": pd.to_datetime(["2026-03-30"]),
+                        "symbol": ["BTCUSDT"],
+                        "open": [100.0],
+                        "high": [101.0],
+                        "low": [99.0],
+                        "close": [100.0],
+                        "volume": [1000.0],
+                        "asset_class": ["crypto"],
+                        "source_count": [2],
+                        "data_conflict_flag": [0],
+                    }
+                ),
+                conflicts=pd.DataFrame(columns=["ts", "symbol", "field", "values", "max_diff_pct"]),
+                macro=pd.DataFrame(
+                    {
+                        "date": pd.to_datetime(["2026-03-20"]),
+                        "cpi_yoy": [0.1],
+                        "ppi_yoy": [-2.0],
+                        "lpr_1y": [3.0],
+                        "source": ["public_macro_news"],
+                    }
+                ),
+                sentiment={"btc_return_24h": 0.01},
+                news=[
+                    NewsEvent(
+                        event_id="evt-1",
+                        ts=datetime(2026, 3, 30, 10, 0),
+                        title="test title",
+                        content="test content",
+                        lang="zh",
+                        source="public_macro_news",
+                        category="宏观",
+                        confidence=0.8,
+                        entities=["BTCUSDT"],
+                        importance=0.7,
+                    )
+                ],
+                source_confidence=SourceConfidenceReport(
+                    overall_score=0.8,
+                    by_source={"public_macro_news": 0.8},
+                    low_confidence_sources=[],
+                    details=[
+                        SourceConfidenceItem(
+                            source="public_macro_news",
+                            score=0.8,
+                            base_reliability=0.8,
+                            bar_consistency=1.0,
+                            bar_coverage=1.0,
+                            news_confidence=0.8,
+                            sentiment_coverage=1.0,
+                            bars_rows=1,
+                            news_events=1,
+                            sentiment_factors=1,
+                            macro_consistency=1.0,
+                            macro_coverage=1.0,
+                            macro_rows=1,
+                        )
+                    ],
+                ),
+                quality=DataQualityReport(
+                    completeness=1.0,
+                    unresolved_conflict_ratio=0.0,
+                    source_confidence_score=0.8,
+                    low_confidence_source_ratio=0.0,
+                    source_confidence={"public_macro_news": 0.8},
+                    flags=[],
+                ),
+            )
+
+            bus.persist(as_of=datetime(2026, 3, 30).date(), result=result)
+            bus.persist(as_of=datetime(2026, 3, 30).date(), result=result)
+
+            conn = sqlite3.connect(root / "artifacts" / "lie_engine.db")
+            try:
+                counts = {
+                    table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    for table in [
+                        "bars_normalized",
+                        "macro",
+                        "news_events",
+                        "sentiment_snapshot",
+                        "source_confidence",
+                        "quality",
+                    ]
+                }
+            finally:
+                conn.close()
+            self.assertEqual(
+                counts,
+                {
+                    "bars_normalized": 1,
+                    "macro": 1,
+                    "news_events": 1,
+                    "sentiment_snapshot": 1,
+                    "source_confidence": 1,
+                    "quality": 1,
+                },
+            )
+
+    def test_persist_feature_parquet_includes_latest_macro_snapshot(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            bus = DataBus(
+                providers=[],
+                output_dir=root,
+                sqlite_path=root / "artifacts" / "lie_engine.db",
+                completeness_min=0.99,
+                conflict_max=0.005,
+            )
+            result = IngestionResult(
+                raw_bars=pd.DataFrame(
+                    {
+                        "ts": pd.to_datetime(["2026-03-30"]),
+                        "symbol": ["BU2606"],
+                        "open": [100.0],
+                        "high": [101.0],
+                        "low": [99.0],
+                        "close": [100.0],
+                        "volume": [1000.0],
+                        "source": ["public_macro_news"],
+                        "asset_class": ["future"],
+                    }
+                ),
+                normalized_bars=pd.DataFrame(
+                    {
+                        "ts": pd.to_datetime(["2026-03-30"]),
+                        "symbol": ["BU2606"],
+                        "open": [100.0],
+                        "high": [101.0],
+                        "low": [99.0],
+                        "close": [100.0],
+                        "volume": [1000.0],
+                        "asset_class": ["future"],
+                        "source_count": [1],
+                        "data_conflict_flag": [0],
+                    }
+                ),
+                conflicts=pd.DataFrame(columns=["ts", "symbol", "field", "values", "max_diff_pct"]),
+                macro=pd.DataFrame(
+                    {
+                        "date": pd.to_datetime(["2026-03-20"]),
+                        "cpi_yoy": [0.1],
+                        "ppi_yoy": [-2.0],
+                        "lpr_1y": [3.0],
+                        "fixed_asset_investment_cum": [52721.0],
+                        "consumer_confidence_index": [90.6],
+                        "source": ["public_macro_news"],
+                        "fixed_asset_investment_source": ["nbs:fixed_asset_investment"],
+                    }
+                ),
+                sentiment={},
+                news=[],
+                source_confidence=SourceConfidenceReport(overall_score=1.0, by_source={}, low_confidence_sources=[], details=[]),
+                quality=DataQualityReport(
+                    completeness=1.0,
+                    unresolved_conflict_ratio=0.0,
+                    source_confidence_score=1.0,
+                    low_confidence_source_ratio=0.0,
+                    source_confidence={},
+                    flags=[],
+                ),
+            )
+
+            bus.persist(as_of=datetime(2026, 3, 30).date(), result=result)
+            feature_path = root / "artifacts" / "feature" / "2026-03-30_bars_feature.parquet"
+            feature_df = pd.read_parquet(feature_path)
+
+            self.assertIn("cpi_yoy", feature_df.columns)
+            self.assertIn("fixed_asset_investment_cum", feature_df.columns)
+            self.assertIn("consumer_confidence_index", feature_df.columns)
+            self.assertNotIn("source", feature_df.columns)
+            self.assertNotIn("fixed_asset_investment_source", feature_df.columns)
+            self.assertAlmostEqual(float(feature_df.iloc[0]["cpi_yoy"]), 0.1, places=6)
+            self.assertAlmostEqual(float(feature_df.iloc[0]["fixed_asset_investment_cum"]), 52721.0, places=6)
+            self.assertAlmostEqual(float(feature_df.iloc[0]["consumer_confidence_index"]), 90.6, places=6)
+
     def test_news_normalization_uses_source_reliability_and_category_extraction(self) -> None:
         bus = DataBus(
             providers=[],

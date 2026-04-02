@@ -68,8 +68,14 @@ def run_walk_forward_backtest(
     agg_viol = int(sum(r.violations for r in windows))
 
     merged_curve = []
+    merged_daily_symbol_exposure = []
+    merged_trade_journal = []
+    merged_holding_daily_symbol_exposure = []
     for r in windows:
         merged_curve.extend(r.equity_curve)
+        merged_daily_symbol_exposure.extend(getattr(r, "daily_symbol_exposure", []) or [])
+        merged_trade_journal.extend(getattr(r, "trade_journal", []) or [])
+        merged_holding_daily_symbol_exposure.extend(getattr(r, "holding_daily_symbol_exposure", []) or [])
 
     by_asset: dict[str, float] = {}
     for r in windows:
@@ -91,4 +97,7 @@ def run_walk_forward_backtest(
         positive_window_ratio=agg_pos,
         equity_curve=merged_curve,
         by_asset=by_asset,
+        daily_symbol_exposure=merged_daily_symbol_exposure,
+        trade_journal=merged_trade_journal,
+        holding_daily_symbol_exposure=merged_holding_daily_symbol_exposure,
     )

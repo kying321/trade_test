@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import json
+import re
 import time
 from typing import Any
 
@@ -14,7 +15,12 @@ import yaml
 from lie_engine.backtest.engine import BacktestConfig, run_event_backtest
 from lie_engine.data.storage import write_json, write_markdown
 from lie_engine.research.modes import MODE_SPACES, ModeSpace
-from lie_engine.research.real_data import RealDataBundle, load_real_data_bundle
+from lie_engine.research.real_data import (
+    RealDataBundle,
+    load_real_data_bundle,
+    resolve_factor_series_for_bars,
+    resolve_factor_series_for_exposure,
+)
 
 
 @dataclass(slots=True)
@@ -42,6 +48,12 @@ class ModeOptimizationSummary:
     budget_seconds: float
     elapsed_seconds: float
     trial_log_path: str
+    best_trade_journal_path: str = ""
+    best_holding_exposure_path: str = ""
+    trial_artifacts: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -82,6 +94,12 @@ def _clip(v: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, v)))
 
 
+def _artifact_slug(text: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", str(text).strip())
+    slug = slug.strip("._-")
+    return slug or "item"
+
+
 def _sample_params(rng: np.random.Generator, space: ModeSpace, best: dict[str, float | int] | None) -> dict[str, float | int]:
     if not best:
         hold = int(rng.integers(space.hold_days_min, space.hold_days_max + 1))
@@ -111,7 +129,17 @@ def _sample_params(rng: np.random.Generator, space: ModeSpace, best: dict[str, f
     }
 
 
-def _factor_alignment(result_curve: list[dict[str, Any]], news_daily: pd.Series, report_daily: pd.Series, news_weight: float, report_weight: float) -> float:
+def _factor_alignment(
+    result_curve: list[dict[str, Any]],
+    news_daily: pd.Series,
+    report_daily: pd.Series,
+    news_weight: float,
+    report_weight: float,
+    *,
+    daily_symbol_exposure: list[dict[str, Any]] | None = None,
+    news_daily_by_symbol: pd.DataFrame | None = None,
+    report_daily_by_symbol: pd.DataFrame | None = None,
+) -> float:
     if not result_curve:
         return 0.0
     eq = pd.DataFrame(result_curve)
@@ -125,8 +153,18 @@ def _factor_alignment(result_curve: list[dict[str, Any]], news_daily: pd.Series,
         return 0.0
 
     idx = eq["date"]
-    ns = news_daily.reindex(idx).fillna(0.0) if not news_daily.empty else pd.Series(0.0, index=idx)
-    rs = report_daily.reindex(idx).fillna(0.0) if not report_daily.empty else pd.Series(0.0, index=idx)
+    ns = resolve_factor_series_for_exposure(
+        aggregate_daily=news_daily,
+        by_symbol_daily=news_daily_by_symbol,
+        daily_symbol_exposure=daily_symbol_exposure,
+        value_col="news_score",
+    ).reindex(idx).fillna(0.0)
+    rs = resolve_factor_series_for_exposure(
+        aggregate_daily=report_daily,
+        by_symbol_daily=report_daily_by_symbol,
+        daily_symbol_exposure=daily_symbol_exposure,
+        value_col="report_score",
+    ).reindex(idx).fillna(0.0)
     factor = news_weight * ns + report_weight * rs
     aligned = pd.DataFrame({"ret": eq["ret"].to_numpy(), "factor": factor.to_numpy()})
     if aligned["factor"].std(ddof=0) < 1e-9 or aligned["ret"].std(ddof=0) < 1e-9:
@@ -193,6 +231,8 @@ def _optimize_one_mode(
     end: date,
     news_daily: pd.Series,
     report_daily: pd.Series,
+    news_daily_by_symbol: pd.DataFrame | None,
+    report_daily_by_symbol: pd.DataFrame | None,
     deadline_ts: float,
     max_trials: int,
     rng: np.random.Generator,
@@ -205,6 +245,9 @@ def _optimize_one_mode(
     best_score = -1e18
     best_params: dict[str, float | int] | None = None
     best_metrics: dict[str, float | int] = {}
+    best_trade_journal_rows: list[dict[str, Any]] = []
+    best_holding_exposure_rows: list[dict[str, Any]] = []
+    trial_artifacts: list[dict[str, Any]] = []
 
     trial_idx = 0
     start_ts = time.time()
@@ -267,12 +310,19 @@ def _optimize_one_mode(
                     bt = bt_retry
                     conf_adj = conf_retry
 
+        exposure_payload = (
+            getattr(bt, "holding_daily_symbol_exposure", None)
+            or getattr(bt, "daily_symbol_exposure", [])
+        )
         fa = _factor_alignment(
             result_curve=bt.equity_curve,
             news_daily=news_daily,
             report_daily=report_daily,
             news_weight=float(params["news_weight"]),
             report_weight=float(params["report_weight"]),
+            daily_symbol_exposure=exposure_payload,
+            news_daily_by_symbol=news_daily_by_symbol,
+            report_daily_by_symbol=report_daily_by_symbol,
         )
         score = _objective(
             annual_return=float(bt.annual_return),
@@ -299,6 +349,22 @@ def _optimize_one_mode(
             elapsed_sec=elapsed,
         )
         trials.append(rec)
+        trial_prefix = f"trial_{int(trial_idx):03d}_{_artifact_slug(mode)}"
+        trial_trade_path = mode_dir / f"{trial_prefix}_trade_journal.csv"
+        trial_hold_path = mode_dir / f"{trial_prefix}_holding_daily_symbol_exposure.csv"
+        pd.DataFrame(list(getattr(bt, "trade_journal", []) or [])).to_csv(trial_trade_path, index=False)
+        pd.DataFrame(list(getattr(bt, "holding_daily_symbol_exposure", []) or [])).to_csv(
+            trial_hold_path, index=False
+        )
+        trial_artifacts.append(
+            {
+                "trial": int(trial_idx),
+                "mode": str(mode),
+                "score": float(score),
+                "trade_journal_path": str(trial_trade_path),
+                "holding_exposure_path": str(trial_hold_path),
+            }
+        )
 
         if score > best_score:
             best_score = score
@@ -311,6 +377,8 @@ def _optimize_one_mode(
                 "factor_alignment": fa,
                 "score": score,
             }
+            best_trade_journal_rows = list(getattr(bt, "trade_journal", []) or [])
+            best_holding_exposure_rows = list(getattr(bt, "holding_daily_symbol_exposure", []) or [])
 
     trials_df = pd.DataFrame(
         [
@@ -332,6 +400,10 @@ def _optimize_one_mode(
     )
     trial_log = mode_dir / "trials.csv"
     trials_df.to_csv(trial_log, index=False)
+    best_trade_journal_path = mode_dir / "best_trade_journal.csv"
+    best_holding_exposure_path = mode_dir / "best_holding_daily_symbol_exposure.csv"
+    pd.DataFrame(best_trade_journal_rows).to_csv(best_trade_journal_path, index=False)
+    pd.DataFrame(best_holding_exposure_rows).to_csv(best_holding_exposure_path, index=False)
 
     return ModeOptimizationSummary(
         mode=mode,
@@ -342,6 +414,9 @@ def _optimize_one_mode(
         budget_seconds=float(max(0.0, deadline_ts - start_ts)),
         elapsed_seconds=float(time.time() - start_ts),
         trial_log_path=str(trial_log),
+        best_trade_journal_path=str(best_trade_journal_path),
+        best_holding_exposure_path=str(best_holding_exposure_path),
+        trial_artifacts=trial_artifacts,
     )
 
 
@@ -424,6 +499,18 @@ def run_research_backtest(
     cutoff_iso = (bundle.cutoff_date or end).isoformat()
     cutoff_ts = str(bundle.cutoff_ts or f"{cutoff_iso}T23:59:59")
     bars = bundle.bars
+    effective_news_daily = resolve_factor_series_for_bars(
+        bars=bars,
+        aggregate_daily=bundle.news_daily,
+        by_symbol_daily=getattr(bundle, "news_daily_by_symbol", pd.DataFrame()),
+        value_col="news_score",
+    )
+    effective_report_daily = resolve_factor_series_for_bars(
+        bars=bars,
+        aggregate_daily=bundle.report_daily,
+        by_symbol_daily=getattr(bundle, "report_daily_by_symbol", pd.DataFrame()),
+        value_col="report_score",
+    )
     bars_path = run_dir / "bars_used.parquet"
     if not bars.empty:
         try:
@@ -435,8 +522,8 @@ def run_research_backtest(
     report_path = run_dir / "report_daily_pre_cutoff.csv"
     review_news_path = run_dir / "news_daily_post_cutoff_review.csv"
     review_report_path = run_dir / "report_daily_post_cutoff_review.csv"
-    bundle.news_daily.rename("news_score").to_csv(news_path, header=True)
-    bundle.report_daily.rename("report_score").to_csv(report_path, header=True)
+    effective_news_daily.rename("news_score").to_csv(news_path, header=True)
+    effective_report_daily.rename("report_score").to_csv(report_path, header=True)
     bundle.review_news_daily.rename("news_score").to_csv(review_news_path, header=True)
     bundle.review_report_daily.rename("report_score").to_csv(review_report_path, header=True)
     write_markdown(
@@ -470,8 +557,10 @@ def run_research_backtest(
             bars=bars,
             start=start,
             end=end,
-            news_daily=bundle.news_daily,
-            report_daily=bundle.report_daily,
+            news_daily=effective_news_daily,
+            report_daily=effective_report_daily,
+            news_daily_by_symbol=getattr(bundle, "news_daily_by_symbol", pd.DataFrame()),
+            report_daily_by_symbol=getattr(bundle, "report_daily_by_symbol", pd.DataFrame()),
             deadline_ts=min(deadline_ts, mode_budget_end),
             max_trials=max_trials_per_mode,
             rng=rng,

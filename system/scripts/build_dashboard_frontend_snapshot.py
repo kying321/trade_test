@@ -103,6 +103,27 @@ def latest_review_suffix(review_dir: Path, suffix: str) -> Path | None:
     return latest_by_glob(review_dir, f"*_{suffix}")
 
 
+def latest_research_summary(research_dir: Path, kind: str) -> Path | None:
+    if not research_dir.exists():
+        return None
+    candidates: list[Path] = []
+    for child in research_dir.iterdir():
+        if not child.is_dir():
+            continue
+        name = child.name
+        if kind == "optimizer" and not re.fullmatch(r"\d{8}_\d{6}", name):
+            continue
+        if kind == "strategy_lab" and not name.startswith("strategy_lab_"):
+            continue
+        summary_path = child / "summary.json"
+        if summary_path.is_file():
+            candidates.append(summary_path)
+    if not candidates:
+        return None
+    candidates.sort(key=sort_key, reverse=True)
+    return candidates[0]
+
+
 def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -490,6 +511,58 @@ def ensure_commodity_reasoning_artifacts(selected_paths: dict[str, tuple[Path | 
             selected_paths[artifact_id] = (candidate, category, artifact_group)
 
 
+def merge_payload_entry(
+    existing: dict[str, Any] | None,
+    *,
+    label: str,
+    path: Path,
+    category: str,
+    artifact_group: str,
+    surface: SurfaceSpec,
+    workspace: Path,
+    review_dir: Path,
+    artifacts_dir: Path,
+    public_dir: Path,
+) -> dict[str, Any]:
+    entry = payload_entry(
+        label,
+        path,
+        category,
+        artifact_group,
+        surface=surface,
+        workspace=workspace,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        public_dir=public_dir,
+    )
+    if entry is None:
+        return existing or {}
+    _, new_entry = entry
+    if not existing:
+        return new_entry
+
+    merged = copy.deepcopy(existing)
+    existing_payload = merged.get("payload") if isinstance(merged.get("payload"), dict) else {}
+    new_payload = new_entry.get("payload") if isinstance(new_entry.get("payload"), dict) else {}
+    payload_out = dict(existing_payload)
+    for key, value in new_payload.items():
+        if key not in payload_out or payload_out.get(key) in (None, "", [], {}):
+            payload_out[key] = value
+    merged["payload"] = payload_out
+
+    existing_summary = merged.get("summary") if isinstance(merged.get("summary"), dict) else {}
+    new_summary = new_entry.get("summary") if isinstance(new_entry.get("summary"), dict) else {}
+    summary_out = dict(existing_summary)
+    for key, value in new_summary.items():
+        if key not in summary_out or summary_out.get(key) in (None, "", [], {}):
+            summary_out[key] = value
+    merged["summary"] = summary_out
+    merged.setdefault("label", new_entry.get("label"))
+    merged.setdefault("category", new_entry.get("category"))
+    merged.setdefault("path", new_entry.get("path"))
+    return merged
+
+
 def build_backtests(
     artifacts_dir: Path,
     max_backtests: int,
@@ -637,6 +710,37 @@ def build_surface_snapshot(
         )
         if entry:
             artifact_payloads[entry[0]] = entry[1]
+
+    research_dir = workspace / "system" / "output" / "research"
+    optimizer_summary = latest_research_summary(research_dir, "optimizer")
+    if optimizer_summary is not None:
+        artifact_payloads["recent_strategy_backtests"] = merge_payload_entry(
+            artifact_payloads.get("recent_strategy_backtests"),
+            label="recent_strategy_backtests",
+            path=optimizer_summary,
+            category="backtest",
+            artifact_group="system_anchor",
+            surface=surface,
+            workspace=workspace,
+            review_dir=review_dir,
+            artifacts_dir=artifacts_dir,
+            public_dir=public_dir,
+        )
+
+    strategy_lab_summary = latest_research_summary(research_dir, "strategy_lab")
+    if strategy_lab_summary is not None:
+        artifact_payloads["strategy_lab_summary"] = merge_payload_entry(
+            artifact_payloads.get("strategy_lab_summary"),
+            label="strategy_lab_summary",
+            path=strategy_lab_summary,
+            category="research",
+            artifact_group="research_mainline",
+            surface=surface,
+            workspace=workspace,
+            review_dir=review_dir,
+            artifacts_dir=artifacts_dir,
+            public_dir=public_dir,
+        )
 
     catalog = build_catalog(
         review_dir,

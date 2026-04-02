@@ -106,6 +106,24 @@ class LieEngine:
     def _core_symbols(self) -> list[str]:
         return [x["symbol"] for x in self.settings.universe.get("core", [])]
 
+    def _persisted_aux_symbols(self) -> list[str]:
+        return [x["symbol"] for x in self.settings.universe.get("domestic_futures_paper", [])]
+
+    @staticmethod
+    def _merge_symbol_lists(primary: list[str], secondary: list[str]) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for raw in list(primary) + list(secondary):
+            sym = str(raw or "").strip()
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            merged.append(sym)
+        return merged
+
+    def _persisted_ingestion_symbols(self, symbols: list[str]) -> list[str]:
+        return self._merge_symbol_lists(list(symbols), self._persisted_aux_symbols())
+
     def _theme_map(self) -> dict[str, str]:
         out = {}
         for item in self.settings.universe.get("core", []):
@@ -1184,67 +1202,84 @@ class LieEngine:
         )
 
     def _run_ingestion(self, as_of: date, symbols: list[str]) -> tuple[pd.DataFrame, Any]:
+        requested_symbols = self._merge_symbol_lists(list(symbols), [])
+        persist_symbols = self._persisted_ingestion_symbols(requested_symbols)
         start = as_of - timedelta(days=420)
         start_ts = datetime.combine(as_of, time(0, 0)) - timedelta(days=1)
         end_ts = datetime.combine(as_of, time(23, 59))
 
         result = self.data_bus.ingest(
-            symbols=symbols,
+            symbols=persist_symbols,
             start=start,
             end=as_of,
             start_ts=start_ts,
             end_ts=end_ts,
             langs=("zh", "en"),
         )
+        expansion_bars = result.normalized_bars.copy()
+        if not expansion_bars.empty and "symbol" in expansion_bars.columns:
+            expansion_bars = expansion_bars[expansion_bars["symbol"].isin(requested_symbols)].copy()
         expanded = expand_universe(
-            core_symbols=symbols,
-            bars=result.normalized_bars,
+            core_symbols=requested_symbols,
+            bars=expansion_bars,
             max_additions=int(self.settings.universe.get("max_dynamic_additions", 5)),
         )
-        if set(expanded) - set(symbols):
+        if set(expanded) - set(requested_symbols):
+            persist_symbols = self._persisted_ingestion_symbols(expanded)
             result = self.data_bus.ingest(
-                symbols=expanded,
+                symbols=persist_symbols,
                 start=start,
                 end=as_of,
                 start_ts=start_ts,
                 end_ts=end_ts,
                 langs=("zh", "en"),
             )
-            symbols = expanded
+            requested_symbols = expanded
 
         self.data_bus.persist(as_of=as_of, result=result)
         model_bars = self._filter_model_path_bars(result.normalized_bars)
+        if not model_bars.empty and "symbol" in model_bars.columns:
+            model_bars = model_bars[model_bars["symbol"].isin(requested_symbols)].copy()
         return model_bars, result
 
     def _run_ingestion_range(self, start: date, end: date, symbols: list[str]) -> tuple[pd.DataFrame, Any]:
+        requested_symbols = self._merge_symbol_lists(list(symbols), [])
+        persist_symbols = self._persisted_ingestion_symbols(requested_symbols)
         start_ts = datetime.combine(start, time(0, 0))
         end_ts = datetime.combine(end, time(23, 59))
 
         result = self.data_bus.ingest(
-            symbols=symbols,
+            symbols=persist_symbols,
             start=start,
             end=end,
             start_ts=start_ts,
             end_ts=end_ts,
             langs=("zh", "en"),
         )
+        expansion_bars = result.normalized_bars.copy()
+        if not expansion_bars.empty and "symbol" in expansion_bars.columns:
+            expansion_bars = expansion_bars[expansion_bars["symbol"].isin(requested_symbols)].copy()
         expanded = expand_universe(
-            core_symbols=symbols,
-            bars=result.normalized_bars,
+            core_symbols=requested_symbols,
+            bars=expansion_bars,
             max_additions=int(self.settings.universe.get("max_dynamic_additions", 5)),
         )
-        if set(expanded) - set(symbols):
+        if set(expanded) - set(requested_symbols):
+            persist_symbols = self._persisted_ingestion_symbols(expanded)
             result = self.data_bus.ingest(
-                symbols=expanded,
+                symbols=persist_symbols,
                 start=start,
                 end=end,
                 start_ts=start_ts,
                 end_ts=end_ts,
                 langs=("zh", "en"),
             )
+            requested_symbols = expanded
 
         self.data_bus.persist(as_of=end, result=result)
         model_bars = self._filter_model_path_bars(result.normalized_bars)
+        if not model_bars.empty and "symbol" in model_bars.columns:
+            model_bars = model_bars[model_bars["symbol"].isin(requested_symbols)].copy()
         return model_bars, result
 
     def _regime_from_bars(self, as_of: date, bars: pd.DataFrame):

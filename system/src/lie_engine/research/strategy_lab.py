@@ -5,6 +5,7 @@ from datetime import date, datetime
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -13,7 +14,11 @@ import yaml
 
 from lie_engine.backtest.engine import BacktestConfig, run_event_backtest
 from lie_engine.data.storage import write_json, write_markdown
-from lie_engine.research.real_data import load_real_data_bundle
+from lie_engine.research.real_data import (
+    load_real_data_bundle,
+    resolve_factor_series_for_bars,
+    resolve_factor_series_for_exposure,
+)
 
 
 @dataclass(slots=True)
@@ -30,6 +35,8 @@ class StrategyCandidateResult:
     factor_alignment_review: float = 0.0
     robustness_score: float = 0.0
     accepted: bool = False
+    trade_journal_path: str = ""
+    holding_exposure_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,6 +77,8 @@ class StrategyLabSummary:
     candidates: list[StrategyCandidateResult] = field(default_factory=list)
     best_candidate: dict[str, Any] = field(default_factory=dict)
     output_dir: str = ""
+    best_trade_journal_path: str = ""
+    best_holding_exposure_path: str = ""
     data_fetch_stats: dict[str, Any] = field(default_factory=dict)
     term_registry: dict[str, Any] = field(default_factory=dict)
     exposure_cap_applied: float = 0.0
@@ -84,6 +93,12 @@ class StrategyLabSummary:
 
 def _clip(v: float, lo: float, hi: float) -> float:
     return float(max(lo, min(hi, v)))
+
+
+def _artifact_slug(text: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", str(text).strip())
+    slug = slug.strip("._-")
+    return slug or "item"
 
 
 def _term_registry_snapshot() -> dict[str, Any]:
@@ -443,7 +458,15 @@ def _report_insights(news_daily: pd.Series, report_daily: pd.Series) -> dict[str
     }
 
 
-def _factor_alignment(result_curve: list[dict[str, Any]], news_daily: pd.Series, report_daily: pd.Series) -> float:
+def _factor_alignment(
+    result_curve: list[dict[str, Any]],
+    news_daily: pd.Series,
+    report_daily: pd.Series,
+    *,
+    daily_symbol_exposure: list[dict[str, Any]] | None = None,
+    news_daily_by_symbol: pd.DataFrame | None = None,
+    report_daily_by_symbol: pd.DataFrame | None = None,
+) -> float:
     if not result_curve:
         return 0.0
     eq = pd.DataFrame(result_curve)
@@ -457,8 +480,18 @@ def _factor_alignment(result_curve: list[dict[str, Any]], news_daily: pd.Series,
         return 0.0
 
     idx = eq["date"].tolist()
-    ns = news_daily.reindex(idx).fillna(0.0) if not news_daily.empty else pd.Series(0.0, index=idx)
-    rs = report_daily.reindex(idx).fillna(0.0) if not report_daily.empty else pd.Series(0.0, index=idx)
+    ns = resolve_factor_series_for_exposure(
+        aggregate_daily=news_daily,
+        by_symbol_daily=news_daily_by_symbol,
+        daily_symbol_exposure=daily_symbol_exposure,
+        value_col="news_score",
+    ).reindex(idx).fillna(0.0)
+    rs = resolve_factor_series_for_exposure(
+        aggregate_daily=report_daily,
+        by_symbol_daily=report_daily_by_symbol,
+        daily_symbol_exposure=daily_symbol_exposure,
+        value_col="report_score",
+    ).reindex(idx).fillna(0.0)
     factor = 0.5 * ns + 0.5 * rs
     aligned = pd.DataFrame({"ret": eq["ret"].to_numpy(), "factor": factor.to_numpy()})
     if aligned["ret"].std(ddof=0) < 1e-9 or aligned["factor"].std(ddof=0) < 1e-9:
@@ -1376,8 +1409,33 @@ def run_strategy_lab(
     if low_activity_mode and crypto_mode:
         proxy_lookback = int(max(proxy_lookback, 84))
 
+    effective_news_daily = resolve_factor_series_for_bars(
+        bars=bars,
+        aggregate_daily=bundle.news_daily,
+        by_symbol_daily=getattr(bundle, "news_daily_by_symbol", pd.DataFrame()),
+        value_col="news_score",
+    )
+    effective_report_daily = resolve_factor_series_for_bars(
+        bars=bars,
+        aggregate_daily=bundle.report_daily,
+        by_symbol_daily=getattr(bundle, "report_daily_by_symbol", pd.DataFrame()),
+        value_col="report_score",
+    )
+    effective_review_news_daily = resolve_factor_series_for_bars(
+        bars=review_bars if not review_bars.empty else bars.iloc[0:0].copy(),
+        aggregate_daily=bundle.review_news_daily,
+        by_symbol_daily=getattr(bundle, "review_news_daily_by_symbol", pd.DataFrame()),
+        value_col="news_score",
+    )
+    effective_review_report_daily = resolve_factor_series_for_bars(
+        bars=review_bars if not review_bars.empty else bars.iloc[0:0].copy(),
+        aggregate_daily=bundle.review_report_daily,
+        by_symbol_daily=getattr(bundle, "review_report_daily_by_symbol", pd.DataFrame()),
+        value_col="report_score",
+    )
+
     market = _market_insights(bars)
-    report = _report_insights(bundle.news_daily, bundle.report_daily)
+    report = _report_insights(effective_news_daily, effective_report_daily)
     exposure_cap, exposure_cap_components = _resolve_exposure_cap(
         output_root=output_root,
         start=start,
@@ -1395,7 +1453,8 @@ def run_strategy_lab(
     )
 
     out_candidates: list[StrategyCandidateResult] = []
-    for spec in candidates_cfg:
+    candidate_artifacts: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}
+    for cand_idx, spec in enumerate(candidates_cfg, start=1):
         cfg = BacktestConfig(
             signal_confidence_min=float(spec["signal_confidence_min"]),
             convexity_min=float(spec["convexity_min"]),
@@ -1442,8 +1501,30 @@ def run_strategy_lab(
             mean_thr=0.4,
             atr_extreme=2.0,
         )
-        align_train = _factor_alignment(train_bt.equity_curve, bundle.news_daily, bundle.report_daily)
-        align_valid = _factor_alignment(valid_bt.equity_curve, bundle.news_daily, bundle.report_daily)
+        train_exposure_payload = (
+            getattr(train_bt, "holding_daily_symbol_exposure", None)
+            or getattr(train_bt, "daily_symbol_exposure", [])
+        )
+        valid_exposure_payload = (
+            getattr(valid_bt, "holding_daily_symbol_exposure", None)
+            or getattr(valid_bt, "daily_symbol_exposure", [])
+        )
+        align_train = _factor_alignment(
+            train_bt.equity_curve,
+            effective_news_daily,
+            effective_report_daily,
+            daily_symbol_exposure=train_exposure_payload,
+            news_daily_by_symbol=getattr(bundle, "news_daily_by_symbol", pd.DataFrame()),
+            report_daily_by_symbol=getattr(bundle, "report_daily_by_symbol", pd.DataFrame()),
+        )
+        align_valid = _factor_alignment(
+            valid_bt.equity_curve,
+            effective_news_daily,
+            effective_report_daily,
+            daily_symbol_exposure=valid_exposure_payload,
+            news_daily_by_symbol=getattr(bundle, "news_daily_by_symbol", pd.DataFrame()),
+            report_daily_by_symbol=getattr(bundle, "report_daily_by_symbol", pd.DataFrame()),
+        )
         review_bt = None
         align_review = 0.0
         review_metrics: dict[str, float | int] = {}
@@ -1468,7 +1549,18 @@ def run_strategy_lab(
                 mean_thr=0.4,
                 atr_extreme=2.0,
             )
-            align_review = _factor_alignment(review_bt.equity_curve, bundle.review_news_daily, bundle.review_report_daily)
+            review_exposure_payload = (
+                getattr(review_bt, "holding_daily_symbol_exposure", None)
+                or getattr(review_bt, "daily_symbol_exposure", [])
+            )
+            align_review = _factor_alignment(
+                review_bt.equity_curve,
+                effective_review_news_daily,
+                effective_review_report_daily,
+                daily_symbol_exposure=review_exposure_payload,
+                news_daily_by_symbol=getattr(bundle, "review_news_daily_by_symbol", pd.DataFrame()),
+                report_daily_by_symbol=getattr(bundle, "review_report_daily_by_symbol", pd.DataFrame()),
+            )
             robustness = _robustness_score(
                 valid_bt=valid_bt,
                 review_bt=review_bt,
@@ -1482,6 +1574,18 @@ def run_strategy_lab(
                 "trades": int(review_bt.trades),
                 "violations": int(review_bt.violations),
             }
+        artifact_bt = review_bt if review_bt is not None else valid_bt
+        candidate_artifacts[str(spec["name"])] = (
+            list(getattr(artifact_bt, "trade_journal", []) or []),
+            list(getattr(artifact_bt, "holding_daily_symbol_exposure", []) or []),
+        )
+        candidate_prefix = f"candidate_{int(cand_idx):02d}_{_artifact_slug(spec['name'])}"
+        pd.DataFrame(list(getattr(artifact_bt, "trade_journal", []) or [])).to_csv(
+            run_dir / f"{candidate_prefix}_trade_journal.csv", index=False
+        )
+        pd.DataFrame(list(getattr(artifact_bt, "holding_daily_symbol_exposure", []) or [])).to_csv(
+            run_dir / f"{candidate_prefix}_holding_daily_symbol_exposure.csv", index=False
+        )
         score = _score_candidate(
             train_bt=train_bt,
             valid_bt=valid_bt,
@@ -1586,11 +1690,22 @@ def run_strategy_lab(
                 robustness_score=robustness,
                 accepted=accepted,
                 score=score,
+                trade_journal_path=str(run_dir / f"{candidate_prefix}_trade_journal.csv"),
+                holding_exposure_path=str(run_dir / f"{candidate_prefix}_holding_daily_symbol_exposure.csv"),
             )
         )
 
     out_candidates.sort(key=lambda x: (1 if x.accepted else 0, x.score), reverse=True)
     best = out_candidates[0].to_dict() if out_candidates else {}
+    best_trade_journal_path = run_dir / "best_trade_journal.csv"
+    best_holding_exposure_path = run_dir / "best_holding_daily_symbol_exposure.csv"
+    best_trade_rows: list[dict[str, Any]] = []
+    best_holding_rows: list[dict[str, Any]] = []
+    if out_candidates:
+        best_name = str(out_candidates[0].name)
+        best_trade_rows, best_holding_rows = candidate_artifacts.get(best_name, ([], []))
+    pd.DataFrame(best_trade_rows).to_csv(best_trade_journal_path, index=False)
+    pd.DataFrame(best_holding_rows).to_csv(best_holding_exposure_path, index=False)
 
     t1 = datetime.now()
     summary = StrategyLabSummary(
@@ -1627,6 +1742,8 @@ def run_strategy_lab(
         candidates=out_candidates,
         best_candidate=best,
         output_dir=str(run_dir),
+        best_trade_journal_path=str(best_trade_journal_path),
+        best_holding_exposure_path=str(best_holding_exposure_path),
         data_fetch_stats=bundle.fetch_stats,
         term_registry=term_registry,
         exposure_cap_applied=float(exposure_cap),

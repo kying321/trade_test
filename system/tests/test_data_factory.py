@@ -37,6 +37,13 @@ class DataFactoryTests(unittest.TestCase):
         self.assertEqual(getattr(providers[0], "name", ""), "binance_spot_public")
         self.assertEqual(getattr(providers[1], "name", ""), "bybit_spot_public")
 
+    def test_build_public_research_binance_bybit(self) -> None:
+        providers = build_provider_stack("public_research_binance_bybit")
+        self.assertEqual(len(providers), 3)
+        self.assertEqual(getattr(providers[0], "name", ""), "public_macro_news")
+        self.assertEqual(getattr(providers[1], "name", ""), "binance_spot_public")
+        self.assertEqual(getattr(providers[2], "name", ""), "bybit_spot_public")
+
     def test_build_hybrid_opensource_binance(self) -> None:
         providers = build_provider_stack("hybrid_opensource_binance")
         self.assertEqual(len(providers), 2)

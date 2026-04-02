@@ -21,6 +21,16 @@ export type GraphNode = {
   status?: string;
   importance: number;
   destination?: string;
+  detail?: {
+    sourceContract?: string;
+    sourceArtifact?: string;
+    sourcePath?: string;
+    sourceReason?: string;
+    gateValue?: string;
+    anchorArtifact?: string;
+    feedbackId?: string;
+    nextDestination?: string;
+  };
   upstream: string[];
   downstream: string[];
 };
@@ -52,6 +62,11 @@ export type GraphHomeModel = {
   nodes: GraphNode[];
   edges: GraphEdge[];
   defaultCenterId: string;
+};
+
+export type GraphFocusState = {
+  activeNodeIds: string[];
+  activeEdgeIds: string[];
 };
 
 export type GraphLayoutNode = GraphNode & {

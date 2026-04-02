@@ -55,3 +55,7 @@ export function buildOverviewLink(focus: SharedQueryState = {}): string {
 export function buildGraphHomeLink(focus: SharedQueryState = {}): string {
   return buildPreservedLink('/graph-home', focus);
 }
+
+export function buildCpaLink(focus: SharedQueryState = {}): string {
+  return buildPreservedLink('/cpa', focus);
+}

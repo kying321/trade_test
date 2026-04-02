@@ -127,6 +127,13 @@ def test_build_workspace_routes_smoke_spec_covers_all_workspace_sections(tmp_pat
     assert "internalSnapshotRequests.length" in spec
     assert "document.documentElement.dataset.theme" in spec
     assert "contracts-acceptance-subcommands" in spec
+    assert "contracts-check-graph_home_smoke" in spec
+    assert "contracts-subcommand-graph_home_smoke" in spec
+    assert "contractsAcceptanceInspectorAssertion" in spec
+    assert "[data-testid=\"contracts-acceptance-status-strip\"]" in spec
+    assert "查看研究审计检索" in spec
+    assert "查看研究审计工件" in spec
+    assert "查看研究审计原始层" in spec
     assert "let pageSectionActiveLabel = '';" in spec
     assert "let pageSectionAccordionState = '';" in spec
     assert "await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-acceptance-subcommands'));" in spec
@@ -204,6 +211,101 @@ def test_load_public_workspace_route_assertions_uses_source_owned_active_baselin
     assert route_assertions[1]["expected_focus_panel"] == "orchestration"
     assert route_assertions[1]["expected_focus_section"] == "freshness"
     assert route_assertions[4]["markers"] == ["告警定向原始层", "操作面板"]
+
+
+def test_load_public_workspace_route_assertions_derives_research_audit_search_cases(tmp_path: Path) -> None:
+    mod = load_module()
+    dist_dir = tmp_path / "dist"
+    data_dir = dist_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "fenlie_dashboard_snapshot.json").write_text(
+        json.dumps(
+            {
+                "artifact_payloads": {
+                    "recent_strategy_backtests": {
+                        "summary": {
+                            "status": "ok",
+                            "research_decision": "keep_best",
+                        },
+                        "payload": {
+                            "mode_summaries": [
+                                {
+                                    "mode": "ultra_short",
+                                    "trial_artifacts": [
+                                        {
+                                            "trial": 1,
+                                            "mode": "ultra_short",
+                                            "trade_journal_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
+                                            "holding_exposure_path": "/tmp/research/ultra_short/trial_001_ultra_short_holding_daily_symbol_exposure.csv",
+                                        }
+                                    ],
+                                }
+                            ]
+                        },
+                    },
+                    "strategy_lab_summary": {
+                        "summary": {
+                            "status": "ok",
+                            "research_decision": "selected",
+                        },
+                        "payload": {
+                            "best_candidate": {
+                                "name": "report_momentum_02",
+                                "trade_journal_path": "/tmp/strategy_lab/best_report_momentum_02_trade_journal.csv",
+                            },
+                            "candidates": [
+                                {
+                                    "name": "report_momentum_02",
+                                    "trade_journal_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
+                                }
+                            ],
+                        },
+                    },
+                },
+                "workspace_default_focus": {
+                    "artifact": "operator_panel",
+                    "group": "system_anchor",
+                    "panel": "orchestration",
+                    "section": "freshness",
+                    "search_scope": "title",
+                },
+                "catalog": [
+                    {
+                        "id": "operator_panel",
+                        "payload_key": "operator_panel",
+                        "label": "操作面板",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    route_assertions = mod.load_public_workspace_route_assertions(dist_dir=dist_dir)
+
+    assert route_assertions[1]["research_audit_search_cases"] == [
+        {
+            "case_id": "optimizer_trial_trade_journal",
+            "scope": "artifact",
+            "query": "trial_001_ultra_short_trade_journal",
+            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+            "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+            "result_label": "ultra_short / trial_001 / trade_journal",
+            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+            "raw_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
+        },
+        {
+            "case_id": "strategy_lab_candidate_trade_journal",
+            "scope": "artifact",
+            "query": "candidate_02_report_momentum_02_trade_journal",
+            "search_route": "#/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
+            "result_artifact": "audit:strategy_lab_summary:report_momentum_02:trade_journal",
+            "result_label": "report_momentum_02 / trade_journal",
+            "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
+            "raw_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
+        },
+    ]
 
 
 def test_load_commodity_visibility_route_assertions_reads_public_snapshot_markers(tmp_path: Path) -> None:
@@ -285,6 +387,64 @@ def test_build_commodity_visibility_smoke_spec_covers_overview_and_terminal_publ
     assert str(result_path) in spec
 
 
+def test_build_workspace_routes_smoke_spec_covers_research_audit_search_and_raw_deeplinks(tmp_path: Path) -> None:
+    mod = load_module()
+    screenshot_path = tmp_path / "workspace-routes-smoke.png"
+    result_path = tmp_path / "workspace-routes-smoke.json"
+    route_assertions = [
+        *mod.PUBLIC_WORKSPACE_ROUTE_ASSERTIONS[:1],
+        {
+            **mod.PUBLIC_WORKSPACE_ROUTE_ASSERTIONS[1],
+            "research_audit_search_cases": [
+                {
+                    "case_id": "optimizer_trial_trade_journal",
+                    "scope": "artifact",
+                    "query": "trial_001_ultra_short_trade_journal",
+                    "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                    "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                    "result_label": "ultra_short / trial_001 / trade_journal",
+                    "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                    "raw_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
+                },
+                {
+                    "case_id": "strategy_lab_candidate_trade_journal",
+                    "scope": "artifact",
+                    "query": "candidate_02_report_momentum_02_trade_journal",
+                    "search_route": "#/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
+                    "result_artifact": "audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                    "result_label": "report_momentum_02 / trade_journal",
+                    "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                    "raw_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
+                },
+            ],
+        },
+        *mod.PUBLIC_WORKSPACE_ROUTE_ASSERTIONS[2:],
+    ]
+
+    spec = mod.build_workspace_routes_smoke_spec(
+        base_url="http://127.0.0.1:4173/",
+        screenshot_path=screenshot_path,
+        result_path=result_path,
+        route_assertions=route_assertions,
+    )
+
+    assert "const researchAuditCases = Array.isArray(workspaceStartRoute.research_audit_search_cases)" in spec
+    assert "research_audit_search_assertion" in spec
+    assert "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact" in spec
+    assert "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal" in spec
+    assert "candidate_02_report_momentum_02_trade_journal" in spec
+    assert "audit:strategy_lab_summary:report_momentum_02:trade_journal" in spec
+    assert "await expect(page.locator('.global-search-input')).toHaveValue(auditQuery);" in spec
+    assert "await expectStableMarker(page, auditRawPath);" in spec
+    assert "const searchResultButton = page.getByRole('button', { name: new RegExp(escapeRegExp(auditRawPath)) }).first();" in spec
+    assert "await expectStableMarker(page, auditResultArtifact);" in spec
+    assert "const rawLink = page.locator(`a[href*=\"${encodeURIComponent(auditRawPath)}\"]`).first();" in spec
+    assert "await rawLink.click();" in spec
+    assert "search_route: auditCase.search_route" in spec
+    assert "workspace_route: auditCase.workspace_route" in spec
+    assert "raw_path: auditCase.raw_path" in spec
+
+
 def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_links(tmp_path: Path) -> None:
     mod = load_module()
     screenshot_path = tmp_path / "graph-home-smoke.png"
@@ -300,6 +460,16 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
                 "nav_label": "图谱主页",
                 "headline": "图谱化主页",
                 "markers": ["默认管道", "推荐下一跳", "回到交易中枢", "去操作终端", "去研究工作区", "打开全局搜索"],
+                "research_audit_search_cases": [
+                    {
+                        "case_id": "optimizer_trial_trade_journal",
+                        "query": "trial_001_ultra_short_trade_journal",
+                        "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                        "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                        "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                        "raw_path": "system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv",
+                    }
+                ],
             }
         ],
     )
@@ -322,6 +492,17 @@ def test_build_graph_home_smoke_spec_covers_default_route_fallback_and_quick_lin
     assert "terminal_link_href" in spec
     assert "workspace_link_href" in spec
     assert "search_link_href" in spec
+    assert "researchAuditCases" in spec
+    assert "research_audit_link_assertion" in spec
+    assert "research_audit_link_assertions" in spec
+    assert "researchAuditLinkAssertions.push" in spec
+    assert "async function waitForHashRoute(page, expectedPathname, expectedParams = {})" in spec
+    assert "selected_heading: String(defaultCenter || '').trim().replace(/^中心：/, '')" in spec
+    assert "检索 / ${auditCase.query}" in spec
+    assert "工件 / ${auditCase.result_artifact}" in spec
+    assert "原始层 / ${auditCase.raw_path}" in spec
+    assert "const auditResultArtifact = String(auditCase.result_artifact || '');" in spec
+    assert "await waitForHashRoute(page, '/workspace/artifacts', { artifact: auditResultArtifact });" in spec
     assert str(result_path) in spec
 
 
@@ -366,6 +547,22 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
                         "selected_center": "执行与风控",
                         "recenter_heading": "交易中枢",
                     },
+                    "research_audit_link_assertions": [
+                        {
+                            "selected_heading": "交易中枢",
+                            "case_id": "optimizer_trial_trade_journal",
+                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                        },
+                        {
+                            "selected_heading": "交易中枢",
+                            "case_id": "strategy_lab_candidate_trade_journal",
+                            "search_link_href": "#/search?q=candidate_01_trend_convex_01_trade_journal&scope=artifact",
+                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:trend_convex_01:trade_journal",
+                            "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2Fstrategy_lab_20260330_134050%2Fcandidate_01_trend_convex_01_trade_journal.csv",
+                        },
+                    ],
                 },
             },
         },
@@ -402,6 +599,22 @@ def test_build_artifact_payload_reports_graph_home_surface(tmp_path: Path) -> No
             "selected_center": "执行与风控",
             "recenter_heading": "交易中枢",
         },
+        "research_audit_link_assertions": [
+            {
+                "selected_heading": "交易中枢",
+                "case_id": "optimizer_trial_trade_journal",
+                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+            },
+            {
+                "selected_heading": "交易中枢",
+                "case_id": "strategy_lab_candidate_trade_journal",
+                "search_link_href": "#/search?q=candidate_01_trend_convex_01_trade_journal&scope=artifact",
+                "artifact_link_href": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:trend_convex_01:trade_journal",
+                "raw_link_href": "#/workspace/raw?artifact=system%2Foutput%2Fresearch%2Fstrategy_lab_20260330_134050%2Fcandidate_01_trend_convex_01_trade_journal.csv",
+            },
+        ],
     }
 
 
@@ -752,6 +965,66 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
                         "price_action_exit_risk_hold_selection_aligned_break_even_review_lane",
                     ],
                 },
+                "research_audit_search_assertion": {
+                    "route": "#/search",
+                    "cases_available": True,
+                    "cases": [
+                        {
+                            "case_id": "optimizer_trial_trade_journal",
+                            "scope": "artifact",
+                            "query": "trial_001_ultra_short_trade_journal",
+                            "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
+                        },
+                        {
+                            "case_id": "strategy_lab_candidate_trade_journal",
+                            "scope": "artifact",
+                            "query": "candidate_02_report_momentum_02_trade_journal",
+                            "search_route": "#/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
+                            "result_artifact": "audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                            "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                            "raw_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
+                        },
+                    ],
+                },
+                "contracts_acceptance_inspector_assertion": {
+                    "checks_by_id": {
+                        "workspace_routes_smoke": {
+                            "route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                            "page_section": "contracts-check-workspace_routes_smoke",
+                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                        },
+                        "graph_home_smoke": {
+                            "route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                            "page_section": "contracts-check-graph_home_smoke",
+                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                        }
+                    },
+                    "subcommands_by_id": {
+                        "workspace_routes_smoke": {
+                            "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
+                            "page_section": "contracts-subcommand-workspace_routes_smoke",
+                            "check_route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                        },
+                        "graph_home_smoke": {
+                            "route": "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
+                            "page_section": "contracts-subcommand-graph_home_smoke",
+                            "check_route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                            "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                            "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                            "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+                        }
+                    },
+                },
             },
         },
         base_url="http://127.0.0.1:4173/",
@@ -843,6 +1116,83 @@ def test_build_artifact_payload_reports_workspace_route_matrix(tmp_path: Path) -
             "price_action_exit_risk_break_even_primary_anchor_review",
             "price_action_exit_risk_hold_selection_aligned_break_even_review_lane",
         ],
+    }
+    assert payload["research_audit_search_assertion"] == {
+        "applicable": True,
+        "route": "#/search",
+        "cases_available": True,
+        "cases": [
+            {
+                "case_id": "optimizer_trial_trade_journal",
+                "scope": "artifact",
+                "query": "trial_001_ultra_short_trade_journal",
+                "search_route": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "result_artifact": "audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "workspace_route": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_path": "/tmp/research/ultra_short/trial_001_ultra_short_trade_journal.csv",
+            },
+            {
+                "case_id": "strategy_lab_candidate_trade_journal",
+                "scope": "artifact",
+                "query": "candidate_02_report_momentum_02_trade_journal",
+                "search_route": "#/search?q=candidate_02_report_momentum_02_trade_journal&scope=artifact",
+                "result_artifact": "audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:report_momentum_02:trade_journal",
+                "raw_path": "/tmp/strategy_lab/candidate_02_report_momentum_02_trade_journal.csv",
+            },
+        ],
+    }
+    assert payload["contracts_acceptance_inspector_assertion"] == {
+        "applicable": True,
+        "checks_by_id": {
+            "topology_smoke": {
+                "route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                "page_section": "contracts-check-topology_smoke",
+                "search_link_href": "",
+                "artifact_link_href": "",
+                "raw_link_href": "",
+            },
+            "workspace_routes_smoke": {
+                "route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                "page_section": "contracts-check-workspace_routes_smoke",
+                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+            },
+            "graph_home_smoke": {
+                "route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                "page_section": "contracts-check-graph_home_smoke",
+                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+            }
+        },
+        "subcommands_by_id": {
+            "topology_smoke": {
+                "route": "#/workspace/contracts?page_section=contracts-subcommand-topology_smoke",
+                "page_section": "contracts-subcommand-topology_smoke",
+                "check_route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                "search_link_href": "",
+                "artifact_link_href": "",
+                "raw_link_href": "",
+            },
+            "workspace_routes_smoke": {
+                "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
+                "page_section": "contracts-subcommand-workspace_routes_smoke",
+                "check_route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+            },
+            "graph_home_smoke": {
+                "route": "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke",
+                "page_section": "contracts-subcommand-graph_home_smoke",
+                "check_route": "#/workspace/contracts?page_section=contracts-check-graph_home_smoke",
+                "search_link_href": "#/search?q=trial_001_ultra_short_trade_journal&scope=artifact",
+                "artifact_link_href": "#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal",
+                "raw_link_href": "#/workspace/raw?artifact=%2Ftmp%2Fresearch%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv",
+            }
+        },
     }
 
 

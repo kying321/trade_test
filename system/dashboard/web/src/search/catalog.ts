@@ -1,5 +1,5 @@
 import { PRIMARY_NAV, OPS_SURFACE_NAV, RESEARCH_LEGACY_NAV } from '../navigation/nav-config';
-import { buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from '../navigation/route-contract';
+import { buildCpaLink, buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from '../navigation/route-contract';
 import { getWorkspacePageSections } from '../navigation/workspace-sections';
 import type { TerminalReadModel } from '../types/contracts';
 import { buildTerminalLink, buildWorkspaceLink, buildWorkspacePageLink } from '../utils/focus-links';
@@ -38,6 +38,8 @@ function createRouteEntries(): SearchCatalogEntry[] {
       ? buildOverviewLink({})
       : item.id === 'ops'
         ? buildOpsLegacyLink('public', {})
+        : item.id === 'cpa'
+          ? buildCpaLink({})
         : buildResearchLegacyLink('artifacts', {}),
   }));
   const ops = OPS_SURFACE_NAV.map((item) => ({

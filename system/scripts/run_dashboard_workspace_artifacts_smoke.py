@@ -81,6 +81,8 @@ CONTRACTS_SOURCE_GAP_ASSERTION = {
         "/operator_task_visual_panel.html",
     ],
 }
+CONTRACTS_ACCEPTANCE_INSPECTOR_CHECK_ROUTE = "#/workspace/contracts?page_section=contracts-check-graph_home_smoke"
+CONTRACTS_ACCEPTANCE_INSPECTOR_SUBCOMMAND_ROUTE = "#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke"
 ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION = {
     "route": "#/workspace/artifacts?artifact=price_action_exit_risk_break_even_review_conclusion",
     "group": "research_exit_risk",
@@ -131,6 +133,25 @@ GRAPH_HOME_ROUTE_ASSERTIONS = [
 ]
 
 
+def load_graph_home_route_assertions(*, dist_dir: Path) -> list[dict[str, Any]]:
+    route_assertions = [
+        {
+            **route,
+            "markers": list(route.get("markers") or []),
+        }
+        for route in GRAPH_HOME_ROUTE_ASSERTIONS
+    ]
+    snapshot_path = dist_dir / "data" / "fenlie_dashboard_snapshot.json"
+    if not snapshot_path.exists():
+        return route_assertions
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return route_assertions
+    route_assertions[0]["research_audit_search_cases"] = derive_research_audit_search_cases(snapshot)
+    return route_assertions
+
+
 def commodity_visibility_markers_from_snapshot(snapshot: dict[str, Any]) -> list[str]:
     commodity_summary_payload = (
         ((snapshot.get("artifact_payloads") or {}).get("commodity_reasoning_summary") or {}).get("payload") or {}
@@ -142,6 +163,91 @@ def commodity_visibility_markers_from_snapshot(snapshot: dict[str, Any]) -> list
         str(((commodity_summary_payload.get("contracts_in_focus") or [None])[0]) or "").strip(),
     ]
     return [marker for marker in markers if marker]
+
+
+def _path_stem(path_value: Any) -> str:
+    raw = str(path_value or "").strip()
+    if not raw:
+        return ""
+    return Path(raw).stem
+
+
+def derive_research_audit_search_cases(snapshot: dict[str, Any]) -> list[dict[str, str]]:
+    payloads = snapshot.get("artifact_payloads") or {}
+    cases: list[dict[str, str]] = []
+
+    recent_backtests = ((payloads.get("recent_strategy_backtests") or {}).get("payload") or {})
+    for mode_summary in list(recent_backtests.get("mode_summaries") or []):
+        mode = str((mode_summary or {}).get("mode") or "").strip()
+        for artifact in list((mode_summary or {}).get("trial_artifacts") or []):
+            trade_path = str((artifact or {}).get("trade_journal_path") or "").strip()
+            if not trade_path:
+                continue
+            mode_name = str((artifact or {}).get("mode") or mode or "").strip()
+            trial_raw = str((artifact or {}).get("trial") or "").strip()
+            trial_label = f"trial_{trial_raw.zfill(3)}" if trial_raw else "trial"
+            cases.append(
+                {
+                    "case_id": "optimizer_trial_trade_journal",
+                    "scope": "artifact",
+                    "query": _path_stem(trade_path),
+                    "search_route": f"#/search?q={_path_stem(trade_path)}&scope=artifact",
+                    "result_artifact": f"audit:recent_strategy_backtests:{mode_name}:{trial_label}:trade_journal",
+                    "result_label": f"{mode_name} / {trial_label} / trade_journal",
+                    "workspace_route": f"#/workspace/artifacts?artifact=audit:recent_strategy_backtests:{mode_name}:{trial_label}:trade_journal",
+                    "raw_path": trade_path,
+                }
+            )
+            break
+        if cases:
+            break
+
+    strategy_lab = ((payloads.get("strategy_lab_summary") or {}).get("payload") or {})
+    strategy_candidates = list(strategy_lab.get("candidates") or [])
+    strategy_best = strategy_lab.get("best_candidate") or {}
+    best_trade_path = str((strategy_best or {}).get("trade_journal_path") or "").strip()
+    best_name = str((strategy_best or {}).get("name") or "best_candidate").strip()
+    strategy_case: dict[str, str] | None = None
+    fallback_candidate_case: dict[str, str] | None = None
+    for index, candidate in enumerate(strategy_candidates, start=1):
+        trade_path = str((candidate or {}).get("trade_journal_path") or "").strip()
+        if not trade_path:
+            continue
+        name = str((candidate or {}).get("name") or f"candidate_{index}").strip()
+        candidate_case = {
+            "case_id": "strategy_lab_candidate_trade_journal",
+            "scope": "artifact",
+            "query": _path_stem(trade_path),
+            "search_route": f"#/search?q={_path_stem(trade_path)}&scope=artifact",
+            "result_artifact": f"audit:strategy_lab_summary:{name}:trade_journal",
+            "result_label": f"{name} / trade_journal",
+            "workspace_route": f"#/workspace/artifacts?artifact=audit:strategy_lab_summary:{name}:trade_journal",
+            "raw_path": trade_path,
+        }
+        if fallback_candidate_case is None:
+            fallback_candidate_case = candidate_case
+        if trade_path != best_trade_path or name != best_name:
+            strategy_case = candidate_case
+            break
+    if strategy_case is None and fallback_candidate_case is not None:
+        strategy_case = fallback_candidate_case
+    if strategy_case is None:
+        trade_path = str((strategy_best or {}).get("trade_journal_path") or "").strip()
+        if trade_path:
+            strategy_case = {
+                "case_id": "strategy_lab_best_trade_journal",
+                "scope": "artifact",
+                "query": _path_stem(trade_path),
+                "search_route": f"#/search?q={_path_stem(trade_path)}&scope=artifact",
+                "result_artifact": "audit:strategy_lab_summary:best_candidate:trade_journal",
+                "result_label": f"{best_name} / trade_journal",
+                "workspace_route": "#/workspace/artifacts?artifact=audit:strategy_lab_summary:best_candidate:trade_journal",
+                "raw_path": trade_path,
+            }
+    if strategy_case:
+        cases.append(strategy_case)
+
+    return [case for case in cases if case.get("query") and case.get("result_artifact") and case.get("raw_path")]
 
 
 def load_public_workspace_route_assertions(*, dist_dir: Path) -> list[dict[str, Any]]:
@@ -225,6 +331,7 @@ def load_public_workspace_route_assertions(*, dist_dir: Path) -> list[dict[str, 
         route_assertions[1]["exit_risk_review_route"] = ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["route"]
         route_assertions[1]["exit_risk_review_visible_artifacts"] = exit_risk_review_visible_artifacts
         route_assertions[1]["exit_risk_review_active_artifact"] = exit_risk_review_visible_artifacts[0] if exit_risk_review_visible_artifacts else ""
+        route_assertions[1]["research_audit_search_cases"] = derive_research_audit_search_cases(snapshot)
     if len(route_assertions) > 4:
         raw_focus_marker = resolve_artifact_label(str(default_focus.get("artifact") or "")) or "操作面板"
         route_assertions[4]["markers"] = ["告警定向原始层", raw_focus_marker]
@@ -473,6 +580,17 @@ def build_workspace_routes_smoke_spec(
               await expect(page.locator('body')).toContainText(marker);
             }}
 
+            async function waitForHashRoute(page, expectedPathname, expectedParams = {{}}) {{
+              await page.waitForFunction(({{ expectedPathname, expectedParams }}) => {{
+                const rawHash = String(window.location.hash || '').replace(/^#/, '');
+                const [rawPathname, rawQuery = ''] = rawHash.split('?');
+                const pathname = rawPathname.startsWith('/') ? rawPathname : `/${{rawPathname}}`;
+                if (pathname !== expectedPathname) return false;
+                const params = new URLSearchParams(rawQuery);
+                return Object.entries(expectedParams).every(([key, value]) => params.get(key) === value);
+              }}, {{ expectedPathname, expectedParams }});
+            }}
+
             async function ensureSidebarPageSectionsVisible(page) {{
               const visibleNavSelector = 'nav[aria-label="page-sections-nav"]:visible';
               const pageSectionsNav = page.locator(visibleNavSelector).first();
@@ -485,6 +603,25 @@ def build_workspace_routes_smoke_spec(
                 }}
               }}
               await expect(page.locator(visibleNavSelector).first()).toBeVisible();
+            }}
+
+            async function ensureInspectorOpen(page) {{
+              const inspectorPanel = page.locator('.inspector-rail-inner').first();
+              if (await inspectorPanel.isVisible().catch(() => false)) {{
+                return inspectorPanel;
+              }}
+              const expandToggle = page.getByRole('button', {{ name: '展开对象检查器' }}).first();
+              if (await expandToggle.isVisible().catch(() => false)) {{
+                await expandToggle.click();
+              }}
+              await expect(inspectorPanel).toBeVisible();
+              return inspectorPanel;
+            }}
+
+            function artifactFromHref(href) {{
+              const raw = String(href || '').replace(/^#/, '');
+              const [, query = ''] = raw.split('?');
+              return new URLSearchParams(query).get('artifact');
             }}
 
             async function clickContextNav(page, label) {{
@@ -528,14 +665,20 @@ def build_workspace_routes_smoke_spec(
               const exitRiskReviewActiveArtifact = Object.prototype.hasOwnProperty.call(workspaceStartRoute, 'exit_risk_review_active_artifact')
                 ? String(workspaceStartRoute.exit_risk_review_active_artifact || '')
                 : {ARTIFACTS_EXIT_RISK_REVIEW_ASSERTION["active_artifact"]!r};
+              const researchAuditCases = Array.isArray(workspaceStartRoute.research_audit_search_cases)
+                ? workspaceStartRoute.research_audit_search_cases
+                : [];
               let exitRiskReviewSectionLabel = exitRiskReviewSectionHint;
               let exitRiskReviewVisibleArtifacts = [];
+              const researchAuditSearchAssertions = [];
               const themeRoute = '#/workspace/contracts?theme=light';
               const pageSectionRoute = '#/workspace/contracts?page_section=contracts-acceptance-subcommands';
               const contractsSourceHeadRoute = {CONTRACTS_SOURCE_HEAD_ASSERTION["route"]!r};
               const contractsSourceHeadMarkers = {json.dumps(CONTRACTS_SOURCE_HEAD_ASSERTION["visible_markers"], ensure_ascii=False, indent=2)};
               const contractsSourceGapRoute = {CONTRACTS_SOURCE_GAP_ASSERTION["route"]!r};
               const contractsSourceGapMarkers = {json.dumps(CONTRACTS_SOURCE_GAP_ASSERTION["visible_markers"], ensure_ascii=False, indent=2)};
+              const contractsInspectorCheckRoute = {CONTRACTS_ACCEPTANCE_INSPECTOR_CHECK_ROUTE!r};
+              const contractsInspectorSubcommandRoute = {CONTRACTS_ACCEPTANCE_INSPECTOR_SUBCOMMAND_ROUTE!r};
               const contractsSourceGapPayloadKey = 'finding_count';
 
               page.on('response', async (response) => {{
@@ -626,6 +769,40 @@ def build_workspace_routes_smoke_spec(
                 await expect(activeExitRiskReviewArtifact).toHaveAttribute('title', exitRiskReviewActiveArtifact);
               }}
 
+              for (const auditCase of researchAuditCases) {{
+                const searchRoute = String(auditCase.search_route || '#/search');
+                const auditScope = String(auditCase.scope || 'artifact');
+                const auditQuery = String(auditCase.query || '');
+                const auditResultArtifact = String(auditCase.result_artifact || '');
+                const auditResultLabel = String(auditCase.result_label || auditQuery || auditResultArtifact);
+                const auditRawPath = String(auditCase.raw_path || '');
+                await page.goto({base_url!r} + searchRoute, {{ waitUntil: 'networkidle' }});
+                await waitForHashRoute(page, '/search', {{ q: auditQuery, scope: auditScope }});
+                await expect(page.locator('.global-search-input')).toHaveValue(auditQuery);
+                await expectStableMarker(page, auditRawPath);
+                const searchResultButton = page.getByRole('button', {{ name: new RegExp(escapeRegExp(auditRawPath)) }}).first();
+                await expect(searchResultButton).toBeVisible();
+                await searchResultButton.click();
+                await waitForHashRoute(page, '/workspace/artifacts', {{ artifact: auditResultArtifact }});
+                await expectStableMarker(page, auditResultArtifact);
+                await expectStableMarker(page, auditRawPath);
+                const rawLink = page.locator(`a[href*="${{encodeURIComponent(auditRawPath)}}"]`).first();
+                await expect(rawLink).toHaveAttribute('href', new RegExp(`/workspace/raw\\\\?artifact=${{escapeRegExp(encodeURIComponent(auditRawPath))}}`));
+                await rawLink.click();
+                await waitForHashRoute(page, '/workspace/raw', {{ artifact: auditRawPath }});
+                await expectStableMarker(page, auditRawPath);
+                researchAuditSearchAssertions.push({{
+                  case_id: String(auditCase.case_id || ''),
+                  scope: auditScope,
+                  query: auditQuery,
+                  search_route: auditCase.search_route,
+                  result_artifact: auditResultArtifact,
+                  result_label: auditResultLabel,
+                  workspace_route: auditCase.workspace_route,
+                  raw_path: auditCase.raw_path,
+                }});
+              }}
+
               for (const route of ROUTES.slice(2)) {{
                 await page.goto({base_url!r} + route.route, {{ waitUntil: 'networkidle' }});
                 await page.waitForFunction((fragment) => window.location.hash.includes(fragment), route.route);
@@ -681,6 +858,143 @@ def build_workspace_routes_smoke_spec(
                 contractsSourceGapObservedMarkers = contractsSourceGapMarkers;
               }}
 
+              let contractsAcceptanceInspectorAssertion = {{
+                checks_by_id: {{
+                  topology_smoke: {{
+                    route: '#/workspace/contracts?page_section=contracts-check-topology_smoke',
+                    page_section: 'contracts-check-topology_smoke',
+                    search_link_href: '',
+                    artifact_link_href: '',
+                    raw_link_href: '',
+                  }},
+                  workspace_routes_smoke: {{
+                    route: '#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
+                    page_section: 'contracts-check-workspace_routes_smoke',
+                    search_link_href: '',
+                    artifact_link_href: '',
+                    raw_link_href: '',
+                  }},
+                  graph_home_smoke: {{
+                    route: contractsInspectorCheckRoute,
+                    page_section: 'contracts-check-graph_home_smoke',
+                    search_link_href: '',
+                    artifact_link_href: '',
+                    raw_link_href: '',
+                  }},
+                }},
+                subcommands_by_id: {{
+                  topology_smoke: {{
+                    route: '#/workspace/contracts?page_section=contracts-subcommand-topology_smoke',
+                    page_section: 'contracts-subcommand-topology_smoke',
+                    check_route: '#/workspace/contracts?page_section=contracts-check-topology_smoke',
+                    search_link_href: '',
+                    artifact_link_href: '',
+                    raw_link_href: '',
+                  }},
+                  workspace_routes_smoke: {{
+                    route: '#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke',
+                    page_section: 'contracts-subcommand-workspace_routes_smoke',
+                    check_route: '#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
+                    search_link_href: '',
+                    artifact_link_href: '',
+                    raw_link_href: '',
+                  }},
+                  graph_home_smoke: {{
+                    route: contractsInspectorSubcommandRoute,
+                    page_section: 'contracts-subcommand-graph_home_smoke',
+                    check_route: contractsInspectorCheckRoute,
+                    search_link_href: '',
+                    artifact_link_href: '',
+                    raw_link_href: '',
+                  }},
+                }},
+              }};
+              if (researchAuditCases.length && contractsPageSectionHrefs.some((href) => href.includes('page_section=contracts-check-graph_home_smoke'))) {{
+                const firstResearchAuditCase = researchAuditCases[0];
+                await page.goto({base_url!r} + '#/workspace/contracts', {{ waitUntil: 'networkidle' }});
+                const statusStrip = page.locator('[data-testid="contracts-acceptance-status-strip"]').first();
+                await expect(statusStrip).toBeVisible();
+                const topologyStatusButton = statusStrip.getByRole('button', {{ name: /入口拓扑烟测/ }}).first();
+                await expect(topologyStatusButton).toBeVisible();
+                await topologyStatusButton.click();
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-check-topology_smoke'));
+                let inspectorPanel = await ensureInspectorOpen(page);
+                await expect(inspectorPanel).toContainText('当前验收项');
+
+                const topologySubcommandLink = statusStrip.getByRole('link', {{ name: '入口拓扑烟测 / 查看子命令' }}).first();
+                await expect(topologySubcommandLink).toBeVisible();
+                await topologySubcommandLink.click();
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-subcommand-topology_smoke'));
+                inspectorPanel = await ensureInspectorOpen(page);
+                await expect(inspectorPanel).toContainText('当前子命令');
+
+                await page.goto({base_url!r} + '#/workspace/contracts', {{ waitUntil: 'networkidle' }});
+                await expect(statusStrip).toBeVisible();
+                const workspaceRoutesStatusButton = statusStrip.getByRole('button', {{ name: /工作区五页面烟测/ }}).first();
+                await expect(workspaceRoutesStatusButton).toBeVisible();
+                await workspaceRoutesStatusButton.click();
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-check-workspace_routes_smoke'));
+                inspectorPanel = await ensureInspectorOpen(page);
+                await expect(inspectorPanel).toContainText('当前验收项');
+                const workspaceCheckSearchLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计检索' }}).first();
+                const workspaceCheckArtifactLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计工件' }}).first();
+                const workspaceCheckRawLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计原始层' }}).first();
+                await expect(workspaceCheckSearchLink).toHaveAttribute('href', firstResearchAuditCase.search_route);
+                expect(artifactFromHref(await workspaceCheckArtifactLink.getAttribute('href'))).toBe(firstResearchAuditCase.result_artifact);
+                await expect(workspaceCheckRawLink).toHaveAttribute('href', new RegExp(`/workspace/raw\\\\?artifact=${{escapeRegExp(encodeURIComponent(firstResearchAuditCase.raw_path))}}`));
+                contractsAcceptanceInspectorAssertion.checks_by_id.workspace_routes_smoke.search_link_href = String(await workspaceCheckSearchLink.getAttribute('href') || '');
+                contractsAcceptanceInspectorAssertion.checks_by_id.workspace_routes_smoke.artifact_link_href = String(await workspaceCheckArtifactLink.getAttribute('href') || '');
+                contractsAcceptanceInspectorAssertion.checks_by_id.workspace_routes_smoke.raw_link_href = String(await workspaceCheckRawLink.getAttribute('href') || '');
+
+                const workspaceRoutesSubcommandLink = statusStrip.getByRole('link', {{ name: '工作区五页面烟测 / 查看子命令' }}).first();
+                await expect(workspaceRoutesSubcommandLink).toBeVisible();
+                await workspaceRoutesSubcommandLink.click();
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-subcommand-workspace_routes_smoke'));
+                inspectorPanel = await ensureInspectorOpen(page);
+                await expect(inspectorPanel).toContainText('当前子命令');
+                const workspaceSubcommandSearchLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计检索' }}).first();
+                const workspaceSubcommandArtifactLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计工件' }}).first();
+                const workspaceSubcommandRawLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计原始层' }}).first();
+                await expect(workspaceSubcommandSearchLink).toHaveAttribute('href', firstResearchAuditCase.search_route);
+                expect(artifactFromHref(await workspaceSubcommandArtifactLink.getAttribute('href'))).toBe(firstResearchAuditCase.result_artifact);
+                await expect(workspaceSubcommandRawLink).toHaveAttribute('href', new RegExp(`/workspace/raw\\\\?artifact=${{escapeRegExp(encodeURIComponent(firstResearchAuditCase.raw_path))}}`));
+                contractsAcceptanceInspectorAssertion.subcommands_by_id.workspace_routes_smoke.search_link_href = String(await workspaceSubcommandSearchLink.getAttribute('href') || '');
+                contractsAcceptanceInspectorAssertion.subcommands_by_id.workspace_routes_smoke.artifact_link_href = String(await workspaceSubcommandArtifactLink.getAttribute('href') || '');
+                contractsAcceptanceInspectorAssertion.subcommands_by_id.workspace_routes_smoke.raw_link_href = String(await workspaceSubcommandRawLink.getAttribute('href') || '');
+
+                const graphHomeStatusButton = statusStrip.getByRole('button', {{ name: /图谱主页烟测/ }}).first();
+                await expect(graphHomeStatusButton).toBeVisible();
+                await graphHomeStatusButton.click();
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-check-graph_home_smoke'));
+                inspectorPanel = await ensureInspectorOpen(page);
+                await expect(inspectorPanel).toContainText('当前验收项');
+                const inspectorSearchLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计检索' }}).first();
+                const inspectorArtifactLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计工件' }}).first();
+                const inspectorRawLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计原始层' }}).first();
+                await expect(inspectorSearchLink).toHaveAttribute('href', firstResearchAuditCase.search_route);
+                expect(artifactFromHref(await inspectorArtifactLink.getAttribute('href'))).toBe(firstResearchAuditCase.result_artifact);
+                await expect(inspectorRawLink).toHaveAttribute('href', new RegExp(`/workspace/raw\\\\?artifact=${{escapeRegExp(encodeURIComponent(firstResearchAuditCase.raw_path))}}`));
+                contractsAcceptanceInspectorAssertion.checks_by_id.graph_home_smoke.search_link_href = String(await inspectorSearchLink.getAttribute('href') || '');
+                contractsAcceptanceInspectorAssertion.checks_by_id.graph_home_smoke.artifact_link_href = String(await inspectorArtifactLink.getAttribute('href') || '');
+                contractsAcceptanceInspectorAssertion.checks_by_id.graph_home_smoke.raw_link_href = String(await inspectorRawLink.getAttribute('href') || '');
+
+                const graphHomeSubcommandLink = statusStrip.getByRole('link', {{ name: '图谱主页烟测 / 查看子命令' }}).first();
+                await expect(graphHomeSubcommandLink).toBeVisible();
+                await graphHomeSubcommandLink.click();
+                await page.waitForFunction(() => window.location.hash.includes('page_section=contracts-subcommand-graph_home_smoke'));
+                inspectorPanel = await ensureInspectorOpen(page);
+                await expect(inspectorPanel).toContainText('当前子命令');
+                const subcommandSearchLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计检索' }}).first();
+                const subcommandArtifactLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计工件' }}).first();
+                const subcommandRawLink = inspectorPanel.getByRole('link', {{ name: '查看研究审计原始层' }}).first();
+                await expect(subcommandSearchLink).toHaveAttribute('href', firstResearchAuditCase.search_route);
+                expect(artifactFromHref(await subcommandArtifactLink.getAttribute('href'))).toBe(firstResearchAuditCase.result_artifact);
+                await expect(subcommandRawLink).toHaveAttribute('href', new RegExp(`/workspace/raw\\\\?artifact=${{escapeRegExp(encodeURIComponent(firstResearchAuditCase.raw_path))}}`));
+                contractsAcceptanceInspectorAssertion.subcommands_by_id.graph_home_smoke.search_link_href = String(await subcommandSearchLink.getAttribute('href') || '');
+                contractsAcceptanceInspectorAssertion.subcommands_by_id.graph_home_smoke.artifact_link_href = String(await subcommandArtifactLink.getAttribute('href') || '');
+                contractsAcceptanceInspectorAssertion.subcommands_by_id.graph_home_smoke.raw_link_href = String(await subcommandRawLink.getAttribute('href') || '');
+              }}
+
               expect(snapshotRequests.length).toBeGreaterThanOrEqual(ROUTES.length);
               expect(internalSnapshotRequests.length).toBe(0);
 
@@ -716,6 +1030,7 @@ def build_workspace_routes_smoke_spec(
                       page_section: 'contracts-fallback',
                       visible_markers: contractsSourceGapObservedMarkers,
                     }},
+                    contracts_acceptance_inspector_assertion: contractsAcceptanceInspectorAssertion,
                     artifacts_filter_assertion: {{
                       route: artifactsFilterRoute,
                       group: 'research_cross_section',
@@ -735,6 +1050,11 @@ def build_workspace_routes_smoke_spec(
                       active_artifact: exitRiskReviewActiveArtifact,
                       visible_artifacts: exitRiskReviewVisibleArtifacts,
                       visible_markers: exitRiskReviewVisibleArtifacts,
+                    }},
+                    research_audit_search_assertion: {{
+                      route: '#/search',
+                      cases_available: researchAuditCases.length > 0,
+                      cases: researchAuditSearchAssertions,
                     }},
                   }},
                   null,
@@ -868,6 +1188,36 @@ def build_internal_alignment_smoke_spec(
               await expect(page.locator('body')).toContainText(marker);
             }}
 
+            async function selectGraphStageHeading(page, graphBox, detailHeadingLocator, targetHeading) {{
+              const candidateOffsets = [
+                [220, 0],
+                [68, 209],
+                [-178, 129],
+                [-178, -129],
+                [68, -209],
+              ];
+              for (const [dx, dy] of candidateOffsets) {{
+                await page.mouse.click(graphBox.x + graphBox.width / 2 + dx, graphBox.y + graphBox.height / 2 + dy);
+                await page.waitForTimeout(450);
+                const nextHeading = String(await detailHeadingLocator.textContent() || '').trim();
+                if (nextHeading === targetHeading) {{
+                  return nextHeading;
+                }}
+              }}
+              return '';
+            }}
+
+            async function waitForHashRoute(page, expectedPathname, expectedParams = {{}}) {{
+              await page.waitForFunction(({{ expectedPathname, expectedParams }}) => {{
+                const rawHash = String(window.location.hash || '').replace(/^#/, '');
+                const [rawPathname, rawQuery = ''] = rawHash.split('?');
+                const pathname = rawPathname.startsWith('/') ? rawPathname : `/${{rawPathname}}`;
+                if (pathname !== expectedPathname) return false;
+                const params = new URLSearchParams(rawQuery);
+                return Object.entries(expectedParams).every(([key, value]) => params.get(key) === value);
+              }}, {{ expectedPathname, expectedParams }});
+            }}
+
             test.use({{ browserName: 'chromium' }});
 
             test('internal alignment smoke', async ({{ page }}) => {{
@@ -952,6 +1302,36 @@ def build_internal_terminal_focus_smoke_spec(
             async function expectStableMarker(page, marker) {{
               await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
               await expect(page.locator('body')).toContainText(marker);
+            }}
+
+            async function selectGraphStageHeading(page, graphBox, detailHeadingLocator, targetHeading) {{
+              const candidateOffsets = [
+                [220, 0],
+                [68, 209],
+                [-178, 129],
+                [-178, -129],
+                [68, -209],
+              ];
+              for (const [dx, dy] of candidateOffsets) {{
+                await page.mouse.click(graphBox.x + graphBox.width / 2 + dx, graphBox.y + graphBox.height / 2 + dy);
+                await page.waitForTimeout(450);
+                const nextHeading = String(await detailHeadingLocator.textContent() || '').trim();
+                if (nextHeading === targetHeading) {{
+                  return nextHeading;
+                }}
+              }}
+              return '';
+            }}
+
+            async function waitForHashRoute(page, expectedPathname, expectedParams = {{}}) {{
+              await page.waitForFunction(({{ expectedPathname, expectedParams }}) => {{
+                const rawHash = String(window.location.hash || '').replace(/^#/, '');
+                const [rawPathname, rawQuery = ''] = rawHash.split('?');
+                const pathname = rawPathname.startsWith('/') ? rawPathname : `/${{rawPathname}}`;
+                if (pathname !== expectedPathname) return false;
+                const params = new URLSearchParams(rawQuery);
+                return Object.entries(expectedParams).every(([key, value]) => params.get(key) === value);
+              }}, {{ expectedPathname, expectedParams }});
             }}
 
             test.use({{ browserName: 'chromium' }});
@@ -1102,6 +1482,34 @@ def build_commodity_visibility_smoke_spec(
               await expect(page.locator('body')).toContainText(marker);
             }}
 
+            async function selectGraphStageHeading(page, graphBox, detailHeadingLocator, targetHeading) {{
+              const candidateOffsets = [
+                [220, 0],
+                [68, 209],
+                [-178, 129],
+                [-178, -129],
+                [68, -209],
+              ];
+              for (const [dx, dy] of candidateOffsets) {{
+                await page.mouse.click(graphBox.x + graphBox.width / 2 + dx, graphBox.y + graphBox.height / 2 + dy);
+                await page.waitForTimeout(450);
+                const nextHeading = String(await detailHeadingLocator.textContent() || '').trim();
+                if (nextHeading === targetHeading) return nextHeading;
+              }}
+              return '';
+            }}
+
+            async function waitForHashRoute(page, expectedPathname, expectedParams = {{}}) {{
+              await page.waitForFunction(({{ expectedPathname, expectedParams }}) => {{
+                const rawHash = String(window.location.hash || '').replace(/^#/, '');
+                const [rawPathname, rawQuery = ''] = rawHash.split('?');
+                const pathname = rawPathname.startsWith('/') ? rawPathname : `/${{rawPathname}}`;
+                if (pathname !== expectedPathname) return false;
+                const params = new URLSearchParams(rawQuery);
+                return Object.entries(expectedParams).every(([key, value]) => params.get(key) === value);
+              }}, {{ expectedPathname, expectedParams }});
+            }}
+
             test.use({{ browserName: 'chromium' }});
 
             test('commodity visibility smoke', async ({{ page }}) => {{
@@ -1173,6 +1581,34 @@ def build_graph_home_smoke_spec(
               await expect(page.locator('body')).toContainText(marker);
             }}
 
+            async function selectGraphStageHeading(page, graphBox, detailHeadingLocator, targetHeading) {{
+              const candidateOffsets = [
+                [220, 0],
+                [68, 209],
+                [-178, 129],
+                [-178, -129],
+                [68, -209],
+              ];
+              for (const [dx, dy] of candidateOffsets) {{
+                await page.mouse.click(graphBox.x + graphBox.width / 2 + dx, graphBox.y + graphBox.height / 2 + dy);
+                await page.waitForTimeout(450);
+                const nextHeading = String(await detailHeadingLocator.textContent() || '').trim();
+                if (nextHeading === targetHeading) return nextHeading;
+              }}
+              return '';
+            }}
+
+            async function waitForHashRoute(page, expectedPathname, expectedParams = {{}}) {{
+              await page.waitForFunction(({{ expectedPathname, expectedParams }}) => {{
+                const rawHash = String(window.location.hash || '').replace(/^#/, '');
+                const [rawPathname, rawQuery = ''] = rawHash.split('?');
+                const pathname = rawPathname.startsWith('/') ? rawPathname : `/${{rawPathname}}`;
+                if (pathname !== expectedPathname) return false;
+                const params = new URLSearchParams(rawQuery);
+                return Object.entries(expectedParams).every(([key, value]) => params.get(key) === value);
+              }}, {{ expectedPathname, expectedParams }});
+            }}
+
             test.use({{ browserName: 'chromium' }});
 
             test('graph home smoke', async ({{ page }}) => {{
@@ -1203,6 +1639,9 @@ def build_graph_home_smoke_spec(
               const terminalLinkHref = await terminalLink.getAttribute('href');
               const workspaceLinkHref = await workspaceLink.getAttribute('href');
               const searchLinkHref = await searchLink.getAttribute('href');
+              const researchAuditCases = Array.isArray(graphRoute.research_audit_search_cases)
+                ? graphRoute.research_audit_search_cases
+                : [];
               const graphCanvas = page.locator('canvas').first();
               await graphCanvas.scrollIntoViewIfNeeded();
               const graphBox = await graphCanvas.boundingBox();
@@ -1233,6 +1672,37 @@ def build_graph_home_smoke_spec(
               await page.getByRole('button', {{ name: '回到交易中枢' }}).click();
               await expect(detailHeadingLocator).toContainText('交易中枢');
               const recenterHeading = String(await detailHeadingLocator.textContent() || '').trim();
+              const researchAuditLinkAssertions = [];
+              if (researchAuditCases.length) {{
+                for (const auditCase of researchAuditCases) {{
+                  const auditResultArtifact = String(auditCase.result_artifact || '');
+                  const auditSearchLink = page.getByRole('link', {{ name: `检索 / ${{auditCase.query}}` }}).first();
+                  const auditArtifactLink = page.getByRole('link', {{ name: `工件 / ${{auditCase.result_artifact}}` }}).first();
+                  const auditRawLink = page.getByRole('link', {{ name: `原始层 / ${{auditCase.raw_path}}` }}).first();
+                  await expect(auditSearchLink).toBeVisible();
+                  await expect(auditArtifactLink).toBeVisible();
+                  await expect(auditRawLink).toBeVisible();
+                  const auditSearchHref = await auditSearchLink.getAttribute('href');
+                  const auditArtifactHref = await auditArtifactLink.getAttribute('href');
+                  const auditRawHref = await auditRawLink.getAttribute('href');
+                  await auditSearchLink.click();
+                  await page.waitForFunction((route) => window.location.hash === route, auditCase.search_route);
+                  await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+                  await auditArtifactLink.click();
+                  await waitForHashRoute(page, '/workspace/artifacts', {{ artifact: auditResultArtifact }});
+                  await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+                  await auditRawLink.click();
+                  await page.waitForFunction((rawPath) => window.location.hash.includes('/workspace/raw') && window.location.hash.includes(encodeURIComponent(rawPath)), auditCase.raw_path);
+                  await page.goto({base_url!r} + graphRoute.route, {{ waitUntil: 'networkidle' }});
+                  researchAuditLinkAssertions.push({{
+                    selected_heading: String(defaultCenter || '').trim().replace(/^中心：/, ''),
+                    case_id: String(auditCase.case_id || ''),
+                    search_link_href: auditSearchHref,
+                    artifact_link_href: auditArtifactHref,
+                    raw_link_href: auditRawHref,
+                  }});
+                }}
+              }}
 
               visitedRoutes.push({{
                 route: graphRoute.route,
@@ -1296,6 +1766,7 @@ def build_graph_home_smoke_spec(
                         selected_center: selectedCenter,
                         recenter_heading: recenterHeading,
                       }},
+                      research_audit_link_assertions: researchAuditLinkAssertions,
                     }},
                   }},
                   null,
@@ -1693,6 +2164,70 @@ def build_artifact_payload(
                 "visible_markers": [],
             }),
         }
+        default_contracts_acceptance_inspector_assertion = {
+            "checks_by_id": {
+                "topology_smoke": {
+                    "route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                    "page_section": "contracts-check-topology_smoke",
+                    "search_link_href": "",
+                    "artifact_link_href": "",
+                    "raw_link_href": "",
+                },
+                "workspace_routes_smoke": {
+                    "route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                    "page_section": "contracts-check-workspace_routes_smoke",
+                    "search_link_href": "",
+                    "artifact_link_href": "",
+                    "raw_link_href": "",
+                },
+                "graph_home_smoke": {
+                    "route": CONTRACTS_ACCEPTANCE_INSPECTOR_CHECK_ROUTE,
+                    "page_section": "contracts-check-graph_home_smoke",
+                    "search_link_href": "",
+                    "artifact_link_href": "",
+                    "raw_link_href": "",
+                },
+            },
+            "subcommands_by_id": {
+                "topology_smoke": {
+                    "route": "#/workspace/contracts?page_section=contracts-subcommand-topology_smoke",
+                    "page_section": "contracts-subcommand-topology_smoke",
+                    "check_route": "#/workspace/contracts?page_section=contracts-check-topology_smoke",
+                    "search_link_href": "",
+                    "artifact_link_href": "",
+                    "raw_link_href": "",
+                },
+                "workspace_routes_smoke": {
+                    "route": "#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke",
+                    "page_section": "contracts-subcommand-workspace_routes_smoke",
+                    "check_route": "#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke",
+                    "search_link_href": "",
+                    "artifact_link_href": "",
+                    "raw_link_href": "",
+                },
+                "graph_home_smoke": {
+                    "route": CONTRACTS_ACCEPTANCE_INSPECTOR_SUBCOMMAND_ROUTE,
+                    "page_section": "contracts-subcommand-graph_home_smoke",
+                    "check_route": CONTRACTS_ACCEPTANCE_INSPECTOR_CHECK_ROUTE,
+                    "search_link_href": "",
+                    "artifact_link_href": "",
+                    "raw_link_href": "",
+                },
+            },
+        }
+        actual_contracts_acceptance_inspector_assertion = playwright_result.get("contracts_acceptance_inspector_assertion") or {}
+        contracts_acceptance_inspector_assertion = {
+            "applicable": True,
+            **actual_contracts_acceptance_inspector_assertion,
+            "checks_by_id": {
+                **default_contracts_acceptance_inspector_assertion["checks_by_id"],
+                **(actual_contracts_acceptance_inspector_assertion.get("checks_by_id") or {}),
+            },
+            "subcommands_by_id": {
+                **default_contracts_acceptance_inspector_assertion["subcommands_by_id"],
+                **(actual_contracts_acceptance_inspector_assertion.get("subcommands_by_id") or {}),
+            },
+        }
         artifacts_filter_assertion = {
             "applicable": True,
             **(playwright_result.get("artifacts_filter_assertion") or {
@@ -1719,6 +2254,14 @@ def build_artifact_payload(
                 "visible_markers": [],
             }),
         }
+        research_audit_search_assertion = {
+            "applicable": True,
+            **(playwright_result.get("research_audit_search_assertion") or {
+                "route": "#/search",
+                "cases_available": False,
+                "cases": [],
+            }),
+        }
     else:
         page_section_assertion = {
             "applicable": False,
@@ -1741,6 +2284,11 @@ def build_artifact_payload(
             "page_section": "",
             "visible_markers": [],
         }
+        contracts_acceptance_inspector_assertion = {
+            "applicable": False,
+            "checks_by_id": {},
+            "subcommands_by_id": {},
+        }
         artifacts_filter_assertion = {
             "applicable": False,
             "route": "",
@@ -1762,6 +2310,12 @@ def build_artifact_payload(
             "active_artifact": "",
             "visible_artifacts": [],
             "visible_markers": [],
+        }
+        research_audit_search_assertion = {
+            "applicable": False,
+            "route": "",
+            "cases_available": False,
+            "cases": [],
         }
     terminal_drilldown_assertion = playwright_result.get("terminal_drilldown_assertion")
     if not visited_routes:
@@ -1830,8 +2384,10 @@ def build_artifact_payload(
         "page_section_assertion": page_section_assertion,
         "contracts_source_head_assertion": contracts_source_head_assertion,
         "contracts_source_gap_assertion": contracts_source_gap_assertion,
+        "contracts_acceptance_inspector_assertion": contracts_acceptance_inspector_assertion,
         "artifacts_filter_assertion": artifacts_filter_assertion,
         "artifacts_exit_risk_review_assertion": artifacts_exit_risk_review_assertion,
+        "research_audit_search_assertion": research_audit_search_assertion,
         "terminal_drilldown_assertion": terminal_drilldown_assertion,
         "graph_home_assertion": playwright_result.get("graph_home_assertion"),
         "projection_assertion": playwright_result.get("projection_assertion"),
@@ -1934,7 +2490,7 @@ def main() -> None:
             },
         ]
     elif args.mode == "graph_home":
-        expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
+        expected_route_markers = load_graph_home_route_assertions(dist_dir=dist_dir)
     elif args.mode == "graph_home_narrow":
         expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
     elif args.mode == "graph_home_pipeline":
@@ -1987,7 +2543,7 @@ def main() -> None:
                 expected_route_markers = load_commodity_visibility_route_assertions(dist_dir=dist_dir)
             elif args.mode == "graph_home":
                 internal_expectations = None
-                expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)
+                expected_route_markers = load_graph_home_route_assertions(dist_dir=dist_dir)
             elif args.mode == "graph_home_narrow":
                 internal_expectations = None
                 expected_route_markers = list(GRAPH_HOME_ROUTE_ASSERTIONS)

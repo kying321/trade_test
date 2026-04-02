@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TerminalReadModel } from '../types/contracts';
-import { buildGraphHomeModel } from './model';
+import { buildGraphFocusState, buildGraphHomeModel } from './model';
 
 function createModel(): TerminalReadModel {
   return {
@@ -35,7 +35,14 @@ function createModel(): TerminalReadModel {
       alerts: [],
       topMetrics: [],
       freshness: [],
-      guards: [],
+      guards: [
+        {
+          id: 'remote_live_gate',
+          label: '远端实盘门禁',
+          value: 'block',
+          tone: 'warning',
+        },
+      ],
       actionLog: [],
       checklist: [],
     },
@@ -50,7 +57,16 @@ function createModel(): TerminalReadModel {
       focusSlots: [],
       gateScores: [],
       controlChain: [],
-      actionQueue: [],
+      actionQueue: [
+        {
+          slot: 'slot-1',
+          symbol: 'ETHUSDT',
+          action: '收窄风险',
+          reason: '门禁漂移',
+          state: 'warning',
+          source_artifact: 'price_action_breakout_pullback',
+        },
+      ],
       repairPlan: [],
       optimizationBacklog: [],
     },
@@ -63,7 +79,35 @@ function createModel(): TerminalReadModel {
       stressSummary: [],
     },
     feedback: {
-      projection: null,
+      projection: {
+        status: 'active',
+        summary: {
+          headline: '保持前端信息架构与用户意图对齐',
+        },
+        events: [],
+        actions: [
+          {
+            feedback_id: 'ui_density_split',
+            recommended_action: '拆分研究工作区左栏',
+            impact_score: 84,
+            anchors: [
+              {
+                route: '/workspace/artifacts',
+                artifact: 'price_action_breakout_pullback',
+                component: 'WorkspacePanels',
+              },
+            ],
+          },
+        ],
+        trends: [],
+        anchors: [
+          {
+            route: '/workspace/artifacts',
+            artifact: 'price_action_breakout_pullback',
+            component: 'WorkspacePanels',
+          },
+        ],
+      },
       domainGroups: [],
     },
     workspace: {
@@ -75,7 +119,20 @@ function createModel(): TerminalReadModel {
       publicTopology: [],
       publicAcceptance: {
         summary: null,
-        checks: [],
+        checks: [
+          {
+            id: 'graph_home_smoke',
+            label: '图谱主页烟测',
+            status: 'ok',
+            inspector_route: '#/workspace/contracts?page_section=contracts-check-graph_home_smoke',
+          },
+          {
+            id: 'workspace_routes_smoke',
+            label: '工作区五页面烟测',
+            status: 'ok',
+            inspector_route: '#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
+          },
+        ],
         subcommands: [],
       },
       surfaceContracts: [],
@@ -87,6 +144,13 @@ function createModel(): TerminalReadModel {
           summary: 'ETH breakout-pullback',
           path: '/review/eth.json',
           status: 'ok',
+        },
+        {
+          id: 'hold_selection_handoff',
+          label: '持仓迁移',
+          summary: '当前主线持仓迁移摘要',
+          path: '/review/hold_selection_handoff.json',
+          status: 'warning',
         },
       ],
       defaultFocus: {
@@ -141,5 +205,77 @@ describe('graph home model', () => {
     expect(artifactParams.get('panel')).toBe('lab-review');
     expect(artifactParams.get('section')).toBe('research-heads');
     expect(artifactParams.get('group')).toBe('research_mainline');
+  });
+
+  it('derives source-head nodes from source-owned contracts heads even when they are not artifact rows', () => {
+    const graph = buildGraphHomeModel(createModel(), []);
+    const sourceHeadNode = graph.nodes.find((node) => node.id === 'source-head-hold_selection_handoff');
+
+    expect(sourceHeadNode).toBeTruthy();
+    expect(sourceHeadNode?.kind).toBe('artifact');
+    expect(sourceHeadNode?.label).toBe('持仓迁移');
+    expect(sourceHeadNode?.destination).toBe('/workspace/contracts?page_section=contracts-source-head-hold_selection_handoff');
+    expect(graph.edges.some((edge) => edge.source === 'pipeline-research-judgment' && edge.target === 'source-head-hold_selection_handoff')).toBe(true);
+  });
+
+  it('derives contracts acceptance route nodes from source-owned inspector routes', () => {
+    const graph = buildGraphHomeModel(createModel(), []);
+    const acceptanceNode = graph.nodes.find((node) => node.id === 'acceptance-check-graph_home_smoke');
+
+    expect(acceptanceNode).toBeTruthy();
+    expect(acceptanceNode?.kind).toBe('route');
+    expect(acceptanceNode?.label).toBe('图谱主页烟测');
+    expect(acceptanceNode?.status).toBe('ok');
+    expect(acceptanceNode?.destination).toBe('/workspace/contracts?page_section=contracts-check-graph_home_smoke');
+    expect(graph.edges.some((edge) => edge.source === 'route-workspace-contracts' && edge.target === 'acceptance-check-graph_home_smoke')).toBe(true);
+  });
+
+  it('derives execution guard and action-queue nodes from source-owned terminal state', () => {
+    const graph = buildGraphHomeModel(createModel(), []);
+    const guardsRoute = graph.nodes.find((node) => node.id === 'route-terminal-guards');
+    const guardNode = graph.nodes.find((node) => node.id === 'guard-remote-live-gate');
+    const actionStackRoute = graph.nodes.find((node) => node.id === 'route-terminal-action-stack');
+    const queueNode = graph.nodes.find((node) => node.id === 'queue-ethusdt');
+
+    expect(guardsRoute?.destination).toBe('/terminal/public?panel=orchestration&section=guards');
+    expect(guardNode?.label).toBe('远端实盘门禁');
+    expect(graph.edges.some((edge) => edge.source === 'route-terminal-guards' && edge.target === 'guard-remote-live-gate')).toBe(true);
+    expect(actionStackRoute?.destination).toBe('/terminal/public?panel=signal-risk&section=action-stack');
+    expect(queueNode?.label).toContain('ETHUSDT');
+    expect(queueNode?.subtitle).toContain('收窄风险');
+    expect(queueNode?.destination).toBe('/terminal/public?artifact=price_action_breakout_pullback&panel=signal-risk&section=action-stack&row=ETHUSDT%3A%3A%E6%94%B6%E7%AA%84%E9%A3%8E%E9%99%A9&symbol=ETHUSDT');
+    expect(graph.edges.some((edge) => edge.source === 'route-terminal-action-stack' && edge.target === 'queue-ethusdt')).toBe(true);
+  });
+
+  it('derives feedback action nodes from source-owned feedback projection', () => {
+    const graph = buildGraphHomeModel(createModel(), []);
+    const alignmentRoute = graph.nodes.find((node) => node.id === 'route-workspace-alignment');
+    const feedbackNode = graph.nodes.find((node) => node.id === 'feedback-action-ui-density-split');
+
+    expect(alignmentRoute?.destination).toBe('/workspace/alignment?page_section=alignment-actions');
+    expect(feedbackNode?.label).toBe('拆分研究工作区左栏');
+    expect(feedbackNode?.status).toBe('active');
+    expect(feedbackNode?.destination).toBe('/workspace/alignment?artifact=price_action_breakout_pullback&anchor=alignment-event-ui_density_split&page_section=alignment-events');
+    expect(graph.edges.some((edge) => edge.source === 'pipeline-feedback' && edge.target === 'feedback-action-ui-density-split')).toBe(true);
+    expect(graph.edges.some((edge) => edge.source === 'route-workspace-alignment' && edge.target === 'feedback-action-ui-density-split')).toBe(true);
+  });
+
+  it('builds a focused impact chain without leaking into sibling branches', () => {
+    const graph = buildGraphHomeModel(createModel(), []);
+    const focus = buildGraphFocusState(graph, 'queue-ethusdt');
+
+    expect(focus.activeNodeIds).toEqual([
+      'trade-hub',
+      'pipeline-execution-risk',
+      'route-terminal-action-stack',
+      'queue-ethusdt',
+    ]);
+    expect(focus.activeEdgeIds).toEqual([
+      'trade-hub->pipeline-execution-risk',
+      'pipeline-execution-risk->route-terminal-action-stack',
+      'route-terminal-action-stack->queue-ethusdt',
+    ]);
+    expect(focus.activeNodeIds).not.toContain('route-terminal-public');
+    expect(focus.activeNodeIds).not.toContain('route-search');
   });
 });

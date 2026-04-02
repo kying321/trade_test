@@ -16,6 +16,45 @@ from lie_engine.data.storage import append_sqlite
 
 
 class StorageTests(unittest.TestCase):
+    def test_append_sqlite_replaces_existing_rows_when_key_columns_provided(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "tmp.db"
+            append_sqlite(
+                db,
+                "bars_normalized",
+                pd.DataFrame(
+                    {
+                        "ts": ["2026-03-30"],
+                        "symbol": ["BTCUSDT"],
+                        "close": [100.0],
+                    }
+                ),
+                key_columns=["ts", "symbol"],
+            )
+            append_sqlite(
+                db,
+                "bars_normalized",
+                pd.DataFrame(
+                    {
+                        "ts": ["2026-03-30", "2026-03-31"],
+                        "symbol": ["BTCUSDT", "BTCUSDT"],
+                        "close": [101.0, 102.0],
+                    }
+                ),
+                key_columns=["ts", "symbol"],
+            )
+
+            import sqlite3
+
+            with closing(sqlite3.connect(db)) as conn:
+                rows = pd.read_sql_query(
+                    "SELECT ts, symbol, close FROM bars_normalized ORDER BY ts",
+                    conn,
+                )
+            self.assertEqual(len(rows), 2)
+            self.assertAlmostEqual(float(rows.loc[0, "close"]), 101.0, places=6)
+            self.assertAlmostEqual(float(rows.loc[1, "close"]), 102.0, places=6)
+
     def test_append_sqlite_does_not_leave_unclosed_connection(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "tmp.db"

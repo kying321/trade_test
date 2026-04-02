@@ -17,9 +17,11 @@ import { InspectorRail } from './app-shell/InspectorRail';
 import { useSidebarCollapse } from './hooks/use-sidebar-collapse';
 import { useUiTheme } from './hooks/use-ui-theme';
 import { PRIMARY_NAV, OPS_SURFACE_NAV, RESEARCH_LEGACY_NAV } from './navigation/nav-config';
-import { buildGraphHomeLink, buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from './navigation/route-contract';
-import { getWorkspacePageSections } from './navigation/workspace-sections';
+import { buildCpaLink, buildGraphHomeLink, buildOpsLegacyLink, buildOverviewLink, buildResearchLegacyLink } from './navigation/route-contract';
+import { getDefaultWorkspacePageSection, getWorkspacePageSections } from './navigation/workspace-sections';
+import { CpaPage } from './pages/CpaPage';
 import { GraphHomePage } from './pages/GraphHomePage';
+import type { GraphNode } from './graph/types';
 import { OverviewPage } from './pages/OverviewPage';
 import { OpsPage } from './pages/OpsPage';
 import { ResearchPage } from './pages/ResearchPage';
@@ -155,6 +157,7 @@ function buildPrimaryNav(focus: SharedFocusState, currentSurface: SurfaceKey) {
     if (item.id === 'overview') return { ...item, to: buildOverviewLink(focus) };
     if (item.id === 'graph') return { ...item, to: buildGraphHomeLink(focus) };
     if (item.id === 'ops') return { ...item, to: buildOpsLegacyLink(currentSurface, focus) };
+    if (item.id === 'cpa') return { ...item, to: buildCpaLink({}) };
     return { ...item, to: buildResearchLegacyLink('artifacts', focus) };
   });
 }
@@ -293,7 +296,7 @@ function buildResearchSidebarItems(focus: SharedFocusState, model?: TerminalRead
     to: buildWorkspacePageLink(
       item.section,
       focus,
-      model && item.section !== 'artifacts' ? getWorkspacePageSections(item.section, model)[0]?.id : undefined,
+      model && item.section !== 'artifacts' ? getDefaultWorkspacePageSection(item.section, model)?.id : undefined,
     ),
   }));
 }
@@ -310,11 +313,22 @@ function findWorkspaceFocusRow(model: TerminalReadModel, artifact: string | unde
     if (matched) return matched;
   }
 
-  return model.workspace.artifactRows.find((row) => {
+  const canonicalBreakout = model.workspace.artifactRows.find((row) => {
     const id = safeDisplayValue(row.id).trim().toLowerCase();
     const payloadKey = safeDisplayValue(row.payload_key).trim().toLowerCase();
-    return id === 'price_action_breakout_pullback' || payloadKey === 'price_action_breakout_pullback';
-  }) || model.workspace.artifactRows.find((row) => safeDisplayValue(row.artifact_group) === 'research_mainline') || model.workspace.artifactRows[0];
+    const layer = safeDisplayValue(row.artifact_layer).trim().toLowerCase();
+    return (id === 'price_action_breakout_pullback' || payloadKey === 'price_action_breakout_pullback') && layer !== 'archive';
+  });
+  if (canonicalBreakout) return canonicalBreakout;
+
+  const canonicalMainline = model.workspace.artifactRows.find((row) => {
+    const group = safeDisplayValue(row.artifact_group).trim().toLowerCase();
+    const layer = safeDisplayValue(row.artifact_layer).trim().toLowerCase();
+    return group === 'research_mainline' && layer !== 'archive';
+  });
+  if (canonicalMainline) return canonicalMainline;
+
+  return model.workspace.artifactRows.find((row) => safeDisplayValue(row.artifact_group) === 'research_mainline') || model.workspace.artifactRows[0];
 }
 
 function resolveWorkspaceNavigationFocus(focus: SharedFocusState, model?: TerminalReadModel): SharedFocusState {
@@ -490,8 +504,22 @@ function buildWorkspaceHeaderRhythm(
   section: WorkspaceSection,
   pageSections: Array<{ id: string; label: string }>,
   activeSectionId: string | undefined,
+  defaultSection: { id: string; label: string } | null,
 ) {
   const activeSection = activeSectionId ? pageSections.find((item) => item.id === activeSectionId) : undefined;
+  const acceptanceFocused = section === 'contracts'
+    && Boolean(activeSectionId && (activeSectionId.startsWith('contracts-check-') || activeSectionId.startsWith('contracts-subcommand-')));
+  const focusItems = acceptanceFocused
+    ? [
+        {
+          type: 'fact' as const,
+          label: '当前验收项',
+          value: activeSection?.label || activeSectionId || '未选验收项',
+          detail: activeSectionId?.startsWith('contracts-subcommand-') ? '当前定位到子命令证据。' : '当前定位到验收子链。 ',
+          tone: 'neutral' as const,
+        },
+      ]
+    : buildFocusSection(focus).items;
   return {
     stateSection: {
       title: '当前状态',
@@ -501,8 +529,8 @@ function buildWorkspaceHeaderRhythm(
       ],
     },
     focusSection: {
-      title: '当前焦点',
-      items: buildFocusSection(focus).items,
+      title: acceptanceFocused ? '验收焦点' : '当前焦点',
+      items: focusItems,
     },
     actionSection: {
       title: '下一步',
@@ -511,8 +539,8 @@ function buildWorkspaceHeaderRhythm(
             {
               type: 'link' as const,
               label: '进入阶段',
-              value: activeSection?.label || pageSections[0]?.label || buildWorkspacePageMeta(section).headerTitle,
-              to: buildWorkspacePageLink(section, focus, activeSectionId || pageSections[0]?.id),
+              value: activeSection?.label || defaultSection?.label || buildWorkspacePageMeta(section).headerTitle,
+              to: buildWorkspacePageLink(section, focus, activeSectionId || defaultSection?.id),
             },
           ]
         : [
@@ -1126,6 +1154,7 @@ function WorkspaceRoute({
   );
   const anchorId = resolveSearchAnchorId(searchParams, focus);
   const pageMeta = buildWorkspacePageMeta(section);
+  const defaultSection = model ? getDefaultWorkspacePageSection(section, model) : null;
 
   useSurfaceRefresh(requestedSurface, section, requestedSurface !== 'internal');
 
@@ -1136,7 +1165,7 @@ function WorkspaceRoute({
         scrollToWorkspaceAnchor(activeSectionId);
         return;
       }
-      const fallbackSectionId = section !== 'artifacts' ? pageSections[0]?.id : undefined;
+      const fallbackSectionId = section !== 'artifacts' ? defaultSection?.id : undefined;
       if (fallbackSectionId) {
         const target = document.querySelector<HTMLElement>(`[data-workspace-section="${fallbackSectionId}"]`);
         if (safeScrollIntoView(target)) return;
@@ -1144,7 +1173,7 @@ function WorkspaceRoute({
       safeResetWindowScroll();
     });
     return () => window.cancelAnimationFrame(handle);
-  }, [activeSectionId, anchorId, location.pathname, pageSections, section]);
+  }, [activeSectionId, anchorId, defaultSection, location.pathname, pageSections, section]);
 
   return (
     <AppShell
@@ -1170,10 +1199,10 @@ function WorkspaceRoute({
         subtitle={pageMeta.headerSubtitle}
         breadcrumbs={[{ label: '总览' }, { label: '研究工作区', current: true }]}
         actions={buildWorkspaceHeaderActions(section, pageSections, activeSectionId)}
-        {...buildWorkspaceHeaderRhythm(navigationFocus, section, pageSections, activeSectionId)}
+        {...buildWorkspaceHeaderRhythm(navigationFocus, section, pageSections, activeSectionId, defaultSection)}
       />}
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
-      inspector={<InspectorRail title="对象检查器" focus={navigationFocus} model={model} context={{ domain: 'workspace', section, surface: requestedSurface }} />}
+      inspector={<InspectorRail title="对象检查器" focus={navigationFocus} model={model} context={{ domain: 'workspace', section, surface: requestedSurface, activeSectionId }} />}
     >
       {!model && loading ? <div className="loading-panel">{t('loading_workspace')}</div> : null}
       {model ? (
@@ -1266,9 +1295,58 @@ function GraphHomeRoute({
   onToggleSidebarCollapse,
 }: AppThemeProps) {
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { model, loading, error } = useTerminalStore();
   const requestedSurface = model?.surface.requested || 'public';
   useSurfaceRefresh(requestedSurface, 'graph-home', requestedSurface !== 'internal');
+  const graphView = searchParams.get('graph_view') === 'focus' ? 'focus' : 'all';
+  const graphCenter = searchParams.get('graph_center') || 'trade-hub';
+  const rawGraphKind = searchParams.get('graph_kind');
+  const graphKind = rawGraphKind === 'pipeline_stage'
+    || rawGraphKind === 'market'
+    || rawGraphKind === 'route'
+    || rawGraphKind === 'artifact'
+    || rawGraphKind === 'custom_pipeline'
+    ? rawGraphKind
+    : 'all';
+  const graphQuery = searchParams.get('graph_query') || '';
+  const graphLayerFocus = searchParams.get('graph_layer_focus') === 'off' ? false : true;
+  const graphLayerWarning = searchParams.get('graph_layer_warning') === 'off' ? false : true;
+  const graphLayerDim = searchParams.get('graph_layer_dim') === 'off' ? false : true;
+
+  const updateGraphRouteState = (next: {
+    viewMode?: 'all' | 'focus';
+    centerId?: string;
+    kindFilter?: 'all' | GraphNode['kind'];
+    query?: string;
+    focusLayer?: boolean;
+    warningLayer?: boolean;
+    dimLayer?: boolean;
+  }) => {
+    const params = new URLSearchParams(searchParams);
+    const resolvedViewMode = next.viewMode ?? graphView;
+    const resolvedCenterId = next.centerId ?? graphCenter;
+    const resolvedKindFilter = next.kindFilter ?? graphKind;
+    const resolvedQuery = next.query ?? graphQuery;
+    const resolvedFocusLayer = next.focusLayer ?? graphLayerFocus;
+    const resolvedWarningLayer = next.warningLayer ?? graphLayerWarning;
+    const resolvedDimLayer = next.dimLayer ?? graphLayerDim;
+    if (resolvedViewMode === 'focus') params.set('graph_view', 'focus');
+    else params.delete('graph_view');
+    if (resolvedCenterId && resolvedCenterId !== 'trade-hub') params.set('graph_center', resolvedCenterId);
+    else params.delete('graph_center');
+    if (resolvedKindFilter && resolvedKindFilter !== 'all') params.set('graph_kind', resolvedKindFilter);
+    else params.delete('graph_kind');
+    if (resolvedQuery.trim()) params.set('graph_query', resolvedQuery.trim());
+    else params.delete('graph_query');
+    if (!resolvedFocusLayer) params.set('graph_layer_focus', 'off');
+    else params.delete('graph_layer_focus');
+    if (!resolvedWarningLayer) params.set('graph_layer_warning', 'off');
+    else params.delete('graph_layer_warning');
+    if (!resolvedDimLayer) params.set('graph_layer_dim', 'off');
+    else params.delete('graph_layer_dim');
+    setSearchParams(params, { replace: true });
+  };
 
   return (
     <AppShell
@@ -1289,7 +1367,61 @@ function GraphHomeRoute({
       notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
     >
       {loading && !model ? <div className="loading-panel">加载图谱主页中…</div> : null}
-      <GraphHomePage model={model || null} />
+      <GraphHomePage
+        model={model || null}
+        centerId={graphCenter}
+        viewMode={graphView}
+        kindFilter={graphKind}
+        query={graphQuery}
+        showFocusLayer={graphLayerFocus}
+        showWarningLayer={graphLayerWarning}
+        showDimLayer={graphLayerDim}
+        onCenterChange={(next) => updateGraphRouteState({ centerId: next })}
+        onViewModeChange={(next) => updateGraphRouteState({ viewMode: next })}
+        onKindFilterChange={(next) => updateGraphRouteState({ kindFilter: next })}
+        onQueryChange={(next) => updateGraphRouteState({ query: next })}
+        onFocusLayerChange={(next) => updateGraphRouteState({ focusLayer: next })}
+        onWarningLayerChange={(next) => updateGraphRouteState({ warningLayer: next })}
+        onDimLayerChange={(next) => updateGraphRouteState({ dimLayer: next })}
+        onResetLegendLayers={() => updateGraphRouteState({ focusLayer: true, warningLayer: true, dimLayer: true })}
+      />
+    </AppShell>
+  );
+}
+
+function CpaRoute({
+  themePreference,
+  resolvedTheme,
+  onThemeChange,
+  sidebarCollapsed,
+  canCollapseSidebar,
+  onToggleSidebarCollapse,
+}: AppThemeProps) {
+  const location = useLocation();
+  const { model, loading, error } = useTerminalStore();
+  const requestedSurface = model?.surface.requested || 'public';
+  useSurfaceRefresh(requestedSurface, 'cpa', requestedSurface !== 'internal');
+
+  return (
+    <AppShell
+      sidebarCollapsed={sidebarCollapsed}
+      topbar={<GlobalTopbar currentPath={location.pathname} primaryNav={buildPrimaryNav({}, requestedSurface)} globalSummary={buildTopbarGlobalSummary(model)} themePreference={themePreference} resolvedTheme={resolvedTheme} onThemeChange={onThemeChange} onOpenSearch={() => window.dispatchEvent(new CustomEvent('fenlie-toggle-search'))} />}
+      sidebar={(
+        <ContextSidebar
+          title="CPA 管理"
+          subtitle="认证文件与额度"
+          items={[]}
+          utilityLinks={[{ label: '搜索 / Search', to: buildSearchLink('CPA') }]}
+          collapsed={sidebarCollapsed}
+          canCollapse={canCollapseSidebar}
+          onToggleCollapse={onToggleSidebarCollapse}
+        />
+      )}
+      header={<ContextHeader compact title="CPA 管理" subtitle="认证文件 / 配额 / 删除保护" breadcrumbs={[{ label: '总览' }, { label: 'CPA 管理', current: true }]} />}
+      notice={<GlobalNoticeLayer error={error} warnings={model?.surface.warnings} />}
+    >
+      {loading && !model ? <div className="loading-panel">加载 CPA 管理页中…</div> : null}
+      <CpaPage />
     </AppShell>
   );
 }
@@ -1370,6 +1502,19 @@ function AppRoutes() {
           path="/graph-home"
           element={(
             <GraphHomeRoute
+              themePreference={preference}
+              resolvedTheme={resolvedTheme}
+              onThemeChange={handleThemeChange}
+              sidebarCollapsed={sidebarCollapsed}
+              canCollapseSidebar={canCollapseSidebar}
+              onToggleSidebarCollapse={onToggleSidebarCollapse}
+            />
+          )}
+        />
+        <Route
+          path="/cpa"
+          element={(
+            <CpaRoute
               themePreference={preference}
               resolvedTheme={resolvedTheme}
               onThemeChange={handleThemeChange}

@@ -658,3 +658,112 @@ def test_artifact_selection_includes_orderflow_blueprint_and_gate_blocker() -> N
     assert blocker["category"] == "research"
     assert blocker["path_mode"] == "review_path"
     assert blocker["value"] == "latest_intraday_orderflow_research_gate_blocker_report.json"
+
+
+def test_snapshot_merges_optimizer_and_strategy_lab_summary_artifacts(tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "system" / "output" / "review"
+    artifacts_dir = workspace / "system" / "output" / "artifacts"
+    research_dir = workspace / "system" / "output" / "research"
+    public_dir = workspace / "system" / "dashboard" / "web" / "public"
+    review_dir.mkdir(parents=True)
+    artifacts_dir.mkdir(parents=True)
+    public_dir.mkdir(parents=True)
+    (public_dir / "data").mkdir(parents=True)
+
+    breakout_path = review_dir / "20260319T103100Z_price_action_breakout_pullback_sim_only.json"
+    write_json(
+        breakout_path,
+        {
+            "status": "ok",
+            "generated_at_utc": "2026-03-19T10:31:00Z",
+        },
+    )
+    comparison_path = review_dir / "20260330T080000Z_recent_strategy_backtest_comparison_report.json"
+    write_json(
+        comparison_path,
+        {
+            "rows": [{"strategy_id_canonical": "eth_breakout_pullback", "recommendation": "keep"}],
+            "status": "ok",
+        },
+    )
+
+    optimizer_run = research_dir / "20260330_120000"
+    strategy_lab_run = research_dir / "strategy_lab_20260330_120500"
+    optimizer_run.mkdir(parents=True)
+    strategy_lab_run.mkdir(parents=True)
+    write_json(
+        optimizer_run / "summary.json",
+        {
+            "mode_summaries": [
+                {
+                    "mode": "ultra_short",
+                    "trial_artifacts": [
+                        {
+                            "trial": 1,
+                            "mode": "ultra_short",
+                            "score": 0.42,
+                            "trade_journal_path": str(optimizer_run / "ultra_short" / "trial_001_ultra_short_trade_journal.csv"),
+                            "holding_exposure_path": str(optimizer_run / "ultra_short" / "trial_001_ultra_short_holding_daily_symbol_exposure.csv"),
+                        }
+                    ],
+                }
+            ],
+            "best_trade_journal_path": str(optimizer_run / "ultra_short" / "best_trade_journal.csv"),
+            "best_holding_exposure_path": str(optimizer_run / "ultra_short" / "best_holding_daily_symbol_exposure.csv"),
+        },
+    )
+    write_json(
+        strategy_lab_run / "summary.json",
+        {
+            "best_candidate": {
+                "name": "balanced_flow_04",
+                "trade_journal_path": str(strategy_lab_run / "best_trade_journal.csv"),
+                "holding_exposure_path": str(strategy_lab_run / "best_holding_daily_symbol_exposure.csv"),
+            },
+            "candidates": [
+                {
+                    "name": "balanced_flow_04",
+                    "trade_journal_path": str(strategy_lab_run / "candidate_01_balanced_flow_04_trade_journal.csv"),
+                    "holding_exposure_path": str(strategy_lab_run / "candidate_01_balanced_flow_04_holding_daily_symbol_exposure.csv"),
+                }
+            ],
+        },
+    )
+
+    selected_paths = {
+        "recent_strategy_backtests": (comparison_path, "backtest", "system_anchor"),
+        "price_action_breakout_pullback": (breakout_path, "sim-only", "research_mainline"),
+    }
+
+    mod.build_surface_snapshot(
+        surface=mod.SurfaceSpec(
+            key="public",
+            output_name="fenlie_dashboard_snapshot.json",
+            expose_absolute_paths=False,
+            redaction_level="public_summary",
+        ),
+        workspace=workspace,
+        public_dir=public_dir,
+        review_dir=review_dir,
+        artifacts_dir=artifacts_dir,
+        selected_paths=selected_paths,
+        route_contract={"ui_routes": {}, "surface_contracts": {}, "experience_contract": {}},
+        source_head_contract={"source_heads": []},
+        max_catalog=20,
+        max_backtests=0,
+        max_equity_points=0,
+    )
+
+    snapshot = json.loads((public_dir / "data" / "fenlie_dashboard_snapshot.json").read_text(encoding="utf-8"))
+    payloads = snapshot["artifact_payloads"]
+    assert "recent_strategy_backtests" in payloads
+    assert payloads["recent_strategy_backtests"]["payload"]["mode_summaries"][0]["trial_artifacts"][0]["trade_journal_path"].endswith(
+        "trial_001_ultra_short_trade_journal.csv"
+    )
+    assert "strategy_lab_summary" in payloads
+    assert payloads["strategy_lab_summary"]["payload"]["best_candidate"]["trade_journal_path"].endswith("best_trade_journal.csv")
+
+    catalog_ids = {row["id"] for row in snapshot["catalog"]}
+    assert "strategy_lab_summary" in catalog_ids

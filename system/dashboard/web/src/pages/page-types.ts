@@ -1,4 +1,4 @@
-export type PrimaryDomain = 'overview' | 'graph' | 'ops' | 'research';
+export type PrimaryDomain = 'overview' | 'graph' | 'ops' | 'research' | 'cpa';
 export type OpsSurface = 'public' | 'internal';
 export type ResearchLegacySection = 'artifacts' | 'alignment' | 'backtests' | 'contracts' | 'raw';
 

@@ -15,6 +15,7 @@ import type {
   OperatorAlertLink,
   OperatorAlertSection,
   PublicAcceptanceCheckRow,
+  PublicAcceptanceResearchAuditCase,
   PublicAcceptanceSubcommandRow,
   PublicAcceptanceSummary,
   ResearchCandidateRow,
@@ -26,6 +27,7 @@ import type {
   ViewDrilldownSchema,
   ViewFieldSchema,
 } from '../types/contracts';
+import { buildSearchLink } from '../search/links';
 import { resolveDisplayIntent } from '../utils/display-policy';
 import { ageMinutes, freshnessState, safeDisplayValue, statusTone, toArray, toRecord } from '../utils/formatters';
 import { buildDrilldownRowId, buildTerminalFocusKey, buildTerminalLink, buildWorkspaceLink } from '../utils/focus-links';
@@ -1320,9 +1322,313 @@ function buildTerminalWorkspaceHandoffs(snapshot: DashboardSnapshot, surface: Su
   return { handoffs, primaryArtifact };
 }
 
+function auditArtifactLabel(parts: string[]): string {
+  return parts.filter(Boolean).join(' / ');
+}
+
+function pathStem(pathValue: string): string {
+  const fileName = pathValue.split(/[\\/]/).pop() || pathValue;
+  return fileName.replace(/\.[^.]+$/, '');
+}
+
+function routeQueryValue(route: unknown, key: string): string | undefined {
+  const raw = normalizedString(route);
+  if (!raw) return undefined;
+  const queryIndex = raw.indexOf('?');
+  if (queryIndex < 0) return undefined;
+  const query = raw.slice(queryIndex + 1);
+  const value = new URLSearchParams(query).get(key);
+  return normalizedString(value) || undefined;
+}
+
+function deriveWorkspaceResearchAuditCases(snapshot: DashboardSnapshot): PublicAcceptanceResearchAuditCase[] {
+  const payloads = snapshot.artifact_payloads || {};
+  const cases: PublicAcceptanceResearchAuditCase[] = [];
+
+  const recentBacktests = toRecord<Dict>((payloads.recent_strategy_backtests as ArtifactPayloadEntry | undefined)?.payload) || {};
+  const recentModeSummaries = toArray<Dict>(recentBacktests.mode_summaries);
+  for (const modeSummary of recentModeSummaries) {
+    const defaultMode = safeDisplayValue(modeSummary.mode);
+    for (const artifact of toArray<Dict>(modeSummary.trial_artifacts)) {
+      const tradePath = normalizedString(artifact.trade_journal_path);
+      if (!tradePath) continue;
+      const modeName = safeDisplayValue(artifact.mode) || defaultMode;
+      const trialRaw = normalizedString(artifact.trial) || '';
+      const trialLabel = trialRaw ? `trial_${trialRaw.padStart(3, '0')}` : 'trial';
+      const query = pathStem(tradePath);
+      const resultArtifact = `audit:recent_strategy_backtests:${modeName}:${trialLabel}:trade_journal`;
+      cases.push({
+        case_id: 'optimizer_trial_trade_journal',
+        scope: 'artifact',
+        query,
+        search_route: `#${buildSearchLink(query, 'artifact')}`,
+        workspace_route: `#${buildWorkspaceLink('artifacts', { artifact: resultArtifact })}`,
+        raw_path: tradePath,
+        result_artifact: resultArtifact,
+      });
+      break;
+    }
+    if (cases.length) break;
+  }
+
+  const strategyLab = toRecord<Dict>((payloads.strategy_lab_summary as ArtifactPayloadEntry | undefined)?.payload) || {};
+  const candidates = toArray<Dict>(strategyLab.candidates);
+  const bestCandidate = toRecord<Dict>(strategyLab.best_candidate) || {};
+  const bestTradePath = normalizedString(bestCandidate.trade_journal_path);
+  const bestName = safeDisplayValue(bestCandidate.name) || 'best_candidate';
+  let selectedCandidate: Dict | null = null;
+  for (const candidate of candidates) {
+    const tradePath = normalizedString(candidate.trade_journal_path);
+    if (!tradePath) continue;
+    const candidateName = safeDisplayValue(candidate.name) || 'candidate';
+    if (!bestTradePath || candidateName !== bestName || tradePath !== bestTradePath) {
+      selectedCandidate = candidate;
+      break;
+    }
+  }
+  if (!selectedCandidate && candidates.length) {
+    selectedCandidate = candidates[0];
+  }
+  if (!selectedCandidate && bestTradePath) {
+    selectedCandidate = bestCandidate;
+  }
+  if (selectedCandidate) {
+    const tradePath = normalizedString(selectedCandidate.trade_journal_path);
+    const candidateName = safeDisplayValue(selectedCandidate.name) || bestName;
+    if (tradePath) {
+      const query = pathStem(tradePath);
+      const resultArtifact = `audit:strategy_lab_summary:${candidateName}:trade_journal`;
+      cases.push({
+        case_id: 'strategy_lab_candidate_trade_journal',
+        scope: 'artifact',
+        query,
+        search_route: `#${buildSearchLink(query, 'artifact')}`,
+        workspace_route: `#${buildWorkspaceLink('artifacts', { artifact: resultArtifact })}`,
+        raw_path: tradePath,
+        result_artifact: resultArtifact,
+      });
+    }
+  }
+
+  return cases;
+}
+
+function deriveGraphHomeResearchAuditCases(
+  rows: Dict[],
+  fallbackCases: PublicAcceptanceResearchAuditCase[],
+): PublicAcceptanceResearchAuditCase[] {
+  const fallbackByCaseId = new Map(
+    fallbackCases
+      .map((row) => [safeDisplayValue(row.case_id), row] as const)
+      .filter(([caseId]) => caseId && caseId !== '—'),
+  );
+
+  const derivedRows = rows.map((row) => {
+    const caseId = safeDisplayValue(row.case_id) || undefined;
+    const fallback = caseId ? fallbackByCaseId.get(caseId) : undefined;
+    const searchRoute = safeDisplayValue(row.search_link_href || fallback?.search_route) || undefined;
+    const workspaceRoute = safeDisplayValue(row.artifact_link_href || fallback?.workspace_route) || undefined;
+    const rawRoute = safeDisplayValue(row.raw_link_href);
+    return {
+      case_id: caseId,
+      scope: routeQueryValue(searchRoute, 'scope') || fallback?.scope || undefined,
+      query: routeQueryValue(searchRoute, 'q') || fallback?.query || undefined,
+      search_route: searchRoute,
+      workspace_route: workspaceRoute,
+      raw_path: routeQueryValue(rawRoute, 'artifact') || fallback?.raw_path || undefined,
+      result_artifact: routeQueryValue(workspaceRoute, 'artifact') || fallback?.result_artifact || undefined,
+    };
+  }).filter((row) => (
+    row.case_id
+    || row.query
+    || row.search_route
+    || row.workspace_route
+    || row.raw_path
+    || row.result_artifact
+  ));
+
+  const seen = new Set<string>();
+  return derivedRows.filter((row) => {
+    const dedupeKey = [
+      safeDisplayValue(row.case_id),
+      safeDisplayValue(row.search_route),
+      safeDisplayValue(row.workspace_route),
+      safeDisplayValue(row.raw_path),
+    ].join('|');
+    if (!dedupeKey || seen.has(dedupeKey)) return false;
+    seen.add(dedupeKey);
+    return true;
+  });
+}
+
+function aggregatePublicAcceptanceResearchAuditCases(
+  groups: PublicAcceptanceResearchAuditCase[][],
+): PublicAcceptanceResearchAuditCase[] {
+  const seen = new Set<string>();
+  return groups.flat().filter((row) => {
+    const dedupeKey = [
+      safeDisplayValue(row.case_id),
+      safeDisplayValue(row.search_route),
+      safeDisplayValue(row.workspace_route),
+      safeDisplayValue(row.raw_path),
+    ].join('|');
+    if (!dedupeKey || seen.has(dedupeKey)) return false;
+    seen.add(dedupeKey);
+    return true;
+  });
+}
+
+function deriveResearchAuditCatalogRows(snapshot: DashboardSnapshot): Array<Record<string, unknown>> {
+  const payloads = snapshot.artifact_payloads || {};
+  const rows: Array<Record<string, unknown>> = [];
+
+  const pushRow = (options: {
+    id: string;
+    label: string;
+    path: string;
+    payloadKey: string;
+    status?: unknown;
+    researchDecision?: unknown;
+  }) => {
+    rows.push({
+      id: options.id,
+      label: options.label,
+      path: options.path,
+      payload_key: options.payloadKey,
+      artifact_layer: 'archive',
+      artifact_group: 'archive',
+      category: 'research-audit',
+      status: safeDisplayValue(options.status),
+      research_decision: safeDisplayValue(options.researchDecision),
+    });
+  };
+
+  Object.entries(payloads).forEach(([payloadKey, entry]) => {
+    const payload = toRecord<Dict>((entry as ArtifactPayloadEntry | undefined)?.payload) || {};
+    const summary = toRecord<Dict>((entry as ArtifactPayloadEntry | undefined)?.summary) || {};
+    const status = summary.status ?? payload.status;
+    const researchDecision = summary.research_decision ?? payload.research_decision;
+
+    const bestTradeJournalPath = normalizedString(payload.best_trade_journal_path);
+    const bestHoldingExposurePath = normalizedString(payload.best_holding_exposure_path);
+    if (bestTradeJournalPath) {
+      pushRow({
+        id: `audit:${payloadKey}:best:trade_journal`,
+        label: auditArtifactLabel([payloadKey, 'best', 'trade_journal']),
+        path: bestTradeJournalPath,
+        payloadKey,
+        status,
+        researchDecision,
+      });
+    }
+    if (bestHoldingExposurePath) {
+      pushRow({
+        id: `audit:${payloadKey}:best:holding_exposure`,
+        label: auditArtifactLabel([payloadKey, 'best', 'holding_exposure']),
+        path: bestHoldingExposurePath,
+        payloadKey,
+        status,
+        researchDecision,
+      });
+    }
+
+    toArray<Dict>(payload.mode_summaries).forEach((modeSummary) => {
+      const mode = safeDisplayValue(modeSummary.mode);
+      toArray<Dict>(modeSummary.trial_artifacts).forEach((artifact) => {
+        const modeName = safeDisplayValue(artifact.mode) || mode;
+        const trialNumRaw = normalizedString(artifact.trial);
+        const trialLabel = trialNumRaw ? `trial_${trialNumRaw.padStart(3, '0')}` : 'trial';
+        const tradePath = normalizedString(artifact.trade_journal_path);
+        const holdingPath = normalizedString(artifact.holding_exposure_path);
+        if (tradePath) {
+          pushRow({
+            id: `audit:${payloadKey}:${modeName}:${trialLabel}:trade_journal`,
+            label: auditArtifactLabel([modeName, trialLabel, 'trade_journal']),
+            path: tradePath,
+            payloadKey,
+            status,
+            researchDecision,
+          });
+        }
+        if (holdingPath) {
+          pushRow({
+            id: `audit:${payloadKey}:${modeName}:${trialLabel}:holding_exposure`,
+            label: auditArtifactLabel([modeName, trialLabel, 'holding_exposure']),
+            path: holdingPath,
+            payloadKey,
+            status,
+            researchDecision,
+          });
+        }
+      });
+    });
+
+    const bestCandidate = toRecord<Dict>(payload.best_candidate) || {};
+    const bestCandidateName = safeDisplayValue(bestCandidate.name) || 'best_candidate';
+    const bestCandidateTradePath = normalizedString(bestCandidate.trade_journal_path);
+    const bestCandidateHoldingPath = normalizedString(bestCandidate.holding_exposure_path);
+    if (bestCandidateTradePath) {
+      pushRow({
+        id: `audit:${payloadKey}:best_candidate:trade_journal`,
+        label: auditArtifactLabel([bestCandidateName, 'trade_journal']),
+        path: bestCandidateTradePath,
+        payloadKey,
+        status,
+        researchDecision,
+      });
+    }
+    if (bestCandidateHoldingPath) {
+      pushRow({
+        id: `audit:${payloadKey}:best_candidate:holding_exposure`,
+        label: auditArtifactLabel([bestCandidateName, 'holding_exposure']),
+        path: bestCandidateHoldingPath,
+        payloadKey,
+        status,
+        researchDecision,
+      });
+    }
+
+    toArray<Dict>(payload.candidates).forEach((candidate, index) => {
+      const name = safeDisplayValue(candidate.name) || `candidate_${index + 1}`;
+      const tradePath = normalizedString(candidate.trade_journal_path);
+      const holdingPath = normalizedString(candidate.holding_exposure_path);
+      if (tradePath) {
+        pushRow({
+          id: `audit:${payloadKey}:${name}:trade_journal`,
+          label: auditArtifactLabel([name, 'trade_journal']),
+          path: tradePath,
+          payloadKey,
+          status,
+          researchDecision,
+        });
+      }
+      if (holdingPath) {
+        pushRow({
+          id: `audit:${payloadKey}:${name}:holding_exposure`,
+          label: auditArtifactLabel([name, 'holding_exposure']),
+          path: holdingPath,
+          payloadKey,
+          status,
+          researchDecision,
+        });
+      }
+    });
+  });
+
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = safeDisplayValue(row.id);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function buildWorkspace(snapshot: DashboardSnapshot, surface: SurfaceView) {
   const experienceContract = toRecord<Dict>(snapshot.experience_contract) || {};
-  const artifactRows = (snapshot.catalog || []).map((row, index) => ({ id: row.id || row.payload_key || `artifact-${index}`, ...row }));
+  const baseArtifactRows = (snapshot.catalog || []).map((row, index) => ({ id: row.id || row.payload_key || `artifact-${index}`, ...row }));
+  const artifactRows = [...baseArtifactRows, ...deriveResearchAuditCatalogRows(snapshot)];
+  const researchAuditCases = deriveWorkspaceResearchAuditCases(snapshot);
   const workspaceHandoffs = buildWorkspaceArtifactHandoffs(snapshot, surface, artifactRows);
   const defaultFocusRecord = toRecord<Dict>(snapshot.workspace_default_focus) || {};
   return {
@@ -1330,6 +1636,7 @@ function buildWorkspace(snapshot: DashboardSnapshot, surface: SurfaceView) {
     interfaces: snapshot.interface_catalog || [],
     publicTopology: snapshot.public_topology || [],
     publicAcceptance: buildPublicAcceptance(snapshot, surface),
+    researchAuditCases,
     surfaceContracts: Object.entries(snapshot.surface_contracts || {}).map(([id, row]) => ({ id, ...row })),
     fallbackChain: toArray<string>(experienceContract.fallback_chain),
     sourceHeads: Object.entries(snapshot.source_heads || {}).map(([id, row]) => ({ id, ...row })),
@@ -1467,9 +1774,21 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
   const topologyPagesContractsBrowser = toRecord<Dict>(topologyChecks.pages_contracts_browser) || {};
   const topologyEntrypoints = toRecord<Dict>(topology.entrypoints) || {};
   const workspaceRoutes = toRecord<Dict>(checks.workspace_routes_smoke) || {};
+  const graphHome = toRecord<Dict>(checks.graph_home_smoke) || {};
+  const graphHomeAssertion = toRecord<Dict>(graphHome.graph_home_assertion) || {};
   const workspaceSurface = toRecord<Dict>(workspaceRoutes.surface_assertion) || {};
   const workspaceNetwork = toRecord<Dict>(workspaceRoutes.network_observation) || {};
   const workspaceArtifactsFilter = toRecord<Dict>(workspaceRoutes.artifacts_filter_assertion) || {};
+  const workspaceResearchAudit = toRecord<Dict>(workspaceRoutes.research_audit_search_assertion) || {};
+  const workspaceContractsInspector = toRecord<Dict>(workspaceRoutes.contracts_acceptance_inspector_assertion) || {};
+  const workspaceContractsInspectorChecks = toRecord<Dict>(workspaceContractsInspector.checks_by_id) || {};
+  const workspaceContractsInspectorSubcommands = toRecord<Dict>(workspaceContractsInspector.subcommands_by_id) || {};
+  const topologyInspector = toRecord<Dict>(workspaceContractsInspectorChecks.topology_smoke) || {};
+  const topologySubcommandInspector = toRecord<Dict>(workspaceContractsInspectorSubcommands.topology_smoke) || {};
+  const graphHomeInspector = toRecord<Dict>(workspaceContractsInspectorChecks.graph_home_smoke) || {};
+  const graphHomeSubcommandInspector = toRecord<Dict>(workspaceContractsInspectorSubcommands.graph_home_smoke) || {};
+  const workspaceRoutesInspector = toRecord<Dict>(workspaceContractsInspectorChecks.workspace_routes_smoke) || {};
+  const workspaceRoutesSubcommandInspector = toRecord<Dict>(workspaceContractsInspectorSubcommands.workspace_routes_smoke) || {};
   const orderflowSourceAvailable = typeof workspaceArtifactsFilter.source_available === 'boolean'
     ? workspaceArtifactsFilter.source_available
     : undefined;
@@ -1478,6 +1797,67 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     .map((value) => safeDisplayValue(value))
     .filter((value) => value && value !== '—')
     .join(' ｜ ');
+  const researchAuditCases = toArray<Dict>(workspaceResearchAudit.cases);
+  const researchAuditCaseRows: PublicAcceptanceResearchAuditCase[] = researchAuditCases.map((row) => ({
+    case_id: safeDisplayValue(row.case_id) || undefined,
+    scope: safeDisplayValue(row.scope) || undefined,
+    query: safeDisplayValue(row.query) || undefined,
+    search_route: safeDisplayValue(row.search_route) || undefined,
+    workspace_route: safeDisplayValue(row.workspace_route) || undefined,
+    raw_path: safeDisplayValue(row.raw_path) || undefined,
+    result_artifact: safeDisplayValue(row.result_artifact) || undefined,
+  })).filter((row) => (
+    row.case_id
+    || row.query
+    || row.search_route
+    || row.workspace_route
+    || row.raw_path
+    || row.result_artifact
+  ));
+  const researchAuditCasesAvailable = typeof workspaceResearchAudit.cases_available === 'boolean'
+    ? workspaceResearchAudit.cases_available
+    : undefined;
+  const researchAuditQueries = researchAuditCaseRows
+    .map((row) => safeDisplayValue(row.query))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const researchAuditResultArtifacts = researchAuditCaseRows
+    .map((row) => safeDisplayValue(row.result_artifact))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const graphHomeResearchAuditLinkAssertions = toArray<Dict>(graphHomeAssertion.research_audit_link_assertions);
+  const graphHomeResearchAuditCaseRows = deriveGraphHomeResearchAuditCases(graphHomeResearchAuditLinkAssertions, researchAuditCaseRows);
+  const graphHomeResearchAuditCasesAvailable = graphHomeResearchAuditCaseRows.length ? true : undefined;
+  const graphHomeResearchAuditQueries = graphHomeResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.query))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const graphHomeResearchAuditResultArtifacts = graphHomeResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.result_artifact))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const graphHomeResearchAuditCaseIds = graphHomeResearchAuditLinkAssertions
+    .map((row) => safeDisplayValue(row.case_id))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const aggregatedResearchAuditCaseRows = aggregatePublicAcceptanceResearchAuditCases([
+    researchAuditCaseRows,
+    graphHomeResearchAuditCaseRows,
+  ]);
+  const aggregatedResearchAuditCasesAvailable = aggregatedResearchAuditCaseRows.length
+    ? true
+    : researchAuditCasesAvailable;
+  const aggregatedResearchAuditQueries = aggregatedResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.query))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const aggregatedResearchAuditResultArtifacts = aggregatedResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.result_artifact))
+    .filter((value) => value && value !== '—')
+    .join(' ｜ ');
+  const aggregatedResearchAuditSearchRoute = aggregatedResearchAuditCaseRows
+    .map((row) => safeDisplayValue(row.search_route))
+    .find((value) => value && value !== '—');
 
   const summary: PublicAcceptanceSummary = {
     artifact_id: 'dashboard_public_acceptance',
@@ -1488,8 +1868,10 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     artifact_path: safeDisplayValue(entry?.path),
     topology_status: safeDisplayValue(topology.status),
     workspace_status: safeDisplayValue(workspaceRoutes.status),
+    graph_home_status: safeDisplayValue(graphHome.status),
     topology_generated_at_utc: safeDisplayValue(topology.generated_at_utc),
     workspace_generated_at_utc: safeDisplayValue(workspaceRoutes.generated_at_utc),
+    graph_home_generated_at_utc: safeDisplayValue(graphHome.generated_at_utc),
     frontend_public: safeDisplayValue(topologyRootSnapshot.frontend_public),
     root_public_entry: safeDisplayValue(topologyRootPublic.header_public_entry),
     public_snapshot_fetch_count: typeof workspaceNetwork.public_snapshot_fetch_count === 'number' ? workspaceNetwork.public_snapshot_fetch_count : undefined,
@@ -1500,6 +1882,16 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     orderflow_source_available: orderflowSourceAvailable,
     orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
     orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
+    research_audit_search_route: aggregatedResearchAuditSearchRoute || safeDisplayValue(workspaceResearchAudit.route),
+    research_audit_cases_available: aggregatedResearchAuditCasesAvailable,
+    research_audit_queries: aggregatedResearchAuditQueries || researchAuditQueries || undefined,
+    research_audit_result_artifacts: aggregatedResearchAuditResultArtifacts || researchAuditResultArtifacts || undefined,
+    graph_home_resolved_route: safeDisplayValue(graphHomeAssertion.resolved_route),
+    graph_home_default_center: safeDisplayValue(graphHomeAssertion.default_center),
+    graph_home_terminal_link_href: safeDisplayValue(graphHomeAssertion.terminal_link_href),
+    graph_home_workspace_link_href: safeDisplayValue(graphHomeAssertion.workspace_link_href),
+    graph_home_search_link_href: safeDisplayValue(graphHomeAssertion.search_link_href),
+    graph_home_research_audit_case_ids: graphHomeResearchAuditCaseIds || undefined,
   };
 
   const checkRows: PublicAcceptanceCheckRow[] = [
@@ -1520,6 +1912,7 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       pages_overview_screenshot_path: safeDisplayValue(topologyPagesOverviewBrowser.screenshot_path),
       root_contracts_screenshot_path: safeDisplayValue(topologyRootContractsBrowser.screenshot_path),
       pages_contracts_screenshot_path: safeDisplayValue(topologyPagesContractsBrowser.screenshot_path),
+      inspector_route: safeDisplayValue(topologyInspector.route),
       ...(surface.effective === 'internal' && typeof topology.stdout === 'string' ? { stdout: topology.stdout } : {}),
       ...(surface.effective === 'internal' && typeof topology.stderr === 'string' ? { stderr: topology.stderr } : {}),
     },
@@ -1542,8 +1935,44 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
       orderflow_source_available: orderflowSourceAvailable,
       orderflow_active_artifact: safeDisplayValue(workspaceArtifactsFilter.active_artifact),
       orderflow_visible_artifacts: orderflowVisibleArtifacts || undefined,
+      research_audit_search_route: safeDisplayValue(workspaceResearchAudit.route),
+      research_audit_cases_available: researchAuditCasesAvailable,
+      research_audit_queries: researchAuditQueries || undefined,
+      research_audit_result_artifacts: researchAuditResultArtifacts || undefined,
+      research_audit_cases: researchAuditCaseRows.length ? researchAuditCaseRows : undefined,
+      inspector_route: safeDisplayValue(workspaceRoutesInspector.route),
+      inspector_search_link_href: safeDisplayValue(workspaceRoutesInspector.search_link_href),
+      inspector_artifact_link_href: safeDisplayValue(workspaceRoutesInspector.artifact_link_href),
+      inspector_raw_link_href: safeDisplayValue(workspaceRoutesInspector.raw_link_href),
       ...(surface.effective === 'internal' && typeof workspaceRoutes.stdout === 'string' ? { stdout: workspaceRoutes.stdout } : {}),
       ...(surface.effective === 'internal' && typeof workspaceRoutes.stderr === 'string' ? { stderr: workspaceRoutes.stderr } : {}),
+    },
+    {
+      id: 'graph_home_smoke',
+      label: t('workspace_contracts_acceptance_graph_home_label'),
+      status: safeDisplayValue(graphHome.status),
+      ok: Boolean(graphHome.ok),
+      generated_at_utc: safeDisplayValue(graphHome.generated_at_utc),
+      report_path: safeDisplayValue(graphHome.report_path),
+      returncode: typeof graphHome.returncode === 'number' ? graphHome.returncode : undefined,
+      failure_reason: safeDisplayValue(graphHome.failure_reason),
+      headline: safeDisplayValue(graphHomeAssertion.resolved_route || graphHomeAssertion.default_route),
+      graph_home_resolved_route: safeDisplayValue(graphHomeAssertion.resolved_route),
+      graph_home_default_center: safeDisplayValue(graphHomeAssertion.default_center),
+      graph_home_terminal_link_href: safeDisplayValue(graphHomeAssertion.terminal_link_href),
+      graph_home_workspace_link_href: safeDisplayValue(graphHomeAssertion.workspace_link_href),
+      graph_home_search_link_href: safeDisplayValue(graphHomeAssertion.search_link_href),
+      research_audit_cases_available: graphHomeResearchAuditCasesAvailable,
+      research_audit_queries: graphHomeResearchAuditQueries || undefined,
+      research_audit_result_artifacts: graphHomeResearchAuditResultArtifacts || undefined,
+      research_audit_cases: graphHomeResearchAuditCaseRows.length ? graphHomeResearchAuditCaseRows : undefined,
+      graph_home_research_audit_case_ids: graphHomeResearchAuditCaseIds || undefined,
+      inspector_route: safeDisplayValue(graphHomeInspector.route),
+      inspector_search_link_href: safeDisplayValue(graphHomeInspector.search_link_href),
+      inspector_artifact_link_href: safeDisplayValue(graphHomeInspector.artifact_link_href),
+      inspector_raw_link_href: safeDisplayValue(graphHomeInspector.raw_link_href),
+      ...(surface.effective === 'internal' && typeof graphHome.stdout === 'string' ? { stdout: graphHome.stdout } : {}),
+      ...(surface.effective === 'internal' && typeof graphHome.stderr === 'string' ? { stderr: graphHome.stderr } : {}),
     },
   ].filter((row) => row.status && row.status !== '—');
 
@@ -1551,13 +1980,42 @@ function buildPublicAcceptance(snapshot: DashboardSnapshot, surface: SurfaceView
     const row = toRecord<Dict>(value) || {};
     return {
       id,
-      label: id === 'topology_smoke' ? t('workspace_contracts_acceptance_topology_command_label') : t('workspace_contracts_acceptance_workspace_command_label'),
+      label: id === 'topology_smoke'
+        ? t('workspace_contracts_acceptance_topology_command_label')
+        : id === 'graph_home_smoke'
+          ? t('workspace_contracts_acceptance_graph_home_command_label')
+          : t('workspace_contracts_acceptance_workspace_command_label'),
       returncode: typeof row.returncode === 'number' ? row.returncode : undefined,
       payload_present: typeof row.payload_present === 'boolean' ? row.payload_present : undefined,
       stdout_bytes: typeof row.stdout_bytes === 'number' ? row.stdout_bytes : undefined,
       stderr_bytes: typeof row.stderr_bytes === 'number' ? row.stderr_bytes : undefined,
       cmd: Array.isArray(row.cmd) ? row.cmd.map((item) => safeDisplayValue(item)).join(' ') : safeDisplayValue(row.cmd),
       cwd: safeDisplayValue(row.cwd),
+      ...(id === 'graph_home_smoke'
+        ? {
+            inspector_route: safeDisplayValue(graphHomeSubcommandInspector.route),
+            inspector_check_route: safeDisplayValue(graphHomeSubcommandInspector.check_route || graphHomeInspector.route),
+            inspector_search_link_href: safeDisplayValue(graphHomeSubcommandInspector.search_link_href),
+            inspector_artifact_link_href: safeDisplayValue(graphHomeSubcommandInspector.artifact_link_href),
+            inspector_raw_link_href: safeDisplayValue(graphHomeSubcommandInspector.raw_link_href),
+          }
+        : id === 'topology_smoke'
+          ? {
+              inspector_route: safeDisplayValue(topologySubcommandInspector.route),
+              inspector_check_route: safeDisplayValue(topologySubcommandInspector.check_route || topologyInspector.route),
+              inspector_search_link_href: safeDisplayValue(topologySubcommandInspector.search_link_href),
+              inspector_artifact_link_href: safeDisplayValue(topologySubcommandInspector.artifact_link_href),
+              inspector_raw_link_href: safeDisplayValue(topologySubcommandInspector.raw_link_href),
+            }
+        : id === 'workspace_routes_smoke'
+          ? {
+              inspector_route: safeDisplayValue(workspaceRoutesSubcommandInspector.route),
+              inspector_check_route: safeDisplayValue(workspaceRoutesSubcommandInspector.check_route),
+              inspector_search_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.search_link_href),
+              inspector_artifact_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.artifact_link_href),
+              inspector_raw_link_href: safeDisplayValue(workspaceRoutesSubcommandInspector.raw_link_href),
+            }
+        : {}),
       ...(surface.effective === 'internal' && typeof row.stdout === 'string' ? { stdout: row.stdout } : {}),
       ...(surface.effective === 'internal' && typeof row.stderr === 'string' ? { stderr: row.stderr } : {}),
     };

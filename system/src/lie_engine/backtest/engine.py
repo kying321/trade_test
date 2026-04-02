@@ -112,6 +112,84 @@ def _compute_metrics(equity: pd.Series, trades: pd.DataFrame, window_returns: li
     )
 
 
+def _build_holding_daily_symbol_exposure(trades: pd.DataFrame) -> list[dict[str, object]]:
+    if trades.empty or not {"entry_date", "exit_date", "symbol", "total_scale"}.issubset(set(trades.columns)):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for rec in trades.to_dict(orient="records"):
+        try:
+            entry_date = pd.to_datetime(rec.get("entry_date"), errors="coerce").date()
+            exit_date = pd.to_datetime(rec.get("exit_date"), errors="coerce").date()
+        except Exception:
+            continue
+        if entry_date is None or exit_date is None:
+            continue
+        if exit_date < entry_date:
+            continue
+        weight_raw = abs(float(pd.to_numeric(pd.Series([rec.get("total_scale")]), errors="coerce").iloc[0]))
+        if not np.isfinite(weight_raw):
+            continue
+        for d in pd.date_range(entry_date, exit_date, freq="D").date:
+            rows.append({"date": d.isoformat(), "symbol": str(rec.get("symbol", "")), "weight_raw": weight_raw})
+
+    if not rows:
+        return []
+
+    exposure_df = pd.DataFrame(rows)
+    exposure_df = (
+        exposure_df.groupby(["date", "symbol"], as_index=False)["weight_raw"].sum()
+        .sort_values(["date", "symbol"])
+        .reset_index(drop=True)
+    )
+    exposure_df["day_total"] = exposure_df.groupby("date")["weight_raw"].transform("sum")
+    exposure_df["weight"] = exposure_df["weight_raw"] / exposure_df["day_total"].replace(0.0, np.nan)
+    exposure_df["weight"] = exposure_df["weight"].fillna(0.0)
+    return exposure_df[["date", "symbol", "weight"]].to_dict(orient="records")
+
+
+def _build_trade_daily_pnl_schedule(
+    *,
+    symbol_df: pd.DataFrame,
+    entry_idx: int,
+    actual_exit_idx: int,
+    actual_exit_price: float,
+    entry_price: float,
+    side: Side,
+    asset_class: str,
+    total_scale: float,
+) -> list[dict[str, object]]:
+    if actual_exit_idx <= entry_idx:
+        return []
+
+    sign = -1.0 if side == Side.SHORT else 1.0
+    denom = max(float(entry_price), 1e-9)
+    cost = default_cost_model(asset_class)
+    borrow_daily = float(cost.borrow_bps_daily) / 10000.0
+    roundtrip_cost = float(cost.roundtrip_bps) / 10000.0
+
+    prev_price = float(entry_price)
+    rows: list[dict[str, object]] = []
+    for idx in range(entry_idx + 1, actual_exit_idx + 1):
+        row = symbol_df.iloc[idx]
+        is_exit = idx == actual_exit_idx
+        mark_price = float(actual_exit_price) if is_exit else float(row["close"])
+        gross_component = sign * (mark_price - prev_price) / denom
+        net_component = gross_component - borrow_daily
+        if is_exit:
+            net_component -= roundtrip_cost
+        net_component *= float(total_scale)
+        rows.append(
+            {
+                "date": pd.to_datetime(row["ts"]).date(),
+                "symbol": str(row["symbol"]),
+                "pnl": float(net_component),
+            }
+        )
+        prev_price = mark_price
+    return rows
+
+
 def _resolve_confirmation_scale(
     *,
     side: Side,
@@ -214,8 +292,16 @@ def run_event_backtest(
     window_returns: list[float] = []
     last_regime = None
     symbol_size_scale: dict[str, float] = {}
+    scheduled_pnl_by_date: dict[date, list[float]] = {}
 
     for i, d in enumerate(dates):
+        day_components = list(scheduled_pnl_by_date.get(d, []))
+        if day_components:
+            day_ret = float(np.mean(day_components))
+            day_ret *= max(0.0, min(1.5, float(cfg.exposure_scale)))
+            equity *= 1.0 + day_ret
+            window_returns.append(day_ret)
+
         hist = bars_all[bars_all["ts"].dt.date <= d]
         if hist["symbol"].nunique() < 2:
             equity_points.append({"date": d.isoformat(), "equity": equity})
@@ -276,8 +362,6 @@ def run_event_backtest(
             equity_points.append({"date": d.isoformat(), "equity": equity})
             continue
 
-        day_ret = 0.0
-        executed_count = 0
         for sig in sigs:
             symbol_df = bars_all[bars_all["symbol"] == sig.symbol].sort_values("ts").reset_index(drop=True)
             entry_row = symbol_df[symbol_df["ts"].dt.date == d]
@@ -294,25 +378,35 @@ def run_event_backtest(
             entry = float(sig.entry_price)
             path = symbol_df.iloc[entry_idx + 1 : exit_idx + 1]
             realized_exit = float(exit_row["close"])
+            actual_exit_idx = int(exit_idx)
+            actual_exit_ts = pd.to_datetime(exit_row["ts"])
             hit_target = False
             hit_stop = False
-            for _, row in path.iterrows():
+            for path_idx, row in path.iterrows():
                 if sig.side == Side.LONG:
                     if float(row["low"]) <= sig.stop_price:
                         realized_exit = sig.stop_price
+                        actual_exit_idx = int(path_idx)
+                        actual_exit_ts = pd.to_datetime(row["ts"])
                         hit_stop = True
                         break
                     if float(row["high"]) >= sig.target_price:
                         realized_exit = sig.target_price
+                        actual_exit_idx = int(path_idx)
+                        actual_exit_ts = pd.to_datetime(row["ts"])
                         hit_target = True
                         break
                 else:
                     if float(row["high"]) >= sig.stop_price:
                         realized_exit = sig.stop_price
+                        actual_exit_idx = int(path_idx)
+                        actual_exit_ts = pd.to_datetime(row["ts"])
                         hit_stop = True
                         break
                     if float(row["low"]) <= sig.target_price:
                         realized_exit = sig.target_price
+                        actual_exit_idx = int(path_idx)
+                        actual_exit_ts = pd.to_datetime(row["ts"])
                         hit_target = True
                         break
 
@@ -321,7 +415,7 @@ def run_event_backtest(
             else:
                 gross = (realized_exit - entry) / max(entry, 1e-9)
             cost = default_cost_model(asset_class)
-            days_held = max(1, exit_idx - entry_idx)
+            days_held = max(1, actual_exit_idx - entry_idx)
             borrow = cost.borrow_bps_daily * days_held / 10000.0
             net = gross - cost.roundtrip_bps / 10000.0 - borrow
             base_scale = float(symbol_size_scale.get(sig.symbol, 1.0))
@@ -339,8 +433,6 @@ def run_event_backtest(
                 )
             total_scale = max(0.0, min(1.8, base_scale * confirm_scale))
             net *= total_scale
-            day_ret += net
-            executed_count += 1
 
             if bool(cfg.execution_anti_martingale_enabled):
                 symbol_size_scale[sig.symbol] = _next_anti_martingale_scale(
@@ -354,9 +446,14 @@ def run_event_backtest(
             trades_rows.append(
                 {
                     "date": d.isoformat(),
+                    "entry_date": d.isoformat(),
+                    "exit_date": actual_exit_ts.date().isoformat(),
                     "symbol": sig.symbol,
                     "side": sig.side.value,
                     "asset_class": asset_class,
+                    "entry_price": entry,
+                    "exit_price": realized_exit,
+                    "holding_days": int(days_held),
                     "hit_target": bool(hit_target),
                     "hit_stop": bool(hit_stop),
                     "gross": gross,
@@ -368,11 +465,18 @@ def run_event_backtest(
                 }
             )
 
-        if executed_count:
-            day_ret /= executed_count
-            day_ret *= max(0.0, min(1.5, float(cfg.exposure_scale)))
-            equity *= 1.0 + day_ret
-            window_returns.append(day_ret)
+            for comp in _build_trade_daily_pnl_schedule(
+                symbol_df=symbol_df,
+                entry_idx=entry_idx,
+                actual_exit_idx=actual_exit_idx,
+                actual_exit_price=realized_exit,
+                entry_price=entry,
+                side=sig.side,
+                asset_class=asset_class,
+                total_scale=total_scale,
+            ):
+                comp_date = comp["date"]
+                scheduled_pnl_by_date.setdefault(comp_date, []).append(float(comp["pnl"]))
 
         equity_points.append({"date": d.isoformat(), "equity": equity})
 
@@ -394,6 +498,27 @@ def run_event_backtest(
     if not tr_df.empty:
         by_asset = tr_df.groupby("asset_class")["pnl"].mean().to_dict()
 
+    daily_symbol_exposure: list[dict[str, object]] = []
+    if not tr_df.empty and {"date", "symbol", "total_scale"}.issubset(set(tr_df.columns)):
+        exposure_df = tr_df.copy()
+        exposure_df["weight_raw"] = pd.to_numeric(exposure_df["total_scale"], errors="coerce").abs()
+        exposure_df = exposure_df.dropna(subset=["date", "symbol", "weight_raw"])
+        if not exposure_df.empty:
+            exposure_df = (
+                exposure_df.groupby(["date", "symbol"], as_index=False)["weight_raw"].sum()
+                .sort_values(["date", "symbol"])
+                .reset_index(drop=True)
+            )
+            exposure_df["day_total"] = exposure_df.groupby("date")["weight_raw"].transform("sum")
+            exposure_df["weight"] = exposure_df["weight_raw"] / exposure_df["day_total"].replace(0.0, np.nan)
+            exposure_df["weight"] = exposure_df["weight"].fillna(0.0)
+            daily_symbol_exposure = (
+                exposure_df[["date", "symbol", "weight"]]
+                .rename(columns={"date": "date", "symbol": "symbol", "weight": "weight"})
+                .to_dict(orient="records")
+            )
+    holding_daily_symbol_exposure = _build_holding_daily_symbol_exposure(tr_df)
+
     violations = 0
     if max_drawdown > 0.18:
         violations += 1
@@ -412,4 +537,7 @@ def run_event_backtest(
         positive_window_ratio=positive_window_ratio,
         equity_curve=eq_df.to_dict(orient="records"),
         by_asset=by_asset,
+        daily_symbol_exposure=daily_symbol_exposure,
+        trade_journal=tr_df.to_dict(orient="records") if not tr_df.empty else [],
+        holding_daily_symbol_exposure=holding_daily_symbol_exposure,
     )

@@ -15,7 +15,7 @@ universe:
     - {symbol: "BU2606", asset_class: "future", venue: "shfe", product: "asphalt", batch: "asphalt_cn", stage: "paper_only", theme: "国内能化"}
   max_dynamic_additions: 5
 data:
-  provider_profile: "dual_binance_bybit_public"
+  provider_profile: "public_research_binance_bybit"
 thresholds:
   hurst_trend: 0.6
   hurst_mean_revert: 0.4

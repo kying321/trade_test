@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 import importlib.util
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from typing import Any
 
 import pandas as pd
 
@@ -69,8 +70,249 @@ class ResearchTests(unittest.TestCase):
                 self.assertTrue(Path(summary.output_dir).exists())
                 self.assertTrue((Path(summary.output_dir) / "summary.json").exists())
                 self.assertTrue((Path(summary.output_dir) / "report.md").exists())
+                first_mode = summary.mode_summaries[0].mode
+                self.assertTrue((Path(summary.output_dir) / first_mode / "best_trade_journal.csv").exists())
+                self.assertTrue((Path(summary.output_dir) / first_mode / "best_holding_daily_symbol_exposure.csv").exists())
+                self.assertTrue(any((Path(summary.output_dir) / first_mode).glob("trial_*_trade_journal.csv")))
+                self.assertTrue(any((Path(summary.output_dir) / first_mode).glob("trial_*_holding_daily_symbol_exposure.csv")))
+                self.assertTrue(bool(summary.mode_summaries[0].to_dict().get("trial_artifacts", [])))
         finally:
             opt_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+
+    def test_run_research_backtest_passes_symbol_level_factor_series_to_optimizer(self) -> None:
+        import lie_engine.research.optimizer as opt_mod
+
+        bars = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2025-01-02", "2025-01-03"]),
+                "symbol": ["BU2606", "BU2606"],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.0, 1.1],
+                "volume": [1000.0, 1200.0],
+                "source": ["mock", "mock"],
+                "asset_class": ["future", "future"],
+            }
+        )
+        idx = [date(2025, 1, 2), date(2025, 1, 3)]
+        bundle = RealDataBundle(
+            bars=bars,
+            universe=["BU2606"],
+            news_daily=pd.Series([0.0, 0.0], index=idx, dtype=float),
+            report_daily=pd.Series([0.0, 0.0], index=idx, dtype=float),
+            news_daily_by_symbol=pd.DataFrame(
+                {
+                    "date": idx,
+                    "symbol": ["BU2606", "BU2606"],
+                    "news_score": [0.6, -0.2],
+                }
+            ),
+            report_daily_by_symbol=pd.DataFrame(
+                {
+                    "date": idx,
+                    "symbol": ["BU2606", "BU2606"],
+                    "report_score": [0.1, 0.3],
+                }
+            ),
+            news_records=2,
+            report_records=2,
+            fetch_stats={"mocked": True},
+            cutoff_date=date(2025, 1, 3),
+        )
+
+        captured: dict[str, Any] = {}
+
+        original_loader = opt_mod.load_real_data_bundle
+        original_optimize = opt_mod._optimize_one_mode
+
+        def _fake_optimize_one_mode(**kwargs):  # type: ignore[no-untyped-def]
+            captured["news_daily"] = kwargs["news_daily"]
+            captured["report_daily"] = kwargs["report_daily"]
+            return opt_mod.ModeOptimizationSummary(
+                mode=kwargs["mode"],
+                trials=0,
+                best_score=0.0,
+                best_params={},
+                best_metrics={},
+                budget_seconds=0.0,
+                elapsed_seconds=0.0,
+                trial_log_path="",
+            )
+
+        opt_mod.load_real_data_bundle = lambda **kwargs: bundle  # type: ignore[assignment]
+        opt_mod._optimize_one_mode = _fake_optimize_one_mode  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                summary = run_research_backtest(
+                    output_root=Path(td),
+                    core_symbols=["BU2606"],
+                    start=date(2025, 1, 1),
+                    end=date(2025, 1, 3),
+                    hours_budget=0.001,
+                    max_symbols=1,
+                    report_symbol_cap=1,
+                    workers=1,
+                    max_trials_per_mode=1,
+                    seed=7,
+                    modes=["ultra_short"],
+                )
+            self.assertTrue(summary.mode_summaries is not None)
+            self.assertAlmostEqual(float(captured["news_daily"].iloc[0]), 0.6, places=6)
+            self.assertAlmostEqual(float(captured["news_daily"].iloc[1]), -0.2, places=6)
+            self.assertAlmostEqual(float(captured["report_daily"].iloc[0]), 0.1, places=6)
+            self.assertAlmostEqual(float(captured["report_daily"].iloc[1]), 0.3, places=6)
+        finally:
+            opt_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+            opt_mod._optimize_one_mode = original_optimize  # type: ignore[assignment]
+
+    def test_optimize_one_mode_passes_backtest_daily_symbol_exposure_into_factor_alignment(self) -> None:
+        import time
+        import numpy as np
+        import lie_engine.research.optimizer as opt_mod
+        from lie_engine.models import BacktestResult
+
+        bars = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2025-01-02", "2025-01-03"]),
+                "symbol": ["BU2606", "BU2606"],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.0, 1.1],
+                "volume": [1000.0, 1100.0],
+                "source": ["mock", "mock"],
+                "asset_class": ["future", "future"],
+            }
+        )
+        idx = [date(2025, 1, 2), date(2025, 1, 3)]
+        captured: dict[str, Any] = {}
+
+        original_run_backtest = opt_mod.run_event_backtest
+        original_factor_alignment = opt_mod._factor_alignment
+
+        def _fake_run_event_backtest(*args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = (args, kwargs)
+            return BacktestResult(
+                start=date(2025, 1, 1),
+                end=date(2025, 1, 3),
+                total_return=0.01,
+                annual_return=0.10,
+                max_drawdown=0.02,
+                win_rate=0.6,
+                profit_factor=1.2,
+                expectancy=0.01,
+                trades=1,
+                violations=0,
+                positive_window_ratio=1.0,
+                equity_curve=[{"date": "2025-01-02", "equity": 1.0}, {"date": "2025-01-03", "equity": 1.02}],
+                by_asset={},
+                daily_symbol_exposure=[{"date": "2025-01-02", "symbol": "BU2606", "weight": 1.0}],
+            )
+
+        def _fake_factor_alignment(*args, **kwargs):  # type: ignore[no-untyped-def]
+            captured["daily_symbol_exposure"] = kwargs.get("daily_symbol_exposure")
+            captured["news_daily_by_symbol"] = kwargs.get("news_daily_by_symbol")
+            captured["report_daily_by_symbol"] = kwargs.get("report_daily_by_symbol")
+            return 0.0
+
+        opt_mod.run_event_backtest = _fake_run_event_backtest  # type: ignore[assignment]
+        opt_mod._factor_alignment = _fake_factor_alignment  # type: ignore[assignment]
+        try:
+            summary = opt_mod._optimize_one_mode(
+                mode="ultra_short",
+                space=opt_mod.MODE_SPACES["ultra_short"],
+                bars=bars,
+                start=date(2025, 1, 1),
+                end=date(2025, 1, 3),
+                news_daily=pd.Series([0.0, 0.0], index=idx, dtype=float),
+                report_daily=pd.Series([0.0, 0.0], index=idx, dtype=float),
+                news_daily_by_symbol=pd.DataFrame({"date": idx, "symbol": ["BU2606", "BU2606"], "news_score": [0.6, -0.2]}),
+                report_daily_by_symbol=pd.DataFrame({"date": idx, "symbol": ["BU2606", "BU2606"], "report_score": [0.1, 0.3]}),
+                deadline_ts=time.time() + 1.0,
+                max_trials=1,
+                rng=np.random.default_rng(7),
+                out_dir=Path(tempfile.mkdtemp()),
+            )
+            self.assertIsNotNone(summary)
+            self.assertEqual(captured["daily_symbol_exposure"][0]["symbol"], "BU2606")
+            self.assertFalse(captured["news_daily_by_symbol"].empty)
+            self.assertFalse(captured["report_daily_by_symbol"].empty)
+        finally:
+            opt_mod.run_event_backtest = original_run_backtest  # type: ignore[assignment]
+            opt_mod._factor_alignment = original_factor_alignment  # type: ignore[assignment]
+
+    def test_optimize_one_mode_prefers_holding_daily_symbol_exposure(self) -> None:
+        import time
+        import numpy as np
+        import lie_engine.research.optimizer as opt_mod
+        from lie_engine.models import BacktestResult
+
+        bars = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2025-01-02", "2025-01-03"]),
+                "symbol": ["BU2606", "BU2606"],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.0, 1.1],
+                "volume": [1000.0, 1100.0],
+                "source": ["mock", "mock"],
+                "asset_class": ["future", "future"],
+            }
+        )
+        idx = [date(2025, 1, 2), date(2025, 1, 3)]
+        captured: dict[str, Any] = {}
+
+        original_run_backtest = opt_mod.run_event_backtest
+        original_factor_alignment = opt_mod._factor_alignment
+
+        def _fake_run_event_backtest(*args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = (args, kwargs)
+            return BacktestResult(
+                start=date(2025, 1, 1),
+                end=date(2025, 1, 3),
+                total_return=0.01,
+                annual_return=0.10,
+                max_drawdown=0.02,
+                win_rate=0.6,
+                profit_factor=1.2,
+                expectancy=0.01,
+                trades=1,
+                violations=0,
+                positive_window_ratio=1.0,
+                equity_curve=[{"date": "2025-01-02", "equity": 1.0}, {"date": "2025-01-03", "equity": 1.02}],
+                by_asset={},
+                daily_symbol_exposure=[{"date": "2025-01-02", "symbol": "WRONG", "weight": 1.0}],
+                holding_daily_symbol_exposure=[{"date": "2025-01-02", "symbol": "BU2606", "weight": 1.0}],
+            )
+
+        def _fake_factor_alignment(*args, **kwargs):  # type: ignore[no-untyped-def]
+            captured["daily_symbol_exposure"] = kwargs.get("daily_symbol_exposure")
+            return 0.0
+
+        opt_mod.run_event_backtest = _fake_run_event_backtest  # type: ignore[assignment]
+        opt_mod._factor_alignment = _fake_factor_alignment  # type: ignore[assignment]
+        try:
+            opt_mod._optimize_one_mode(
+                mode="ultra_short",
+                space=opt_mod.MODE_SPACES["ultra_short"],
+                bars=bars,
+                start=date(2025, 1, 1),
+                end=date(2025, 1, 3),
+                news_daily=pd.Series([0.0, 0.0], index=idx, dtype=float),
+                report_daily=pd.Series([0.0, 0.0], index=idx, dtype=float),
+                news_daily_by_symbol=pd.DataFrame({"date": idx, "symbol": ["BU2606", "BU2606"], "news_score": [0.6, -0.2]}),
+                report_daily_by_symbol=pd.DataFrame({"date": idx, "symbol": ["BU2606", "BU2606"], "report_score": [0.1, 0.3]}),
+                deadline_ts=time.time() + 1.0,
+                max_trials=1,
+                rng=np.random.default_rng(7),
+                out_dir=Path(tempfile.mkdtemp()),
+            )
+            self.assertEqual(captured["daily_symbol_exposure"][0]["symbol"], "BU2606")
+        finally:
+            opt_mod.run_event_backtest = original_run_backtest  # type: ignore[assignment]
+            opt_mod._factor_alignment = original_factor_alignment  # type: ignore[assignment]
 
     def test_load_real_data_bundle_enforces_cutoff_and_review_split(self) -> None:
         import lie_engine.research.real_data as rd
@@ -206,6 +448,688 @@ class ResearchTests(unittest.TestCase):
         finally:
             rd._get_binance_provider = original_get_provider  # type: ignore[assignment]
 
+    def test_fetch_crypto_daily_falls_back_to_bybit_when_binance_empty(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_get_binance = rd._get_binance_provider
+        original_get_bybit = getattr(rd, "_get_bybit_provider", None)
+
+        class _EmptyProvider:
+            def fetch_ohlcv(self, symbol: str, start: date, end: date, freq: str = "1d") -> pd.DataFrame:
+                _ = (symbol, start, end, freq)
+                return pd.DataFrame(
+                    columns=["ts", "symbol", "open", "high", "low", "close", "volume", "source", "asset_class"]
+                )
+
+        class _FallbackProvider:
+            def fetch_ohlcv(self, symbol: str, start: date, end: date, freq: str = "1d") -> pd.DataFrame:
+                _ = (start, end, freq)
+                return pd.DataFrame(
+                    {
+                        "ts": pd.to_datetime(["2026-03-29", "2026-03-30"]),
+                        "symbol": [symbol, symbol],
+                        "open": [100.0, 101.0],
+                        "high": [101.0, 102.0],
+                        "low": [99.0, 100.0],
+                        "close": [100.5, 101.5],
+                        "volume": [1000.0, 1200.0],
+                        "source": ["bybit_spot_public", "bybit_spot_public"],
+                        "asset_class": ["crypto", "crypto"],
+                    }
+                )
+
+        rd._get_binance_provider = lambda: _EmptyProvider()  # type: ignore[assignment]
+        rd._get_bybit_provider = lambda: _FallbackProvider()  # type: ignore[attr-defined,assignment]
+        try:
+            out = rd.fetch_crypto_daily("BTCUSDT", date(2026, 3, 29), date(2026, 3, 30))
+            self.assertFalse(out.empty)
+            self.assertEqual(set(out["symbol"]), {"BTCUSDT"})
+            self.assertEqual(set(out["asset_class"]), {"crypto"})
+            self.assertEqual(set(out["source"]), {"bybit_spot_public"})
+        finally:
+            rd._get_binance_provider = original_get_binance  # type: ignore[assignment]
+            if original_get_bybit is not None:
+                rd._get_bybit_provider = original_get_bybit  # type: ignore[attr-defined,assignment]
+
+    def test_public_news_helpers_support_crypto_and_future_symbols(self) -> None:
+        import lie_engine.research.real_data as rd
+        from lie_engine.models import NewsEvent
+        future_event = NewsEvent(
+            event_id="n1",
+            ts=datetime(2026, 3, 30, 9, 0),
+            title="[SHMET] 沥青库存去化",
+            content="BU2606 沥青库存下降，成本支撑增强，短线利好。",
+            lang="zh",
+            source="public_macro_news",
+            category="产业链",
+            confidence=0.8,
+            entities=["BU2606"],
+            importance=0.7,
+        )
+        crypto_event = NewsEvent(
+            event_id="n2",
+            ts=datetime(2026, 3, 30, 10, 0),
+            title="[Baidu] 比特币风险偏好回升",
+            content="BTCUSDT 资金回流，突破前高，情绪改善。",
+            lang="zh",
+            source="public_macro_news",
+            category="宏观",
+            confidence=0.78,
+            entities=["BTCUSDT"],
+            importance=0.68,
+        )
+        self.assertTrue(rd._public_news_matches_symbol(future_event, "BU2606"))
+        self.assertTrue(rd._public_news_matches_symbol(crypto_event, "BTCUSDT"))
+        self.assertGreater(rd._public_news_score(future_event), 0.0)
+        self.assertGreater(rd._public_news_score(crypto_event), 0.0)
+
+    def test_public_news_helpers_allow_macro_geopolitical_fallback_for_crypto(self) -> None:
+        import lie_engine.research.real_data as rd
+        from lie_engine.models import NewsEvent
+
+        event = NewsEvent(
+            event_id="n3",
+            ts=datetime(2026, 3, 30, 3, 0),
+            title="[SHMET] 伊朗首都德黑兰发生爆炸",
+            content="地缘冲突升级，风险偏好承压，避险情绪上升。",
+            lang="zh",
+            source="public_macro_news",
+            category="产业链",
+            confidence=0.74,
+            entities=[],
+            importance=0.66,
+        )
+        self.assertTrue(rd._public_news_matches_symbol(event, "BTCUSDT"))
+        self.assertLess(rd._public_news_score(event, relevance=0.45), 0.0)
+
+    def test_public_news_helpers_parse_warehouse_delta_direction_for_commodities(self) -> None:
+        import lie_engine.research.real_data as rd
+        from lie_engine.models import NewsEvent
+
+        decrease_event = NewsEvent(
+            event_id="n4",
+            ts=datetime(2026, 3, 30, 15, 10),
+            title="[Baidu] 中国3月30日上期所每日仓单变动-铜(吨)",
+            content="中国 | 中国3月30日上期所每日仓单变动-铜(吨) | 预期=nan | 前值=-9365",
+            lang="zh",
+            source="public_macro_news",
+            category="宏观",
+            confidence=0.82,
+            entities=[],
+            importance=0.75,
+        )
+        increase_event = NewsEvent(
+            event_id="n5",
+            ts=datetime(2026, 3, 30, 15, 10),
+            title="[Baidu] 中国3月30日上期所每日仓单变动-白银(千克)",
+            content="中国 | 中国3月30日上期所每日仓单变动-白银(千克) | 预期=nan | 前值=1500",
+            lang="zh",
+            source="public_macro_news",
+            category="宏观",
+            confidence=0.82,
+            entities=[],
+            importance=0.60,
+        )
+
+        self.assertGreater(rd._public_news_score(decrease_event, relevance=0.75), 0.0)
+        self.assertLess(rd._public_news_score(increase_event, relevance=0.75), 0.0)
+
+    def test_public_news_helpers_do_not_match_unrelated_warehouse_events_for_bu(self) -> None:
+        import lie_engine.research.real_data as rd
+        from lie_engine.models import NewsEvent
+
+        event = NewsEvent(
+            event_id="n6",
+            ts=datetime(2026, 3, 30, 15, 10),
+            title="[Baidu] 中国3月30日上期所每日仓单变动-铜(吨)",
+            content="中国 | 中国3月30日上期所每日仓单变动-铜(吨) | 预期=nan | 前值=-9365",
+            lang="zh",
+            source="public_macro_news",
+            category="宏观",
+            confidence=0.82,
+            entities=[],
+            importance=0.75,
+        )
+
+        self.assertFalse(rd._public_news_matches_symbol(event, "BU2606"))
+        self.assertTrue(rd._public_news_matches_symbol(event, "CU2606"))
+
+    def test_load_real_data_bundle_collects_public_news_for_crypto_and_future_universe(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_load_universe = rd.load_universe
+        original_fetch_one = rd._fetch_one_symbol
+        original_fetch_nr = rd.fetch_symbol_news_and_reports
+
+        def _fake_load_universe(core_symbols: list[str], max_symbols: int = 120) -> list[str]:
+            _ = max_symbols
+            return ["BTCUSDT", "BU2606"]
+
+        def _fake_fetch_one(symbol: str, start: date, end: date):
+            _ = (start, end)
+            df = pd.DataFrame(
+                {
+                    "ts": pd.to_datetime(["2026-03-29", "2026-03-30"]),
+                    "symbol": [symbol, symbol],
+                    "open": [1.0, 1.1],
+                    "high": [1.1, 1.2],
+                    "low": [0.9, 1.0],
+                    "close": [1.0, 1.1],
+                    "volume": [1000.0, 1200.0],
+                    "source": ["mock", "mock"],
+                    "asset_class": ["crypto" if symbol == "BTCUSDT" else "future"] * 2,
+                }
+            )
+            return symbol, df, None
+
+        def _fake_fetch_nr(symbol: str, start: date, end: date):
+            _ = (start, end)
+            return (
+                pd.DataFrame(
+                    [
+                        {
+                            "date": date(2026, 3, 30),
+                            "symbol": symbol,
+                            "news_score": 0.4 if symbol == "BTCUSDT" else 0.2,
+                        }
+                    ]
+                ),
+                pd.DataFrame(columns=["date", "symbol", "report_score"]),
+            )
+
+        rd.load_universe = _fake_load_universe  # type: ignore[assignment]
+        rd._fetch_one_symbol = _fake_fetch_one  # type: ignore[assignment]
+        rd.fetch_symbol_news_and_reports = _fake_fetch_nr  # type: ignore[assignment]
+        try:
+            bundle = rd.load_real_data_bundle(
+                core_symbols=["BTCUSDT", "BU2606"],
+                start=date(2026, 3, 29),
+                end=date(2026, 3, 30),
+                max_symbols=2,
+                report_symbol_cap=2,
+                workers=2,
+                cache_dir=None,
+                strict_cutoff=date(2026, 3, 30),
+                review_days=0,
+                include_post_review=False,
+            )
+            self.assertEqual(bundle.universe, ["BTCUSDT", "BU2606"])
+            self.assertEqual(bundle.news_records, 2)
+            self.assertFalse(bundle.news_daily.empty)
+            self.assertAlmostEqual(float(bundle.news_daily.iloc[-1]), 0.3, places=6)
+        finally:
+            rd.load_universe = original_load_universe  # type: ignore[assignment]
+            rd._fetch_one_symbol = original_fetch_one  # type: ignore[assignment]
+            rd.fetch_symbol_news_and_reports = original_fetch_nr  # type: ignore[assignment]
+
+    def test_load_real_data_bundle_news_daily_ignores_zero_score_coverage_rows(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_load_universe = rd.load_universe
+        original_fetch_one = rd._fetch_one_symbol
+        original_fetch_nr = rd.fetch_symbol_news_and_reports
+
+        def _fake_load_universe(core_symbols: list[str], max_symbols: int = 120) -> list[str]:
+            _ = max_symbols
+            return ["BTCUSDT", "BU2606"]
+
+        def _fake_fetch_one(symbol: str, start: date, end: date):
+            _ = (start, end)
+            df = pd.DataFrame(
+                {
+                    "ts": pd.to_datetime(["2026-03-30"]),
+                    "symbol": [symbol],
+                    "open": [1.0],
+                    "high": [1.1],
+                    "low": [0.9],
+                    "close": [1.0],
+                    "volume": [1000.0],
+                    "source": ["mock"],
+                    "asset_class": ["crypto" if symbol == "BTCUSDT" else "future"],
+                }
+            )
+            return symbol, df, None
+
+        def _fake_fetch_nr(symbol: str, start: date, end: date):
+            _ = (start, end)
+            rows = [
+                {"date": date(2026, 3, 30), "symbol": symbol, "news_score": 0.0},
+                {"date": date(2026, 3, 30), "symbol": symbol, "news_score": -0.6 if symbol == "BU2606" else 0.3},
+            ]
+            return (
+                pd.DataFrame(rows),
+                pd.DataFrame(columns=["date", "symbol", "report_score"]),
+            )
+
+        rd.load_universe = _fake_load_universe  # type: ignore[assignment]
+        rd._fetch_one_symbol = _fake_fetch_one  # type: ignore[assignment]
+        rd.fetch_symbol_news_and_reports = _fake_fetch_nr  # type: ignore[assignment]
+        try:
+            bundle = rd.load_real_data_bundle(
+                core_symbols=["BTCUSDT", "BU2606"],
+                start=date(2026, 3, 30),
+                end=date(2026, 3, 30),
+                max_symbols=2,
+                report_symbol_cap=2,
+                workers=2,
+                cache_dir=None,
+                strict_cutoff=date(2026, 3, 30),
+                review_days=0,
+                include_post_review=False,
+            )
+            self.assertEqual(bundle.news_records, 4)
+            self.assertFalse(bundle.news_daily.empty)
+            self.assertAlmostEqual(float(bundle.news_daily.iloc[-1]), -0.15, places=6)
+        finally:
+            rd.load_universe = original_load_universe  # type: ignore[assignment]
+            rd._fetch_one_symbol = original_fetch_one  # type: ignore[assignment]
+            rd.fetch_symbol_news_and_reports = original_fetch_nr  # type: ignore[assignment]
+
+    def test_load_real_data_bundle_exposes_symbol_level_news_daily_and_equal_weight_aggregate(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_load_universe = rd.load_universe
+        original_fetch_one = rd._fetch_one_symbol
+        original_fetch_nr = rd.fetch_symbol_news_and_reports
+
+        def _fake_load_universe(core_symbols: list[str], max_symbols: int = 120) -> list[str]:
+            _ = max_symbols
+            return ["BTCUSDT", "BU2606"]
+
+        def _fake_fetch_one(symbol: str, start: date, end: date):
+            _ = (start, end)
+            df = pd.DataFrame(
+                {
+                    "ts": pd.to_datetime(["2026-03-30"]),
+                    "symbol": [symbol],
+                    "open": [1.0],
+                    "high": [1.1],
+                    "low": [0.9],
+                    "close": [1.0],
+                    "volume": [1000.0],
+                    "source": ["mock"],
+                    "asset_class": ["crypto" if symbol == "BTCUSDT" else "future"],
+                }
+            )
+            return symbol, df, None
+
+        def _fake_fetch_nr(symbol: str, start: date, end: date):
+            _ = (start, end)
+            if symbol == "BTCUSDT":
+                rows = [
+                    {"date": date(2026, 3, 30), "symbol": symbol, "news_score": 0.0},
+                    {"date": date(2026, 3, 30), "symbol": symbol, "news_score": 0.6},
+                    {"date": date(2026, 3, 30), "symbol": symbol, "news_score": 0.6},
+                ]
+            else:
+                rows = [
+                    {"date": date(2026, 3, 30), "symbol": symbol, "news_score": -0.3},
+                ]
+            return (
+                pd.DataFrame(rows),
+                pd.DataFrame(columns=["date", "symbol", "report_score"]),
+            )
+
+        rd.load_universe = _fake_load_universe  # type: ignore[assignment]
+        rd._fetch_one_symbol = _fake_fetch_one  # type: ignore[assignment]
+        rd.fetch_symbol_news_and_reports = _fake_fetch_nr  # type: ignore[assignment]
+        try:
+            bundle = rd.load_real_data_bundle(
+                core_symbols=["BTCUSDT", "BU2606"],
+                start=date(2026, 3, 30),
+                end=date(2026, 3, 30),
+                max_symbols=2,
+                report_symbol_cap=2,
+                workers=2,
+                cache_dir=None,
+                strict_cutoff=date(2026, 3, 30),
+                review_days=0,
+                include_post_review=False,
+            )
+            self.assertFalse(bundle.news_daily_by_symbol.empty)
+            by_symbol = bundle.news_daily_by_symbol.sort_values(["date", "symbol"]).reset_index(drop=True)
+            self.assertEqual(list(by_symbol["symbol"]), ["BTCUSDT", "BU2606"])
+            self.assertAlmostEqual(float(by_symbol.loc[by_symbol["symbol"] == "BTCUSDT", "news_score"].iloc[0]), 0.6, places=6)
+            self.assertAlmostEqual(float(by_symbol.loc[by_symbol["symbol"] == "BU2606", "news_score"].iloc[0]), -0.3, places=6)
+            self.assertFalse(bundle.news_daily.empty)
+            self.assertAlmostEqual(float(bundle.news_daily.iloc[-1]), 0.15, places=6)
+        finally:
+            rd.load_universe = original_load_universe  # type: ignore[assignment]
+            rd._fetch_one_symbol = original_fetch_one  # type: ignore[assignment]
+            rd.fetch_symbol_news_and_reports = original_fetch_nr  # type: ignore[assignment]
+
+    def test_fetch_symbol_news_and_reports_supports_public_reports_for_crypto_and_future(self) -> None:
+        import lie_engine.research.real_data as rd
+        from lie_engine.models import NewsEvent
+        from unittest.mock import patch
+
+        def _fake_load_public_news_events(start: date, end: date, lang: str = "zh"):  # noqa: ANN001
+            _ = (start, end, lang)
+            return [
+                NewsEvent(
+                    event_id="n-shmet",
+                    ts=datetime(2026, 3, 30, 9, 0),
+                    title="[SHMET] 伊朗首都德黑兰发生爆炸",
+                    content="地缘冲突升级，原油链承压，风险偏好下降。",
+                    lang="zh",
+                    source="public_macro_news",
+                    category="产业链",
+                    confidence=0.74,
+                    entities=["原油"],
+                    importance=0.66,
+                ),
+                NewsEvent(
+                    event_id="n-cctv",
+                    ts=datetime(2026, 3, 30, 19, 0),
+                    title="[CCTV] 今年前两个月我国电子商务稳定发展",
+                    content="数字消费持续活跃，产业电商成为增长主动力，稳增长政策继续推进。",
+                    lang="zh",
+                    source="public_macro_news",
+                    category="政策",
+                    confidence=0.84,
+                    entities=[],
+                    importance=0.72,
+                ),
+            ]
+
+        with patch.object(rd, "_load_public_news_events", new=_fake_load_public_news_events):
+            future_news, future_report = rd.fetch_symbol_news_and_reports("BU2606", date(2026, 3, 29), date(2026, 3, 30))
+            crypto_news, crypto_report = rd.fetch_symbol_news_and_reports("BTCUSDT", date(2026, 3, 29), date(2026, 3, 30))
+
+        self.assertFalse(future_news.empty)
+        self.assertFalse(future_report.empty)
+        self.assertFalse(crypto_news.empty)
+        self.assertFalse(crypto_report.empty)
+        self.assertLess(float(future_news["news_score"].iloc[0]), 0.0)
+        self.assertGreater(float(future_report["report_score"].iloc[0]), 0.0)
+        self.assertLess(float(crypto_news["news_score"].iloc[0]), 0.0)
+        self.assertGreater(float(crypto_report["report_score"].iloc[0]), 0.0)
+
+    def test_fetch_symbol_news_and_reports_keeps_zero_scored_public_news_coverage(self) -> None:
+        import lie_engine.research.real_data as rd
+        from lie_engine.models import NewsEvent
+        from unittest.mock import patch
+
+        def _fake_load_public_news_events(start: date, end: date, lang: str = "zh"):  # noqa: ANN001
+            _ = (start, end, lang)
+            return [
+                NewsEvent(
+                    event_id="n-baidu-warehouse",
+                    ts=datetime(2026, 3, 30, 15, 10),
+                    title="[Baidu] 中国3月30日上期所每日仓单变动-原油(桶)",
+                    content="中国 | 中国3月30日上期所每日仓单变动-原油(桶) | 预期=nan | 前值=0",
+                    lang="zh",
+                    source="public_macro_news",
+                    category="宏观",
+                    confidence=0.82,
+                    entities=[],
+                    importance=0.75,
+                ),
+            ]
+
+        with patch.object(rd, "_load_public_news_events", new=_fake_load_public_news_events):
+            future_news, future_report = rd.fetch_symbol_news_and_reports("BU2606", date(2026, 3, 30), date(2026, 3, 30))
+
+        self.assertFalse(future_news.empty)
+        self.assertTrue(future_report.empty)
+        self.assertAlmostEqual(float(future_news["news_score"].iloc[0]), 0.0, places=6)
+
+    def test_load_real_data_bundle_collects_public_reports_for_crypto_and_future_universe(self) -> None:
+        import lie_engine.research.real_data as rd
+        from lie_engine.models import NewsEvent
+        from unittest.mock import patch
+
+        original_load_universe = rd.load_universe
+        original_fetch_one = rd._fetch_one_symbol
+
+        def _fake_load_universe(core_symbols: list[str], max_symbols: int = 120) -> list[str]:
+            _ = max_symbols
+            return ["BTCUSDT", "BU2606"]
+
+        def _fake_fetch_one(symbol: str, start: date, end: date):
+            _ = (start, end)
+            df = pd.DataFrame(
+                {
+                    "ts": pd.to_datetime(["2026-03-29", "2026-03-30"]),
+                    "symbol": [symbol, symbol],
+                    "open": [1.0, 1.1],
+                    "high": [1.1, 1.2],
+                    "low": [0.9, 1.0],
+                    "close": [1.0, 1.1],
+                    "volume": [1000.0, 1200.0],
+                    "source": ["mock", "mock"],
+                    "asset_class": ["crypto" if symbol == "BTCUSDT" else "future"] * 2,
+                }
+            )
+            return symbol, df, None
+
+        def _fake_load_public_news_events(start: date, end: date, lang: str = "zh"):  # noqa: ANN001
+            _ = (start, end, lang)
+            return [
+                NewsEvent(
+                    event_id="n-shmet",
+                    ts=datetime(2026, 3, 30, 9, 0),
+                    title="[SHMET] 伊朗首都德黑兰发生爆炸",
+                    content="地缘冲突升级，原油链承压，风险偏好下降。",
+                    lang="zh",
+                    source="public_macro_news",
+                    category="产业链",
+                    confidence=0.74,
+                    entities=["原油"],
+                    importance=0.66,
+                ),
+                NewsEvent(
+                    event_id="n-cctv",
+                    ts=datetime(2026, 3, 30, 19, 0),
+                    title="[CCTV] 今年前两个月我国电子商务稳定发展",
+                    content="数字消费持续活跃，产业电商成为增长主动力，稳增长政策继续推进。",
+                    lang="zh",
+                    source="public_macro_news",
+                    category="政策",
+                    entities=[],
+                    confidence=0.84,
+                    importance=0.72,
+                ),
+            ]
+
+        rd.load_universe = _fake_load_universe  # type: ignore[assignment]
+        rd._fetch_one_symbol = _fake_fetch_one  # type: ignore[assignment]
+        try:
+            with patch.object(rd, "_load_public_news_events", new=_fake_load_public_news_events):
+                bundle = rd.load_real_data_bundle(
+                    core_symbols=["BTCUSDT", "BU2606"],
+                    start=date(2026, 3, 29),
+                    end=date(2026, 3, 30),
+                    max_symbols=2,
+                    report_symbol_cap=2,
+                    workers=2,
+                    cache_dir=None,
+                    strict_cutoff=date(2026, 3, 30),
+                    review_days=0,
+                    include_post_review=False,
+                )
+            self.assertEqual(bundle.universe, ["BTCUSDT", "BU2606"])
+            self.assertGreater(bundle.news_records, 0)
+            self.assertGreater(bundle.report_records, 0)
+            self.assertFalse(bundle.news_daily.empty)
+            self.assertFalse(bundle.report_daily.empty)
+        finally:
+            rd.load_universe = original_load_universe  # type: ignore[assignment]
+            rd._fetch_one_symbol = original_fetch_one  # type: ignore[assignment]
+
+    def test_load_real_data_bundle_cache_ttl_zero_forces_refresh(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_load_universe = rd.load_universe
+        original_fetch_one = rd._fetch_one_symbol
+        original_fetch_nr = rd.fetch_symbol_news_and_reports
+
+        def _fake_load_universe(core_symbols: list[str], max_symbols: int = 120) -> list[str]:
+            _ = (core_symbols, max_symbols)
+            return ["BTCUSDT"]
+
+        call_state = {"n": 0}
+
+        def _fake_fetch_one(symbol: str, start: date, end: date):
+            _ = (start, end)
+            call_state["n"] += 1
+            close_value = 100.0 if call_state["n"] == 1 else 200.0
+            df = pd.DataFrame(
+                {
+                    "ts": pd.to_datetime(["2026-03-30"]),
+                    "symbol": [symbol],
+                    "open": [close_value],
+                    "high": [close_value],
+                    "low": [close_value],
+                    "close": [close_value],
+                    "volume": [1000.0],
+                    "source": ["mock"],
+                    "asset_class": ["crypto"],
+                }
+            )
+            return symbol, df, None
+
+        def _fake_fetch_nr(symbol: str, start: date, end: date):
+            _ = (symbol, start, end)
+            return (
+                pd.DataFrame([{"date": date(2026, 3, 30), "symbol": "BTCUSDT", "news_score": 0.1}]),
+                pd.DataFrame(columns=["date", "symbol", "report_score"]),
+            )
+
+        rd.load_universe = _fake_load_universe  # type: ignore[assignment]
+        rd._fetch_one_symbol = _fake_fetch_one  # type: ignore[assignment]
+        rd.fetch_symbol_news_and_reports = _fake_fetch_nr  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                cache_dir = Path(td)
+                bundle_1 = rd.load_real_data_bundle(
+                    core_symbols=["BTCUSDT"],
+                    start=date(2026, 3, 30),
+                    end=date(2026, 3, 30),
+                    max_symbols=1,
+                    report_symbol_cap=1,
+                    workers=1,
+                    cache_dir=cache_dir,
+                    cache_ttl_hours=8.0,
+                    strict_cutoff=date(2026, 3, 30),
+                    review_days=0,
+                    include_post_review=False,
+                )
+                bundle_2 = rd.load_real_data_bundle(
+                    core_symbols=["BTCUSDT"],
+                    start=date(2026, 3, 30),
+                    end=date(2026, 3, 30),
+                    max_symbols=1,
+                    report_symbol_cap=1,
+                    workers=1,
+                    cache_dir=cache_dir,
+                    cache_ttl_hours=0.0,
+                    strict_cutoff=date(2026, 3, 30),
+                    review_days=0,
+                    include_post_review=False,
+                )
+            self.assertAlmostEqual(float(bundle_1.bars["close"].iloc[0]), 100.0, places=6)
+            self.assertAlmostEqual(float(bundle_2.bars["close"].iloc[0]), 200.0, places=6)
+            self.assertFalse(bool(bundle_2.fetch_stats.get("cache_hit", False)))
+            self.assertGreaterEqual(call_state["n"], 2)
+        finally:
+            rd.load_universe = original_load_universe  # type: ignore[assignment]
+            rd._fetch_one_symbol = original_fetch_one  # type: ignore[assignment]
+            rd.fetch_symbol_news_and_reports = original_fetch_nr  # type: ignore[assignment]
+
+    def test_load_real_data_bundle_attaches_public_macro_features_to_bars_and_cache(self) -> None:
+        import lie_engine.research.real_data as rd
+
+        original_load_universe = rd.load_universe
+        original_fetch_one = rd._fetch_one_symbol
+        original_fetch_nr = rd.fetch_symbol_news_and_reports
+        original_get_provider = rd._get_public_news_provider
+
+        def _fake_load_universe(core_symbols: list[str], max_symbols: int = 120) -> list[str]:
+            _ = (core_symbols, max_symbols)
+            return ["BU2606"]
+
+        def _fake_fetch_one(symbol: str, start: date, end: date):
+            _ = (start, end)
+            df = pd.DataFrame(
+                {
+                    "ts": pd.to_datetime(["2026-03-30"]),
+                    "symbol": [symbol],
+                    "open": [100.0],
+                    "high": [101.0],
+                    "low": [99.0],
+                    "close": [100.0],
+                    "volume": [1000.0],
+                    "source": ["mock"],
+                    "asset_class": ["future"],
+                }
+            )
+            return symbol, df, None
+
+        def _fake_fetch_nr(symbol: str, start: date, end: date):
+            _ = (symbol, start, end)
+            return (
+                pd.DataFrame(columns=["date", "symbol", "news_score"]),
+                pd.DataFrame(columns=["date", "symbol", "report_score"]),
+            )
+
+        class _FakePublicProvider:
+            def fetch_macro(self, start: date, end: date) -> pd.DataFrame:
+                _ = (start, end)
+                return pd.DataFrame(
+                    {
+                        "date": pd.to_datetime(["2026-03-29"]),
+                        "cpi_yoy": [0.2],
+                        "fixed_asset_investment_cum": [52721.0],
+                        "consumer_confidence_index": [90.6],
+                        "source": ["public_macro_news"],
+                        "fixed_asset_investment_source": ["nbs:fixed_asset_investment"],
+                    }
+                )
+
+            def fetch_news(self, start_ts, end_ts, lang: str = "zh"):  # type: ignore[no-untyped-def]
+                _ = (start_ts, end_ts, lang)
+                return []
+
+        rd.load_universe = _fake_load_universe  # type: ignore[assignment]
+        rd._fetch_one_symbol = _fake_fetch_one  # type: ignore[assignment]
+        rd.fetch_symbol_news_and_reports = _fake_fetch_nr  # type: ignore[assignment]
+        rd._get_public_news_provider = lambda: _FakePublicProvider()  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                cache_dir = Path(td)
+                bundle = rd.load_real_data_bundle(
+                    core_symbols=["BU2606"],
+                    start=date(2026, 3, 29),
+                    end=date(2026, 3, 30),
+                    max_symbols=1,
+                    report_symbol_cap=1,
+                    workers=1,
+                    cache_dir=cache_dir,
+                    strict_cutoff=date(2026, 3, 30),
+                    review_days=0,
+                    include_post_review=False,
+                )
+
+                self.assertIn("cpi_yoy", bundle.bars.columns)
+                self.assertIn("fixed_asset_investment_cum", bundle.bars.columns)
+                self.assertIn("consumer_confidence_index", bundle.bars.columns)
+                self.assertAlmostEqual(float(bundle.bars.iloc[0]["cpi_yoy"]), 0.2, places=6)
+                self.assertAlmostEqual(float(bundle.bars.iloc[0]["fixed_asset_investment_cum"]), 52721.0, places=6)
+                self.assertAlmostEqual(float(bundle.bars.iloc[0]["consumer_confidence_index"]), 90.6, places=6)
+
+                cache_files = sorted(cache_dir.glob("*_bars.parquet"))
+                self.assertEqual(len(cache_files), 1)
+                cached_bars = pd.read_parquet(cache_files[0])
+                self.assertIn("cpi_yoy", cached_bars.columns)
+                self.assertIn("fixed_asset_investment_cum", cached_bars.columns)
+                self.assertIn("consumer_confidence_index", cached_bars.columns)
+        finally:
+            rd.load_universe = original_load_universe  # type: ignore[assignment]
+            rd._fetch_one_symbol = original_fetch_one  # type: ignore[assignment]
+            rd.fetch_symbol_news_and_reports = original_fetch_nr  # type: ignore[assignment]
+            rd._get_public_news_provider = original_get_provider  # type: ignore[assignment]
+
     def test_run_strategy_lab_with_mock_bundle(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
 
@@ -259,7 +1183,13 @@ class ResearchTests(unittest.TestCase):
                 self.assertTrue((Path(summary.output_dir) / "summary.json").exists())
                 self.assertTrue((Path(summary.output_dir) / "report.md").exists())
                 self.assertTrue((Path(summary.output_dir) / "best_strategy.yaml").exists())
+                self.assertTrue((Path(summary.output_dir) / "best_trade_journal.csv").exists())
+                self.assertTrue((Path(summary.output_dir) / "best_holding_daily_symbol_exposure.csv").exists())
+                self.assertTrue(any(Path(summary.output_dir).glob("candidate_*_trade_journal.csv")))
+                self.assertTrue(any(Path(summary.output_dir).glob("candidate_*_holding_daily_symbol_exposure.csv")))
                 self.assertIn("review_metrics", summary.candidates[0].to_dict())
+                self.assertIn("trade_journal_path", summary.candidates[0].to_dict())
+                self.assertIn("holding_exposure_path", summary.candidates[0].to_dict())
                 self.assertEqual(summary.cutoff_ts, "2025-12-31T23:59:59")
                 self.assertEqual(summary.bar_max_ts, "")
                 self.assertEqual(summary.news_max_ts, "")
@@ -271,6 +1201,246 @@ class ResearchTests(unittest.TestCase):
                 self.assertAlmostEqual(float(summary.drawdown_soft_band), 0.03, places=6)
         finally:
             sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+
+    def test_run_strategy_lab_uses_symbol_level_factor_series(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+
+        bars = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05"]),
+                "symbol": ["BU2606"] * 4,
+                "open": [1.0, 1.1, 1.2, 1.3],
+                "high": [1.1, 1.2, 1.3, 1.4],
+                "low": [0.9, 1.0, 1.1, 1.2],
+                "close": [1.0, 1.1, 1.2, 1.25],
+                "volume": [1000.0, 1100.0, 1200.0, 1300.0],
+                "source": ["mock"] * 4,
+                "asset_class": ["future"] * 4,
+            }
+        )
+        idx = sorted(pd.to_datetime(bars["ts"]).dt.date.unique())
+        bundle = RealDataBundle(
+            bars=bars,
+            universe=["BU2606"],
+            news_daily=pd.Series([0.0] * len(idx), index=idx, dtype=float),
+            report_daily=pd.Series([0.0] * len(idx), index=idx, dtype=float),
+            news_daily_by_symbol=pd.DataFrame(
+                {
+                    "date": idx,
+                    "symbol": ["BU2606"] * len(idx),
+                    "news_score": [0.4, 0.5, -0.2, 0.1],
+                }
+            ),
+            report_daily_by_symbol=pd.DataFrame(
+                {
+                    "date": idx,
+                    "symbol": ["BU2606"] * len(idx),
+                    "report_score": [0.3, 0.2, 0.1, 0.0],
+                }
+            ),
+            news_records=4,
+            report_records=4,
+            fetch_stats={"mocked": True},
+            cutoff_date=date(2025, 1, 5),
+            review_days=0,
+        )
+
+        captured: dict[str, Any] = {}
+
+        original_loader = sl_mod.load_real_data_bundle
+        original_report_insights = sl_mod._report_insights
+
+        def _capture_report_insights(news_daily, report_daily):  # type: ignore[no-untyped-def]
+            captured["news_daily"] = news_daily
+            captured["report_daily"] = report_daily
+            return original_report_insights(news_daily, report_daily)
+
+        sl_mod.load_real_data_bundle = lambda **kwargs: bundle  # type: ignore[assignment]
+        sl_mod._report_insights = _capture_report_insights  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                summary = run_strategy_lab(
+                    output_root=Path(td),
+                    core_symbols=["BU2606"],
+                    start=date(2025, 1, 1),
+                    end=date(2025, 1, 5),
+                    candidate_count=1,
+                    workers=1,
+                )
+            self.assertTrue(summary.best_candidate is not None)
+            self.assertAlmostEqual(float(captured["news_daily"].iloc[0]), 0.4, places=6)
+            self.assertAlmostEqual(float(captured["report_daily"].iloc[0]), 0.3, places=6)
+        finally:
+            sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+            sl_mod._report_insights = original_report_insights  # type: ignore[assignment]
+
+    def test_run_strategy_lab_passes_backtest_daily_symbol_exposure_into_factor_alignment(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+        from lie_engine.models import BacktestResult
+
+        bars = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05"]),
+                "symbol": ["BU2606"] * 4,
+                "open": [1.0, 1.1, 1.2, 1.3],
+                "high": [1.1, 1.2, 1.3, 1.4],
+                "low": [0.9, 1.0, 1.1, 1.2],
+                "close": [1.0, 1.1, 1.2, 1.25],
+                "volume": [1000.0, 1100.0, 1200.0, 1300.0],
+                "source": ["mock"] * 4,
+                "asset_class": ["future"] * 4,
+            }
+        )
+        idx = sorted(pd.to_datetime(bars["ts"]).dt.date.unique())
+        bundle = RealDataBundle(
+            bars=bars,
+            universe=["BU2606"],
+            news_daily=pd.Series([0.0] * len(idx), index=idx, dtype=float),
+            report_daily=pd.Series([0.0] * len(idx), index=idx, dtype=float),
+            news_daily_by_symbol=pd.DataFrame({"date": idx, "symbol": ["BU2606"] * len(idx), "news_score": [0.4, 0.5, -0.2, 0.1]}),
+            report_daily_by_symbol=pd.DataFrame({"date": idx, "symbol": ["BU2606"] * len(idx), "report_score": [0.3, 0.2, 0.1, 0.0]}),
+            news_records=4,
+            report_records=4,
+            fetch_stats={"mocked": True},
+            cutoff_date=date(2025, 1, 5),
+            review_days=0,
+        )
+
+        captured: dict[str, Any] = {}
+        original_loader = sl_mod.load_real_data_bundle
+        original_factor_alignment = sl_mod._factor_alignment
+        original_run_backtest = sl_mod.run_event_backtest
+
+        def _fake_factor_alignment(*args, **kwargs):  # type: ignore[no-untyped-def]
+            captured["daily_symbol_exposure"] = kwargs.get("daily_symbol_exposure")
+            captured["news_daily_by_symbol"] = kwargs.get("news_daily_by_symbol")
+            return 0.0
+
+        def _fake_run_event_backtest(*args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = (args, kwargs)
+            return BacktestResult(
+                start=date(2025, 1, 1),
+                end=date(2025, 1, 5),
+                total_return=0.01,
+                annual_return=0.10,
+                max_drawdown=0.02,
+                win_rate=0.6,
+                profit_factor=1.2,
+                expectancy=0.01,
+                trades=1,
+                violations=0,
+                positive_window_ratio=1.0,
+                equity_curve=[{"date": "2025-01-02", "equity": 1.0}, {"date": "2025-01-05", "equity": 1.02}],
+                by_asset={},
+                daily_symbol_exposure=[{"date": "2025-01-02", "symbol": "BU2606", "weight": 1.0}],
+            )
+
+        sl_mod.load_real_data_bundle = lambda **kwargs: bundle  # type: ignore[assignment]
+        sl_mod._factor_alignment = _fake_factor_alignment  # type: ignore[assignment]
+        sl_mod.run_event_backtest = _fake_run_event_backtest  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                summary = run_strategy_lab(
+                    output_root=Path(td),
+                    core_symbols=["BU2606"],
+                    start=date(2025, 1, 1),
+                    end=date(2025, 1, 5),
+                    max_symbols=1,
+                    report_symbol_cap=1,
+                    workers=1,
+                    review_days=0,
+                    candidate_count=1,
+                )
+            self.assertTrue(summary.best_candidate is not None)
+            self.assertEqual(captured["daily_symbol_exposure"][0]["symbol"], "BU2606")
+            self.assertFalse(captured["news_daily_by_symbol"].empty)
+        finally:
+            sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+            sl_mod._factor_alignment = original_factor_alignment  # type: ignore[assignment]
+            sl_mod.run_event_backtest = original_run_backtest  # type: ignore[assignment]
+
+    def test_run_strategy_lab_prefers_holding_daily_symbol_exposure(self) -> None:
+        import lie_engine.research.strategy_lab as sl_mod
+        from lie_engine.models import BacktestResult
+
+        bars = pd.DataFrame(
+            {
+                "ts": pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05"]),
+                "symbol": ["BU2606"] * 4,
+                "open": [1.0, 1.1, 1.2, 1.3],
+                "high": [1.1, 1.2, 1.3, 1.4],
+                "low": [0.9, 1.0, 1.1, 1.2],
+                "close": [1.0, 1.1, 1.2, 1.25],
+                "volume": [1000.0, 1100.0, 1200.0, 1300.0],
+                "source": ["mock"] * 4,
+                "asset_class": ["future"] * 4,
+            }
+        )
+        idx = sorted(pd.to_datetime(bars["ts"]).dt.date.unique())
+        bundle = RealDataBundle(
+            bars=bars,
+            universe=["BU2606"],
+            news_daily=pd.Series([0.0] * len(idx), index=idx, dtype=float),
+            report_daily=pd.Series([0.0] * len(idx), index=idx, dtype=float),
+            news_daily_by_symbol=pd.DataFrame({"date": idx, "symbol": ["BU2606"] * len(idx), "news_score": [0.4, 0.5, -0.2, 0.1]}),
+            report_daily_by_symbol=pd.DataFrame({"date": idx, "symbol": ["BU2606"] * len(idx), "report_score": [0.3, 0.2, 0.1, 0.0]}),
+            news_records=4,
+            report_records=4,
+            fetch_stats={"mocked": True},
+            cutoff_date=date(2025, 1, 5),
+            review_days=0,
+        )
+
+        captured: dict[str, Any] = {}
+        original_loader = sl_mod.load_real_data_bundle
+        original_factor_alignment = sl_mod._factor_alignment
+        original_run_backtest = sl_mod.run_event_backtest
+
+        def _fake_factor_alignment(*args, **kwargs):  # type: ignore[no-untyped-def]
+            captured["daily_symbol_exposure"] = kwargs.get("daily_symbol_exposure")
+            return 0.0
+
+        def _fake_run_event_backtest(*args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = (args, kwargs)
+            return BacktestResult(
+                start=date(2025, 1, 1),
+                end=date(2025, 1, 5),
+                total_return=0.01,
+                annual_return=0.10,
+                max_drawdown=0.02,
+                win_rate=0.6,
+                profit_factor=1.2,
+                expectancy=0.01,
+                trades=1,
+                violations=0,
+                positive_window_ratio=1.0,
+                equity_curve=[{"date": "2025-01-02", "equity": 1.0}, {"date": "2025-01-05", "equity": 1.02}],
+                by_asset={},
+                daily_symbol_exposure=[{"date": "2025-01-02", "symbol": "WRONG", "weight": 1.0}],
+                holding_daily_symbol_exposure=[{"date": "2025-01-02", "symbol": "BU2606", "weight": 1.0}],
+            )
+
+        sl_mod.load_real_data_bundle = lambda **kwargs: bundle  # type: ignore[assignment]
+        sl_mod._factor_alignment = _fake_factor_alignment  # type: ignore[assignment]
+        sl_mod.run_event_backtest = _fake_run_event_backtest  # type: ignore[assignment]
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                run_strategy_lab(
+                    output_root=Path(td),
+                    core_symbols=["BU2606"],
+                    start=date(2025, 1, 1),
+                    end=date(2025, 1, 5),
+                    max_symbols=1,
+                    report_symbol_cap=1,
+                    workers=1,
+                    review_days=0,
+                    candidate_count=1,
+                )
+            self.assertEqual(captured["daily_symbol_exposure"][0]["symbol"], "BU2606")
+        finally:
+            sl_mod.load_real_data_bundle = original_loader  # type: ignore[assignment]
+            sl_mod._factor_alignment = original_factor_alignment  # type: ignore[assignment]
+            sl_mod.run_event_backtest = original_run_backtest  # type: ignore[assignment]
 
     def test_run_strategy_lab_dd_target_acceptance_gate(self) -> None:
         import lie_engine.research.strategy_lab as sl_mod
