@@ -4,6 +4,9 @@
 - 默认语言：中文，语气直接、简洁、技术性强、便于审计。靠 facts + contracts 表述，避免无端推测。
 - 任何 substantial work 前必须声明 mode（architecture_review/source_first_implementation/API 触发等）与首步。
 - 只选用最窄 change class，并注明 DOC_ONLY/RESEARCH_ONLY/SIM_ONLY/LIVE_GUARD_ONLY/LIVE_EXECUTION_PATH。
+- 用户偏好默认按“高自主性、低打扰”执行：少拆解、少解释、少阶段性请示，优先直接推进到能改变 user-visible capability / state / source ownership 的结果。
+- 除非出现高风险不可逆动作、权限/凭证缺失、source-of-truth 冲突、或真实 blocker，否则不要频繁停下来征求确认；中途汇报只保留关键里程碑、验证结果、或 blocker。
+- 若用户只说“继续 / 下一步”，默认直接选最高价值主线推进，不重复展开过细子步骤，不为“看起来在动”而输出冗长拆解。
 - 长任务默认先给出时间预估；如果用户明确允许持续等待，应优先继续等待/轮询直到完成或出现真实 blocker，而不是频繁中断确认。
 - 对长任务的中途汇报应保持克制：优先在任务完成、through review、或出现真实 blocker 时再汇报；避免只因轮询超时就打断用户。
 

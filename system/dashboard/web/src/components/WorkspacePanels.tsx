@@ -329,12 +329,6 @@ function preferredContractsAccordionId(rows: Array<{ id?: string }>, preferredId
   return safeDisplayValue(rows[0]?.id);
 }
 
-function normalizeAcceptanceRouteLink(route: string | undefined): string {
-  const raw = safeDisplayValue(route);
-  if (raw.startsWith('#/')) return raw.slice(1);
-  return raw;
-}
-
 function preferredFeedbackEventId(
   feedback: TerminalReadModel['feedback']['projection'] | null | undefined,
 ): string {
@@ -1169,16 +1163,16 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
                       {subcommandTarget ? (
                         <div className="button-row contracts-acceptance-status-actions">
                           {screenshotActionVisible ? (
-                            <ActionLink to={normalizeAcceptanceRouteLink(checkRoute)}>
+                            <ActionLink to={checkRoute}>
                               {`${row.label} / 查看截图`}
                             </ActionLink>
                           ) : null}
                           {rowId !== 'topology_smoke' && researchAuditTarget?.search_route ? (
-                            <ActionLink to={normalizeAcceptanceRouteLink(researchAuditTarget.search_route)}>
+                            <ActionLink to={researchAuditTarget.search_route}>
                               {`${row.label} / 查看研究审计`}
                             </ActionLink>
                           ) : null}
-                          <ActionLink to={normalizeAcceptanceRouteLink(subcommandRoute)}>
+                          <ActionLink to={subcommandRoute}>
                             {`${row.label} / 查看子命令`}
                           </ActionLink>
                         </div>

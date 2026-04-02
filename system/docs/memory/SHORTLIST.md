@@ -35,5 +35,10 @@ Main-agent bootstrap path：
 ## “继续 / 下一步” Semantics
 “继续”只在先决条件（state/queue/gate/source ownership）发生变化后才触发；优先处理能改变任何 source-owned gate、状态、手工 queue 或 user-visible 能力的未解决高危问题。连续两轮都没改变这些内容就需要停止并总结。
 
+## Operator Preference
+- 默认高自主推进：少拆解、少过程解释、少频繁确认。
+- 除非涉及高风险不可逆动作、权限缺失、source-of-truth 冲突或真实 blocker，否则直接推进主线并在关键节点再汇报。
+- 用户未要求详细计划时，不主动展开过细步骤分解。
+
 ## Never Treat As Source-of-Truth
 记忆树是解释型手册——它提醒你如何恢复与判断，但永远不能代替 source artifacts、handoff 或 live contract。本文件中提及的优先级与规则必须回到对应 artifact 验证后再采取行动。

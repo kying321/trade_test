@@ -143,7 +143,7 @@ function SidebarTaskNav({ items, pageSections, activeSectionId }: SidebarTaskNav
   );
 }
 
-function SidebarUtilities({ utilityLinks }: Pick<ContextSidebarProps, 'utilityLinks'>) {
+function SidebarUtilities({ utilityLinks = [] }: Pick<ContextSidebarProps, 'utilityLinks'>) {
   const normalizedLinks = utilityLinks.some((item) => item.to === '/cpa')
     ? utilityLinks
     : [...utilityLinks, { label: 'CPA 管理 / Auth & Quota', to: '/cpa' }];

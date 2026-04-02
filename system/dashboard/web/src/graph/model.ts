@@ -40,14 +40,6 @@ function addNode(nodes: Map<string, GraphNode>, node: Omit<GraphNode, 'upstream'
   });
 }
 
-function normalizeRoute(route: string | undefined): string | undefined {
-  const raw = String(route || '').trim();
-  if (!raw) return undefined;
-  if (raw.startsWith('#/')) return raw.slice(1);
-  if (raw.startsWith('#')) return raw.slice(1);
-  return raw;
-}
-
 function slugify(value: unknown): string {
   return safeDisplayValue(value)
     .trim()
@@ -433,22 +425,18 @@ export function buildGraphHomeModel(model: TerminalReadModel, pipelines: GraphPi
         label: safeDisplayValue(row.label || row.id),
         subtitle: safeDisplayValue(row.headline || row.generated_at_utc || row.report_path || 'contracts acceptance'),
         importance: 6,
-        destination: normalizeRoute(
-          safeDisplayValue(row.inspector_route) !== '—'
-            ? row.inspector_route
-            : buildWorkspacePageLink('contracts', {}, `contracts-check-${rowId}`),
-        ),
+        destination: safeDisplayValue(row.inspector_route) !== '—'
+          ? row.inspector_route
+          : buildWorkspacePageLink('contracts', {}, `contracts-check-${rowId}`),
         status: safeDisplayValue(row.status || (row.ok ? 'ok' : 'pending')),
         detail: {
           sourceContract: 'workspace.publicAcceptance.checks',
           sourceArtifact: 'dashboard_public_acceptance',
           sourcePath: safeDisplayValue(row.report_path) !== '—' ? safeDisplayValue(row.report_path) : undefined,
           sourceReason: safeDisplayValue(row.headline || row.failure_reason) !== '—' ? safeDisplayValue(row.headline || row.failure_reason) : undefined,
-          nextDestination: normalizeRoute(
-            safeDisplayValue(row.inspector_route) !== '—'
-              ? row.inspector_route
-              : buildWorkspacePageLink('contracts', {}, `contracts-check-${rowId}`),
-          ),
+          nextDestination: safeDisplayValue(row.inspector_route) !== '—'
+            ? row.inspector_route
+            : buildWorkspacePageLink('contracts', {}, `contracts-check-${rowId}`),
         },
       });
       connect(edges, nodes, 'route-workspace-contracts', `acceptance-check-${rowId}`, 'routes_to', 0.8);

@@ -4,8 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 const FILES = [
   'src/components/ErrorBoundary.tsx',
-  'src/hooks/useExplorerState.js',
-  'src/lib/snapshot-normalizers.js',
   'src/utils/dictionary.ts',
   'src/utils/formatters.ts',
 ];

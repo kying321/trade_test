@@ -19,9 +19,9 @@ function createModel(): TerminalReadModel {
       change_class: 'RESEARCH_ONLY',
     },
     uiRoutes: {
-      terminal_public: '#/terminal/public',
-      terminal_internal: '#/terminal/internal',
-      workspace_artifacts: '#/workspace/artifacts',
+      terminal_public: '/ops/risk',
+      terminal_internal: '/terminal/internal',
+      workspace_artifacts: '/workspace/artifacts',
     },
     experienceContract: {
       mode: 'read_only_snapshot',
@@ -124,13 +124,13 @@ function createModel(): TerminalReadModel {
             id: 'graph_home_smoke',
             label: '图谱主页烟测',
             status: 'ok',
-            inspector_route: '#/workspace/contracts?page_section=contracts-check-graph_home_smoke',
+            inspector_route: '/workspace/contracts?page_section=contracts-check-graph_home_smoke',
           },
           {
             id: 'workspace_routes_smoke',
             label: '工作区五页面烟测',
             status: 'ok',
-            inspector_route: '#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
+            inspector_route: '/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
           },
         ],
         subcommands: [],
@@ -195,7 +195,7 @@ describe('graph home model', () => {
     const artifactDestination = graph.nodes.find((node) => node.id === 'artifact-price_action_breakout_pullback')?.destination;
     const artifactParams = new URLSearchParams(artifactDestination?.split('?')[1] || '');
 
-    expect(graph.nodes.find((node) => node.id === 'pipeline-market-input')?.destination).toBe('/terminal/public?anchor=terminal-data-regime&panel=data-regime');
+    expect(graph.nodes.find((node) => node.id === 'pipeline-market-input')?.destination).toBe('/ops/risk?anchor=terminal-data-regime&panel=data-regime');
     expect(graph.nodes.find((node) => node.id === 'pipeline-feedback')?.destination).toBe('/workspace/alignment?page_section=alignment-actions');
     expect(graph.nodes.find((node) => node.id === 'route-workspace-contracts')?.destination).toBe('/workspace/contracts?page_section=contracts-source-heads');
     expect(artifactDestination?.startsWith('/workspace/artifacts?')).toBe(true);
@@ -237,13 +237,13 @@ describe('graph home model', () => {
     const actionStackRoute = graph.nodes.find((node) => node.id === 'route-terminal-action-stack');
     const queueNode = graph.nodes.find((node) => node.id === 'queue-ethusdt');
 
-    expect(guardsRoute?.destination).toBe('/terminal/public?panel=orchestration&section=guards');
+    expect(guardsRoute?.destination).toBe('/ops/risk?panel=orchestration&section=guards');
     expect(guardNode?.label).toBe('远端实盘门禁');
     expect(graph.edges.some((edge) => edge.source === 'route-terminal-guards' && edge.target === 'guard-remote-live-gate')).toBe(true);
-    expect(actionStackRoute?.destination).toBe('/terminal/public?panel=signal-risk&section=action-stack');
+    expect(actionStackRoute?.destination).toBe('/ops/risk?panel=signal-risk&section=action-stack');
     expect(queueNode?.label).toContain('ETHUSDT');
     expect(queueNode?.subtitle).toContain('收窄风险');
-    expect(queueNode?.destination).toBe('/terminal/public?artifact=price_action_breakout_pullback&panel=signal-risk&section=action-stack&row=ETHUSDT%3A%3A%E6%94%B6%E7%AA%84%E9%A3%8E%E9%99%A9&symbol=ETHUSDT');
+    expect(queueNode?.destination).toBe('/ops/risk?artifact=price_action_breakout_pullback&panel=signal-risk&section=action-stack&row=ETHUSDT%3A%3A%E6%94%B6%E7%AA%84%E9%A3%8E%E9%99%A9&symbol=ETHUSDT');
     expect(graph.edges.some((edge) => edge.source === 'route-terminal-action-stack' && edge.target === 'queue-ethusdt')).toBe(true);
   });
 

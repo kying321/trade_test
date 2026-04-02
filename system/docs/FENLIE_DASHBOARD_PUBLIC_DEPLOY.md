@@ -177,11 +177,11 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 - 两侧快照 JSON 的 `frontend_public` 都等于 `https://fuuu.fun`
 - `http://43.153.148.242:3001` 返回 `OpenClaw Control`
 - `http://43.153.148.242:8787` 返回 `404 Not Found`
-- `https://fuuu.fun/#/overview` 与 `https://fenlie.fuuu.fun/#/overview` 都能看到 `研究主线摘要 / 国内商品推理线`
-- `https://fuuu.fun/#/workspace/contracts` 与 `https://fenlie.fuuu.fun/#/workspace/contracts` 都能看到 `公开面验收 / 穿透层 1 / 验收总览 / 接口目录 / 源头主线 / 回退链`
-- `https://fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-operator_panel`
+- `https://fuuu.fun/ops/overview` 与 `https://fenlie.fuuu.fun/ops/overview` 都能看到 `研究主线摘要 / 国内商品推理线`
+- `https://fuuu.fun/ops/audits` 与 `https://fenlie.fuuu.fun/ops/audits` 都能看到 `公开入口拓扑 / 公开面验收 / 穿透层 1 / 验收总览 / 穿透层 2 / 子链状态`
+- `https://fuuu.fun/workspace/contracts?page_section=contracts-source-head-operator_panel`
   与
-  `https://fenlie.fuuu.fun/#/workspace/contracts?page_section=contracts-source-head-operator_panel`
+  `https://fenlie.fuuu.fun/workspace/contracts?page_section=contracts-source-head-operator_panel`
   都能看到：
   - `状态`
   - `研究结论`
@@ -210,7 +210,7 @@ python3 /Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_
 本轮额外确认：
 
 - `workspace_routes_smoke` 现已把这条 orderflow 过滤路由纳入真实浏览器回归断言，并在 smoke payload 中固化：
-  - `artifacts_filter_assertion.route=#/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
+  - `artifacts_filter_assertion.route=/workspace/artifacts?group=research_cross_section&search_scope=title&search=orderflow`
   - `artifacts_filter_assertion.source_available=true|false`
   - `artifacts_filter_assertion.active_artifact`
   - `artifacts_filter_assertion.visible_artifacts`
@@ -230,11 +230,11 @@ npm run smoke:workspace-routes
 
 此命令会验证同一只读公开会话内以下五个页面：
 
-- `#/overview`
-- `#/workspace/artifacts`
-- `#/workspace/backtests`
-- `#/workspace/raw`
-- `#/workspace/contracts`
+- `/ops/overview`
+- `/workspace/artifacts`
+- `/workspace/backtests`
+- `/workspace/raw`
+- `/workspace/contracts`
 
 并断言：
 

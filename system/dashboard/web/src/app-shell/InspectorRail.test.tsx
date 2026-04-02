@@ -28,10 +28,10 @@ function createContractsAcceptanceFixture(): TerminalReadModel['workspace']['pub
         snapshot_endpoint_observed: '/data/fenlie_dashboard_snapshot.json',
         public_snapshot_fetch_count: 4,
         internal_snapshot_fetch_count: 0,
-        inspector_route: '#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
-        inspector_search_link_href: '#/search?q=explicit_workspace_routes_check&scope=artifact',
-        inspector_artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:workspace_routes_check:trade_journal',
-        inspector_raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_workspace_routes_check.csv',
+        inspector_route: '/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
+        inspector_search_link_href: '/search?q=explicit_workspace_routes_check&scope=artifact',
+        inspector_artifact_link_href: '/workspace/artifacts?artifact=audit:explicit:workspace_routes_check:trade_journal',
+        inspector_raw_link_href: '/workspace/raw?artifact=%2Ftmp%2Fexplicit_workspace_routes_check.csv',
       },
       {
         id: 'graph_home_smoke',
@@ -39,18 +39,18 @@ function createContractsAcceptanceFixture(): TerminalReadModel['workspace']['pub
         status: 'ok',
         ok: true,
         report_path: '/system/output/review/dashboard_graph_home_browser_smoke.json',
-        graph_home_resolved_route: '#/graph-home',
+        graph_home_resolved_route: '/graph-home',
         graph_home_default_center: '交易中枢',
-        inspector_route: '#/workspace/contracts?page_section=contracts-check-graph_home_smoke',
-        inspector_search_link_href: '#/search?q=explicit_graph_home_check&scope=artifact',
-        inspector_artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:graph_home_check:trade_journal',
-        inspector_raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_check.csv',
+        inspector_route: '/workspace/contracts?page_section=contracts-check-graph_home_smoke',
+        inspector_search_link_href: '/search?q=explicit_graph_home_check&scope=artifact',
+        inspector_artifact_link_href: '/workspace/artifacts?artifact=audit:explicit:graph_home_check:trade_journal',
+        inspector_raw_link_href: '/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_check.csv',
         research_audit_cases: [
           {
             case_id: 'optimizer_trial_trade_journal',
             query: 'trial_001_ultra_short_trade_journal',
-            search_route: '#/search?q=trial_001_ultra_short_trade_journal&scope=artifact',
-            workspace_route: '#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal',
+            search_route: '/search?q=trial_001_ultra_short_trade_journal&scope=artifact',
+            workspace_route: '/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal',
             raw_path: 'system/output/research/20260330_133956/ultra_short/trial_001_ultra_short_trade_journal.csv',
             result_artifact: 'audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal',
           },
@@ -68,7 +68,7 @@ function createContractsAcceptanceFixture(): TerminalReadModel['workspace']['pub
         pages_overview_screenshot_path: 'review/pages_overview_browser.png',
         root_contracts_screenshot_path: 'review/root_contracts_browser.png',
         pages_contracts_screenshot_path: 'review/pages_contracts_browser.png',
-        inspector_route: '#/workspace/contracts?page_section=contracts-check-topology_smoke',
+        inspector_route: '/workspace/contracts?page_section=contracts-check-topology_smoke',
       },
     ],
     subcommands: [
@@ -81,11 +81,11 @@ function createContractsAcceptanceFixture(): TerminalReadModel['workspace']['pub
         stderr_bytes: 0,
         cmd: 'python3 run_dashboard_workspace_artifacts_smoke.py --mode graph_home',
         cwd: '/tmp',
-        inspector_route: '#/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke',
-        inspector_search_link_href: '#/search?q=explicit_graph_home_subcommand&scope=artifact',
-        inspector_artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:graph_home_subcommand:trade_journal',
-        inspector_raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_subcommand.csv',
-        inspector_check_route: '#/workspace/contracts?page_section=contracts-check-graph_home_smoke',
+        inspector_route: '/workspace/contracts?page_section=contracts-subcommand-graph_home_smoke',
+        inspector_search_link_href: '/search?q=explicit_graph_home_subcommand&scope=artifact',
+        inspector_artifact_link_href: '/workspace/artifacts?artifact=audit:explicit:graph_home_subcommand:trade_journal',
+        inspector_raw_link_href: '/workspace/raw?artifact=%2Ftmp%2Fexplicit_graph_home_subcommand.csv',
+        inspector_check_route: '/workspace/contracts?page_section=contracts-check-graph_home_smoke',
       },
       {
         id: 'workspace-routes-smoke',
@@ -96,11 +96,11 @@ function createContractsAcceptanceFixture(): TerminalReadModel['workspace']['pub
         stderr_bytes: 0,
         cmd: 'python3 run_dashboard_workspace_artifacts_smoke.py',
         cwd: '/tmp',
-        inspector_route: '#/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke',
-        inspector_search_link_href: '#/search?q=explicit_workspace_routes_subcommand&scope=artifact',
-        inspector_artifact_link_href: '#/workspace/artifacts?artifact=audit:explicit:workspace_routes_subcommand:trade_journal',
-        inspector_raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Fexplicit_workspace_routes_subcommand.csv',
-        inspector_check_route: '#/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
+        inspector_route: '/workspace/contracts?page_section=contracts-subcommand-workspace_routes_smoke',
+        inspector_search_link_href: '/search?q=explicit_workspace_routes_subcommand&scope=artifact',
+        inspector_artifact_link_href: '/workspace/artifacts?artifact=audit:explicit:workspace_routes_subcommand:trade_journal',
+        inspector_raw_link_href: '/workspace/raw?artifact=%2Ftmp%2Fexplicit_workspace_routes_subcommand.csv',
+        inspector_check_route: '/workspace/contracts?page_section=contracts-check-workspace_routes_smoke',
       },
       {
         id: 'topology_smoke',
@@ -111,8 +111,8 @@ function createContractsAcceptanceFixture(): TerminalReadModel['workspace']['pub
         stderr_bytes: 0,
         cmd: 'python3 run_dashboard_public_topology_smoke.py',
         cwd: '/tmp',
-        inspector_route: '#/workspace/contracts?page_section=contracts-subcommand-topology_smoke',
-        inspector_check_route: '#/workspace/contracts?page_section=contracts-check-topology_smoke',
+        inspector_route: '/workspace/contracts?page_section=contracts-subcommand-topology_smoke',
+        inspector_check_route: '/workspace/contracts?page_section=contracts-check-topology_smoke',
       },
     ],
   };
@@ -267,7 +267,7 @@ describe('InspectorRail', () => {
     expect(screen.getAllByTitle('/data/fenlie_dashboard_snapshot.json').length).toBeGreaterThan(0);
 
     const overviewLink = screen.getByRole('link', { name: '返回总览' });
-    expect(overviewLink.getAttribute('href')).toBe('/overview?artifact=price_action_breakout_pullback&panel=lab-review&section=research-heads&row=ETHUSDT');
+    expect(overviewLink.getAttribute('href')).toBe('/ops/overview?artifact=price_action_breakout_pullback&panel=lab-review&section=research-heads&row=ETHUSDT');
 
     const workspaceLink = screen.getByRole('link', { name: '返回研究工作区' });
     expect(workspaceLink.getAttribute('href')).toBe('/workspace/artifacts?artifact=price_action_breakout_pullback&panel=lab-review&section=research-heads&row=ETHUSDT');
@@ -567,9 +567,9 @@ describe('InspectorRail', () => {
       graphHomeCheck.research_audit_cases = [];
     }
     Object.assign((model.workspace.publicAcceptance.summary || {}) as any, {
-      contracts_acceptance_check_search_link_href: '#/search?q=legacy_summary_check&scope=artifact',
-      contracts_acceptance_check_artifact_link_href: '#/workspace/artifacts?artifact=audit:legacy_summary_check',
-      contracts_acceptance_check_raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Flegacy_summary_check.csv',
+      contracts_acceptance_check_search_link_href: '/search?q=legacy_summary_check&scope=artifact',
+      contracts_acceptance_check_artifact_link_href: '/workspace/artifacts?artifact=audit:legacy_summary_check',
+      contracts_acceptance_check_raw_link_href: '/workspace/raw?artifact=%2Ftmp%2Flegacy_summary_check.csv',
     });
 
     render(
@@ -606,10 +606,10 @@ describe('InspectorRail', () => {
       graphHomeSubcommand.inspector_raw_link_href = undefined;
     }
     Object.assign((model.workspace.publicAcceptance.summary || {}) as any, {
-      contracts_acceptance_subcommand_search_link_href: '#/search?q=legacy_summary_subcommand&scope=artifact',
-      contracts_acceptance_subcommand_artifact_link_href: '#/workspace/artifacts?artifact=audit:legacy_summary_subcommand',
-      contracts_acceptance_subcommand_raw_link_href: '#/workspace/raw?artifact=%2Ftmp%2Flegacy_summary_subcommand.csv',
-      contracts_acceptance_check_route: '#/workspace/contracts?page_section=contracts-check-graph_home_smoke',
+      contracts_acceptance_subcommand_search_link_href: '/search?q=legacy_summary_subcommand&scope=artifact',
+      contracts_acceptance_subcommand_artifact_link_href: '/workspace/artifacts?artifact=audit:legacy_summary_subcommand',
+      contracts_acceptance_subcommand_raw_link_href: '/workspace/raw?artifact=%2Ftmp%2Flegacy_summary_subcommand.csv',
+      contracts_acceptance_check_route: '/workspace/contracts?page_section=contracts-check-graph_home_smoke',
     });
 
     render(
@@ -694,7 +694,7 @@ describe('InspectorRail', () => {
     expect(screen.getByText('执行证据')).toBeTruthy();
     expect(screen.queryByText('下一跳建议')).toBeNull();
     expect(screen.getAllByTitle('/system/output/review/price_action_breakout_pullback.json').length).toBeGreaterThan(0);
-    expect(screen.getByRole('link', { name: '返回总览' }).getAttribute('href')).toBe('/overview?artifact=price_action_breakout_pullback&panel=signal-risk&section=focus-slots&row=primary');
+    expect(screen.getByRole('link', { name: '返回总览' }).getAttribute('href')).toBe('/ops/overview?artifact=price_action_breakout_pullback&panel=signal-risk&section=focus-slots&row=primary');
     expect(screen.getByRole('link', { name: '查看工件池' }).getAttribute('href')).toBe('/workspace/artifacts?artifact=price_action_breakout_pullback');
     expect(screen.queryByRole('link', { name: /conflict\\.json/ })).toBeNull();
   });

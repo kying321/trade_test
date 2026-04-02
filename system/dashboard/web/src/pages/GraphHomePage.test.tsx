@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { HashRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalReadModel } from '../types/contracts';
 import type { GraphNode } from '../graph/types';
@@ -40,8 +40,8 @@ function createModel(): TerminalReadModel {
       change_class: 'RESEARCH_ONLY',
     },
     uiRoutes: {
-      terminal_public: '#/terminal/public',
-      workspace_artifacts: '#/workspace/artifacts',
+      terminal_public: '/terminal/public',
+      workspace_artifacts: '/workspace/artifacts',
     },
     experienceContract: {
       mode: 'read_only_snapshot',
@@ -185,9 +185,9 @@ describe('GraphHomePage', () => {
 
   it('keeps graph home in loading state when model is not ready', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={null} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     expect(screen.getByRole('heading', { name: '图谱化主页' })).toBeTruthy();
@@ -196,9 +196,9 @@ describe('GraphHomePage', () => {
 
   it('recenters detail on node selection and persists default pipeline locally', async () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     expect(screen.getByRole('heading', { name: '图谱化主页' })).toBeTruthy();
@@ -214,9 +214,9 @@ describe('GraphHomePage', () => {
 
   it('shows localized filters, explicit quick-entry links, and a recenter action for the current node', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     expect(screen.getByRole('button', { name: '管道阶段' })).toBeTruthy();
@@ -224,10 +224,10 @@ describe('GraphHomePage', () => {
     expect(screen.getByRole('button', { name: '子页面' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '研究工件' })).toBeTruthy();
     expect(screen.getAllByRole('button', { name: '自定义管道' }).length).toBeGreaterThan(0);
-    expect(screen.getByRole('link', { name: '去操作终端' }).getAttribute('href')).toBe('#/terminal/public');
-    expect(screen.getByRole('link', { name: '去研究工作区' }).getAttribute('href')).toBe('#/workspace/artifacts');
-    expect(screen.getByRole('link', { name: '去 CPA 管理' }).getAttribute('href')).toBe('#/cpa');
-    expect(screen.getByRole('link', { name: '打开全局搜索' }).getAttribute('href')).toBe('#/search');
+    expect(screen.getByRole('link', { name: '去操作终端' }).getAttribute('href')).toBe('/ops/risk');
+    expect(screen.getByRole('link', { name: '去研究工作区' }).getAttribute('href')).toBe('/workspace/artifacts');
+    expect(screen.getByRole('link', { name: '去 CPA 管理' }).getAttribute('href')).toBe('/cpa');
+    expect(screen.getByRole('link', { name: '打开全局搜索' }).getAttribute('href')).toBe('/search');
     expect(screen.getByText('为什么现在看它')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '市场输入' }));
@@ -240,19 +240,19 @@ describe('GraphHomePage', () => {
 
   it('surfaces precise deep links for selected stage and artifact nodes instead of coarse page jumps', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '市场输入' }));
-    expect(screen.getByRole('link', { name: '进入子网页' }).getAttribute('href')).toBe('#/terminal/public?anchor=terminal-data-regime&panel=data-regime');
+    expect(screen.getByRole('link', { name: '进入子网页' }).getAttribute('href')).toBe('/ops/risk?anchor=terminal-data-regime&panel=data-regime');
 
     fireEvent.change(screen.getByPlaceholderText('过滤节点：标签 / 副标题'), { target: { value: 'ETH' } });
     fireEvent.click(screen.getByRole('button', { name: 'ETH 15m 主线' }));
     const artifactHref = screen.getByRole('link', { name: '进入子网页' }).getAttribute('href') || '';
     const artifactParams = new URLSearchParams(artifactHref.split('?')[1] || '');
-    expect(artifactHref.startsWith('#/workspace/artifacts?')).toBe(true);
+    expect(artifactHref.startsWith('/workspace/artifacts?')).toBe(true);
     expect(artifactParams.get('artifact')).toBe('price_action_breakout_pullback');
     expect(artifactParams.get('anchor')).toBe('workspace-artifacts-focus-panel');
     expect(artifactParams.get('search_scope')).toBe('title');
@@ -263,20 +263,20 @@ describe('GraphHomePage', () => {
 
   it('shows research-audit deep links inside the detail panel for feedback and search nodes', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '复盘反馈' }));
     expect(screen.getByRole('heading', { name: '复盘反馈' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: '检索 / trial_001_ultra_short_trade_journal' }).getAttribute('href')).toBe('#/search?q=trial_001_ultra_short_trade_journal&scope=artifact');
-    expect(screen.getByRole('link', { name: '工件 / audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal' }).getAttribute('href')).toBe('#/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal');
-    expect(screen.getByRole('link', { name: /原始层/ }).getAttribute('href')).toBe('#/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv');
+    expect(screen.getByRole('link', { name: '检索 / trial_001_ultra_short_trade_journal' }).getAttribute('href')).toBe('/search?q=trial_001_ultra_short_trade_journal&scope=artifact');
+    expect(screen.getByRole('link', { name: '工件 / audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal' }).getAttribute('href')).toBe('/workspace/artifacts?artifact=audit:recent_strategy_backtests:ultra_short:trial_001:trade_journal');
+    expect(screen.getByRole('link', { name: /原始层/ }).getAttribute('href')).toBe('/workspace/raw?artifact=system%2Foutput%2Fresearch%2F20260330_133956%2Fultra_short%2Ftrial_001_ultra_short_trade_journal.csv');
 
     fireEvent.click(screen.getByRole('button', { name: '搜索' }));
     expect(screen.getByRole('heading', { name: '搜索' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: '检索 / trial_001_ultra_short_trade_journal' }).getAttribute('href')).toBe('#/search?q=trial_001_ultra_short_trade_journal&scope=artifact');
+    expect(screen.getByRole('link', { name: '检索 / trial_001_ultra_short_trade_journal' }).getAttribute('href')).toBe('/search?q=trial_001_ultra_short_trade_journal&scope=artifact');
   });
 
   it('does not fall back to acceptance summary research-audit cases when workspace source-owned cases are absent', () => {
@@ -287,8 +287,8 @@ describe('GraphHomePage', () => {
         {
           case_id: 'summary_only_case',
           query: 'summary_only_case',
-          search_route: '#/search?q=summary_only_case&scope=artifact',
-          workspace_route: '#/workspace/artifacts?artifact=audit:summary_only_case',
+          search_route: '/search?q=summary_only_case&scope=artifact',
+          workspace_route: '/workspace/artifacts?artifact=audit:summary_only_case',
           raw_path: 'system/output/research/summary_only_case.csv',
           result_artifact: 'audit:summary_only_case',
         },
@@ -296,9 +296,9 @@ describe('GraphHomePage', () => {
     });
 
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={model} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '复盘反馈' }));
@@ -310,9 +310,9 @@ describe('GraphHomePage', () => {
 
   it('shows source-owned detail evidence for action-queue and feedback nodes', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'ETHUSDT' }));
@@ -337,9 +337,9 @@ describe('GraphHomePage', () => {
 
   it('shows source-head contract path in the detail panel for source-owned contract nodes', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '持仓迁移' }));
@@ -354,27 +354,27 @@ describe('GraphHomePage', () => {
 
   it('uses row-level and anchor-level deep links for queue and feedback nodes instead of coarse section jumps', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'ETHUSDT' }));
     expect(screen.getByRole('link', { name: '进入子网页' }).getAttribute('href')).toBe(
-      '#/terminal/public?artifact=price_action_breakout_pullback&panel=signal-risk&section=action-stack&row=ETHUSDT%3A%3A%E6%94%B6%E7%AA%84%E9%A3%8E%E9%99%A9&symbol=ETHUSDT',
+      '/ops/risk?artifact=price_action_breakout_pullback&panel=signal-risk&section=action-stack&row=ETHUSDT%3A%3A%E6%94%B6%E7%AA%84%E9%A3%8E%E9%99%A9&symbol=ETHUSDT',
     );
 
     fireEvent.click(screen.getByRole('button', { name: '拆分研究工作区左栏' }));
     expect(screen.getByRole('link', { name: '进入子网页' }).getAttribute('href')).toBe(
-      '#/workspace/alignment?artifact=price_action_breakout_pullback&anchor=alignment-event-ui_density_split&page_section=alignment-events',
+      '/workspace/alignment?artifact=price_action_breakout_pullback&anchor=alignment-event-ui_density_split&page_section=alignment-events',
     );
   });
 
   it('shows source-owned contract tag and status inside the custom pipeline list', async () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'ETHUSDT' }));
@@ -391,9 +391,9 @@ describe('GraphHomePage', () => {
 
   it('surfaces current impact-chain counts for the selected node', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'ETHUSDT' }));
@@ -405,9 +405,9 @@ describe('GraphHomePage', () => {
 
   it('toggles between full graph and locked impact-chain view', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'ETHUSDT' }));
@@ -431,9 +431,9 @@ describe('GraphHomePage', () => {
 
   it('warns when the current impact chain contains nodes without source-owned detail', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '国内商品' }));
@@ -444,17 +444,17 @@ describe('GraphHomePage', () => {
 
   it('offers repair links for nodes missing source-owned detail', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: '国内商品' }));
     const warningBlock = screen.getByTestId('graph-home-missing-source');
     expect(within(warningBlock).getByText('国内商品 / 市场输入域')).toBeTruthy();
     expect(within(warningBlock).getByText('先核对契约层，再搜索节点来源')).toBeTruthy();
-    expect(within(warningBlock).getByRole('link', { name: '国内商品 / 查看契约层' }).getAttribute('href')).toBe('#/workspace/contracts?page_section=contracts-source-heads');
-    expect(within(warningBlock).getByRole('link', { name: '国内商品 / 搜索节点' }).getAttribute('href')).toBe('#/search?q=%E5%9B%BD%E5%86%85%E5%95%86%E5%93%81');
+    expect(within(warningBlock).getByRole('link', { name: '国内商品 / 查看契约层' }).getAttribute('href')).toBe('/workspace/contracts?page_section=contracts-source-heads');
+    expect(within(warningBlock).getByRole('link', { name: '国内商品 / 搜索节点' }).getAttribute('href')).toBe('/search?q=%E5%9B%BD%E5%86%85%E5%95%86%E5%93%81');
   });
 
   it('builds kind-specific missing-source repair plans', () => {
@@ -482,9 +482,9 @@ describe('GraphHomePage', () => {
 
   it('shows a graph legend for current chain warning and dimmed nodes', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     const legend = screen.getByTestId('graph-home-legend');
@@ -495,9 +495,9 @@ describe('GraphHomePage', () => {
 
   it('toggles legend layers interactively', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     const legend = screen.getByTestId('graph-home-legend');
@@ -520,9 +520,9 @@ describe('GraphHomePage', () => {
 
   it('restores default legend layers after manual toggles', () => {
     render(
-      <HashRouter>
+      <MemoryRouter>
         <GraphHomePage model={createModel()} />
-      </HashRouter>,
+      </MemoryRouter>,
     );
 
     const legend = screen.getByTestId('graph-home-legend');

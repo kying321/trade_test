@@ -50,7 +50,7 @@ function buildContractsSections(model: TerminalReadModel): WorkspacePageSectionI
     ...model.workspace.sourceHeads,
   ].filter((row, index, rows): row is NonNullable<typeof row> => (
     Boolean(row)
-    && rows.findIndex((candidate) => safeDisplayValue(candidate?.id) === safeDisplayValue(row.id)) === index
+    && rows.findIndex((candidate) => safeDisplayValue(candidate?.id) === safeDisplayValue(row?.id)) === index
   ));
 
   return [
