@@ -54,6 +54,7 @@ describe('GlobalTopbar', () => {
     const controlDeck = screen.getByRole('region', { name: 'global-tool-strip' });
     expect(within(controlDeck).getByRole('group', { name: 'theme-switcher' })).toBeTruthy();
     expect(within(controlDeck).getByRole('button', { name: '打开全局搜索' })).toBeTruthy();
+    expect(within(controlDeck).getByRole('link', { name: '打开 CPA 管理' }).getAttribute('href')).toBe('/cpa');
 
     const summaryStrip = screen.getByLabelText('global-summary');
     expect(within(summaryStrip).getByText('模式：只读快照')).toBeTruthy();

@@ -52,6 +52,7 @@ describe('ContextSidebar', () => {
     const utilities = screen.getByRole('region', { name: 'sidebar-utilities' });
     expect(within(utilities).queryByText(/变更级别/)).toBeNull();
     expect(within(utilities).getByRole('link', { name: '搜索 / Search' })).toBeTruthy();
+    expect(within(utilities).getByRole('link', { name: 'CPA 管理 / Auth & Quota' }).getAttribute('href')).toBe('/cpa');
   });
 
   it('收缩到 32px 竖条时只保留展开把手', () => {

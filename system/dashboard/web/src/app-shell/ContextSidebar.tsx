@@ -144,11 +144,21 @@ function SidebarTaskNav({ items, pageSections, activeSectionId }: SidebarTaskNav
 }
 
 function SidebarUtilities({ utilityLinks }: Pick<ContextSidebarProps, 'utilityLinks'>) {
+  const normalizedLinks = utilityLinks.some((item) => item.to === '/cpa')
+    ? utilityLinks
+    : [...utilityLinks, { label: 'CPA 管理 / Auth & Quota', to: '/cpa' }];
+
   return (
     <section className="sidebar-section sidebar-utilities" aria-label="sidebar-utilities">
       <nav className="rail-footnote" aria-label="sidebar-utility-nav">
-        {utilityLinks?.map((item) => (
-          <Link key={item.to} to={item.to}>{item.label}</Link>
+        {normalizedLinks.map((item) => (
+          <NavLink
+            key={`${item.to}-${item.label}`}
+            className={({ isActive }) => `utility-link ${item.to === '/cpa' ? 'utility-link-emphasis' : ''} ${isActive ? 'active' : ''}`.trim()}
+            to={item.to}
+          >
+            {item.label}
+          </NavLink>
         ))}
       </nav>
     </section>

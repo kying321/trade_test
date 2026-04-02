@@ -329,6 +329,7 @@ export function GraphHomePage({
   }, [focusState, nodes]);
   const terminalLink = '/terminal/public';
   const workspaceLink = '/workspace/artifacts';
+  const cpaLink = '/cpa';
   const searchLink = buildSearchLink();
   const addToPipeline = () => {
     if (!selectedNode) return;
@@ -388,6 +389,7 @@ export function GraphHomePage({
             </ActionButton>
             <ActionLink to={terminalLink}>去操作终端</ActionLink>
             <ActionLink to={workspaceLink}>去研究工作区</ActionLink>
+            <ActionLink className="graph-home-cpa-link" to={cpaLink}>去 CPA 管理</ActionLink>
             <ActionLink to={searchLink}>打开全局搜索</ActionLink>
           </div>
           <div className="chip-row">

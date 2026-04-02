@@ -1020,7 +1020,7 @@ button { cursor: pointer; }
 
 .overview-entry-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -1039,6 +1039,14 @@ button { cursor: pointer; }
   color: var(--text-2);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.overview-entry-card-emphasis {
+  border-color: rgba(90, 169, 255, 0.36);
+  box-shadow: inset 0 0 0 1px rgba(90, 169, 255, 0.12), var(--shadow-panel);
+  background:
+    linear-gradient(180deg, rgba(90, 169, 255, 0.12), rgba(90, 169, 255, 0.04)),
+    var(--entry-card-bg);
 }
 
 .inspector-rail {
@@ -1425,6 +1433,17 @@ button { cursor: pointer; }
   font-size: 11px;
   color: var(--text-2);
   opacity: 0.88;
+}
+
+.sidebar-utilities .utility-link-emphasis {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.sidebar-utilities .utility-link.active {
+  color: var(--text-1);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .sidebar-utilities a:hover {
@@ -2202,6 +2221,11 @@ button { cursor: pointer; }
 
 .graph-home-quicklinks {
   flex-wrap: wrap;
+}
+
+.graph-home-cpa-link {
+  border-color: rgba(90, 169, 255, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(90, 169, 255, 0.12), var(--shadow-panel);
 }
 
 .graph-home-explanation {
@@ -2996,6 +3020,13 @@ button { cursor: pointer; }
 
 .global-search-trigger {
   white-space: nowrap;
+}
+
+.global-cpa-trigger {
+  white-space: nowrap;
+  border-color: rgba(90, 169, 255, 0.38);
+  background: linear-gradient(180deg, rgba(90, 169, 255, 0.28), rgba(90, 169, 255, 0.16));
+  box-shadow: inset 0 0 0 1px rgba(90, 169, 255, 0.14), var(--shadow-panel);
 }
 
 .search-overlay-backdrop {
