@@ -1,7 +1,7 @@
 # Fenlie Investor Docs README
 
 > 版本：2026-03-24  
-> 用途：作为 `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor` 的目录级导航入口，统一管理发送顺序、材料分层、口径红线与版本治理。  
+> 用途：作为 `docs/investor` 的目录级导航入口，统一管理发送顺序、材料分层、口径红线与版本治理。  
 > change class：`DOC_ONLY`
 
 ---
@@ -29,16 +29,16 @@
 如果你第一次进入这个目录，按下面顺序阅读：
 
 1. **总索引**
-   - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-pack-index.md`
+   - `docs/investor/2026-03-24-fenlie-investor-pack-index.md`
 2. **统一发件 / Notion 入口**
-   - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-unified-outreach-pack-and-notion-index.md`
-   - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-minimal-send-pack-manifest.md`
-   - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-deck-production-and-export-checklist.md`
-   - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-read-only-share-directory-manifest.md`
+   - `docs/investor/2026-03-24-fenlie-unified-outreach-pack-and-notion-index.md`
+   - `docs/investor/2026-03-24-fenlie-minimal-send-pack-manifest.md`
+   - `docs/investor/2026-03-24-fenlie-deck-production-and-export-checklist.md`
+   - `docs/investor/2026-03-24-fenlie-read-only-share-directory-manifest.md`
 3. **尽调入口**
-   - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-data-room-index-and-request-list.md`
+   - `docs/investor/2026-03-24-fenlie-data-room-index-and-request-list.md`
 4. **尽调完备度**
-   - `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-diligence-readiness-checklist.md`
+   - `docs/investor/2026-03-24-fenlie-diligence-readiness-checklist.md`
 
 ---
 
@@ -46,37 +46,37 @@
 
 ### Pack A｜首次触达
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-executive-summary.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-market-and-competitive-landscape.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-email-pack.md`
+- `docs/investor/2026-03-24-fenlie-executive-summary.md`
+- `docs/investor/2026-03-24-fenlie-market-and-competitive-landscape.md`
+- `docs/investor/2026-03-24-fenlie-investor-email-pack.md`
 
 ### Pack B｜会前预读
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pitch-deck-full-copy.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-preread-copy.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pitch-deck-visual-brief.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-product-architecture-visual-brief.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-12-18-month-milestone-roadmap.md`
+- `docs/investor/2026-03-24-fenlie-pitch-deck-full-copy.md`
+- `docs/investor/2026-03-24-fenlie-investor-deck-preread-copy.md`
+- `docs/investor/2026-03-24-fenlie-pitch-deck-visual-brief.md`
+- `docs/investor/2026-03-24-fenlie-product-architecture-visual-brief.md`
+- `docs/investor/2026-03-24-fenlie-12-18-month-milestone-roadmap.md`
 
 ### Pack C｜会后推进
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-business-plan.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-tam-sam-som-and-3y-financial-model.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-fundraise-scenarios-and-runway.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-deck-followup-copy.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-execution-maturity-note.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-deployment-enablement-package-one-pager.md`
+- `docs/investor/2026-03-24-fenlie-business-plan.md`
+- `docs/investor/2026-03-24-fenlie-tam-sam-som-and-3y-financial-model.md`
+- `docs/investor/2026-03-24-fenlie-fundraise-scenarios-and-runway.md`
+- `docs/investor/2026-03-24-fenlie-investor-deck-followup-copy.md`
+- `docs/investor/2026-03-24-fenlie-execution-maturity-note.md`
+- `docs/investor/2026-03-24-fenlie-deployment-enablement-package-one-pager.md`
 
 ### Pack D｜尽调 / Pilot
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-evidence-matrix.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-qa-battlecard.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-investor-faq-expanded.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-risk-and-governance-principles-one-pager.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pilot-customer-profile-one-pager.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-pilot-milestone-and-acceptance-template.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-data-room-index-and-request-list.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/2026-03-24-fenlie-diligence-readiness-checklist.md`
+- `docs/investor/2026-03-24-fenlie-investor-evidence-matrix.md`
+- `docs/investor/2026-03-24-fenlie-investor-qa-battlecard.md`
+- `docs/investor/2026-03-24-fenlie-investor-faq-expanded.md`
+- `docs/investor/2026-03-24-fenlie-risk-and-governance-principles-one-pager.md`
+- `docs/investor/2026-03-24-fenlie-pilot-customer-profile-one-pager.md`
+- `docs/investor/2026-03-24-fenlie-pilot-milestone-and-acceptance-template.md`
+- `docs/investor/2026-03-24-fenlie-data-room-index-and-request-list.md`
+- `docs/investor/2026-03-24-fenlie-diligence-readiness-checklist.md`
 
 ---
 

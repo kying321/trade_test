@@ -59,8 +59,8 @@ fenlie/
 
 For deeper system operation notes, see:
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/README.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/FENLIE_CODEX_MEMORY.md`
+- `system/README.md`
+- `system/docs/FENLIE_CODEX_MEMORY.md`
 
 ---
 
@@ -89,7 +89,7 @@ Key dashboard paths:
 ### 1. Dashboard frontend
 
 ```bash
-cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+cd system/dashboard/web
 npm install
 npm run dev
 ```
@@ -97,14 +97,14 @@ npm run dev
 ### 2. Build production dashboard
 
 ```bash
-cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+cd system/dashboard/web
 npm run build
 ```
 
 ### 3. Run focused frontend verification
 
 ```bash
-cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web
+cd system/dashboard/web
 npm test -- --run \
   src/pages/GraphHomePage.test.tsx \
   src/graph/model.test.ts \
@@ -117,7 +117,7 @@ npm test -- --run \
 ### 4. Python-side verification
 
 ```bash
-cd /Users/jokenrobot/Downloads/Folders/fenlie/system
+cd system
 pytest -q
 ```
 
@@ -177,9 +177,9 @@ It is better understood as a **trading control and research operations system**.
 
 Useful starting points:
 
-- `/Users/jokenrobot/Downloads/Folders/fenlie/system/README.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/docs/investor/README.md`
-- `/Users/jokenrobot/Downloads/Folders/fenlie/AGENTS.md`
+- `system/README.md`
+- `docs/investor/README.md`
+- `AGENTS.md`
 
 ---
 
