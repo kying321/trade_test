@@ -1888,8 +1888,8 @@ def build_graph_home_pipeline_smoke_spec(
             const ROUTES = {routes_json};
             const BASE_URL = {base_url!r}.replace(/\\/$/, '');
             const DEFAULT_ROUTE = '/';
-            const BASE_URL = {base_url!r}.replace(/\\/$/, '');
             const STORAGE_KEY = 'graph_home_pipelines_v1';
+            const STAGE_CENTER_ROUTE = '/graph-home?graph_center=pipeline-execution-risk';
 
             async function expectStableMarker(page, marker) {{
               await page.waitForFunction((text) => document.body.innerText.toLowerCase().includes(text.toLowerCase()), marker);
@@ -1917,44 +1917,29 @@ def build_graph_home_pipeline_smoke_spec(
                 await expectStableMarker(page, marker);
               }}
 
+              const createDefaultPipelineButton = page.getByRole('button', {{ name: '创建默认管道' }});
+              await createDefaultPipelineButton.click();
+              await page.waitForTimeout(300);
               const addToPipelineButton = page.getByRole('button', {{ name: '加入自定义管道' }});
               await addToPipelineButton.click();
               await page.waitForTimeout(300);
 
-              const graphCanvas = page.locator('canvas').first();
-              await graphCanvas.scrollIntoViewIfNeeded();
-              const graphBox = await graphCanvas.boundingBox();
-              if (!graphBox) throw new Error('graph_canvas_missing');
+              await page.goto(BASE_URL + STAGE_CENTER_ROUTE, {{ waitUntil: 'networkidle' }});
               const detailHeadingLocator = page.locator('.graph-home-side .panel-card').first().locator('.panel-card-title');
-              const candidateOffsets = [
-                [220, 0],
-                [68, 209],
-                [-178, 129],
-                [-178, -129],
-                [68, -209],
-              ];
-              const selectableHeadings = new Set(['市场输入', '研究判断', '交易逻辑', '执行与风控', '复盘反馈']);
-              let selectedHeading = '';
-              for (const [dx, dy] of candidateOffsets) {{
-                await page.mouse.click(graphBox.x + graphBox.width / 2 + dx, graphBox.y + graphBox.height / 2 + dy);
-                await page.waitForTimeout(350);
-                const nextHeading = String(await detailHeadingLocator.textContent() || '').trim();
-                if (selectableHeadings.has(nextHeading)) {{
-                  selectedHeading = nextHeading;
-                  break;
-                }}
-              }}
+              await expect(detailHeadingLocator).toContainText('执行与风控');
+              const selectedHeading = String(await detailHeadingLocator.textContent() || '').trim();
               expect(selectedHeading).not.toBe('');
               await addToPipelineButton.click();
               await page.waitForTimeout(300);
 
               const pipelineItems = page.locator('.graph-pipeline-item');
-              const initialOrder = await page.locator('.graph-pipeline-item > span:first-child').allTextContents();
+              const pipelineItemLabels = page.locator('.graph-pipeline-item strong');
+              const initialOrder = await pipelineItemLabels.allTextContents();
               expect(initialOrder.length).toBeGreaterThanOrEqual(2);
 
               await pipelineItems.nth(1).dragTo(pipelineItems.nth(0));
               await page.waitForTimeout(800);
-              const reorderedOrder = await page.locator('.graph-pipeline-item > span:first-child').allTextContents();
+              const reorderedOrder = await pipelineItemLabels.allTextContents();
               expect(reorderedOrder[0]).toBe(selectedHeading);
               expect(reorderedOrder[1]).toBe('交易中枢');
 
@@ -1962,7 +1947,7 @@ def build_graph_home_pipeline_smoke_spec(
               expect(storedAfterDrag?.pipelines?.[0]?.nodeIds || []).toEqual(['pipeline-execution-risk', 'trade-hub']);
 
               await page.reload({{ waitUntil: 'networkidle' }});
-              const persistedOrder = await page.locator('.graph-pipeline-item > span:first-child').allTextContents();
+              const persistedOrder = await pipelineItemLabels.allTextContents();
               expect(persistedOrder[0]).toBe(selectedHeading);
               expect(persistedOrder[1]).toBe('交易中枢');
               const resolvedRoute = await page.evaluate(() => window.location.pathname);

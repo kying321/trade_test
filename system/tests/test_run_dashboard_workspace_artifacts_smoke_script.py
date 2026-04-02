@@ -748,10 +748,15 @@ def test_build_graph_home_pipeline_smoke_spec_covers_drag_reorder_and_refresh_pe
     assert "const BASE_URL = 'http://127.0.0.1:4173/'.replace(/\\/$/, '');" in spec
     assert "await page.waitForFunction(() => window.location.pathname.includes('/graph-home'));" in spec
     assert "const resolvedRoute = await page.evaluate(() => window.location.pathname);" in spec
+    assert "const STAGE_CENTER_ROUTE = '/graph-home?graph_center=pipeline-execution-risk';" in spec
+    assert "const createDefaultPipelineButton = page.getByRole('button', { name: '创建默认管道' });" in spec
+    assert "const addToPipelineButton = page.getByRole('button', { name: '加入自定义管道' });" in spec
     assert "graph_home_pipelines_v1" in spec
     assert "dragTo" in spec
     assert "pipeline_persistence_assertion" in spec
     assert "await page.reload({ waitUntil: 'networkidle' });" in spec
+    assert "const pipelineItemLabels = page.locator('.graph-pipeline-item strong');" in spec
+    assert "const initialOrder = await pipelineItemLabels.allTextContents();" in spec
     assert "加入自定义管道" in spec
     assert str(result_path) in spec
 
