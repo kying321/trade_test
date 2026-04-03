@@ -6,6 +6,27 @@
   - 新增 `/ops/overview`、`/ops/risk`、`/ops/audits`、`/ops/runbooks`、`/ops/workflow`、`/ops/traces`
   - `#/overview` 与 `#/terminal/public` 现通过 legacy hash bridge 自动落到 path route
   - 主导航与图谱主页快捷入口已改为 path-based href，不再输出 `#/...`
+- 已完成 `lie -> pi` dashboard 漂移归属审计：
+  - `pi` 当前不包含 `system/dashboard/web`
+  - `lie` 当前承载 dashboard/public-surface 工程树、smoke/acceptance、Cloudflare Pages 配置与 path-route IA 文档
+  - 结论：当前不应做 blanket `lie -> pi` sync；若未来需要跨 lane 引入 dashboard 能力，必须按能力切片做最小同步
+  - 最小同步矩阵已固化：
+    `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/DASHBOARD_LANE_SYNC_MATRIX.md`
+- governance 非破坏式审计现已内置 `dashboard_lane_sync_guard`：
+  - helper：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_dashboard_lane_sync_guard.py`
+  - 聚合入口：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/branch_governance_audit.sh`
+  - 统一 advisory runner：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_governance_audit_advisory.sh`
+  - workflow summary renderer：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/render_governance_audit_summary.py`
+  - workflow comment renderer：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/render_governance_audit_comment.py`
+  - 当前行为：
+    - 读取 primary branches 的 dashboard tree ownership
+    - advisory-only，不阻断 `overall_pass`
+    - 当前实仓库结果为 `current_owner=lie`、`recommended_action=no_sync_record_ownership`
+    - `.github/workflows/governance-health-audit.yml` 现会把 guard 结果写入 GitHub Step Summary，并在需要时发 non-blocking warning
+    - `.github/workflows/branch-policy.yml` 与 `.github/workflows/hotfix-pr-gate.yml` 现也会在 PR 侧渲染同类 advisory summary / warning，但不改原有 gate 成败
+    - 上述两个 PR workflow 现在还会上传 `*_branch_governance_audit.{json,md}`，保证 summary/warning 背后有原始证据附件
+    - 上述两个 PR workflow 现在还会 upsert sticky PR comment：`fenlie-governance-audit-advisory`
+    - 上述三个 workflow 的 advisory 执行路径已统一经由 `run_governance_audit_advisory.sh`，降低 summary/comment/artifact 输出漂移
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`

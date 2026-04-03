@@ -17,6 +17,9 @@ USAGE
 
 repo=""
 output_dir="system/output/review"
+branch_protection_script="${FENLIE_BRANCH_PROTECTION_SCRIPT:-}"
+hotfix_reaper_script="${FENLIE_HOTFIX_REAPER_SCRIPT:-}"
+dashboard_lane_sync_guard_script="${FENLIE_DASHBOARD_LANE_SYNC_GUARD_SCRIPT:-}"
 
 # Simple token bucket for outbound API traffic.
 bucket_capacity=5
@@ -98,6 +101,16 @@ if [[ -z "$repo_root" ]]; then
   exit 2
 fi
 
+if [[ -z "$branch_protection_script" ]]; then
+  branch_protection_script="${repo_root}/system/scripts/github_branch_protection.sh"
+fi
+if [[ -z "$hotfix_reaper_script" ]]; then
+  hotfix_reaper_script="${repo_root}/system/scripts/hotfix_reaper.sh"
+fi
+if [[ -z "$dashboard_lane_sync_guard_script" ]]; then
+  dashboard_lane_sync_guard_script="${repo_root}/system/scripts/run_dashboard_lane_sync_guard.py"
+fi
+
 if [[ -z "$repo" ]]; then
   repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true)"
 fi
@@ -123,7 +136,7 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
 set +e
-bash "${repo_root}/system/scripts/github_branch_protection.sh" check --profile strict ${repo:+--repo "$repo"} >"${tmpdir}/protection.out" 2>"${tmpdir}/protection.err"
+bash "${branch_protection_script}" check --profile strict ${repo:+--repo "$repo"} >"${tmpdir}/protection.out" 2>"${tmpdir}/protection.err"
 protect_rc=$?
 set -e
 
@@ -175,9 +188,21 @@ if [[ "$protect_rc" -ne 0 ]]; then
 fi
 
 set +e
-bash "${repo_root}/system/scripts/hotfix_reaper.sh" --mode report ${repo:+--repo "$repo"} >"${tmpdir}/reaper.out" 2>"${tmpdir}/reaper.err"
+bash "${hotfix_reaper_script}" --mode report ${repo:+--repo "$repo"} >"${tmpdir}/reaper.out" 2>"${tmpdir}/reaper.err"
 reaper_rc=$?
 set -e
+
+set +e
+python3 "${dashboard_lane_sync_guard_script}" \
+  --repo-root "${repo_root}" \
+  --primary-branches "$(gov_primary_branches_csv)" >"${tmpdir}/dashboard_lane_sync_guard.out" 2>"${tmpdir}/dashboard_lane_sync_guard.err"
+dashboard_lane_sync_guard_rc=$?
+set -e
+
+dashboard_lane_sync_guard_pass=false
+if [[ "$dashboard_lane_sync_guard_rc" -eq 0 ]]; then
+  dashboard_lane_sync_guard_pass="$(jq -r '.pass' <"${tmpdir}/dashboard_lane_sync_guard.out" 2>/dev/null || printf 'false')"
+fi
 
 protect_pass=false
 reaper_pass=false
@@ -200,11 +225,15 @@ jq -n \
   --argjson reaper_rc "$reaper_rc" \
   --argjson protect_pass "$protect_pass" \
   --argjson reaper_pass "$reaper_pass" \
+  --argjson dashboard_lane_sync_guard_rc "$dashboard_lane_sync_guard_rc" \
+  --argjson dashboard_lane_sync_guard_pass "$dashboard_lane_sync_guard_pass" \
   --argjson overall_pass "$overall_pass" \
   --arg protection_stdout "$(cat "${tmpdir}/protection.out")" \
   --arg protection_stderr "$(cat "${tmpdir}/protection.err")" \
   --arg reaper_stdout "$(cat "${tmpdir}/reaper.out")" \
   --arg reaper_stderr "$(cat "${tmpdir}/reaper.err")" \
+  --rawfile dashboard_lane_sync_guard_payload "${tmpdir}/dashboard_lane_sync_guard.out" \
+  --arg dashboard_lane_sync_guard_stderr "$(cat "${tmpdir}/dashboard_lane_sync_guard.err")" \
   '{
     generated_at_utc: $generated_at,
     checks: {
@@ -220,7 +249,22 @@ jq -n \
         return_code: $reaper_rc,
         stdout: $reaper_stdout,
         stderr: $reaper_stderr
-      }
+      },
+      dashboard_lane_sync_guard: ((if ($dashboard_lane_sync_guard_payload | length) > 0
+        then ($dashboard_lane_sync_guard_payload | fromjson)
+        else {}
+        end) + {
+          pass: $dashboard_lane_sync_guard_pass,
+          return_code: $dashboard_lane_sync_guard_rc,
+          stderr: $dashboard_lane_sync_guard_stderr
+      })
+    },
+    advisory: {
+      dashboard_lane_sync_guard_blocking: false,
+      dashboard_lane_sync_guard_included: true
+    },
+    docs: {
+      dashboard_lane_sync_matrix: "system/docs/DASHBOARD_LANE_SYNC_MATRIX.md"
     },
     overall_pass: $overall_pass
   }' > "$artifact_json"
@@ -232,6 +276,8 @@ cat > "$artifact_md" <<MD
 - branch_protection_strict_rc: \`${protect_rc}\`
 - branch_protection_mode: \`${protection_mode}\`
 - hotfix_reaper_report_rc: \`${reaper_rc}\`
+- dashboard_lane_sync_guard_rc: \`${dashboard_lane_sync_guard_rc}\`
+- dashboard_lane_sync_guard_blocking: \`false\`
 
 ## Artifacts
 - JSON: ${artifact_json}

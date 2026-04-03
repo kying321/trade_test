@@ -25,8 +25,11 @@ jobs:
           GOV_PRIMARY_BRANCHES: pi,lie
         run: |
           set -euo pipefail
-          chmod +x ./system/scripts/branch_governance_audit.sh
-          ./system/scripts/branch_governance_audit.sh --repo "${{ github.repository }}"
+          chmod +x ./system/scripts/run_governance_audit_advisory.sh
+          ./system/scripts/run_governance_audit_advisory.sh \
+            --repo "${{ github.repository }}" \
+            --step-summary-out "${GITHUB_STEP_SUMMARY}" \
+            --emit-github-warning
 
       - name: Upload governance audit artifacts
         if: always()

@@ -27,6 +27,19 @@
 - gateway/API 保持：
   - `http://43.153.148.242:8787`
 
+## Branch ownership note（2026-04-03）
+
+- 当前公开面与 path-route ops IA 的**源码归属 lane**是 `lie`，不是 `pi`。
+- 核对依据：
+  - `pi` 分支当前不包含 `system/dashboard/web` 工程树；
+  - `lie` 分支承载 dashboard 前端、smoke/acceptance 脚本、Cloudflare Pages 配置与 path-route 文档。
+- 因此：
+  1. 不要把 `pi..lie` 的大漂移直接理解成“应该把 dashboard 整体回灌到 `pi`”。
+  2. 若后续确实需要把某个 dashboard/deploy 能力移交给 `pi`，必须做最小能力切片同步，并带独立验收。
+  3. 云端服务名 `pi-dashboard-web.service` 只能说明**历史部署命名**，不能单独裁决 git lane ownership。
+  4. 具体最小切片规则见：
+     `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/DASHBOARD_LANE_SYNC_MATRIX.md`
+
 ## 已确认的入口事实
 
 ### 云端 5173
