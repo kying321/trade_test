@@ -28,23 +28,36 @@ def run_git_text(repo_root: Path, *args: str) -> str:
     return proc.stdout
 
 
+def resolve_branch_ref(repo_root: Path, branch: str) -> str | None:
+    candidates = [branch, f"origin/{branch}"]
+    for candidate in candidates:
+        try:
+            run_git_text(repo_root, "rev-parse", "--verify", candidate)
+        except subprocess.CalledProcessError:
+            continue
+        return candidate
+    return None
+
+
 def branch_snapshot(repo_root: Path, branch: str) -> dict[str, object]:
-    try:
-        head = run_git_text(repo_root, "rev-parse", "--verify", branch).strip()
-    except subprocess.CalledProcessError:
+    resolved_ref = resolve_branch_ref(repo_root, branch)
+    if not resolved_ref:
         return {
             "exists": False,
             "has_dashboard_tree": False,
             "head": "",
             "ahead_since_merge_base": None,
+            "resolved_ref": "",
         }
 
-    tree_text = run_git_text(repo_root, "ls-tree", "--name-only", branch, DASHBOARD_TREE).strip()
+    head = run_git_text(repo_root, "rev-parse", "--verify", resolved_ref).strip()
+    tree_text = run_git_text(repo_root, "ls-tree", "--name-only", resolved_ref, DASHBOARD_TREE).strip()
     return {
         "exists": True,
         "has_dashboard_tree": bool(tree_text),
         "head": head,
         "ahead_since_merge_base": None,
+        "resolved_ref": resolved_ref,
     }
 
 
@@ -108,14 +121,17 @@ def evaluate_dashboard_lane_sync_guard(repo_root: Path, primary_branches: Sequen
 
     for left, right in pair_candidates:
         try:
-            candidate_merge_base = run_git_text(repo_root, "merge-base", left, right).strip()
+            left_ref = str(branches[left].get("resolved_ref") or left)
+            right_ref = str(branches[right].get("resolved_ref") or right)
+            candidate_merge_base = run_git_text(repo_root, "merge-base", left_ref, right_ref).strip()
         except subprocess.CalledProcessError:
             continue
         if not candidate_merge_base:
             continue
         merge_base = candidate_merge_base
         for branch in {left, right}:
-            count_text = run_git_text(repo_root, "rev-list", "--count", f"{merge_base}..{branch}").strip()
+            branch_ref = str(branches[branch].get("resolved_ref") or branch)
+            count_text = run_git_text(repo_root, "rev-list", "--count", f"{merge_base}..{branch_ref}").strip()
             branches[branch]["ahead_since_merge_base"] = int(count_text or "0")
         break
 

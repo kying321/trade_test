@@ -6,6 +6,7 @@ audit_output_dir="system/output/review"
 step_summary_out=""
 comment_out=""
 emit_github_warning=0
+gov_primary_branches="${GOV_PRIMARY_BRANCHES:-pi,lie}"
 
 branch_gov_audit_script="${FENLIE_BRANCH_GOV_AUDIT_SCRIPT:-}"
 gov_summary_script="${FENLIE_GOV_SUMMARY_SCRIPT:-}"
@@ -72,6 +73,22 @@ fi
 if [[ -z "$gov_comment_script" ]]; then
   gov_comment_script="${repo_root}/system/scripts/render_governance_audit_comment.py"
 fi
+
+fetch_primary_branch_refs() {
+  local raw branch
+  raw="${gov_primary_branches:-}"
+  [[ -n "$raw" ]] || return 0
+
+  IFS=',' read -r -a primary_branch_array <<<"$raw"
+  for branch in "${primary_branch_array[@]}"; do
+    branch="$(printf '%s' "$branch" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [[ -n "$branch" ]] || continue
+    git fetch --quiet --depth=1 origin \
+      "refs/heads/${branch}:refs/remotes/origin/${branch}" >/dev/null 2>&1 || true
+  done
+}
+
+fetch_primary_branch_refs
 
 audit_stdout="$(mktemp)"
 audit_stderr="$(mktemp)"
