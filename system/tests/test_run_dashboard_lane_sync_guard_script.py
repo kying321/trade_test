@@ -64,12 +64,14 @@ def test_evaluate_guard_reports_lie_as_owner_and_rejects_blanket_sync(monkeypatc
         "has_dashboard_tree": False,
         "head": "36302e27048390274df5b936653842c43359ba49",
         "ahead_since_merge_base": 24,
+        "resolved_ref": "pi",
     }
     assert result["branches"]["lie"] == {
         "exists": True,
         "has_dashboard_tree": True,
         "head": "016af7acdf3d2c647c5394f70e15b537298841d3",
         "ahead_since_merge_base": 78,
+        "resolved_ref": "lie",
     }
     assert result["merge_base"] == "ab86d0d4abcdabcdabcdabcdabcdabcdabcdabcd"
     assert ("ls-tree", "--name-only", "pi", "system/dashboard/web") in commands
@@ -114,6 +116,65 @@ def test_evaluate_guard_skips_branches_without_common_merge_base(monkeypatch, tm
     assert result["branches"]["main"]["ahead_since_merge_base"] is None
     assert result["branches"]["pi"]["ahead_since_merge_base"] == 24
     assert result["branches"]["lie"]["ahead_since_merge_base"] == 78
+    assert result["branches"]["main"]["resolved_ref"] == "main"
+    assert result["branches"]["pi"]["resolved_ref"] == "pi"
+    assert result["branches"]["lie"]["resolved_ref"] == "lie"
+    assert result["merge_base"] == "ab86d0d4abcdabcdabcdabcdabcdabcdabcdabcd"
+
+
+def test_evaluate_guard_falls_back_to_origin_tracking_branches(monkeypatch, tmp_path: Path) -> None:
+    mod = load_module()
+
+    def fake_run_git_text(repo_root: Path, *args: str) -> str:
+        assert repo_root == tmp_path
+        lookup = {
+            ("rev-parse", "--verify", "pi"): subprocess.CalledProcessError(1, ["git", "rev-parse", "--verify", "pi"]),
+            ("rev-parse", "--verify", "origin/pi"): "36302e27048390274df5b936653842c43359ba49\n",
+            ("rev-parse", "--verify", "lie"): subprocess.CalledProcessError(1, ["git", "rev-parse", "--verify", "lie"]),
+            ("rev-parse", "--verify", "origin/lie"): "016af7acdf3d2c647c5394f70e15b537298841d3\n",
+            ("ls-tree", "--name-only", "origin/pi", "system/dashboard/web"): "",
+            ("ls-tree", "--name-only", "origin/lie", "system/dashboard/web"): "system/dashboard/web\n",
+            ("merge-base", "origin/pi", "origin/lie"): "ab86d0d4abcdabcdabcdabcdabcdabcdabcdabcd\n",
+            ("rev-list", "--count", "ab86d0d4abcdabcdabcdabcdabcdabcdabcdabcd..origin/pi"): "24\n",
+            ("rev-list", "--count", "ab86d0d4abcdabcdabcdabcdabcdabcdabcdabcd..origin/lie"): "78\n",
+        }
+        key = tuple(args)
+        value = lookup.get(key)
+        if value is None:
+            raise AssertionError(f"unexpected git args: {args!r}")
+        if isinstance(value, subprocess.CalledProcessError):
+            raise value
+        return value
+
+    monkeypatch.setattr(mod, "run_git_text", fake_run_git_text)
+
+    result = mod.evaluate_dashboard_lane_sync_guard(
+        repo_root=tmp_path,
+        primary_branches=["pi", "lie"],
+    )
+
+    assert result["pass"] is True
+    assert result["current_owner"] == "lie"
+    assert result["recommended_action"] == "no_sync_record_ownership"
+    assert result["reason_codes"] == [
+        "single_owner_detected",
+        "pi_missing_dashboard_tree",
+        "lie_owns_dashboard_surface",
+    ]
+    assert result["branches"]["pi"] == {
+        "exists": True,
+        "has_dashboard_tree": False,
+        "head": "36302e27048390274df5b936653842c43359ba49",
+        "ahead_since_merge_base": 24,
+        "resolved_ref": "origin/pi",
+    }
+    assert result["branches"]["lie"] == {
+        "exists": True,
+        "has_dashboard_tree": True,
+        "head": "016af7acdf3d2c647c5394f70e15b537298841d3",
+        "ahead_since_merge_base": 78,
+        "resolved_ref": "origin/lie",
+    }
     assert result["merge_base"] == "ab86d0d4abcdabcdabcdabcdabcdabcdabcdabcd"
 
 
