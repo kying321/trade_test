@@ -16,10 +16,9 @@ def test_branch_policy_workflow_runs_non_blocking_governance_audit_summary() -> 
     assert "Render governance audit advisory PR comment body" in workflow
     assert "Upsert governance audit advisory PR comment" in workflow
     assert "run_governance_audit_advisory.sh" in workflow
+    assert "upsert_governance_audit_pr_comment.py" in workflow
     assert "GITHUB_STEP_SUMMARY" in workflow
     assert "--emit-github-warning" in workflow
-    assert "actions/github-script@v7" in workflow
-    assert "fenlie-governance-audit-advisory" in workflow
     assert "governance_audit_pr_comment.md" in workflow
     assert "uses: actions/upload-artifact@v4" in workflow
     assert "name: branch-policy-governance-audit" in workflow
@@ -37,10 +36,9 @@ def test_hotfix_pr_gate_workflow_runs_non_blocking_governance_audit_summary() ->
     assert "Render governance audit advisory PR comment body" in workflow
     assert "Upsert governance audit advisory PR comment" in workflow
     assert "run_governance_audit_advisory.sh" in workflow
+    assert "upsert_governance_audit_pr_comment.py" in workflow
     assert "GITHUB_STEP_SUMMARY" in workflow
     assert "--emit-github-warning" in workflow
-    assert "actions/github-script@v7" in workflow
-    assert "fenlie-governance-audit-advisory" in workflow
     assert "governance_audit_pr_comment.md" in workflow
     assert "uses: actions/upload-artifact@v4" in workflow
     assert "name: hotfix-pr-gate-governance-audit" in workflow
