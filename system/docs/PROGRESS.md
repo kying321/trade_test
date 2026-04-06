@@ -88,6 +88,22 @@
     - 外部情报 refresh 失败时只记 `degraded_request_failed`
     - 不阻断 operator panel / dashboard snapshot 主刷新
     - 保持 `dashboard/metrics/external sidecar` 故障为 degrade-only，而不是 hard-fail
+- CPA channel kernel Phase 1 已接入 repo：
+  - package：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/cpa_channels/account_bundle.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/cpa_channels/token_store.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/cpa_channels/cpa_authfiles.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/cpa_channels/ingest_pipeline.py`
+  - script：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_cpa_channel_ingest.py`
+  - 测试：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_cpa_channel_token_store.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_cpa_channel_authfile_export.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_cpa_channel_ingest_script.py`
+  - 当前范围：
+    - 只做 `account bundle -> token store -> run ledger -> cpa auth-file export`
+    - 不接 browser/oauth/live management API
+    - 作为 `cpa` 控制面的底层 source-owned kernel 预埋
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`
