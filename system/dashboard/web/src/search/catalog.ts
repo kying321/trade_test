@@ -80,6 +80,30 @@ function createStaticModuleEntries(): SearchCatalogEntry[] {
       destination: buildOverviewLink({ anchor: 'overview-commodity-reasoning' }),
     },
     {
+      id: 'module:overview-jin10-sidecar',
+      category: 'module',
+      title: 'Jin10 研究侧边车',
+      subtitle: '总览 / 日历 / 快讯 / quote watch',
+      keywords: ['总览', 'jin10', '财经日历', '快讯', 'quote watch', 'xauusd', 'usoil'],
+      destination: buildOverviewLink({ anchor: 'overview-jin10-sidecar' }),
+    },
+    {
+      id: 'module:overview-axios-sidecar',
+      category: 'module',
+      title: 'Axios 研究侧边车',
+      subtitle: '总览 / 新闻条目 / 关键词',
+      keywords: ['总览', 'axios', '新闻', '关键词', 'local', 'national'],
+      destination: buildOverviewLink({ anchor: 'overview-axios-sidecar' }),
+    },
+    {
+      id: 'module:overview-external-intelligence',
+      category: 'module',
+      title: '外部情报带',
+      subtitle: '总览 / Jin10 + Axios / aggregated',
+      keywords: ['总览', '外部情报', 'jin10', 'axios', 'calendar', 'flash', 'news'],
+      destination: buildOverviewLink({ anchor: 'overview-external-intelligence' }),
+    },
+    {
       id: 'module:overview-alignment-projection',
       category: 'module',
       title: '方向对齐投射',
@@ -171,19 +195,46 @@ function createWorkspaceSectionEntries(model: TerminalReadModel): SearchCatalogE
 function createArtifactEntries(model: TerminalReadModel): SearchCatalogEntry[] {
   const artifactEntries = model.workspace.artifactRows.map((row) => {
     const artifactId = safeDisplayValue(row.id || row.payload_key);
+    const displayTitle = artifactId === 'jin10_mcp_snapshot'
+      ? 'Jin10 研究侧边车'
+      : artifactId === 'axios_site_snapshot'
+        ? 'Axios 研究侧边车'
+        : artifactId === 'external_intelligence_snapshot'
+          ? '外部情报带'
+        : labelFor(safeDisplayValue(row.label || row.payload_key || row.id));
+    const payloadEntry = row.payload_key ? model.workspace.artifactPayloads[row.payload_key] : undefined;
+    const payloadSummary = payloadEntry?.summary as Record<string, unknown> | undefined;
+    const payload = payloadEntry?.payload as Record<string, unknown> | undefined;
+    const nestedSummary = payload?.summary as Record<string, unknown> | undefined;
+    const summaryKeywords = [
+      safeDisplayValue(payloadSummary?.recommended_brief),
+      safeDisplayValue(payloadSummary?.takeaway),
+      safeDisplayValue(payload?.recommended_brief),
+      safeDisplayValue(payload?.takeaway),
+      ...(Array.isArray(nestedSummary?.high_importance_titles) ? nestedSummary.high_importance_titles.map((value) => safeDisplayValue(value)) : []),
+      ...(Array.isArray(nestedSummary?.latest_flash_briefs) ? nestedSummary.latest_flash_briefs.map((value) => safeDisplayValue(value)) : []),
+      ...(Array.isArray(nestedSummary?.quote_watch)
+        ? nestedSummary.quote_watch.flatMap((value) => {
+          const row = value as Record<string, unknown>;
+          return [safeDisplayValue(row.name), safeDisplayValue(row.code)];
+        })
+        : []),
+    ];
     return {
       id: `artifact:catalog:${artifactId}`,
       category: 'artifact' as const,
-      title: labelFor(safeDisplayValue(row.label || row.payload_key || row.id)),
+      title: displayTitle,
       subtitle: safeDisplayValue(row.path || row.category || row.artifact_group || '工件'),
       keywords: [
         artifactId,
+        displayTitle,
         safeDisplayValue(row.payload_key),
         safeDisplayValue(row.label),
         safeDisplayValue(row.path),
         safeDisplayValue(row.category),
         safeDisplayValue(row.artifact_group),
         safeDisplayValue(row.research_decision),
+        ...summaryKeywords,
       ],
       destination: buildWorkspaceLink('artifacts', { artifact: artifactId }),
     };

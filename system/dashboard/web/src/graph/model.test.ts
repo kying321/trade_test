@@ -170,6 +170,15 @@ function createModel(): TerminalReadModel {
           status: 'ok',
           path: '/review/eth.json',
         },
+        {
+          id: 'jin10_mcp_snapshot',
+          label: 'Jin10 研究侧边车',
+          artifact_group: 'system_anchor',
+          category: 'research',
+          research_decision: 'selected',
+          status: 'ok',
+          path: 'review/latest_jin10_mcp_snapshot.json',
+        },
       ],
       artifactPrimaryFocus: {},
       artifactHandoffs: {},
@@ -187,6 +196,7 @@ describe('graph home model', () => {
     expect(graph.nodes.some((node) => node.id === 'pipeline-market-input' && node.kind === 'pipeline_stage')).toBe(true);
     expect(graph.nodes.some((node) => node.id === 'route-terminal-public' && node.kind === 'route')).toBe(true);
     expect(graph.nodes.some((node) => node.id === 'artifact-price_action_breakout_pullback' && node.kind === 'artifact')).toBe(true);
+    expect(graph.nodes.some((node) => node.id === 'artifact-jin10_mcp_snapshot' && node.kind === 'artifact')).toBe(true);
     expect(graph.edges.some((edge) => edge.source === 'trade-hub' && edge.target === 'pipeline-research-judgment')).toBe(true);
   });
 

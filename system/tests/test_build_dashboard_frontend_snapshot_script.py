@@ -224,6 +224,74 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "contracts_in_focus": ["BU2606"],
         },
     )
+    jin10_mcp_snapshot_path = review_dir / "latest_jin10_mcp_snapshot.json"
+    write_json(
+        jin10_mcp_snapshot_path,
+        {
+            "generated_at_utc": "2026-04-06T12:16:41Z",
+            "mode": "jin10_mcp_snapshot",
+            "change_class": "RESEARCH_ONLY",
+            "ok": True,
+            "status": "ok",
+            "server_info": {"name": "mcp-server", "version": "1.0.0"},
+            "tools_total": 7,
+            "resources_total": 1,
+            "tool_call": None,
+        },
+    )
+    axios_site_snapshot_path = review_dir / "latest_axios_site_snapshot.json"
+    write_json(
+        axios_site_snapshot_path,
+        {
+            "generated_at_utc": "2026-04-06T13:20:29Z",
+            "mode": "axios_site_snapshot",
+            "change_class": "RESEARCH_ONLY",
+            "ok": True,
+            "status": "ok",
+            "summary": {
+                "news_total": 10,
+                "local_total": 8,
+                "national_total": 2,
+                "top_titles": [
+                    "Gilbert's Heritage Park to open first phase in September",
+                    "Anthropic cuts third party usage",
+                ],
+                "top_keywords": ["Arizona", "Axios"],
+                "takeaway": "Gilbert's Heritage Park to open first phase in September",
+            },
+            "recommended_brief": "axios news=10 | local=8 | national=2",
+            "takeaway": "Gilbert's Heritage Park to open first phase in September",
+        },
+    )
+    external_intelligence_snapshot_path = review_dir / "latest_external_intelligence_snapshot.json"
+    write_json(
+        external_intelligence_snapshot_path,
+        {
+            "generated_at_utc": "2026-04-06T13:30:00Z",
+            "mode": "external_intelligence_snapshot",
+            "change_class": "RESEARCH_ONLY",
+            "ok": True,
+            "status": "ok",
+            "summary": {
+                "sources_total": 2,
+                "active_sources": ["jin10", "axios"],
+                "calendar_total": 244,
+                "high_importance_count": 5,
+                "flash_total": 20,
+                "quote_watch": ["现货黄金", "WTI原油"],
+                "axios_news_total": 10,
+                "axios_local_total": 8,
+                "axios_national_total": 2,
+                "top_titles": [
+                    "Gilbert's Heritage Park to open first phase in September",
+                    "Anthropic cuts third party usage",
+                ],
+                "top_keywords": ["Arizona", "Axios"],
+            },
+            "recommended_brief": "sources=2 | calendar=244 | flash=20 | quotes=2 | news=10",
+            "takeaway": "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September",
+        },
+    )
 
     mod.build_surface_snapshot(
         surface=mod.SurfaceSpec(
@@ -384,6 +452,42 @@ def test_dashboard_snapshot_exposes_commodity_reasoning_artifacts(tmp_path: Path
     ]:
         assert artifact_id in payloads
         assert payloads[artifact_id]["path"].endswith(f"review/{suffix}")
+
+
+def test_dashboard_snapshot_exposes_jin10_mcp_snapshot_artifact(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    assert "jin10_mcp_snapshot" in payloads
+    assert payloads["jin10_mcp_snapshot"]["path"].endswith("review/latest_jin10_mcp_snapshot.json")
+    assert payloads["jin10_mcp_snapshot"]["summary"]["artifact_group"] == "system_anchor"
+    row = next(row for row in snapshot["catalog"] if row.get("payload_key") == "jin10_mcp_snapshot")
+    assert row["artifact_group"] == "system_anchor"
+    assert row["path"].endswith("review/latest_jin10_mcp_snapshot.json")
+
+
+def test_dashboard_snapshot_exposes_axios_site_snapshot_artifact(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    assert "axios_site_snapshot" in payloads
+    assert payloads["axios_site_snapshot"]["path"].endswith("review/latest_axios_site_snapshot.json")
+    assert payloads["axios_site_snapshot"]["summary"]["artifact_group"] == "system_anchor"
+    row = next(row for row in snapshot["catalog"] if row.get("payload_key") == "axios_site_snapshot")
+    assert row["artifact_group"] == "system_anchor"
+    assert row["path"].endswith("review/latest_axios_site_snapshot.json")
+
+
+def test_dashboard_snapshot_exposes_external_intelligence_snapshot_artifact(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    assert "external_intelligence_snapshot" in payloads
+    assert payloads["external_intelligence_snapshot"]["path"].endswith("review/latest_external_intelligence_snapshot.json")
+    assert payloads["external_intelligence_snapshot"]["summary"]["artifact_group"] == "system_anchor"
+    row = next(row for row in snapshot["catalog"] if row.get("payload_key") == "external_intelligence_snapshot")
+    assert row["artifact_group"] == "system_anchor"
+    assert row["path"].endswith("review/latest_external_intelligence_snapshot.json")
 
 
 def test_public_catalog_dedupes_selected_artifact_against_same_review_file(tmp_path: Path) -> None:

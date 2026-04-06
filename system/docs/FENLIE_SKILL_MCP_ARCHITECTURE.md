@@ -81,6 +81,7 @@
 当前推荐：
 
 - `coingecko`：research-only enrichment
+- `jin10`：research-only macro/calendar/news sidecar
 
 典型 skill：
 
@@ -256,6 +257,94 @@ MCP 策略：
 3. research MCP 只能做 sidecar enrichment，不能静默覆盖 source-owned 指标
 4. blocked auth / blocked initialize 必须明确记为 blocked
 5. skill 是入口，MCP 是能力补充；不要把 MCP 直接当工作流
+
+## Jin10 MCP Research Sidecar
+
+新增的 Jin10 MCP 集成采用 **research sidecar** 形态，而不是替换现有 source-owned Jin10 HTTP provider。
+
+规则：
+
+- 只允许进入 `research_enrichment / research_backtest`
+- 只输出 review/research artifact
+- 不允许直接覆盖 `PublicInternetResearchProvider` 产出的 source-owned 宏观字段
+- 不允许进入 live routing / capital / queue mutation
+
+Repo 内 runner：
+
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_jin10_mcp_snapshot.py`
+
+Repo 内 client：
+
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/jin10_mcp_client.py`
+
+默认 token 环境变量：
+
+- `JIN10_MCP_BEARER_TOKEN`
+
+默认 server URL：
+
+- `https://mcp.jin10.com/mcp`
+
+典型用法：
+
+```bash
+cd /Users/jokenrobot/Downloads/Folders/fenlie
+export JIN10_MCP_BEARER_TOKEN=...
+python3 system/scripts/run_jin10_mcp_snapshot.py \
+  --workspace /Users/jokenrobot/Downloads/Folders/fenlie \
+  --tool-name calendar.latest \
+  --tool-args-json '{"symbols":["XAUUSD"]}'
+```
+
+产物：
+
+- `system/output/review/latest_jin10_mcp_snapshot.json`
+- `system/output/review/latest_jin10_mcp_snapshot.md`
+
+## Axios Public-Site Research Sidecar
+
+Axios 接入采用 **public-site research sidecar**，只读取公开可抓取 sitemap/robots/news feed，不抓首页动态壳层，也不进入 live path。
+
+规则：
+
+- 只允许进入 `research_enrichment / research_backtest`
+- 只输出 review artifact
+- 只允许读取公开 sitemap / robots / news xml
+- 不允许把站点抓取结果上升为 live/source-owned authority
+
+Repo 内 runner：
+
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_axios_site_snapshot.py`
+
+Repo 内 client：
+
+- `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/axios_site_client.py`
+
+产物：
+
+- `system/output/review/latest_axios_site_snapshot.json`
+- `system/output/review/latest_axios_site_snapshot.md`
+
+## Unified External Intelligence
+
+Jin10 与 Axios 之上增加统一 read-model：
+
+- 汇总 runner：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_external_intelligence_snapshot.py`
+- 单入口 refresh runner：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_external_intelligence_refresh.py`
+
+规则：
+
+- unified snapshot 只能聚合 sidecar，不得反向改写各 source-owned provider
+- 只有 `status in {ok, partial}` 且 `ok != false` 的 sidecar 才能计入 active sources
+- blocked auth / blocked initialize 必须继续保持 blocked，不得因 latest artifact 存在而被误计为 active
+- refresh runner 允许重建 dashboard frontend snapshot，但仍属于 `RESEARCH_ONLY`
+
+产物：
+
+- `system/output/review/latest_external_intelligence_snapshot.json`
+- `system/output/review/latest_external_intelligence_snapshot.md`
+- `system/output/review/latest_external_intelligence_refresh.json`
+- `system/output/review/latest_external_intelligence_refresh.md`
 
 ## Recommended Operating Pattern
 

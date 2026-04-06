@@ -422,6 +422,94 @@ const mockSnapshot = {
         contracts_in_focus: ['BU2606'],
       },
     },
+    jin10_mcp_snapshot: {
+      label: 'jin10 mcp snapshot',
+      path: 'review/latest_jin10_mcp_snapshot.json',
+      summary: {
+        status: 'ok',
+        change_class: 'RESEARCH_ONLY',
+        recommended_brief: 'calendar=244 | flash=20 | quotes=2',
+        takeaway: '美国至4月3日当周EIA原油库存(万桶)',
+      },
+      payload: {
+        status: 'ok',
+        summary: {
+          calendar_total: 244,
+          high_importance_count: 5,
+          high_importance_titles: [
+            '美国至4月3日当周EIA原油库存(万桶)',
+            '美国至4月4日当周初请失业金人数(万人)',
+          ],
+          flash_total: 20,
+          latest_flash_briefs: [
+            '中国品牌车在曼谷国际车展预订量首次超越日系车',
+            '以色列国防军：胡塞武装无人机已被拦截',
+          ],
+          quote_watch: [
+            { code: 'XAUUSD', name: '现货黄金', close: '4671.90', ups_percent: '-0.08' },
+            { code: 'USOIL', name: 'WTI原油', close: '110.850', ups_percent: '-1.274' },
+          ],
+        },
+        recommended_brief: 'calendar=244 | flash=20 | quotes=2',
+        takeaway: '美国至4月3日当周EIA原油库存(万桶)',
+      },
+    },
+    axios_site_snapshot: {
+      label: 'axios site snapshot',
+      path: 'review/latest_axios_site_snapshot.json',
+      summary: {
+        status: 'ok',
+        change_class: 'RESEARCH_ONLY',
+        recommended_brief: 'axios news=10 | local=8 | national=2',
+        takeaway: "Gilbert's Heritage Park to open first phase in September",
+      },
+      payload: {
+        status: 'ok',
+        summary: {
+          news_total: 10,
+          local_total: 8,
+          national_total: 2,
+          top_titles: [
+            "Gilbert's Heritage Park to open first phase in September",
+            'Anthropic cuts third party usage',
+          ],
+          top_keywords: ['Arizona', 'Axios'],
+        },
+        recommended_brief: 'axios news=10 | local=8 | national=2',
+        takeaway: "Gilbert's Heritage Park to open first phase in September",
+      },
+    },
+    external_intelligence_snapshot: {
+      label: 'external intelligence snapshot',
+      path: 'review/latest_external_intelligence_snapshot.json',
+      summary: {
+        status: 'ok',
+        change_class: 'RESEARCH_ONLY',
+        recommended_brief: 'sources=2 | calendar=244 | flash=20 | quotes=2 | news=10',
+        takeaway: "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September",
+      },
+      payload: {
+        status: 'ok',
+        summary: {
+          sources_total: 2,
+          active_sources: ['jin10', 'axios'],
+          calendar_total: 244,
+          high_importance_count: 5,
+          flash_total: 20,
+          quote_watch: ['现货黄金', 'WTI原油'],
+          axios_news_total: 10,
+          axios_local_total: 8,
+          axios_national_total: 2,
+          top_titles: [
+            "Gilbert's Heritage Park to open first phase in September",
+            'Anthropic cuts third party usage',
+          ],
+          top_keywords: ['Arizona', 'Axios'],
+        },
+        recommended_brief: 'sources=2 | calendar=244 | flash=20 | quotes=2 | news=10',
+        takeaway: "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September",
+      },
+    },
     hold_selection_handoff: {
       label: 'hold selection handoff',
       path: 'review/latest_price_action_breakout_pullback_hold_selection_handoff_sim_only.json',
@@ -440,6 +528,9 @@ const mockSnapshot = {
   },
   catalog: [
     { id: 'operator_panel', payload_key: 'operator_panel', artifact_layer: 'canonical', artifact_group: 'system_anchor', category: 'operator-panel', label: 'operator_panel', status: 'ok' },
+    { id: 'external_intelligence_snapshot', payload_key: 'external_intelligence_snapshot', artifact_layer: 'canonical', artifact_group: 'system_anchor', category: 'research', label: 'external_intelligence_snapshot', status: 'ok', path: 'review/latest_external_intelligence_snapshot.json' },
+    { id: 'jin10_mcp_snapshot', payload_key: 'jin10_mcp_snapshot', artifact_layer: 'canonical', artifact_group: 'system_anchor', category: 'research', label: 'jin10_mcp_snapshot', status: 'ok', path: 'review/latest_jin10_mcp_snapshot.json' },
+    { id: 'axios_site_snapshot', payload_key: 'axios_site_snapshot', artifact_layer: 'canonical', artifact_group: 'system_anchor', category: 'research', label: 'axios_site_snapshot', status: 'ok', path: 'review/latest_axios_site_snapshot.json' },
     { id: 'price_action_breakout_pullback', payload_key: 'price_action_breakout_pullback', artifact_layer: 'canonical', artifact_group: 'research_mainline', category: 'sim-only', label: 'price_action_breakout_pullback', status: 'ok' },
     { id: 'price_action_exit_risk', payload_key: 'price_action_exit_risk', artifact_layer: 'canonical', artifact_group: 'research_mainline', category: 'sim-only', label: 'price_action_exit_risk', status: 'warning' },
     { id: 'price_action_exit_hold_robustness', payload_key: 'price_action_exit_hold_robustness', artifact_layer: 'canonical', artifact_group: 'research_exit_risk', category: 'sim-only', label: 'price_action_exit_hold_robustness', status: 'ok' },
@@ -1027,6 +1118,13 @@ describe('Fenlie terminal console', () => {
     expect(commodityCard?.textContent || '').toContain('supply_chain_tightening');
     expect(commodityCard?.textContent || '').toContain('feedstock_cost_push_chain');
     expect(commodityCard?.textContent || '').toContain('BU2606');
+    expect(screen.getByRole('heading', { name: '外部情报带' })).toBeTruthy();
+    const externalCard = screen.getByRole('heading', { name: '外部情报带' }).closest('section');
+    expect(externalCard?.textContent || '').toContain('美国至4月3日当周EIA原油库存(万桶)');
+    expect(externalCard?.textContent || '').toContain("Gilbert's Heritage Park to open first phase in September");
+    expect(externalCard?.textContent || '').toContain('现货黄金');
+    expect(externalCard?.textContent || '').toContain('WTI原油');
+    expect(externalCard?.textContent || '').toContain('Arizona');
     const cpaEntry = screen.getByRole('link', { name: '进入 CPA 管理' });
     expect(cpaEntry.getAttribute('href')).toBe('/cpa');
     expect(cpaEntry.textContent || '').toContain('CPA 管理');
@@ -1265,8 +1363,12 @@ describe('Fenlie terminal console', () => {
     expect(textOf('.context-header-route-badges')).toContain('当前视图：公开终端');
     expect(document.querySelector('.top-rail')).toBeNull();
     expect(screen.getByText('风险观察')).toBeTruthy();
+    expect(screen.getByText('市场输入')).toBeTruthy();
     expect(screen.getByText('风险诊断')).toBeTruthy();
     expect(screen.getByText('动作分流')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '外部情报带' })).toBeTruthy();
+    expect(document.body.textContent || '').toContain('美国至4月3日当周EIA原油库存(万桶)');
+    expect(document.body.textContent || '').toContain("Gilbert's Heritage Park to open first phase in September");
     expect(screen.getByRole('link', { name: '审计诊断' }).getAttribute('href')).toBe('/ops/audits');
     expect(screen.getByRole('link', { name: '处置手册' }).getAttribute('href')).toBe('/ops/runbooks');
     expect(screen.getByRole('link', { name: '工作流' }).getAttribute('href')).toBe('/ops/workflow');
@@ -2589,6 +2691,48 @@ describe('Fenlie terminal console', () => {
       expect(screen.getByText('告警定向原始层')).toBeTruthy();
     });
     expect(document.body.textContent || '').toMatch(/price_action_exit_risk|continue forward window/);
+  });
+
+  it('renders structured Jin10 workspace detail when the Jin10 artifact is focused', async () => {
+    await navigatePath('/workspace/artifacts?artifact=jin10_mcp_snapshot&group=system_anchor');
+    await renderApp();
+
+    await screen.findByLabelText('workspace-context-strip');
+    expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/jin10_mcp_snapshot|Jin10/);
+    expect(screen.getByText('Jin10 侧边车摘要')).toBeTruthy();
+    const bodyText = document.body.textContent || '';
+    expect(bodyText).toContain('美国至4月3日当周EIA原油库存(万桶)');
+    expect(bodyText).toContain('中国品牌车在曼谷国际车展预订量首次超越日系车');
+    expect(bodyText).toContain('现货黄金');
+    expect(bodyText).toContain('WTI原油');
+  });
+
+  it('renders structured Axios workspace detail when the Axios artifact is focused', async () => {
+    await navigatePath('/workspace/artifacts?artifact=axios_site_snapshot&group=system_anchor');
+    await renderApp();
+
+    await screen.findByLabelText('workspace-context-strip');
+    expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/axios_site_snapshot|Axios/);
+    expect(screen.getByText('Axios 侧边车摘要')).toBeTruthy();
+    const bodyText = document.body.textContent || '';
+    expect(bodyText).toContain("Gilbert's Heritage Park to open first phase in September");
+    expect(bodyText).toContain('Anthropic cuts third party usage');
+    expect(bodyText).toContain('Arizona');
+    expect(bodyText).toContain('Axios');
+  });
+
+  it('renders structured external intelligence workspace detail when the unified artifact is focused', async () => {
+    await navigatePath('/workspace/artifacts?artifact=external_intelligence_snapshot&group=system_anchor');
+    await renderApp();
+
+    await screen.findByLabelText('workspace-context-strip');
+    expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/external_intelligence_snapshot|外部情报带/);
+    expect(screen.getByText('外部情报带摘要')).toBeTruthy();
+    const bodyText = document.body.textContent || '';
+    expect(bodyText).toContain('美国至4月3日当周EIA原油库存(万桶)');
+    expect(bodyText).toContain("Gilbert's Heritage Park to open first phase in September");
+    expect(bodyText).toContain('现货黄金');
+    expect(bodyText).toContain('Arizona');
   });
 
   it('syncs workspace explorer state back into the url', async () => {

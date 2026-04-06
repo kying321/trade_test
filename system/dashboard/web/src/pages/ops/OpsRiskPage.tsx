@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Badge, DenseTable, MetricStrip, PanelCard } from '../../components/ui-kit';
+import { Badge, DenseTable, KeyValueGrid, MetricStrip, PanelCard } from '../../components/ui-kit';
 import { labelFor } from '../../utils/dictionary';
 import { safeDisplayValue } from '../../utils/formatters';
 import { buildWorkspaceLink, type SharedFocusState } from '../../utils/focus-links';
@@ -15,6 +15,18 @@ function previewRows(rows: Array<Record<string, unknown>>, limit = 4) {
   return rows.slice(0, limit);
 }
 
+function jin10Payload(model: TerminalReadModel) {
+  return (model.workspace.artifactPayloads?.jin10_mcp_snapshot?.payload as Record<string, unknown> | undefined) || {};
+}
+
+function axiosPayload(model: TerminalReadModel) {
+  return (model.workspace.artifactPayloads?.axios_site_snapshot?.payload as Record<string, unknown> | undefined) || {};
+}
+
+function externalPayload(model: TerminalReadModel) {
+  return (model.workspace.artifactPayloads?.external_intelligence_snapshot?.payload as Record<string, unknown> | undefined) || {};
+}
+
 export function OpsRiskPage({ model, focus }: OpsRiskPageProps) {
   const view = model.view.terminal;
   const alertCount = model.orchestration.alerts.length;
@@ -23,6 +35,12 @@ export function OpsRiskPage({ model, focus }: OpsRiskPageProps) {
   const actionQueue = model.signalRisk.actionQueue as unknown as Array<Record<string, unknown>>;
   const primaryAlert = model.orchestration.alerts[0] || null;
   const activeArtifact = safeDisplayValue(focus.artifact);
+  const external = externalPayload(model);
+  const externalSummary = (external.summary as Record<string, unknown> | undefined) || {};
+  const jin10 = jin10Payload(model);
+  const jin10Summary = (jin10.summary as Record<string, unknown> | undefined) || {};
+  const axios = axiosPayload(model);
+  const axiosSummary = (axios.summary as Record<string, unknown> | undefined) || {};
 
   return (
     <section className="ops-risk-page" aria-label="ops-risk-page">
@@ -41,6 +59,93 @@ export function OpsRiskPage({ model, focus }: OpsRiskPageProps) {
             )}
             <MetricStrip items={model.signalRisk.gateScores} showRawValues={view.signalRisk.gateScoresStrip.showRawValues} />
             <MetricStrip items={model.orchestration.guards} showRawValues={view.orchestration.guardsStrip.showRawValues} />
+          </PanelCard>
+        </section>
+
+        <section className="terminal-rhythm-band terminal-rhythm-state" aria-label="ops-risk-market-input">
+          <PanelCard
+            title="市场输入"
+            kicker="observe / external intelligence"
+            meta="把 research sidecar 外部情报收敛到风险观察页，不把它们提升为 live source-of-truth。"
+          >
+            {Object.keys(external).length ? (
+              <PanelCard
+                title="外部情报带"
+                kicker="aggregated / jin10 + axios"
+                meta={safeDisplayValue(external.recommended_brief || '外部情报汇总')}
+                actions={<Link className="button" to={buildWorkspaceLink('artifacts', { artifact: 'external_intelligence_snapshot', group: 'system_anchor' })}>查看外部情报工件</Link>}
+              >
+                <KeyValueGrid
+                  rows={[
+                    { key: 'sources_total', label: '情报源', value: externalSummary.sources_total ?? '—' },
+                    { key: 'calendar_total', label: '日历事件', value: externalSummary.calendar_total ?? '—' },
+                    { key: 'flash_total', label: '最新快讯', value: externalSummary.flash_total ?? '—' },
+                    { key: 'news_total', label: '新闻条目', value: externalSummary.axios_news_total ?? '—' },
+                    {
+                      key: 'quote_watch',
+                      label: '盯盘品种',
+                      value: Array.isArray(externalSummary.quote_watch)
+                        ? externalSummary.quote_watch.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—').join(', ')
+                        : '—',
+                    },
+                    { key: 'takeaway', label: '重点', value: safeDisplayValue(external.takeaway), showRaw: true },
+                  ]}
+                />
+              </PanelCard>
+            ) : null}
+            <div className="overview-entry-grid">
+              {Object.keys(jin10).length ? (
+                <PanelCard
+                  title="Jin10 研究侧边车"
+                  kicker="calendar / flash / quote watch"
+                  meta={safeDisplayValue(jin10.recommended_brief || '财经日历 / 快讯 / 盯盘摘要')}
+                  actions={<Link className="button" to={buildWorkspaceLink('artifacts', { artifact: 'jin10_mcp_snapshot', group: 'system_anchor' })}>查看 Jin10 工件</Link>}
+                >
+                  <KeyValueGrid
+                    rows={[
+                      { key: 'calendar_total', label: '日历事件', value: jin10Summary.calendar_total ?? '—' },
+                      { key: 'high_importance_count', label: '高重要事件', value: jin10Summary.high_importance_count ?? '—' },
+                      { key: 'flash_total', label: '最新快讯', value: jin10Summary.flash_total ?? '—' },
+                      {
+                        key: 'quote_watch',
+                        label: '盯盘品种',
+                        value: Array.isArray(jin10Summary.quote_watch)
+                          ? jin10Summary.quote_watch
+                            .map((row) => safeDisplayValue((row as Record<string, unknown>)?.name || (row as Record<string, unknown>)?.code))
+                            .filter((value) => value && value !== '—')
+                            .join(', ')
+                          : '—',
+                      },
+                    ]}
+                  />
+                  {safeDisplayValue(jin10.takeaway) !== '—' ? <div className="empty-block">重点：{safeDisplayValue(jin10.takeaway)}</div> : null}
+                </PanelCard>
+              ) : null}
+              {Object.keys(axios).length ? (
+                <PanelCard
+                  title="Axios 研究侧边车"
+                  kicker="news sitemap / headlines"
+                  meta={safeDisplayValue(axios.recommended_brief || '新闻条目 / 本地与全国分布 / 关键词')}
+                  actions={<Link className="button" to={buildWorkspaceLink('artifacts', { artifact: 'axios_site_snapshot', group: 'system_anchor' })}>查看 Axios 工件</Link>}
+                >
+                  <KeyValueGrid
+                    rows={[
+                      { key: 'news_total', label: 'Axios 条目', value: axiosSummary.news_total ?? '—' },
+                      { key: 'local_total', label: '本地新闻', value: axiosSummary.local_total ?? '—' },
+                      { key: 'national_total', label: '全国新闻', value: axiosSummary.national_total ?? '—' },
+                      {
+                        key: 'top_keywords',
+                        label: '关键词',
+                        value: Array.isArray(axiosSummary.top_keywords)
+                          ? axiosSummary.top_keywords.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—').join(', ')
+                          : '—',
+                      },
+                    ]}
+                  />
+                  {safeDisplayValue(axios.takeaway) !== '—' ? <div className="empty-block">重点：{safeDisplayValue(axios.takeaway)}</div> : null}
+                </PanelCard>
+              ) : null}
+            </div>
           </PanelCard>
         </section>
 
