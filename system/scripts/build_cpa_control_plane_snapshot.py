@@ -164,6 +164,50 @@ def build_snapshot(*, workspace: Path, public_dir: Path, source_root: Path = DEF
         "new_unmounted_emails": [str(row.get("email") or "").strip() for row in new_unmounted_rows if str(row.get("email") or "").strip()],
         "review_queue_preview": review_queue_rows[:10],
         "deactivated_preview": deactivated_rows[:10],
+        "groups": {
+            "retry_candidate_rows": [
+                {
+                    "email": str(row.get("email") or "").strip(),
+                    "bucket": str(row.get("bucket") or "").strip(),
+                    "reason": str(row.get("reason") or "").strip(),
+                    "artifact_title": str(row.get("artifact_title") or "").strip(),
+                    "artifact_flags": str(row.get("artifact_flags") or "").strip(),
+                    "updated_at": str(row.get("updated_at") or "").strip(),
+                }
+                for row in review_queue_rows
+                if str(row.get("bucket") or "").strip() == "retry_candidate"
+            ],
+            "blocked_about_you_rows": [
+                {
+                    "email": str(row.get("email") or "").strip(),
+                    "bucket": str(row.get("bucket") or "").strip(),
+                    "reason": str(row.get("reason") or "").strip(),
+                    "artifact_title": str(row.get("artifact_title") or "").strip(),
+                    "artifact_flags": str(row.get("artifact_flags") or "").strip(),
+                    "updated_at": str(row.get("updated_at") or "").strip(),
+                }
+                for row in review_queue_rows
+                if str(row.get("bucket") or "").strip() == "blocked_about_you"
+            ],
+            "no_retry_deactivated_rows": [
+                {
+                    "email": str(row.get("email") or "").strip(),
+                    "bucket": str(row.get("bucket") or "").strip(),
+                    "reason": str(row.get("reason") or "").strip(),
+                    "artifact_title": str(row.get("artifact_title") or "").strip(),
+                    "artifact_flags": str(row.get("artifact_flags") or "").strip(),
+                    "updated_at": str(row.get("updated_at") or "").strip(),
+                }
+                for row in deactivated_rows
+            ],
+            "new_unmounted_rows": [
+                {
+                    "email": str(row.get("email") or "").strip(),
+                    "timestamp": str(row.get("timestamp") or "").strip(),
+                }
+                for row in new_unmounted_rows
+            ],
+        },
         "acceptance": acceptance_map,
         "latest_kernel_run_id": str(kernel_map.get("run_id") or ""),
         "guarded_actions": guarded_actions,

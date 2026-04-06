@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ActionButton } from '../components/control-primitives';
-import { Badge, PanelCard } from '../components/ui-kit';
+import { Badge, DenseTable, DrilldownSection, PanelCard } from '../components/ui-kit';
 import {
   buildManagementBase,
   buildManagementHeaders,
@@ -42,6 +42,7 @@ type CpaControlSnapshot = {
   latest_kernel_run_id?: string;
   historical_success_emails?: string[];
   guarded_actions?: Array<Record<string, unknown>>;
+  groups?: Record<string, Array<Record<string, unknown>>>;
 };
 
 function trimJsonSuffix(name: string) {
@@ -461,6 +462,11 @@ export function CpaPage() {
   const historicalMissingInLiveCount = Math.max(0, historicalSuccessEmails.length - historicalHitCount);
   const unexpectedLiveCount = liveEmails.filter((email) => !historicalSuccessEmails.includes(email)).length;
   const guardedActions = Array.isArray(controlSnapshot?.guarded_actions) ? controlSnapshot?.guarded_actions : [];
+  const groups = (controlSnapshot?.groups || {}) as Record<string, Array<Record<string, unknown>>>;
+  const retryCandidateRows = Array.isArray(groups.retry_candidate_rows) ? groups.retry_candidate_rows : [];
+  const blockedAboutYouRows = Array.isArray(groups.blocked_about_you_rows) ? groups.blocked_about_you_rows : [];
+  const noRetryDeactivatedRows = Array.isArray(groups.no_retry_deactivated_rows) ? groups.no_retry_deactivated_rows : [];
+  const newUnmountedRows = Array.isArray(groups.new_unmounted_rows) ? groups.new_unmounted_rows : [];
 
   return (
     <div className="workspace-grid single-column cpa-page">
@@ -502,6 +508,61 @@ export function CpaPage() {
               <pre className="json-block">{String(action.command || '')}</pre>
             </div>
           ))}
+        </PanelCard>
+      ) : null}
+      {(retryCandidateRows.length || blockedAboutYouRows.length || noRetryDeactivatedRows.length || newUnmountedRows.length) ? (
+        <PanelCard title="CPA 分组表" kicker="source-owned / grouped drilldown" meta="把 retry / blocked / deactivated / new_unmounted 从 summary chip 下钻成结构化表。">
+          {retryCandidateRows.length ? (
+            <DrilldownSection title="retry_candidate 队列" summary={`${retryCandidateRows.length} 条`} defaultOpen>
+              <DenseTable
+                columns={[
+                  { key: 'email', label: '邮箱' },
+                  { key: 'reason', label: '原因' },
+                  { key: 'artifact_title', label: '页面标题' },
+                  { key: 'artifact_flags', label: '标记' },
+                ]}
+                rows={retryCandidateRows}
+              />
+            </DrilldownSection>
+          ) : null}
+          {blockedAboutYouRows.length ? (
+            <DrilldownSection title="blocked_about_you 队列" summary={`${blockedAboutYouRows.length} 条`} defaultOpen>
+              <DenseTable
+                columns={[
+                  { key: 'email', label: '邮箱' },
+                  { key: 'reason', label: '原因' },
+                  { key: 'artifact_title', label: '页面标题' },
+                  { key: 'artifact_flags', label: '标记' },
+                ]}
+                rows={blockedAboutYouRows}
+              />
+            </DrilldownSection>
+          ) : null}
+          {noRetryDeactivatedRows.length ? (
+            <DrilldownSection title="no_retry_deactivated 队列" summary={`${noRetryDeactivatedRows.length} 条`} defaultOpen>
+              <DenseTable
+                columns={[
+                  { key: 'email', label: '邮箱' },
+                  { key: 'reason', label: '原因' },
+                  { key: 'artifact_title', label: '页面标题' },
+                  { key: 'artifact_flags', label: '标记' },
+                  { key: 'updated_at', label: '更新时间' },
+                ]}
+                rows={noRetryDeactivatedRows}
+              />
+            </DrilldownSection>
+          ) : null}
+          {newUnmountedRows.length ? (
+            <DrilldownSection title="new_unmounted 池" summary={`${newUnmountedRows.length} 条`} defaultOpen>
+              <DenseTable
+                columns={[
+                  { key: 'email', label: '邮箱' },
+                  { key: 'timestamp', label: '注册时间' },
+                ]}
+                rows={newUnmountedRows}
+              />
+            </DrilldownSection>
+          ) : null}
         </PanelCard>
       ) : null}
       <PanelCard title="CPA 管理" kicker="auth-files / quota / delete-guard" meta="认证文件、额度查询与误删保护">

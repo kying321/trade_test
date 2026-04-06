@@ -60,6 +60,41 @@ describe('CpaPage', () => {
                 command: 'cd /Users/jokenrobot/Downloads/Folders/MAC工具 && python3 check_five_account_acceptance.py --csv data/registered_success_active20.csv --target-count 20 --store data/pipeline_store.sqlite3 --pretty',
               },
             ],
+            groups: {
+              retry_candidate_rows: [
+                {
+                  email: 'retry1@fuuu.fun',
+                  bucket: 'retry_candidate',
+                  reason: 'needs remount',
+                  artifact_title: '欢迎回来',
+                  artifact_flags: 'consent,welcome_back',
+                },
+              ],
+              blocked_about_you_rows: [
+                {
+                  email: 'about1@fuuu.fun',
+                  bucket: 'blocked_about_you',
+                  reason: 'stuck on age/about-you',
+                  artifact_title: '确认一下你的年龄',
+                  artifact_flags: 'about_you,consent',
+                },
+              ],
+              no_retry_deactivated_rows: [
+                {
+                  email: 'dead1@fuuu.fun',
+                  bucket: 'no_retry_deactivated',
+                  reason: 'deactivated / disabled',
+                  artifact_title: '糟糕，出错了！',
+                  artifact_flags: 'deactivated',
+                },
+              ],
+              new_unmounted_rows: [
+                {
+                  email: 'new1@fuuu.fun',
+                  timestamp: '2026-03-29 18:51:17',
+                },
+              ],
+            },
             latest_kernel_run_id: 'run-kernel-1',
           }),
         };
@@ -84,6 +119,14 @@ describe('CpaPage', () => {
     expect(screen.getByText(/20 个历史成功账号/)).toBeTruthy();
     expect(screen.getByText(/Guarded Actions/)).toBeTruthy();
     expect(screen.getByText(/验收回放 \/ 历史成功20/)).toBeTruthy();
+    expect(screen.getByText(/retry_candidate 队列/)).toBeTruthy();
+    expect(screen.getByText(/blocked_about_you 队列/)).toBeTruthy();
+    expect(screen.getByText(/no_retry_deactivated 队列/)).toBeTruthy();
+    expect(screen.getByText(/new_unmounted 池/)).toBeTruthy();
+    expect(screen.getByText(/retry1@fuuu.fun/)).toBeTruthy();
+    expect(screen.getByText(/about1@fuuu.fun/)).toBeTruthy();
+    expect(screen.getByText(/dead1@fuuu.fun/)).toBeTruthy();
+    expect(screen.getByText(/new1@fuuu.fun/)).toBeTruthy();
     expect(await screen.findByText('token_oc_alpha')).toBeTruthy();
     expect(screen.getByText(/live 已连接 1/)).toBeTruthy();
     expect(screen.getByText(/历史成功命中 1/)).toBeTruthy();
