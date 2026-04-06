@@ -26,6 +26,7 @@
     - `.github/workflows/branch-policy.yml` 与 `.github/workflows/hotfix-pr-gate.yml` 现也会在 PR 侧渲染同类 advisory summary / warning，但不改原有 gate 成败
     - 上述两个 PR workflow 现在还会上传 `*_branch_governance_audit.{json,md}`，保证 summary/warning 背后有原始证据附件
     - 上述两个 PR workflow 现在还会 upsert sticky PR comment：`fenlie-governance-audit-advisory`
+    - sticky PR comment 现优先使用仓库 secret `GOVERNANCE_COMMENT_TOKEN`；未配置时回退 `github.token`
     - 上述三个 workflow 的 advisory 执行路径已统一经由 `run_governance_audit_advisory.sh`，降低 summary/comment/artifact 输出漂移
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`

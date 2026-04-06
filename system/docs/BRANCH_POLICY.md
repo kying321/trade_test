@@ -86,6 +86,8 @@ Current baseline (applied on 2026-03-01):
   - 仅补充审计可见性，不改变原有 required checks 的通过/失败语义
   - 现在还会上传 `*_branch_governance_audit.{json,md}` 作为 PR 侧可下载证据附件
   - 现在还会用 sticky comment 方式 upsert `fenlie-governance-audit-advisory` PR comment，集中暴露 lane ownership / recommended_action
+  - comment upsert 现优先读取仓库 secret：`GOVERNANCE_COMMENT_TOKEN`
+  - 若该 secret 未配置，则回退到 `github.token`；若 integration 仍无 comment 权限，则继续降级为 non-blocking warning
   - 三个 workflow 现统一经由：
     `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_governance_audit_advisory.sh`
     收敛 advisory runner，避免 shell 片段继续分叉
