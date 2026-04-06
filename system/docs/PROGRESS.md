@@ -104,6 +104,28 @@
     - 只做 `account bundle -> token store -> run ledger -> cpa auth-file export`
     - 不接 browser/oauth/live management API
     - 作为 `cpa` 控制面的底层 source-owned kernel 预埋
+- CPA control plane Phase 2 已接入 repo：
+  - builder：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_cpa_control_plane_snapshot.py`
+  - 当前来源：
+    - `/Users/jokenrobot/Downloads/Folders/MAC工具/data/registered_success_active20.csv`
+    - `/Users/jokenrobot/Downloads/Folders/MAC工具/data/active20_acceptance_20260329_212018.json`
+    - `/Users/jokenrobot/Downloads/Folders/MAC工具/data/cpa_account_inventory.json`
+    - `/Users/jokenrobot/Downloads/Folders/MAC工具/data/cpa_non_active_review_queue.csv`
+    - `/Users/jokenrobot/Downloads/Folders/MAC工具/data/cpa_no_retry_deactivated_accounts.csv`
+    - `/Users/jokenrobot/Downloads/Folders/MAC工具/data/registered_new_unmounted.csv`
+    - `system/output/review/latest_cpa_channel_ingest.json`
+  - 当前产物：
+    - `system/output/review/latest_cpa_control_plane_snapshot.json`
+    - `system/output/review/latest_cpa_control_plane_snapshot.md`
+    - `system/dashboard/web/public/data/cpa_control_plane_snapshot.json`
+  - 当前消费面：
+    - `run_operator_panel_refresh.py` 会自动刷新并复制到 `dist/data/`
+    - `system/dashboard/web/src/pages/CpaPage.tsx` 会读取 `/data/cpa_control_plane_snapshot.json`
+  - 当前语义：
+    - 历史成功 20-active 快照作为 source-owned 成功集
+    - 当前 inventory / review queue / no-retry-deactivated 作为漂移/重建状态面
+    - CPA 前端控制面不再只依赖临时 localStorage/error ledger，开始读取 source-owned 只读摘要
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`

@@ -35,6 +35,23 @@ describe('CpaPage', () => {
   it('renders config fields and loads codex auth files into a fenlie-style table', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/data/cpa_control_plane_snapshot.json')) {
+        return {
+          ok: true,
+          json: async () => ({
+            summary: {
+              historical_success_total: 20,
+              active_target_authfiles: 20,
+              inventory_total: 72,
+              retry_candidate_total: 5,
+              blocked_about_you_total: 8,
+              no_retry_deactivated_total: 11,
+              new_unmounted_total: 6,
+            },
+            latest_kernel_run_id: 'run-kernel-1',
+          }),
+        };
+      }
       if (url.includes('/auth-files')) {
         return {
           ok: true,
@@ -51,6 +68,8 @@ describe('CpaPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '开始连接' }));
 
     expect(await screen.findByRole('heading', { name: 'CPA 管理' })).toBeTruthy();
+    expect(await screen.findByText(/历史成功快照/)).toBeTruthy();
+    expect(screen.getByText(/20 个历史成功账号/)).toBeTruthy();
     expect(await screen.findByText('token_oc_alpha')).toBeTruthy();
     expect(screen.queryByText('non_chat_file')).toBeNull();
     expect(screen.getByRole('button', { name: '查询额度' })).toBeTruthy();
@@ -68,6 +87,12 @@ describe('CpaPage', () => {
     ];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/data/cpa_control_plane_snapshot.json')) {
+        return {
+          ok: true,
+          json: async () => ({ summary: {} }),
+        };
+      }
       if (url.includes('/auth-files')) {
         return {
           ok: true,
@@ -121,6 +146,12 @@ describe('CpaPage', () => {
   it('never marks network failures deletable even when they repeat', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/data/cpa_control_plane_snapshot.json')) {
+        return {
+          ok: true,
+          json: async () => ({ summary: {} }),
+        };
+      }
       if (url.includes('/auth-files')) {
         return {
           ok: true,

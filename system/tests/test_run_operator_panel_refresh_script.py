@@ -146,6 +146,16 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
                 "latest_artifact": str(review_dir / "latest_conversation_feedback_projection_internal.json"),
                 "status": "ok",
             }
+        if name == "build_cpa_control_plane_snapshot":
+            (public_dir / "data" / "cpa_control_plane_snapshot.json").write_text(
+                json.dumps({"summary": {"historical_success_total": 20}}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "artifact_json": str(review_dir / "latest_cpa_control_plane_snapshot.json"),
+                "public_path": str(public_dir / "data" / "cpa_control_plane_snapshot.json"),
+                "status": "ok",
+            }
         if name == "build_dashboard_frontend_snapshot":
             (public_dir / "data" / "fenlie_dashboard_snapshot.json").write_text(
                 json.dumps({"surface": "public"}) + "\n",
@@ -193,6 +203,9 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
     assert payload["external_intelligence_snapshot_artifact"] == str(review_dir / "latest_external_intelligence_snapshot.json")
     assert payload["external_intelligence_recommended_brief"] == "sources=1 | calendar=0 | flash=0 | quotes=0 | news=10"
     assert payload["external_intelligence_takeaway"] == "NBA takes bids on European league, eyes 2027"
+    assert payload["cpa_control_plane_status"] == "ok"
+    assert payload["cpa_control_plane_artifact"] == str(review_dir / "latest_cpa_control_plane_snapshot.json")
+    assert payload["cpa_control_plane_public_path"] == str(public_dir / "data" / "cpa_control_plane_snapshot.json")
     assert payload["commodity_reasoning_primary_scenario_brief"] == "supply_chain_tightening"
     assert payload["commodity_reasoning_primary_chain_brief"] == "feedstock_cost_push_chain"
     assert payload["commodity_reasoning_range_scope_brief"] == "contract_focused"
@@ -255,6 +268,14 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
         "--now",
         "2026-03-21T08:40:00Z",
     ]
+    assert seen_cmds["build_cpa_control_plane_snapshot"] == [
+        "python3",
+        str(system_root / "scripts" / "build_cpa_control_plane_snapshot.py"),
+        "--workspace",
+        str(workspace),
+        "--public-dir",
+        str(public_dir),
+    ]
     assert seen_cmds["run_event_crisis_pipeline"] == [
         "python3",
         str(system_root / "scripts" / "run_event_crisis_pipeline.py"),
@@ -279,6 +300,11 @@ def test_build_summary_does_not_report_degraded_operator_head_when_full_source_p
             "external_intelligence_path": str(tmp_path / "latest_external_intelligence_snapshot.json"),
             "recommended_brief": "sources=1 | calendar=0 | flash=0 | quotes=0 | news=10",
             "takeaway": "NBA takes bids on European league, eyes 2027",
+        },
+        cpa_control_payload={
+            "status": "ok",
+            "artifact_json": str(tmp_path / "latest_cpa_control_plane_snapshot.json"),
+            "public_path": str(tmp_path / "public" / "data" / "cpa_control_plane_snapshot.json"),
         },
         panel_payload={
             "summary": {
@@ -346,6 +372,16 @@ def test_main_degrades_when_external_intelligence_refresh_fails(monkeypatch, tmp
             }
         if name == "build_conversation_feedback_projection_internal":
             return {"artifact": str(review_dir / "feedback.json"), "latest_artifact": str(review_dir / "latest_feedback.json")}
+        if name == "build_cpa_control_plane_snapshot":
+            (public_dir / "data" / "cpa_control_plane_snapshot.json").write_text(
+                json.dumps({"summary": {"historical_success_total": 20}}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "status": "ok",
+                "artifact_json": str(review_dir / "latest_cpa_control_plane_snapshot.json"),
+                "public_path": str(public_dir / "data" / "cpa_control_plane_snapshot.json"),
+            }
         if name == "build_dashboard_frontend_snapshot":
             (public_dir / "data" / "fenlie_dashboard_snapshot.json").write_text(json.dumps({"surface": "public"}) + "\n", encoding="utf-8")
             (public_dir / "data" / "fenlie_dashboard_internal_snapshot.json").write_text(json.dumps({"surface": "internal"}) + "\n", encoding="utf-8")
@@ -371,4 +407,5 @@ def test_main_degrades_when_external_intelligence_refresh_fails(monkeypatch, tmp
     assert payload["ok"] is True
     assert payload["external_intelligence_status"] == "degraded_request_failed"
     assert payload["external_intelligence_takeaway"] == "axios timeout"
+    assert payload["cpa_control_plane_status"] == "ok"
     assert payload["snapshot_outputs"] == [str(public_dir / "data" / "fenlie_dashboard_snapshot.json")]

@@ -37,6 +37,11 @@ type StatusMessage = {
   text: string;
 };
 
+type CpaControlSnapshot = {
+  summary?: Record<string, unknown>;
+  latest_kernel_run_id?: string;
+};
+
 function trimJsonSuffix(name: string) {
   return name.replace(/\.json$/i, '');
 }
@@ -188,6 +193,7 @@ function matchFilters(row: CpaDisplayRow, filters: {
 export function CpaPage() {
   const [server, setServer] = useState('');
   const [password, setPassword] = useState('');
+  const [controlSnapshot, setControlSnapshot] = useState<CpaControlSnapshot | null>(null);
   const [rows, setRows] = useState<CpaRowRecord[]>([]);
   const [status, setStatus] = useState<StatusMessage | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -203,6 +209,24 @@ export function CpaPage() {
   useEffect(() => {
     persistCpaErrorLedger(ledger);
   }, [ledger]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const resp = await fetch('/data/cpa_control_plane_snapshot.json');
+        if (!resp.ok) return;
+        const payload = await resp.json();
+        if (!active || !payload || typeof payload !== 'object') return;
+        setControlSnapshot(payload as CpaControlSnapshot);
+      } catch {
+        // degrade-only
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const base = useMemo(() => buildManagementBase(server), [server]);
   const headers = useMemo(() => buildManagementHeaders(password), [password]);
@@ -415,9 +439,25 @@ export function CpaPage() {
   };
 
   const bucketSummaryEntries = Object.entries(bucketCounts).sort((a, b) => a[0].localeCompare(b[0]));
+  const controlSummary = (controlSnapshot?.summary || {}) as Record<string, unknown>;
 
   return (
     <div className="workspace-grid single-column cpa-page">
+      {controlSnapshot ? (
+        <PanelCard title="CPA 渠道状态" kicker="source-owned / historical acceptance + inventory" meta="历史成功快照、当前 inventory 与主仓 CPA kernel 统一只读摘要">
+          <div className="chip-row cpa-summary-grid">
+            <span className="summary-chip">{`${Number(controlSummary.historical_success_total || 0)} 个历史成功账号`}</span>
+            <span className="summary-chip">{`active 验收快照 ${Number(controlSummary.active_target_authfiles || 0)}`}</span>
+            <span className="summary-chip">{`inventory ${Number(controlSummary.inventory_total || 0)}`}</span>
+            <span className="summary-chip">{`retry_candidate ${Number(controlSummary.retry_candidate_total || 0)}`}</span>
+            <span className="summary-chip">{`blocked_about_you ${Number(controlSummary.blocked_about_you_total || 0)}`}</span>
+            <span className="summary-chip">{`no_retry_deactivated ${Number(controlSummary.no_retry_deactivated_total || 0)}`}</span>
+            <span className="summary-chip">{`new_unmounted ${Number(controlSummary.new_unmounted_total || 0)}`}</span>
+            <span className="summary-chip">{`kernel accounts ${Number(controlSummary.latest_kernel_accounts_total || 0)}`}</span>
+            {controlSnapshot.latest_kernel_run_id ? <span className="summary-chip">{`kernel run ${controlSnapshot.latest_kernel_run_id}`}</span> : null}
+          </div>
+        </PanelCard>
+      ) : null}
       <PanelCard title="CPA 管理" kicker="auth-files / quota / delete-guard" meta="认证文件、额度查询与误删保护">
         <div className="cpa-config-row">
           <label className="cpa-field">
