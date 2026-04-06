@@ -129,6 +129,7 @@ def build_summary(
     public_dir: Path,
     dist_dir: Path,
     external_refresh_payload: dict[str, Any],
+    cpa_control_payload: dict[str, Any],
     panel_payload: dict[str, Any],
     snapshot_payload: dict[str, Any],
     feedback_payload: dict[str, Any],
@@ -175,6 +176,9 @@ def build_summary(
         "external_intelligence_snapshot_artifact": safe_text(external_refresh_payload.get("external_intelligence_path")),
         "external_intelligence_recommended_brief": safe_text(external_refresh_payload.get("recommended_brief")),
         "external_intelligence_takeaway": safe_text(external_refresh_payload.get("takeaway")),
+        "cpa_control_plane_status": safe_text(cpa_control_payload.get("status")),
+        "cpa_control_plane_artifact": safe_text(cpa_control_payload.get("artifact_json")),
+        "cpa_control_plane_public_path": safe_text(cpa_control_payload.get("public_path")),
         "snapshot_outputs": list(snapshot_payload.get("outputs") or []),
         "sync_results": sync_results,
     }
@@ -249,6 +253,18 @@ def main() -> None:
         ],
     )
 
+    cpa_control_payload = run_json(
+        name="build_cpa_control_plane_snapshot",
+        cmd=[
+            "python3",
+            str(system_root / "scripts" / "build_cpa_control_plane_snapshot.py"),
+            "--workspace",
+            str(workspace),
+            "--public-dir",
+            str(public_dir),
+        ],
+    )
+
     snapshot_payload = run_json(
         name="build_dashboard_frontend_snapshot",
         cmd=[
@@ -264,6 +280,7 @@ def main() -> None:
     sync_results = [
         sync_copy(public_dir / "operator_task_visual_panel.html", dist_dir / "operator_task_visual_panel.html"),
         sync_copy(public_dir / "operator_task_visual_panel_data.json", dist_dir / "operator_task_visual_panel_data.json"),
+        sync_copy(public_dir / "data" / "cpa_control_plane_snapshot.json", dist_dir / "data" / "cpa_control_plane_snapshot.json"),
         sync_copy(public_dir / "data" / "fenlie_dashboard_snapshot.json", dist_dir / "data" / "fenlie_dashboard_snapshot.json"),
         sync_copy(public_dir / "data" / "fenlie_dashboard_internal_snapshot.json", dist_dir / "data" / "fenlie_dashboard_internal_snapshot.json"),
     ]
@@ -275,6 +292,7 @@ def main() -> None:
                 public_dir=public_dir,
                 dist_dir=dist_dir,
                 external_refresh_payload=external_refresh_payload,
+                cpa_control_payload=cpa_control_payload,
                 panel_payload=panel_payload,
                 snapshot_payload=snapshot_payload,
                 feedback_payload=feedback_payload,
