@@ -93,6 +93,187 @@ function buildCommodityReasoningMetrics(model: TerminalReadModel | null): Metric
   return [...micro, ...repair];
 }
 
+function buildJin10Metrics(model: TerminalReadModel | null): MetricItem[] {
+  if (!model) return [];
+  const payload = model.workspace.artifactPayloads?.jin10_mcp_snapshot?.payload as Record<string, unknown> | undefined;
+  const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  return [
+    {
+      id: 'jin10-calendar-total',
+      label: '日历事件',
+      value: summary.calendar_total ?? '—',
+      tone: statusTone(summary.calendar_total && Number(summary.calendar_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'jin10-high-importance',
+      label: '高重要事件',
+      value: summary.high_importance_count ?? '—',
+      tone: statusTone(summary.high_importance_count && Number(summary.high_importance_count) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'jin10-flash-total',
+      label: '最新快讯',
+      value: summary.flash_total ?? '—',
+      tone: statusTone(summary.flash_total && Number(summary.flash_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'jin10-quote-watch',
+      label: '盯盘品种',
+      value: Array.isArray(summary.quote_watch)
+        ? summary.quote_watch
+          .map((row) => safeDisplayValue((row as Record<string, unknown>)?.name || (row as Record<string, unknown>)?.code))
+          .filter((value) => value && value !== '—')
+          .join(', ')
+        : '—',
+      tone: statusTone(Array.isArray(summary.quote_watch) && summary.quote_watch.length ? 'positive' : 'warning'),
+    },
+  ];
+}
+
+function buildJin10Highlights(model: TerminalReadModel | null) {
+  const payload = model?.workspace.artifactPayloads?.jin10_mcp_snapshot?.payload as Record<string, unknown> | undefined;
+  const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  const highImportanceTitles = Array.isArray(summary.high_importance_titles)
+    ? summary.high_importance_titles
+      .map((value) => safeDisplayValue(value))
+      .filter((value) => value && value !== '—')
+    : [];
+  const latestFlashBriefs = Array.isArray(summary.latest_flash_briefs)
+    ? summary.latest_flash_briefs
+      .map((value) => safeDisplayValue(value))
+      .filter((value) => value && value !== '—')
+    : [];
+  const quoteWatch = Array.isArray(summary.quote_watch)
+    ? summary.quote_watch.map((row) => {
+      const record = (row || {}) as Record<string, unknown>;
+      const name = safeDisplayValue(record.name || record.code);
+      const close = safeDisplayValue(record.close);
+      const ups = safeDisplayValue(record.ups_percent);
+      return [name, close !== '—' ? close : '', ups !== '—' ? `${ups}%` : ''].filter(Boolean).join(' ');
+    }).filter((value) => value && value !== '—')
+    : [];
+
+  return {
+    recommendedBrief: safeDisplayValue(payload?.recommended_brief),
+    takeaway: safeDisplayValue(payload?.takeaway),
+    highImportanceTitles,
+    latestFlashBriefs,
+    quoteWatch,
+  };
+}
+
+function buildAxiosMetrics(model: TerminalReadModel | null): MetricItem[] {
+  if (!model) return [];
+  const payload = model.workspace.artifactPayloads?.axios_site_snapshot?.payload as Record<string, unknown> | undefined;
+  const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  return [
+    {
+      id: 'axios-news-total',
+      label: 'Axios 条目',
+      value: summary.news_total ?? '—',
+      tone: statusTone(summary.news_total && Number(summary.news_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'axios-local-total',
+      label: '本地新闻',
+      value: summary.local_total ?? '—',
+      tone: statusTone(summary.local_total && Number(summary.local_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'axios-national-total',
+      label: '全国新闻',
+      value: summary.national_total ?? '—',
+      tone: statusTone(summary.national_total && Number(summary.national_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'axios-keywords',
+      label: '关键词',
+      value: Array.isArray(summary.top_keywords)
+        ? summary.top_keywords.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—').join(', ')
+        : '—',
+      tone: statusTone(Array.isArray(summary.top_keywords) && summary.top_keywords.length ? 'positive' : 'warning'),
+    },
+  ];
+}
+
+function buildAxiosHighlights(model: TerminalReadModel | null) {
+  const payload = model?.workspace.artifactPayloads?.axios_site_snapshot?.payload as Record<string, unknown> | undefined;
+  const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  const topTitles = Array.isArray(summary.top_titles)
+    ? summary.top_titles.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const topKeywords = Array.isArray(summary.top_keywords)
+    ? summary.top_keywords.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  return {
+    recommendedBrief: safeDisplayValue(payload?.recommended_brief),
+    takeaway: safeDisplayValue(payload?.takeaway),
+    topTitles,
+    topKeywords,
+  };
+}
+
+function buildExternalIntelligenceMetrics(model: TerminalReadModel | null): MetricItem[] {
+  if (!model) return [];
+  const payload = model.workspace.artifactPayloads?.external_intelligence_snapshot?.payload as Record<string, unknown> | undefined;
+  const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  return [
+    {
+      id: 'external-sources-total',
+      label: '情报源',
+      value: summary.sources_total ?? '—',
+      tone: statusTone(summary.sources_total && Number(summary.sources_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'external-calendar-total',
+      label: '日历事件',
+      value: summary.calendar_total ?? '—',
+      tone: statusTone(summary.calendar_total && Number(summary.calendar_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'external-flash-total',
+      label: '最新快讯',
+      value: summary.flash_total ?? '—',
+      tone: statusTone(summary.flash_total && Number(summary.flash_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'external-news-total',
+      label: '新闻条目',
+      value: summary.axios_news_total ?? '—',
+      tone: statusTone(summary.axios_news_total && Number(summary.axios_news_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'external-quote-watch',
+      label: '盯盘品种',
+      value: Array.isArray(summary.quote_watch)
+        ? summary.quote_watch.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—').join(', ')
+        : '—',
+      tone: statusTone(Array.isArray(summary.quote_watch) && summary.quote_watch.length ? 'positive' : 'warning'),
+    },
+  ];
+}
+
+function buildExternalIntelligenceHighlights(model: TerminalReadModel | null) {
+  const payload = model?.workspace.artifactPayloads?.external_intelligence_snapshot?.payload as Record<string, unknown> | undefined;
+  const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  const topTitles = Array.isArray(summary.top_titles)
+    ? summary.top_titles.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const topKeywords = Array.isArray(summary.top_keywords)
+    ? summary.top_keywords.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const quoteWatch = Array.isArray(summary.quote_watch)
+    ? summary.quote_watch.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  return {
+    recommendedBrief: safeDisplayValue(payload?.recommended_brief),
+    takeaway: safeDisplayValue(payload?.takeaway),
+    topTitles,
+    topKeywords,
+    quoteWatch,
+  };
+}
+
 function buildOverviewStateMetrics(model: TerminalReadModel | null): MetricItem[] {
   if (!model) return [];
   return [
@@ -142,7 +323,25 @@ export function OverviewPage({ model }: OverviewPageProps) {
     'alignment-summary',
   );
   const commodityReasoningMetrics = buildCommodityReasoningMetrics(model);
+  const externalIntelligenceMetrics = buildExternalIntelligenceMetrics(model);
+  const externalIntelligenceHighlights = buildExternalIntelligenceHighlights(model);
+  const jin10Metrics = buildJin10Metrics(model);
+  const jin10Highlights = buildJin10Highlights(model);
+  const axiosMetrics = buildAxiosMetrics(model);
+  const axiosHighlights = buildAxiosHighlights(model);
   const overviewStateMetrics = buildOverviewStateMetrics(model);
+  const externalLink = buildWorkspacePageLink(
+    'artifacts',
+    { artifact: 'external_intelligence_snapshot', group: 'system_anchor' },
+  );
+  const jin10Link = buildWorkspacePageLink(
+    'artifacts',
+    { artifact: 'jin10_mcp_snapshot', group: 'system_anchor' },
+  );
+  const axiosLink = buildWorkspacePageLink(
+    'artifacts',
+    { artifact: 'axios_site_snapshot', group: 'system_anchor' },
+  );
 
   return (
     <section className="overview-page">
@@ -182,6 +381,53 @@ export function OverviewPage({ model }: OverviewPageProps) {
             meta="首屏固定摘要：主情景 / 主传导链 / 范围 / 边界 / 失效条件"
           >
             <MetricStrip items={commodityReasoningMetrics} showRawValues />
+          </PanelCard>
+        </div>
+        ) : null}
+        {externalIntelligenceMetrics.length ? (
+        <div data-search-anchor="overview-external-intelligence" id="overview-external-intelligence">
+          <PanelCard
+            title="外部情报带"
+            kicker="research sidecar / aggregated"
+            meta={externalIntelligenceHighlights.recommendedBrief !== '—' ? externalIntelligenceHighlights.recommendedBrief : 'Jin10 / Axios 外部情报摘要'}
+            actions={<Link className="button" to={externalLink}>查看外部情报工件</Link>}
+          >
+            <MetricStrip items={externalIntelligenceMetrics} />
+            {externalIntelligenceHighlights.takeaway !== '—' ? <div className="empty-block">重点：{externalIntelligenceHighlights.takeaway}</div> : null}
+            {externalIntelligenceHighlights.topTitles.length ? <div className="empty-block">重点标题：{externalIntelligenceHighlights.topTitles.join(' ｜ ')}</div> : null}
+            {externalIntelligenceHighlights.topKeywords.length ? <div className="empty-block">关键词：{externalIntelligenceHighlights.topKeywords.join(' ｜ ')}</div> : null}
+            {externalIntelligenceHighlights.quoteWatch.length ? <div className="empty-block">盯盘摘要：{externalIntelligenceHighlights.quoteWatch.join(' ｜ ')}</div> : null}
+          </PanelCard>
+        </div>
+        ) : null}
+        {jin10Metrics.length ? (
+        <div data-search-anchor="overview-jin10-sidecar" id="overview-jin10-sidecar">
+          <PanelCard
+            title="Jin10 研究侧边车"
+            kicker="research sidecar / macro calendar / flash"
+            meta={jin10Highlights.recommendedBrief !== '—' ? jin10Highlights.recommendedBrief : '财经日历 / 快讯 / 盯盘摘要'}
+            actions={<Link className="button" to={jin10Link}>查看 Jin10 工件</Link>}
+          >
+            <MetricStrip items={jin10Metrics} />
+            {jin10Highlights.takeaway !== '—' ? <div className="empty-block">重点：{jin10Highlights.takeaway}</div> : null}
+            {jin10Highlights.highImportanceTitles.length ? <div className="empty-block">高重要日历：{jin10Highlights.highImportanceTitles.join(' ｜ ')}</div> : null}
+            {jin10Highlights.latestFlashBriefs.length ? <div className="empty-block">最新快讯：{jin10Highlights.latestFlashBriefs.join(' ｜ ')}</div> : null}
+            {jin10Highlights.quoteWatch.length ? <div className="empty-block">盯盘摘要：{jin10Highlights.quoteWatch.join(' ｜ ')}</div> : null}
+          </PanelCard>
+        </div>
+        ) : null}
+        {axiosMetrics.length ? (
+        <div data-search-anchor="overview-axios-sidecar" id="overview-axios-sidecar">
+          <PanelCard
+            title="Axios 研究侧边车"
+            kicker="research sidecar / news sitemap"
+            meta={axiosHighlights.recommendedBrief !== '—' ? axiosHighlights.recommendedBrief : '新闻条目 / 本地与全国分布 / 关键词'}
+            actions={<Link className="button" to={axiosLink}>查看 Axios 工件</Link>}
+          >
+            <MetricStrip items={axiosMetrics} />
+            {axiosHighlights.takeaway !== '—' ? <div className="empty-block">重点：{axiosHighlights.takeaway}</div> : null}
+            {axiosHighlights.topTitles.length ? <div className="empty-block">重点标题：{axiosHighlights.topTitles.join(' ｜ ')}</div> : null}
+            {axiosHighlights.topKeywords.length ? <div className="empty-block">关键词：{axiosHighlights.topKeywords.join(' ｜ ')}</div> : null}
           </PanelCard>
         </div>
         ) : null}

@@ -511,6 +511,33 @@ def ensure_commodity_reasoning_artifacts(selected_paths: dict[str, tuple[Path | 
             selected_paths[artifact_id] = (candidate, category, artifact_group)
 
 
+def ensure_jin10_mcp_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    artifact_id = "jin10_mcp_snapshot"
+    if artifact_id in selected_paths:
+        return
+    candidate = latest_review_suffix(review_dir, "jin10_mcp_snapshot.json")
+    if candidate:
+        selected_paths[artifact_id] = (candidate, "research", "system_anchor")
+
+
+def ensure_axios_site_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    artifact_id = "axios_site_snapshot"
+    if artifact_id in selected_paths:
+        return
+    candidate = latest_review_suffix(review_dir, "axios_site_snapshot.json")
+    if candidate:
+        selected_paths[artifact_id] = (candidate, "research", "system_anchor")
+
+
+def ensure_external_intelligence_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    artifact_id = "external_intelligence_snapshot"
+    if artifact_id in selected_paths:
+        return
+    candidate = latest_review_suffix(review_dir, "external_intelligence_snapshot.json")
+    if candidate:
+        selected_paths[artifact_id] = (candidate, "research", "system_anchor")
+
+
 def merge_payload_entry(
     existing: dict[str, Any] | None,
     *,
@@ -694,6 +721,9 @@ def build_surface_snapshot(
 ) -> dict[str, Any]:
     ensure_event_artifacts(selected_paths, review_dir)
     ensure_commodity_reasoning_artifacts(selected_paths, review_dir)
+    ensure_jin10_mcp_artifacts(selected_paths, review_dir)
+    ensure_axios_site_artifacts(selected_paths, review_dir)
+    ensure_external_intelligence_artifacts(selected_paths, review_dir)
     generated_at = utc_now()
     artifact_payloads: dict[str, dict[str, Any]] = {}
     for label, (path, category, artifact_group) in selected_paths.items():

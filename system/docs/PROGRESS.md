@@ -28,6 +28,41 @@
     - 上述两个 PR workflow 现在还会 upsert sticky PR comment：`fenlie-governance-audit-advisory`
     - sticky PR comment 现优先使用仓库 secret `GOVERNANCE_COMMENT_TOKEN`；未配置时回退 `github.token`
     - 上述三个 workflow 的 advisory 执行路径已统一经由 `run_governance_audit_advisory.sh`，降低 summary/comment/artifact 输出漂移
+- Jin10 MCP research sidecar 已接入 repo：
+  - client：`/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/jin10_mcp_client.py`
+  - runner：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_jin10_mcp_snapshot.py`
+  - 测试：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_jin10_mcp_client.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_jin10_mcp_snapshot_script.py`
+  - 定位：`RESEARCH_ONLY` 的 MCP sidecar，不替换现有 source-owned Jin10 HTTP provider
+  - 产物：
+    - `system/output/review/latest_jin10_mcp_snapshot.json`
+    - `system/output/review/latest_jin10_mcp_snapshot.md`
+- Axios public-site research sidecar 已接入 repo：
+  - client：`/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/axios_site_client.py`
+  - runner：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_axios_site_snapshot.py`
+  - 测试：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_axios_site_client.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_axios_site_snapshot_script.py`
+  - 定位：`RESEARCH_ONLY` 的公开站点 sidecar，只读取 `robots/sitemap/news sitemap`，不进入 live path
+  - 产物：
+    - `system/output/review/latest_axios_site_snapshot.json`
+    - `system/output/review/latest_axios_site_snapshot.md`
+- unified external intelligence 已接入 repo：
+  - 汇总 runner：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_external_intelligence_snapshot.py`
+  - 单入口 refresh runner：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_external_intelligence_refresh.py`
+  - 测试：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_external_intelligence_snapshot_script.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_external_intelligence_refresh_script.py`
+  - 当前语义：
+    - 统一快照只把 `status in {ok, partial}` 且 `ok != false` 的 sidecar 计入 active sources
+    - `blocked_auth_missing / blocked_initialize_failed` 不再被误算成活跃来源
+    - refresh runner 会串联 `jin10 -> axios -> unified snapshot -> dashboard snapshot`
+  - 产物：
+    - `system/output/review/latest_external_intelligence_snapshot.json`
+    - `system/output/review/latest_external_intelligence_snapshot.md`
+    - `system/output/review/latest_external_intelligence_refresh.json`
+    - `system/output/review/latest_external_intelligence_refresh.md`
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`

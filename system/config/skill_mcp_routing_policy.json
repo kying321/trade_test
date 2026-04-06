@@ -21,7 +21,7 @@
     },
     "research_enrichment": {
       "purpose": "Research-only sidecars, external context, non-live market enrichment.",
-      "mcp_policy": "Allowed: CoinGecko. Do not promote MCP-derived fields into live routing.",
+      "mcp_policy": "Allowed: CoinGecko, Jin10. Do not promote MCP-derived fields into live routing.",
       "preferred_skills": [
         "fenlie-intraday-strategy-research",
         "codex-autoresearch"
@@ -96,6 +96,7 @@
       ],
       "mcp_allow": [
         "coingecko",
+        "jin10",
         "notion"
       ],
       "mcp_forbid": [

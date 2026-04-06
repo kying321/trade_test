@@ -267,6 +267,86 @@ function ArtifactHandoffs({
   );
 }
 
+function jin10SnapshotSummary(payload: Record<string, unknown>) {
+  const summary = (payload.summary as Record<string, unknown> | undefined) || {};
+  const highImportanceTitles = Array.isArray(summary.high_importance_titles)
+    ? summary.high_importance_titles.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const latestFlashBriefs = Array.isArray(summary.latest_flash_briefs)
+    ? summary.latest_flash_briefs.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const quoteWatch = Array.isArray(summary.quote_watch)
+    ? summary.quote_watch.map((row) => {
+      const record = (row || {}) as Record<string, unknown>;
+      const name = safeDisplayValue(record.name || record.code);
+      const close = safeDisplayValue(record.close);
+      const ups = safeDisplayValue(record.ups_percent);
+      return [name, close !== '—' ? close : '', ups !== '—' ? `${ups}%` : ''].filter(Boolean).join(' ');
+    }).filter((value) => value && value !== '—')
+    : [];
+  return {
+    recommendedBrief: safeDisplayValue(payload.recommended_brief),
+    takeaway: safeDisplayValue(payload.takeaway),
+    calendarTotal: safeDisplayValue(summary.calendar_total),
+    highImportanceCount: safeDisplayValue(summary.high_importance_count),
+    flashTotal: safeDisplayValue(summary.flash_total),
+    quoteWatchTotal: Array.isArray(summary.quote_watch) ? String(summary.quote_watch.length) : '0',
+    highImportanceTitles,
+    latestFlashBriefs,
+    quoteWatch,
+  };
+}
+
+function axiosSnapshotSummary(payload: Record<string, unknown>) {
+  const summary = (payload.summary as Record<string, unknown> | undefined) || {};
+  const topTitles = Array.isArray(summary.top_titles)
+    ? summary.top_titles.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const topKeywords = Array.isArray(summary.top_keywords)
+    ? summary.top_keywords.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  return {
+    recommendedBrief: safeDisplayValue(payload.recommended_brief),
+    takeaway: safeDisplayValue(payload.takeaway),
+    newsTotal: safeDisplayValue(summary.news_total),
+    localTotal: safeDisplayValue(summary.local_total),
+    nationalTotal: safeDisplayValue(summary.national_total),
+    topTitles,
+    topKeywords,
+  };
+}
+
+function externalIntelligenceSummary(payload: Record<string, unknown>) {
+  const summary = (payload.summary as Record<string, unknown> | undefined) || {};
+  const topTitles = Array.isArray(summary.top_titles)
+    ? summary.top_titles.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const topKeywords = Array.isArray(summary.top_keywords)
+    ? summary.top_keywords.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const activeSources = Array.isArray(summary.active_sources)
+    ? summary.active_sources.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const quoteWatch = Array.isArray(summary.quote_watch)
+    ? summary.quote_watch.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  return {
+    recommendedBrief: safeDisplayValue(payload.recommended_brief),
+    takeaway: safeDisplayValue(payload.takeaway),
+    sourcesTotal: safeDisplayValue(summary.sources_total),
+    activeSources,
+    calendarTotal: safeDisplayValue(summary.calendar_total),
+    highImportanceCount: safeDisplayValue(summary.high_importance_count),
+    flashTotal: safeDisplayValue(summary.flash_total),
+    newsTotal: safeDisplayValue(summary.axios_news_total),
+    localTotal: safeDisplayValue(summary.axios_local_total),
+    nationalTotal: safeDisplayValue(summary.axios_national_total),
+    topTitles,
+    topKeywords,
+    quoteWatch,
+  };
+}
+
 function buildResearchAuditCaseLinks(
   cases: PublicAcceptanceResearchAuditCase[] | undefined,
   idPrefix: string,
@@ -752,6 +832,80 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
                   ) : t('workspace_artifacts_no_keys')}
                 </div>
               </DrilldownSection>
+              {selectedPayloadKey === 'jin10_mcp_snapshot' ? (
+                <DrilldownSection title="Jin10 侧边车摘要" summary={safeDisplayValue(payloadRecord.recommended_brief || payloadRecord.takeaway || 'research sidecar')} defaultOpen>
+                  {(() => {
+                    const jin10 = jin10SnapshotSummary(payloadRecord);
+                    return (
+                      <>
+                        <KeyValueGrid
+                          rows={[
+                            { ...c('calendar_total', 'summary'), label: '日历事件', value: jin10.calendarTotal, kind: 'number' as const },
+                            { ...c('high_importance_count', 'summary'), label: '高重要事件', value: jin10.highImportanceCount, kind: 'number' as const },
+                            { ...c('flash_total', 'summary'), label: '最新快讯', value: jin10.flashTotal, kind: 'number' as const },
+                            { ...c('quote_watch_total', 'summary'), label: '盯盘品种', value: jin10.quoteWatchTotal, kind: 'number' as const },
+                            { ...c('recommended_brief', 'recommended_brief'), value: jin10.recommendedBrief, showRaw: true },
+                            { ...c('takeaway', 'takeaway'), value: jin10.takeaway, showRaw: true },
+                          ]}
+                        />
+                        {jin10.highImportanceTitles.length ? <div className="empty-block">高重要日历：{jin10.highImportanceTitles.join(' ｜ ')}</div> : null}
+                        {jin10.latestFlashBriefs.length ? <div className="empty-block">最新快讯：{jin10.latestFlashBriefs.join(' ｜ ')}</div> : null}
+                        {jin10.quoteWatch.length ? <div className="empty-block">盯盘摘要：{jin10.quoteWatch.join(' ｜ ')}</div> : null}
+                      </>
+                    );
+                  })()}
+                </DrilldownSection>
+              ) : null}
+              {selectedPayloadKey === 'axios_site_snapshot' ? (
+                <DrilldownSection title="Axios 侧边车摘要" summary={safeDisplayValue(payloadRecord.recommended_brief || payloadRecord.takeaway || 'research sidecar')} defaultOpen>
+                  {(() => {
+                    const axios = axiosSnapshotSummary(payloadRecord);
+                    return (
+                      <>
+                        <KeyValueGrid
+                          rows={[
+                            { ...c('news_total', 'summary'), label: 'Axios 条目', value: axios.newsTotal, kind: 'number' as const },
+                            { ...c('local_total', 'summary'), label: '本地新闻', value: axios.localTotal, kind: 'number' as const },
+                            { ...c('national_total', 'summary'), label: '全国新闻', value: axios.nationalTotal, kind: 'number' as const },
+                            { ...c('recommended_brief', 'recommended_brief'), value: axios.recommendedBrief, showRaw: true },
+                            { ...c('takeaway', 'takeaway'), value: axios.takeaway, showRaw: true },
+                          ]}
+                        />
+                        {axios.topTitles.length ? <div className="empty-block">重点标题：{axios.topTitles.join(' ｜ ')}</div> : null}
+                        {axios.topKeywords.length ? <div className="empty-block">关键词：{axios.topKeywords.join(' ｜ ')}</div> : null}
+                      </>
+                    );
+                  })()}
+                </DrilldownSection>
+              ) : null}
+              {selectedPayloadKey === 'external_intelligence_snapshot' ? (
+                <DrilldownSection title="外部情报带摘要" summary={safeDisplayValue(payloadRecord.recommended_brief || payloadRecord.takeaway || 'external intelligence')} defaultOpen>
+                  {(() => {
+                    const external = externalIntelligenceSummary(payloadRecord);
+                    return (
+                      <>
+                        <KeyValueGrid
+                          rows={[
+                            { ...c('sources_total', 'summary'), label: '情报源', value: external.sourcesTotal, kind: 'number' as const },
+                            { ...c('calendar_total', 'summary'), label: '日历事件', value: external.calendarTotal, kind: 'number' as const },
+                            { ...c('high_importance_count', 'summary'), label: '高重要事件', value: external.highImportanceCount, kind: 'number' as const },
+                            { ...c('flash_total', 'summary'), label: '最新快讯', value: external.flashTotal, kind: 'number' as const },
+                            { ...c('news_total', 'summary'), label: '新闻条目', value: external.newsTotal, kind: 'number' as const },
+                            { ...c('local_total', 'summary'), label: '本地新闻', value: external.localTotal, kind: 'number' as const },
+                            { ...c('national_total', 'summary'), label: '全国新闻', value: external.nationalTotal, kind: 'number' as const },
+                            { ...c('recommended_brief', 'recommended_brief'), value: external.recommendedBrief, showRaw: true },
+                            { ...c('takeaway', 'takeaway'), value: external.takeaway, showRaw: true },
+                          ]}
+                        />
+                        {external.activeSources.length ? <div className="empty-block">激活源：{external.activeSources.join(' ｜ ')}</div> : null}
+                        {external.topTitles.length ? <div className="empty-block">重点标题：{external.topTitles.join(' ｜ ')}</div> : null}
+                        {external.topKeywords.length ? <div className="empty-block">关键词：{external.topKeywords.join(' ｜ ')}</div> : null}
+                        {external.quoteWatch.length ? <div className="empty-block">盯盘摘要：{external.quoteWatch.join(' ｜ ')}</div> : null}
+                      </>
+                    );
+                  })()}
+                </DrilldownSection>
+              ) : null}
               <DrilldownSection title={t('workspace_artifacts_payload_title')} summary={`${Object.keys(payloadRecord).length} ${t('workspace_summary_payload_fields_suffix')}`} defaultOpen>
                 {Object.keys(payloadRecord).length ? (
                   <KeyValueGrid

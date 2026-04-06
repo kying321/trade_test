@@ -114,6 +114,134 @@ describe('search catalog', () => {
     expect(results.some((row) => row.destination.includes('/ops/risk'))).toBe(true);
   });
 
+  it('搜索 Jin10 研究侧边车时返回总览模块与工件结果', () => {
+    const enrichedSnapshot: DashboardSnapshot = {
+      ...snapshot,
+      catalog: [
+        ...(snapshot.catalog || []),
+        {
+          id: 'jin10_mcp_snapshot',
+          payload_key: 'jin10_mcp_snapshot',
+          artifact_group: 'system_anchor',
+          category: 'research',
+          label: 'jin10_mcp_snapshot',
+          status: 'ok',
+          path: 'review/latest_jin10_mcp_snapshot.json',
+        },
+      ],
+      artifact_payloads: {
+        ...(snapshot.artifact_payloads || {}),
+        jin10_mcp_snapshot: {
+          label: 'jin10 mcp snapshot',
+          path: 'review/latest_jin10_mcp_snapshot.json',
+          summary: {
+            status: 'ok',
+            recommended_brief: 'calendar=244 | flash=20 | quotes=2',
+            takeaway: '美国至4月3日当周EIA原油库存(万桶)',
+          },
+          payload: {
+            summary: {
+              high_importance_titles: ['美国至4月3日当周EIA原油库存(万桶)'],
+              latest_flash_briefs: ['中国品牌车在曼谷国际车展预订量首次超越日系车'],
+              quote_watch: [{ code: 'XAUUSD', name: '现货黄金' }],
+            },
+          },
+        },
+      },
+    };
+    const model = buildTerminalReadModel(buildLoaded(enrichedSnapshot));
+    const results = searchCatalog(buildSearchCatalog(model), 'Jin10 研究侧边车', 'all');
+    expect(results.some((row) => row.destination.includes('/ops/overview'))).toBe(true);
+    expect(results.some((row) => row.destination.includes('/workspace/artifacts'))).toBe(true);
+  });
+
+  it('搜索 Axios 研究侧边车时返回总览模块与工件结果', () => {
+    const enrichedSnapshot: DashboardSnapshot = {
+      ...snapshot,
+      catalog: [
+        ...(snapshot.catalog || []),
+        {
+          id: 'axios_site_snapshot',
+          payload_key: 'axios_site_snapshot',
+          artifact_group: 'system_anchor',
+          category: 'research',
+          label: 'axios_site_snapshot',
+          status: 'ok',
+          path: 'review/latest_axios_site_snapshot.json',
+        },
+      ],
+      artifact_payloads: {
+        ...(snapshot.artifact_payloads || {}),
+        axios_site_snapshot: {
+          label: 'axios site snapshot',
+          path: 'review/latest_axios_site_snapshot.json',
+          summary: {
+            status: 'ok',
+            recommended_brief: 'axios news=10 | local=8 | national=2',
+            takeaway: "Gilbert's Heritage Park to open first phase in September",
+          },
+          payload: {
+            summary: {
+              top_titles: [
+                "Gilbert's Heritage Park to open first phase in September",
+                'Anthropic cuts third party usage',
+              ],
+              top_keywords: ['Arizona', 'Axios'],
+            },
+          },
+        },
+      },
+    };
+    const model = buildTerminalReadModel(buildLoaded(enrichedSnapshot));
+    const results = searchCatalog(buildSearchCatalog(model), 'Axios 研究侧边车', 'all');
+    expect(results.some((row) => row.destination.includes('/ops/overview'))).toBe(true);
+    expect(results.some((row) => row.destination.includes('/workspace/artifacts'))).toBe(true);
+  });
+
+  it('搜索外部情报带时返回总览模块与工件结果', () => {
+    const enrichedSnapshot: DashboardSnapshot = {
+      ...snapshot,
+      catalog: [
+        ...(snapshot.catalog || []),
+        {
+          id: 'external_intelligence_snapshot',
+          payload_key: 'external_intelligence_snapshot',
+          artifact_group: 'system_anchor',
+          category: 'research',
+          label: 'external_intelligence_snapshot',
+          status: 'ok',
+          path: 'review/latest_external_intelligence_snapshot.json',
+        },
+      ],
+      artifact_payloads: {
+        ...(snapshot.artifact_payloads || {}),
+        external_intelligence_snapshot: {
+          label: 'external intelligence snapshot',
+          path: 'review/latest_external_intelligence_snapshot.json',
+          summary: {
+            status: 'ok',
+            recommended_brief: 'sources=2 | calendar=244 | flash=20 | quotes=2 | news=10',
+            takeaway: "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September",
+          },
+          payload: {
+            summary: {
+              top_titles: [
+                "Gilbert's Heritage Park to open first phase in September",
+                'Anthropic cuts third party usage',
+              ],
+              top_keywords: ['Arizona', 'Axios'],
+              quote_watch: ['现货黄金', 'WTI原油'],
+            },
+          },
+        },
+      },
+    };
+    const model = buildTerminalReadModel(buildLoaded(enrichedSnapshot));
+    const results = searchCatalog(buildSearchCatalog(model), '外部情报带', 'all');
+    expect(results.some((row) => row.destination.includes('/ops/overview'))).toBe(true);
+    expect(results.some((row) => row.destination.includes('/workspace/artifacts'))).toBe(true);
+  });
+
   it('搜索契约层时命中 workspace contracts 路由', () => {
     const model = buildTerminalReadModel(buildLoaded(snapshot));
     const results = searchCatalog(buildSearchCatalog(model), '契约层', 'all');
