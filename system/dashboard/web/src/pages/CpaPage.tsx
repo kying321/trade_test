@@ -43,6 +43,7 @@ type CpaControlSnapshot = {
   historical_success_emails?: string[];
   guarded_actions?: Array<Record<string, unknown>>;
   groups?: Record<string, Array<Record<string, unknown>>>;
+  latest_receipts?: Array<Record<string, unknown>>;
 };
 
 function trimJsonSuffix(name: string) {
@@ -462,6 +463,7 @@ export function CpaPage() {
   const historicalMissingInLiveCount = Math.max(0, historicalSuccessEmails.length - historicalHitCount);
   const unexpectedLiveCount = liveEmails.filter((email) => !historicalSuccessEmails.includes(email)).length;
   const guardedActions = Array.isArray(controlSnapshot?.guarded_actions) ? controlSnapshot?.guarded_actions : [];
+  const latestReceipts = Array.isArray(controlSnapshot?.latest_receipts) ? controlSnapshot?.latest_receipts : [];
   const groups = (controlSnapshot?.groups || {}) as Record<string, Array<Record<string, unknown>>>;
   const retryCandidateRows = Array.isArray(groups.retry_candidate_rows) ? groups.retry_candidate_rows : [];
   const blockedAboutYouRows = Array.isArray(groups.blocked_about_you_rows) ? groups.blocked_about_you_rows : [];
@@ -506,6 +508,18 @@ export function CpaPage() {
               <div>{String(action.description || '')}</div>
               <div>{`风险级别：${String(action.risk_class || 'LIVE_GUARD_ONLY')}`}</div>
               <pre className="json-block">{String(action.command || '')}</pre>
+            </div>
+          ))}
+        </PanelCard>
+      ) : null}
+      {latestReceipts.length ? (
+        <PanelCard title="最近回执" kicker="source-owned / guarded action receipts" meta="展示最近一次 guarded action 执行或 dry-run 回执。">
+          {latestReceipts.map((receipt) => (
+            <div className="empty-block" key={String(receipt.action_id || receipt.generated_at_utc || Math.random())}>
+              <strong>{String(receipt.action_label || receipt.action_id || 'receipt')}</strong>
+              <div>{`状态：${String(receipt.status || 'unknown')}`}</div>
+              <div>{`时间：${String(receipt.generated_at_utc || '—')}`}</div>
+              <div>{`returncode：${String(receipt.returncode ?? '—')}`}</div>
             </div>
           ))}
         </PanelCard>
