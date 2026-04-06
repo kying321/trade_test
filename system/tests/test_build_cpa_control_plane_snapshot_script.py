@@ -116,6 +116,10 @@ def test_build_snapshot_rolls_up_handoff_sources_and_kernel_state(tmp_path: Path
         "active_target_sync_success20",
         "retry_candidate_pipeline",
     ]
+    assert [row["email"] for row in payload["groups"]["retry_candidate_rows"]] == ["x@fuuu.fun"]
+    assert [row["email"] for row in payload["groups"]["blocked_about_you_rows"]] == ["y@fuuu.fun"]
+    assert [row["email"] for row in payload["groups"]["no_retry_deactivated_rows"]] == ["z@fuuu.fun"]
+    assert [row["email"] for row in payload["groups"]["new_unmounted_rows"]] == ["c@fuuu.fun"]
     assert "python3 check_five_account_acceptance.py --csv data/registered_success_active20.csv" in payload["guarded_actions"][0]["command"]
     assert "python3 run_active_target_sync.py --csv data/registered_success_active20.csv" in payload["guarded_actions"][1]["command"]
     assert "python3 run_retry_candidate_pipeline.py --csv registered_accounts.csv" in payload["guarded_actions"][2]["command"]

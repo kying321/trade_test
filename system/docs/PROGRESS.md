@@ -139,6 +139,20 @@
   - 当前原则：
     - live OAuth / active sync / retry candidate 仍保持 `LIVE_GUARD_ONLY`
     - 页面只提供 source-owned reconciliation 和命令建议，不直接触发 live workflow
+- CPA control plane Phase 4 已接入 repo：
+  - `build_cpa_control_plane_snapshot.py` 现会输出结构化分组：
+    - `retry_candidate_rows`
+    - `blocked_about_you_rows`
+    - `no_retry_deactivated_rows`
+    - `new_unmounted_rows`
+  - `CpaPage.tsx` 现会把上述分组渲染为 drilldown table：
+    - `retry_candidate 队列`
+    - `blocked_about_you 队列`
+    - `no_retry_deactivated 队列`
+    - `new_unmounted 池`
+  - 目标：
+    - 不再只看 summary chip
+    - 直接把 handoff 中最关键的 CPA 风险队列结构化暴露到控制面
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`
