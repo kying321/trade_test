@@ -97,6 +97,15 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
                 encoding="utf-8",
             )
             return {"artifacts": {"operator_summary": str(review_dir / "latest_event_crisis_operator_summary.json")}}
+        if name == "run_external_intelligence_refresh":
+            return {
+                "status": "partial",
+                "artifact_json": str(review_dir / "latest_external_intelligence_refresh.json"),
+                "external_intelligence_path": str(review_dir / "latest_external_intelligence_snapshot.json"),
+                "recommended_brief": "sources=1 | calendar=0 | flash=0 | quotes=0 | news=10",
+                "takeaway": "NBA takes bids on European league, eyes 2027",
+                "snapshot_skipped": True,
+            }
         if name == "build_operator_task_visual_panel":
             (public_dir / "operator_task_visual_panel.html").write_text(
                 "<html><body>panel</body></html>\n",
@@ -179,6 +188,11 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
     assert payload["event_crisis_dominant_chain_brief"] == "credit_intermediary_chain"
     assert payload["event_crisis_safety_margin_brief"] == "system_margin=0.42"
     assert payload["event_crisis_hard_boundary_brief"] == "new_risk_hard_block"
+    assert payload["external_intelligence_status"] == "partial"
+    assert payload["external_intelligence_refresh_artifact"] == str(review_dir / "latest_external_intelligence_refresh.json")
+    assert payload["external_intelligence_snapshot_artifact"] == str(review_dir / "latest_external_intelligence_snapshot.json")
+    assert payload["external_intelligence_recommended_brief"] == "sources=1 | calendar=0 | flash=0 | quotes=0 | news=10"
+    assert payload["external_intelligence_takeaway"] == "NBA takes bids on European league, eyes 2027"
     assert payload["commodity_reasoning_primary_scenario_brief"] == "supply_chain_tightening"
     assert payload["commodity_reasoning_primary_chain_brief"] == "feedstock_cost_push_chain"
     assert payload["commodity_reasoning_range_scope_brief"] == "contract_focused"
@@ -214,6 +228,17 @@ def test_main_refreshes_panel_and_snapshot_into_public_and_dist(monkeypatch, tmp
         "--now",
         "2026-03-21T08:40:00Z",
     ]
+    assert seen_cmds["run_external_intelligence_refresh"] == [
+        "python3",
+        str(system_root / "scripts" / "run_external_intelligence_refresh.py"),
+        "--workspace",
+        str(workspace),
+        "--public-dir",
+        str(public_dir),
+        "--now",
+        "2026-03-21T08:40:00Z",
+        "--skip-dashboard-snapshot",
+    ]
     assert seen_cmds["build_dashboard_frontend_snapshot"] == [
         "python3",
         str(system_root / "scripts" / "build_dashboard_frontend_snapshot.py"),
@@ -248,6 +273,13 @@ def test_build_summary_does_not_report_degraded_operator_head_when_full_source_p
         workspace=tmp_path,
         public_dir=tmp_path / "public",
         dist_dir=tmp_path / "dist",
+        external_refresh_payload={
+            "status": "partial",
+            "artifact_json": str(tmp_path / "latest_external_intelligence_refresh.json"),
+            "external_intelligence_path": str(tmp_path / "latest_external_intelligence_snapshot.json"),
+            "recommended_brief": "sources=1 | calendar=0 | flash=0 | quotes=0 | news=10",
+            "takeaway": "NBA takes bids on European league, eyes 2027",
+        },
         panel_payload={
             "summary": {
                 "operator_head_brief": "review:brooks_structure:SC2603:review_manual_stop_entry:92",
@@ -270,3 +302,73 @@ def test_build_summary_does_not_report_degraded_operator_head_when_full_source_p
     )
     assert payload["operator_head_brief"] == "review:brooks_structure:SC2603:review_manual_stop_entry:92"
     assert not payload["operator_head_brief"].startswith("degraded:")
+    assert payload["external_intelligence_status"] == "partial"
+
+
+def test_main_degrades_when_external_intelligence_refresh_fails(monkeypatch, tmp_path: Path, capsys) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    system_root = workspace / "system"
+    dashboard_root = system_root / "dashboard" / "web"
+    public_dir = dashboard_root / "public"
+    review_dir = system_root / "output" / "review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+
+    def fake_run_json(*, name: str, cmd: list[str]) -> dict:
+        public_dir.mkdir(parents=True, exist_ok=True)
+        (public_dir / "data").mkdir(parents=True, exist_ok=True)
+        if name == "run_event_crisis_pipeline":
+            (review_dir / "latest_event_crisis_operator_summary.json").write_text(
+                json.dumps(
+                    {
+                        "event_crisis_primary_theater_brief": "usd_liquidity_and_sanctions",
+                        "event_crisis_dominant_chain_brief": "credit_intermediary_chain",
+                        "event_crisis_safety_margin_brief": "system_margin=0.42",
+                        "event_crisis_hard_boundary_brief": "new_risk_hard_block",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return {"artifacts": {"operator_summary": str(review_dir / "latest_event_crisis_operator_summary.json")}}
+        if name == "run_external_intelligence_refresh":
+            raise RuntimeError("run_external_intelligence_refresh_failed: axios timeout")
+        if name == "build_operator_task_visual_panel":
+            (public_dir / "operator_task_visual_panel.html").write_text("<html><body>panel</body></html>\n", encoding="utf-8")
+            (public_dir / "operator_task_visual_panel_data.json").write_text(
+                json.dumps({"summary": {"operator_head_brief": "ETH"}}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "artifact": str(review_dir / "20260321T084000Z_operator_task_visual_panel.json"),
+                "html": str(review_dir / "20260321T084000Z_operator_task_visual_panel.html"),
+                "summary": {"operator_head_brief": "ETHUSDT:wait_for_pullback"},
+            }
+        if name == "build_conversation_feedback_projection_internal":
+            return {"artifact": str(review_dir / "feedback.json"), "latest_artifact": str(review_dir / "latest_feedback.json")}
+        if name == "build_dashboard_frontend_snapshot":
+            (public_dir / "data" / "fenlie_dashboard_snapshot.json").write_text(json.dumps({"surface": "public"}) + "\n", encoding="utf-8")
+            (public_dir / "data" / "fenlie_dashboard_internal_snapshot.json").write_text(json.dumps({"surface": "internal"}) + "\n", encoding="utf-8")
+            return {"outputs": [str(public_dir / "data" / "fenlie_dashboard_snapshot.json")]}
+        raise AssertionError(name)
+
+    monkeypatch.setattr(mod, "run_json", fake_run_json)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_operator_panel_refresh.py",
+            "--workspace",
+            str(workspace),
+            "--now",
+            "2026-03-21T08:40:00Z",
+        ],
+    )
+
+    mod.main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["ok"] is True
+    assert payload["external_intelligence_status"] == "degraded_request_failed"
+    assert payload["external_intelligence_takeaway"] == "axios timeout"
+    assert payload["snapshot_outputs"] == [str(public_dir / "data" / "fenlie_dashboard_snapshot.json")]

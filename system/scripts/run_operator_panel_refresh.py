@@ -110,11 +110,25 @@ def sync_copy(src: Path, dst: Path) -> dict[str, Any]:
     }
 
 
+def degraded_external_refresh_payload(exc: Exception) -> dict[str, Any]:
+    detail = safe_text(exc)
+    takeaway = detail.split(":", 1)[1].strip() if ":" in detail else detail
+    return {
+        "status": "degraded_request_failed",
+        "artifact_json": "",
+        "external_intelligence_path": "",
+        "recommended_brief": "",
+        "takeaway": takeaway,
+        "error": detail,
+    }
+
+
 def build_summary(
     *,
     workspace: Path,
     public_dir: Path,
     dist_dir: Path,
+    external_refresh_payload: dict[str, Any],
     panel_payload: dict[str, Any],
     snapshot_payload: dict[str, Any],
     feedback_payload: dict[str, Any],
@@ -156,6 +170,11 @@ def build_summary(
         "commodity_reasoning_invalidator_brief": safe_text(summary.get("commodity_reasoning_invalidator_brief")),
         "feedback_projection_artifact": safe_text(feedback_payload.get("artifact")),
         "feedback_projection_latest_artifact": safe_text(feedback_payload.get("latest_artifact")),
+        "external_intelligence_status": safe_text(external_refresh_payload.get("status")),
+        "external_intelligence_refresh_artifact": safe_text(external_refresh_payload.get("artifact_json")),
+        "external_intelligence_snapshot_artifact": safe_text(external_refresh_payload.get("external_intelligence_path")),
+        "external_intelligence_recommended_brief": safe_text(external_refresh_payload.get("recommended_brief")),
+        "external_intelligence_takeaway": safe_text(external_refresh_payload.get("takeaway")),
         "snapshot_outputs": list(snapshot_payload.get("outputs") or []),
         "sync_results": sync_results,
     }
@@ -185,6 +204,24 @@ def main() -> None:
         review_dir=review_dir,
         runtime_now=runtime_now,
     )
+
+    try:
+        external_refresh_payload = run_json(
+            name="run_external_intelligence_refresh",
+            cmd=[
+                "python3",
+                str(system_root / "scripts" / "run_external_intelligence_refresh.py"),
+                "--workspace",
+                str(workspace),
+                "--public-dir",
+                str(public_dir),
+                "--now",
+                fmt_utc(runtime_now),
+                "--skip-dashboard-snapshot",
+            ],
+        )
+    except RuntimeError as exc:
+        external_refresh_payload = degraded_external_refresh_payload(exc)
 
     panel_payload = run_json(
         name="build_operator_task_visual_panel",
@@ -237,6 +274,7 @@ def main() -> None:
                 workspace=workspace,
                 public_dir=public_dir,
                 dist_dir=dist_dir,
+                external_refresh_payload=external_refresh_payload,
                 panel_payload=panel_payload,
                 snapshot_payload=snapshot_payload,
                 feedback_payload=feedback_payload,

@@ -63,6 +63,17 @@
     - `system/output/review/latest_external_intelligence_snapshot.md`
     - `system/output/review/latest_external_intelligence_refresh.json`
     - `system/output/review/latest_external_intelligence_refresh.md`
+- `run_operator_panel_refresh.py` 已接入外部情报主刷新链：
+  - 当前顺序：
+    - `run_external_intelligence_refresh.py --skip-dashboard-snapshot`
+    - `build_operator_task_visual_panel.py`
+    - `build_conversation_feedback_projection_internal.py`
+    - `build_dashboard_frontend_snapshot.py`
+  - 目的：让现有 operator/dashboard 主刷新链自动携带最新 Jin10/Axios/unified external intelligence
+  - 失败语义：
+    - 外部情报 refresh 失败时只记 `degraded_request_failed`
+    - 不阻断 operator panel / dashboard snapshot 主刷新
+    - 保持 `dashboard/metrics/external sidecar` 故障为 degrade-only，而不是 hard-fail
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`
