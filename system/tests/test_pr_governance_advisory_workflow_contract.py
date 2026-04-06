@@ -20,6 +20,8 @@ def test_branch_policy_workflow_runs_non_blocking_governance_audit_summary() -> 
     assert "GITHUB_STEP_SUMMARY" in workflow
     assert "--emit-github-warning" in workflow
     assert "governance_audit_pr_comment.md" in workflow
+    assert "GOVERNANCE_COMMENT_TOKEN" in workflow
+    assert "GITHUB_TOKEN: ${{ github.token }}" in workflow
     assert "uses: actions/upload-artifact@v4" in workflow
     assert "name: branch-policy-governance-audit" in workflow
     assert "system/output/review/*_branch_governance_audit.json" in workflow
@@ -40,6 +42,8 @@ def test_hotfix_pr_gate_workflow_runs_non_blocking_governance_audit_summary() ->
     assert "GITHUB_STEP_SUMMARY" in workflow
     assert "--emit-github-warning" in workflow
     assert "governance_audit_pr_comment.md" in workflow
+    assert "GOVERNANCE_COMMENT_TOKEN" in workflow
+    assert "GITHUB_TOKEN: ${{ github.token }}" in workflow
     assert "uses: actions/upload-artifact@v4" in workflow
     assert "name: hotfix-pr-gate-governance-audit" in workflow
     assert "system/output/review/*_branch_governance_audit.json" in workflow
