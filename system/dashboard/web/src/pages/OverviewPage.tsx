@@ -213,10 +213,65 @@ function buildAxiosHighlights(model: TerminalReadModel | null) {
   };
 }
 
+function buildPolymarketMetrics(model: TerminalReadModel | null): MetricItem[] {
+  if (!model) return [];
+  const payload = model.workspace.artifactPayloads?.polymarket_gamma_snapshot?.payload as Record<string, unknown> | undefined;
+  const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  const yesAvg = typeof summary.yes_price_avg === 'number'
+    ? `${(Number(summary.yes_price_avg) * 100).toFixed(1)}%`
+    : safeDisplayValue(summary.yes_price_avg);
+  return [
+    {
+      id: 'polymarket-markets-total',
+      label: '活跃市场',
+      value: summary.markets_total ?? '—',
+      tone: statusTone(summary.markets_total && Number(summary.markets_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'polymarket-bullish-count',
+      label: '偏多合约',
+      value: summary.bullish_count ?? '—',
+      tone: statusTone(summary.bullish_count && Number(summary.bullish_count) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'polymarket-bearish-count',
+      label: '偏空合约',
+      value: summary.bearish_count ?? '—',
+      tone: statusTone(summary.bearish_count && Number(summary.bearish_count) > 0 ? 'warning' : 'positive'),
+    },
+    {
+      id: 'polymarket-yes-price-avg',
+      label: '平均 Yes 概率',
+      value: yesAvg,
+      tone: statusTone(summary.yes_price_avg && Number(summary.yes_price_avg) > 0 ? 'positive' : 'warning'),
+    },
+  ];
+}
+
+function buildPolymarketHighlights(model: TerminalReadModel | null) {
+  const payload = model?.workspace.artifactPayloads?.polymarket_gamma_snapshot?.payload as Record<string, unknown> | undefined;
+  const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  const topTitles = Array.isArray(summary.top_titles)
+    ? summary.top_titles.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const topCategories = Array.isArray(summary.top_categories)
+    ? summary.top_categories.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  return {
+    recommendedBrief: safeDisplayValue(payload?.recommended_brief),
+    takeaway: safeDisplayValue(payload?.takeaway),
+    topTitles,
+    topCategories,
+  };
+}
+
 function buildExternalIntelligenceMetrics(model: TerminalReadModel | null): MetricItem[] {
   if (!model) return [];
   const payload = model.workspace.artifactPayloads?.external_intelligence_snapshot?.payload as Record<string, unknown> | undefined;
   const summary = (payload?.summary as Record<string, unknown> | undefined) || {};
+  const polyAvg = typeof summary.polymarket_yes_price_avg === 'number'
+    ? `${(Number(summary.polymarket_yes_price_avg) * 100).toFixed(1)}%`
+    : safeDisplayValue(summary.polymarket_yes_price_avg);
   return [
     {
       id: 'external-sources-total',
@@ -243,6 +298,18 @@ function buildExternalIntelligenceMetrics(model: TerminalReadModel | null): Metr
       tone: statusTone(summary.axios_news_total && Number(summary.axios_news_total) > 0 ? 'positive' : 'warning'),
     },
     {
+      id: 'external-poly-total',
+      label: '预测市场',
+      value: summary.polymarket_markets_total ?? '—',
+      tone: statusTone(summary.polymarket_markets_total && Number(summary.polymarket_markets_total) > 0 ? 'positive' : 'warning'),
+    },
+    {
+      id: 'external-poly-avg',
+      label: '平均 Yes 概率',
+      value: polyAvg,
+      tone: statusTone(summary.polymarket_yes_price_avg && Number(summary.polymarket_yes_price_avg) > 0 ? 'positive' : 'warning'),
+    },
+    {
       id: 'external-quote-watch',
       label: '盯盘品种',
       value: Array.isArray(summary.quote_watch)
@@ -262,6 +329,9 @@ function buildExternalIntelligenceHighlights(model: TerminalReadModel | null) {
   const topKeywords = Array.isArray(summary.top_keywords)
     ? summary.top_keywords.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
     : [];
+  const polymarketTopCategories = Array.isArray(summary.polymarket_top_categories)
+    ? summary.polymarket_top_categories.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
   const quoteWatch = Array.isArray(summary.quote_watch)
     ? summary.quote_watch.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
     : [];
@@ -270,6 +340,7 @@ function buildExternalIntelligenceHighlights(model: TerminalReadModel | null) {
     takeaway: safeDisplayValue(payload?.takeaway),
     topTitles,
     topKeywords,
+    polymarketTopCategories,
     quoteWatch,
   };
 }
@@ -329,6 +400,8 @@ export function OverviewPage({ model }: OverviewPageProps) {
   const jin10Highlights = buildJin10Highlights(model);
   const axiosMetrics = buildAxiosMetrics(model);
   const axiosHighlights = buildAxiosHighlights(model);
+  const polymarketMetrics = buildPolymarketMetrics(model);
+  const polymarketHighlights = buildPolymarketHighlights(model);
   const overviewStateMetrics = buildOverviewStateMetrics(model);
   const externalLink = buildWorkspacePageLink(
     'artifacts',
@@ -341,6 +414,10 @@ export function OverviewPage({ model }: OverviewPageProps) {
   const axiosLink = buildWorkspacePageLink(
     'artifacts',
     { artifact: 'axios_site_snapshot', group: 'system_anchor' },
+  );
+  const polymarketLink = buildWorkspacePageLink(
+    'artifacts',
+    { artifact: 'polymarket_gamma_snapshot', group: 'system_anchor' },
   );
 
   return (
@@ -396,6 +473,7 @@ export function OverviewPage({ model }: OverviewPageProps) {
             {externalIntelligenceHighlights.takeaway !== '—' ? <div className="empty-block">重点：{externalIntelligenceHighlights.takeaway}</div> : null}
             {externalIntelligenceHighlights.topTitles.length ? <div className="empty-block">重点标题：{externalIntelligenceHighlights.topTitles.join(' ｜ ')}</div> : null}
             {externalIntelligenceHighlights.topKeywords.length ? <div className="empty-block">关键词：{externalIntelligenceHighlights.topKeywords.join(' ｜ ')}</div> : null}
+            {externalIntelligenceHighlights.polymarketTopCategories.length ? <div className="empty-block">Polymarket 主题：{externalIntelligenceHighlights.polymarketTopCategories.join(' ｜ ')}</div> : null}
             {externalIntelligenceHighlights.quoteWatch.length ? <div className="empty-block">盯盘摘要：{externalIntelligenceHighlights.quoteWatch.join(' ｜ ')}</div> : null}
           </PanelCard>
         </div>
@@ -428,6 +506,21 @@ export function OverviewPage({ model }: OverviewPageProps) {
             {axiosHighlights.takeaway !== '—' ? <div className="empty-block">重点：{axiosHighlights.takeaway}</div> : null}
             {axiosHighlights.topTitles.length ? <div className="empty-block">重点标题：{axiosHighlights.topTitles.join(' ｜ ')}</div> : null}
             {axiosHighlights.topKeywords.length ? <div className="empty-block">关键词：{axiosHighlights.topKeywords.join(' ｜ ')}</div> : null}
+          </PanelCard>
+        </div>
+        ) : null}
+        {polymarketMetrics.length ? (
+        <div data-search-anchor="overview-polymarket-sidecar" id="overview-polymarket-sidecar">
+          <PanelCard
+            title="Polymarket 情绪侧边车"
+            kicker="research sidecar / prediction market"
+            meta={polymarketHighlights.recommendedBrief !== '—' ? polymarketHighlights.recommendedBrief : '预测市场 / 情绪分布 / 热门主题'}
+            actions={<Link className="button" to={polymarketLink}>查看 Polymarket 工件</Link>}
+          >
+            <MetricStrip items={polymarketMetrics} />
+            {polymarketHighlights.takeaway !== '—' ? <div className="empty-block">重点：{polymarketHighlights.takeaway}</div> : null}
+            {polymarketHighlights.topTitles.length ? <div className="empty-block">热点问题：{polymarketHighlights.topTitles.join(' ｜ ')}</div> : null}
+            {polymarketHighlights.topCategories.length ? <div className="empty-block">热门主题：{polymarketHighlights.topCategories.join(' ｜ ')}</div> : null}
           </PanelCard>
         </div>
         ) : null}

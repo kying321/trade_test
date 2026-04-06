@@ -529,6 +529,15 @@ def ensure_axios_site_artifacts(selected_paths: dict[str, tuple[Path | None, str
         selected_paths[artifact_id] = (candidate, "research", "system_anchor")
 
 
+def ensure_polymarket_gamma_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
+    artifact_id = "polymarket_gamma_snapshot"
+    if artifact_id in selected_paths:
+        return
+    candidate = latest_review_suffix(review_dir, "polymarket_gamma_snapshot.json")
+    if candidate:
+        selected_paths[artifact_id] = (candidate, "research", "system_anchor")
+
+
 def ensure_external_intelligence_artifacts(selected_paths: dict[str, tuple[Path | None, str, str]], review_dir: Path) -> None:
     artifact_id = "external_intelligence_snapshot"
     if artifact_id in selected_paths:
@@ -723,6 +732,7 @@ def build_surface_snapshot(
     ensure_commodity_reasoning_artifacts(selected_paths, review_dir)
     ensure_jin10_mcp_artifacts(selected_paths, review_dir)
     ensure_axios_site_artifacts(selected_paths, review_dir)
+    ensure_polymarket_gamma_artifacts(selected_paths, review_dir)
     ensure_external_intelligence_artifacts(selected_paths, review_dir)
     generated_at = utc_now()
     artifact_payloads: dict[str, dict[str, Any]] = {}

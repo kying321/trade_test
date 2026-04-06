@@ -316,6 +316,29 @@ function axiosSnapshotSummary(payload: Record<string, unknown>) {
   };
 }
 
+function polymarketSnapshotSummary(payload: Record<string, unknown>) {
+  const summary = (payload.summary as Record<string, unknown> | undefined) || {};
+  const topTitles = Array.isArray(summary.top_titles)
+    ? summary.top_titles.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const topCategories = Array.isArray(summary.top_categories)
+    ? summary.top_categories.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
+  const yesPriceAvg = typeof summary.yes_price_avg === 'number'
+    ? `${(Number(summary.yes_price_avg) * 100).toFixed(1)}%`
+    : safeDisplayValue(summary.yes_price_avg);
+  return {
+    recommendedBrief: safeDisplayValue(payload.recommended_brief),
+    takeaway: safeDisplayValue(payload.takeaway),
+    marketsTotal: safeDisplayValue(summary.markets_total),
+    bullishCount: safeDisplayValue(summary.bullish_count),
+    bearishCount: safeDisplayValue(summary.bearish_count),
+    yesPriceAvg,
+    topTitles,
+    topCategories,
+  };
+}
+
 function externalIntelligenceSummary(payload: Record<string, unknown>) {
   const summary = (payload.summary as Record<string, unknown> | undefined) || {};
   const topTitles = Array.isArray(summary.top_titles)
@@ -327,9 +350,15 @@ function externalIntelligenceSummary(payload: Record<string, unknown>) {
   const activeSources = Array.isArray(summary.active_sources)
     ? summary.active_sources.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
     : [];
+  const polymarketTopCategories = Array.isArray(summary.polymarket_top_categories)
+    ? summary.polymarket_top_categories.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
+    : [];
   const quoteWatch = Array.isArray(summary.quote_watch)
     ? summary.quote_watch.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—')
     : [];
+  const polymarketYesPriceAvg = typeof summary.polymarket_yes_price_avg === 'number'
+    ? `${(Number(summary.polymarket_yes_price_avg) * 100).toFixed(1)}%`
+    : safeDisplayValue(summary.polymarket_yes_price_avg);
   return {
     recommendedBrief: safeDisplayValue(payload.recommended_brief),
     takeaway: safeDisplayValue(payload.takeaway),
@@ -341,8 +370,13 @@ function externalIntelligenceSummary(payload: Record<string, unknown>) {
     newsTotal: safeDisplayValue(summary.axios_news_total),
     localTotal: safeDisplayValue(summary.axios_local_total),
     nationalTotal: safeDisplayValue(summary.axios_national_total),
+    polymarketMarketsTotal: safeDisplayValue(summary.polymarket_markets_total),
+    polymarketYesPriceAvg,
+    polymarketBullishCount: safeDisplayValue(summary.polymarket_bullish_count),
+    polymarketBearishCount: safeDisplayValue(summary.polymarket_bearish_count),
     topTitles,
     topKeywords,
+    polymarketTopCategories,
     quoteWatch,
   };
 }
@@ -878,6 +912,29 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
                   })()}
                 </DrilldownSection>
               ) : null}
+              {selectedPayloadKey === 'polymarket_gamma_snapshot' ? (
+                <DrilldownSection title="Polymarket 情绪侧边车摘要" summary={safeDisplayValue(payloadRecord.recommended_brief || payloadRecord.takeaway || 'research sidecar')} defaultOpen>
+                  {(() => {
+                    const polymarket = polymarketSnapshotSummary(payloadRecord);
+                    return (
+                      <>
+                        <KeyValueGrid
+                          rows={[
+                            { ...c('markets_total', 'summary'), label: '活跃市场', value: polymarket.marketsTotal, kind: 'number' as const },
+                            { ...c('bullish_count', 'summary'), label: '偏多合约', value: polymarket.bullishCount, kind: 'number' as const },
+                            { ...c('bearish_count', 'summary'), label: '偏空合约', value: polymarket.bearishCount, kind: 'number' as const },
+                            { ...c('yes_price_avg', 'summary'), label: '平均 Yes 概率', value: polymarket.yesPriceAvg, showRaw: true },
+                            { ...c('recommended_brief', 'recommended_brief'), value: polymarket.recommendedBrief, showRaw: true },
+                            { ...c('takeaway', 'takeaway'), value: polymarket.takeaway, showRaw: true },
+                          ]}
+                        />
+                        {polymarket.topTitles.length ? <div className="empty-block">热点问题：{polymarket.topTitles.join(' ｜ ')}</div> : null}
+                        {polymarket.topCategories.length ? <div className="empty-block">热门主题：{polymarket.topCategories.join(' ｜ ')}</div> : null}
+                      </>
+                    );
+                  })()}
+                </DrilldownSection>
+              ) : null}
               {selectedPayloadKey === 'external_intelligence_snapshot' ? (
                 <DrilldownSection title="外部情报带摘要" summary={safeDisplayValue(payloadRecord.recommended_brief || payloadRecord.takeaway || 'external intelligence')} defaultOpen>
                   {(() => {
@@ -893,6 +950,10 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
                             { ...c('news_total', 'summary'), label: '新闻条目', value: external.newsTotal, kind: 'number' as const },
                             { ...c('local_total', 'summary'), label: '本地新闻', value: external.localTotal, kind: 'number' as const },
                             { ...c('national_total', 'summary'), label: '全国新闻', value: external.nationalTotal, kind: 'number' as const },
+                            { ...c('polymarket_markets_total', 'summary'), label: '预测市场', value: external.polymarketMarketsTotal, kind: 'number' as const },
+                            { ...c('polymarket_yes_price_avg', 'summary'), label: '平均 Yes 概率', value: external.polymarketYesPriceAvg, showRaw: true },
+                            { ...c('polymarket_bullish_count', 'summary'), label: '偏多合约', value: external.polymarketBullishCount, kind: 'number' as const },
+                            { ...c('polymarket_bearish_count', 'summary'), label: '偏空合约', value: external.polymarketBearishCount, kind: 'number' as const },
                             { ...c('recommended_brief', 'recommended_brief'), value: external.recommendedBrief, showRaw: true },
                             { ...c('takeaway', 'takeaway'), value: external.takeaway, showRaw: true },
                           ]}
@@ -900,6 +961,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
                         {external.activeSources.length ? <div className="empty-block">激活源：{external.activeSources.join(' ｜ ')}</div> : null}
                         {external.topTitles.length ? <div className="empty-block">重点标题：{external.topTitles.join(' ｜ ')}</div> : null}
                         {external.topKeywords.length ? <div className="empty-block">关键词：{external.topKeywords.join(' ｜ ')}</div> : null}
+                        {external.polymarketTopCategories.length ? <div className="empty-block">Polymarket 主题：{external.polymarketTopCategories.join(' ｜ ')}</div> : null}
                         {external.quoteWatch.length ? <div className="empty-block">盯盘摘要：{external.quoteWatch.join(' ｜ ')}</div> : null}
                       </>
                     );

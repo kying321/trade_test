@@ -198,6 +198,49 @@ describe('search catalog', () => {
     expect(results.some((row) => row.destination.includes('/workspace/artifacts'))).toBe(true);
   });
 
+  it('搜索 Polymarket 情绪侧边车时返回总览模块与工件结果', () => {
+    const enrichedSnapshot: DashboardSnapshot = {
+      ...snapshot,
+      catalog: [
+        ...(snapshot.catalog || []),
+        {
+          id: 'polymarket_gamma_snapshot',
+          payload_key: 'polymarket_gamma_snapshot',
+          artifact_group: 'system_anchor',
+          category: 'research',
+          label: 'polymarket_gamma_snapshot',
+          status: 'ok',
+          path: 'review/latest_polymarket_gamma_snapshot.json',
+        },
+      ],
+      artifact_payloads: {
+        ...(snapshot.artifact_payloads || {}),
+        polymarket_gamma_snapshot: {
+          label: 'polymarket gamma snapshot',
+          path: 'review/latest_polymarket_gamma_snapshot.json',
+          summary: {
+            status: 'ok',
+            recommended_brief: 'poly markets=12 | yes_avg=56.3% | bull=3 | bear=2',
+            takeaway: 'Will BTC hit $120k in April?',
+          },
+          payload: {
+            summary: {
+              top_titles: [
+                'Will BTC hit $120k in April?',
+                'Will the Fed cut before June?',
+              ],
+              top_categories: ['Crypto', 'Economy'],
+            },
+          },
+        },
+      },
+    };
+    const model = buildTerminalReadModel(buildLoaded(enrichedSnapshot));
+    const results = searchCatalog(buildSearchCatalog(model), 'Polymarket 情绪侧边车', 'all');
+    expect(results.some((row) => row.destination.includes('/ops/overview'))).toBe(true);
+    expect(results.some((row) => row.destination.includes('/workspace/artifacts'))).toBe(true);
+  });
+
   it('搜索外部情报带时返回总览模块与工件结果', () => {
     const enrichedSnapshot: DashboardSnapshot = {
       ...snapshot,

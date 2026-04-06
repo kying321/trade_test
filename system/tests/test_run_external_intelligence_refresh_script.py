@@ -43,12 +43,18 @@ def test_main_runs_external_intelligence_refresh_chain(monkeypatch, tmp_path: Pa
                 "artifact_json": str(review_dir / "latest_axios_site_snapshot.json"),
                 "recommended_brief": "axios news=10 | local=8 | national=2",
             }
+        if name == "run_polymarket_gamma_snapshot":
+            return {
+                "status": "ok",
+                "artifact_json": str(review_dir / "latest_polymarket_gamma_snapshot.json"),
+                "recommended_brief": "poly markets=12 | yes_avg=56.3% | bull=3 | bear=2",
+            }
         if name == "run_external_intelligence_snapshot":
             return {
                 "status": "ok",
                 "artifact_json": str(review_dir / "latest_external_intelligence_snapshot.json"),
-                "recommended_brief": "sources=2 | calendar=244 | flash=20 | quotes=2 | news=10",
-                "takeaway": "美国至4月3日当周EIA原油库存(万桶) ｜ Anthropic cuts third party usage",
+                "recommended_brief": "sources=3 | calendar=244 | flash=20 | quotes=2 | news=10 | poly=12",
+                "takeaway": "美国至4月3日当周EIA原油库存(万桶) ｜ Anthropic cuts third party usage ｜ Will BTC hit $120k in April?",
             }
         if name == "build_dashboard_frontend_snapshot":
             public_snapshot = public_dir / "data" / "fenlie_dashboard_snapshot.json"
@@ -100,9 +106,10 @@ def test_main_runs_external_intelligence_refresh_chain(monkeypatch, tmp_path: Pa
     assert payload["stamp"] == "20260406T144000Z"
     assert payload["jin10_status"] == "ok"
     assert payload["axios_status"] == "ok"
+    assert payload["polymarket_status"] == "ok"
     assert payload["external_status"] == "ok"
-    assert payload["recommended_brief"] == "sources=2 | calendar=244 | flash=20 | quotes=2 | news=10"
-    assert payload["takeaway"] == "美国至4月3日当周EIA原油库存(万桶) ｜ Anthropic cuts third party usage"
+    assert payload["recommended_brief"] == "sources=3 | calendar=244 | flash=20 | quotes=2 | news=10 | poly=12"
+    assert payload["takeaway"] == "美国至4月3日当周EIA原油库存(万桶) ｜ Anthropic cuts third party usage ｜ Will BTC hit $120k in April?"
     assert payload["external_intelligence_path"] == str(review_dir / "latest_external_intelligence_snapshot.json")
     assert payload["dashboard_outputs"] == [
         {
@@ -126,6 +133,7 @@ def test_main_runs_external_intelligence_refresh_chain(monkeypatch, tmp_path: Pa
     assert list(seen_cmds) == [
         "run_jin10_mcp_snapshot",
         "run_axios_site_snapshot",
+        "run_polymarket_gamma_snapshot",
         "run_external_intelligence_snapshot",
         "build_dashboard_frontend_snapshot",
     ]
@@ -144,6 +152,14 @@ def test_main_runs_external_intelligence_refresh_chain(monkeypatch, tmp_path: Pa
         str(workspace),
         "--limit",
         "12",
+    ]
+    assert seen_cmds["run_polymarket_gamma_snapshot"] == [
+        sys.executable,
+        str(system_root / "scripts" / "run_polymarket_gamma_snapshot.py"),
+        "--workspace",
+        str(workspace),
+        "--limit",
+        "20",
     ]
     assert seen_cmds["run_external_intelligence_snapshot"] == [
         sys.executable,
@@ -176,11 +192,13 @@ def test_main_skips_dashboard_snapshot_when_requested(monkeypatch, tmp_path: Pat
             return {"status": "blocked_auth_missing", "artifact_json": str(review_dir / "latest_jin10_mcp_snapshot.json")}
         if name == "run_axios_site_snapshot":
             return {"status": "ok", "artifact_json": str(review_dir / "latest_axios_site_snapshot.json")}
+        if name == "run_polymarket_gamma_snapshot":
+            return {"status": "ok", "artifact_json": str(review_dir / "latest_polymarket_gamma_snapshot.json")}
         if name == "run_external_intelligence_snapshot":
             return {
                 "status": "partial",
                 "artifact_json": str(review_dir / "latest_external_intelligence_snapshot.json"),
-                "recommended_brief": "sources=1 | calendar=0 | flash=0 | quotes=0 | news=10",
+                "recommended_brief": "sources=2 | calendar=0 | flash=0 | quotes=0 | news=10 | poly=12",
                 "takeaway": "NBA takes bids on European league, eyes 2027",
             }
         raise AssertionError(name)

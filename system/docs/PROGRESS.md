@@ -63,6 +63,20 @@
     - `system/output/review/latest_external_intelligence_snapshot.md`
     - `system/output/review/latest_external_intelligence_refresh.json`
     - `system/output/review/latest_external_intelligence_refresh.md`
+- Polymarket public gamma sentiment sidecar 已接入 repo：
+  - client：`/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/polymarket_gamma_client.py`
+  - runner：`/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_polymarket_gamma_snapshot.py`
+  - 测试：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_polymarket_gamma_client.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_run_polymarket_gamma_snapshot_script.py`
+  - 定位：`RESEARCH_ONLY` 的公开只读情绪侧车，不使用交易认证凭证，不进入 live/source-of-truth
+  - 当前汇总链：
+    - `run_external_intelligence_refresh.py` 会串联 `jin10 -> axios -> polymarket -> unified snapshot`
+    - `run_operator_panel_refresh.py` 现会自动触发上述外部情报刷新
+  - 当前公开语义：
+    - 只读取 public gamma market 数据
+    - 只产出 `markets_total / bullish_count / bearish_count / yes_price_avg / top_categories / top_titles`
+    - 只能用于情绪面参考与置信度降级，不能直接驱动 execution
 - `run_operator_panel_refresh.py` 已接入外部情报主刷新链：
   - 当前顺序：
     - `run_external_intelligence_refresh.py --skip-dashboard-snapshot`
