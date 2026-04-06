@@ -107,6 +107,17 @@ def test_build_snapshot_rolls_up_handoff_sources_and_kernel_state(tmp_path: Path
     assert payload["summary"]["no_retry_deactivated_total"] == 1
     assert payload["summary"]["active_target_authfiles"] == 20
     assert payload["summary"]["latest_kernel_accounts_total"] == 1
+    assert payload["summary"]["historical_success_in_usable_active_total"] == 0
+    assert payload["summary"]["historical_success_non_active_total"] == 0
+    assert payload["summary"]["historical_success_missing_from_inventory_total"] == 2
     assert payload["latest_kernel_run_id"] == "run-kernel-1"
+    assert [row["id"] for row in payload["guarded_actions"]] == [
+        "acceptance_replay_success20",
+        "active_target_sync_success20",
+        "retry_candidate_pipeline",
+    ]
+    assert "python3 check_five_account_acceptance.py --csv data/registered_success_active20.csv" in payload["guarded_actions"][0]["command"]
+    assert "python3 run_active_target_sync.py --csv data/registered_success_active20.csv" in payload["guarded_actions"][1]["command"]
+    assert "python3 run_retry_candidate_pipeline.py --csv registered_accounts.csv" in payload["guarded_actions"][2]["command"]
     assert Path(payload["artifact_json"]).exists()
     assert (public_dir / "data" / "cpa_control_plane_snapshot.json").exists()

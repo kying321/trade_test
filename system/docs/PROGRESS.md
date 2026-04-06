@@ -126,6 +126,19 @@
     - 历史成功 20-active 快照作为 source-owned 成功集
     - 当前 inventory / review queue / no-retry-deactivated 作为漂移/重建状态面
     - CPA 前端控制面不再只依赖临时 localStorage/error ledger，开始读取 source-owned 只读摘要
+- CPA control plane Phase 3 已接入 repo：
+  - 当前增强：
+    - `build_cpa_control_plane_snapshot.py` 现会生成 guarded action command 列表：
+      - `check_five_account_acceptance.py`
+      - `run_active_target_sync.py`
+      - `run_retry_candidate_pipeline.py`
+    - `CpaPage.tsx` 现会展示：
+      - source-owned 对账视图（历史成功 vs inventory）
+      - connected live auth-files 与历史成功集的命中/缺口对账
+      - Guarded Actions 命令建议（只读展示，不在页面里直接执行）
+  - 当前原则：
+    - live OAuth / active sync / retry candidate 仍保持 `LIVE_GUARD_ONLY`
+    - 页面只提供 source-owned reconciliation 和命令建议，不直接触发 live workflow
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`
