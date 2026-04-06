@@ -40,10 +40,22 @@ type StatusMessage = {
 type CpaControlSnapshot = {
   summary?: Record<string, unknown>;
   latest_kernel_run_id?: string;
+  historical_success_emails?: string[];
+  guarded_actions?: Array<Record<string, unknown>>;
 };
 
 function trimJsonSuffix(name: string) {
   return name.replace(/\.json$/i, '');
+}
+
+function resolveLiveFileEmail(file: CpaAuthFile): string {
+  for (const key of ['email', 'account', 'name'] as const) {
+    const raw = String(file[key] || '').trim().toLowerCase();
+    if (!raw) continue;
+    const match = raw.match(/[a-z0-9._%+-]+@[a-z0-9.-]+/);
+    if (match) return match[0];
+  }
+  return '';
 }
 
 function planTone(planType: string | null | undefined) {
@@ -440,6 +452,15 @@ export function CpaPage() {
 
   const bucketSummaryEntries = Object.entries(bucketCounts).sort((a, b) => a[0].localeCompare(b[0]));
   const controlSummary = (controlSnapshot?.summary || {}) as Record<string, unknown>;
+  const historicalSuccessEmails = Array.isArray(controlSnapshot?.historical_success_emails)
+    ? controlSnapshot?.historical_success_emails.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  const liveEmails = rows.map((row) => resolveLiveFileEmail(row.file)).filter(Boolean);
+  const liveEmailSet = new Set(liveEmails);
+  const historicalHitCount = historicalSuccessEmails.filter((email) => liveEmailSet.has(email)).length;
+  const historicalMissingInLiveCount = Math.max(0, historicalSuccessEmails.length - historicalHitCount);
+  const unexpectedLiveCount = liveEmails.filter((email) => !historicalSuccessEmails.includes(email)).length;
+  const guardedActions = Array.isArray(controlSnapshot?.guarded_actions) ? controlSnapshot?.guarded_actions : [];
 
   return (
     <div className="workspace-grid single-column cpa-page">
@@ -456,6 +477,31 @@ export function CpaPage() {
             <span className="summary-chip">{`kernel accounts ${Number(controlSummary.latest_kernel_accounts_total || 0)}`}</span>
             {controlSnapshot.latest_kernel_run_id ? <span className="summary-chip">{`kernel run ${controlSnapshot.latest_kernel_run_id}`}</span> : null}
           </div>
+        </PanelCard>
+      ) : null}
+      {controlSnapshot ? (
+        <PanelCard title="CPA 对账视图" kicker="source-owned / reconciliation" meta="先看历史成功集与 inventory 的偏移，再决定是否触发 guarded live workflow。">
+          <div className="chip-row cpa-summary-grid">
+            <span className="summary-chip">{`历史成功在 usable_active ${Number(controlSummary.historical_success_in_usable_active_total || 0)}`}</span>
+            <span className="summary-chip">{`历史成功非 active ${Number(controlSummary.historical_success_non_active_total || 0)}`}</span>
+            <span className="summary-chip">{`历史成功缺口 ${Number(controlSummary.historical_success_missing_from_inventory_total || 0)}`}</span>
+            {rows.length ? <span className="summary-chip">{`live 已连接 ${liveEmails.length}`}</span> : null}
+            {rows.length ? <span className="summary-chip">{`历史成功命中 ${historicalHitCount}`}</span> : null}
+            {rows.length ? <span className="summary-chip">{`历史成功缺口 ${historicalMissingInLiveCount}`}</span> : null}
+            {rows.length ? <span className="summary-chip">{`unexpected live ${unexpectedLiveCount}`}</span> : null}
+          </div>
+        </PanelCard>
+      ) : null}
+      {guardedActions.length ? (
+        <PanelCard title="Guarded Actions" kicker="live-guard-only / command suggestions" meta="这些动作来自 handoff 与 source-owned CPA control snapshot，只给出建议命令，不在页面中直接执行。">
+          {guardedActions.map((action) => (
+            <div className="empty-block" key={String(action.id || action.label || Math.random())}>
+              <strong>{String(action.label || action.id || 'action')}</strong>
+              <div>{String(action.description || '')}</div>
+              <div>{`风险级别：${String(action.risk_class || 'LIVE_GUARD_ONLY')}`}</div>
+              <pre className="json-block">{String(action.command || '')}</pre>
+            </div>
+          ))}
         </PanelCard>
       ) : null}
       <PanelCard title="CPA 管理" kicker="auth-files / quota / delete-guard" meta="认证文件、额度查询与误删保护">

@@ -89,15 +89,53 @@ def build_snapshot(*, workspace: Path, public_dir: Path, source_root: Path = DEF
     inventory_rows = inventory if isinstance(inventory, list) else []
     acceptance_map = acceptance if isinstance(acceptance, dict) else {}
     kernel_map = latest_kernel if isinstance(latest_kernel, dict) else {}
+    historical_success_emails = [str(row.get("email") or "").strip().lower() for row in success_rows if str(row.get("email") or "").strip()]
 
     bucket_counts: dict[str, int] = {}
+    inventory_bucket_by_email: dict[str, str] = {}
     for row in inventory_rows:
         if not isinstance(row, dict):
             continue
+        email = str(row.get("email") or "").strip().lower()
         bucket = str(row.get("bucket") or "").strip()
         if not bucket:
             continue
         bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        if email:
+            inventory_bucket_by_email[email] = bucket
+
+    historical_success_in_usable_active_total = sum(1 for email in historical_success_emails if inventory_bucket_by_email.get(email) == "usable_active")
+    historical_success_non_active_total = sum(
+        1
+        for email in historical_success_emails
+        if email in inventory_bucket_by_email and inventory_bucket_by_email.get(email) != "usable_active"
+    )
+    historical_success_missing_from_inventory_total = sum(1 for email in historical_success_emails if email not in inventory_bucket_by_email)
+    tools_root = source_root.parent
+    retry_candidate_total = bucket_counts.get("retry_candidate", 0)
+    guarded_actions = [
+        {
+            "id": "acceptance_replay_success20",
+            "label": "验收回放 / 历史成功20",
+            "risk_class": "LIVE_GUARD_ONLY",
+            "description": "先用历史成功快照重放 acceptance，不直接信当前 live 管理面。",
+            "command": f"cd {tools_root} && python3 check_five_account_acceptance.py --csv data/registered_success_active20.csv --target-count 20 --store data/pipeline_store.sqlite3 --pretty",
+        },
+        {
+            "id": "active_target_sync_success20",
+            "label": "重建 active 子集 / success20",
+            "risk_class": "LIVE_GUARD_ONLY",
+            "description": "把历史 success20 重新推送到 CPA 并同步入库。",
+            "command": f"cd {tools_root} && python3 run_active_target_sync.py --csv data/registered_success_active20.csv --output-csv data/active_target_accounts.csv --store data/pipeline_store.sqlite3 --target-count 20 --pretty",
+        },
+        {
+            "id": "retry_candidate_pipeline",
+            "label": "重试 retry_candidate 队列",
+            "risk_class": "LIVE_GUARD_ONLY",
+            "description": "只对 review queue 中 retry_candidate 运行受控 OAuth 重挂载。",
+            "command": f"cd {tools_root} && python3 run_retry_candidate_pipeline.py --csv registered_accounts.csv --review-queue data/cpa_non_active_review_queue.csv --output-csv data/active_target_accounts.csv --store data/pipeline_store.sqlite3 --max-attempts {max(retry_candidate_total, 1)} --pretty",
+        },
+    ]
 
     payload: dict[str, Any] = {
         "generated_at_utc": generated_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -117,14 +155,18 @@ def build_snapshot(*, workspace: Path, public_dir: Path, source_root: Path = DEF
             "active_target_authfiles": int(acceptance_map.get("active_target_authfiles") or 0),
             "registered_valid_accounts": int(acceptance_map.get("registered_valid_accounts") or 0),
             "latest_kernel_accounts_total": int(kernel_map.get("accounts_total") or 0),
+            "historical_success_in_usable_active_total": historical_success_in_usable_active_total,
+            "historical_success_non_active_total": historical_success_non_active_total,
+            "historical_success_missing_from_inventory_total": historical_success_missing_from_inventory_total,
         },
         "bucket_counts": bucket_counts,
-        "historical_success_emails": [str(row.get("email") or "").strip() for row in success_rows if str(row.get("email") or "").strip()],
+        "historical_success_emails": historical_success_emails,
         "new_unmounted_emails": [str(row.get("email") or "").strip() for row in new_unmounted_rows if str(row.get("email") or "").strip()],
         "review_queue_preview": review_queue_rows[:10],
         "deactivated_preview": deactivated_rows[:10],
         "acceptance": acceptance_map,
         "latest_kernel_run_id": str(kernel_map.get("run_id") or ""),
+        "guarded_actions": guarded_actions,
     }
 
     artifact_json, artifact_md = write_review_artifacts(review_dir, payload, stamp)

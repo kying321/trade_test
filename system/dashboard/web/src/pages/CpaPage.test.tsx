@@ -7,6 +7,7 @@ function mockAuthFiles() {
   return [
     {
       name: 'token_oc_alpha.json',
+      email: 'hpgwqc62wtwg@fuuu.fun',
       type: 'codex',
       auth_index: '1',
       disabled: false,
@@ -47,7 +48,18 @@ describe('CpaPage', () => {
               blocked_about_you_total: 8,
               no_retry_deactivated_total: 11,
               new_unmounted_total: 6,
+              historical_success_in_usable_active_total: 1,
+              historical_success_non_active_total: 19,
+              historical_success_missing_from_inventory_total: 0,
             },
+            historical_success_emails: ['hpgwqc62wtwg@fuuu.fun', 'oezru5cjfn@fuuu.fun'],
+            guarded_actions: [
+              {
+                id: 'acceptance_replay_success20',
+                label: '验收回放 / 历史成功20',
+                command: 'cd /Users/jokenrobot/Downloads/Folders/MAC工具 && python3 check_five_account_acceptance.py --csv data/registered_success_active20.csv --target-count 20 --store data/pipeline_store.sqlite3 --pretty',
+              },
+            ],
             latest_kernel_run_id: 'run-kernel-1',
           }),
         };
@@ -70,7 +82,11 @@ describe('CpaPage', () => {
     expect(await screen.findByRole('heading', { name: 'CPA 管理' })).toBeTruthy();
     expect(await screen.findByText(/历史成功快照/)).toBeTruthy();
     expect(screen.getByText(/20 个历史成功账号/)).toBeTruthy();
+    expect(screen.getByText(/Guarded Actions/)).toBeTruthy();
+    expect(screen.getByText(/验收回放 \/ 历史成功20/)).toBeTruthy();
     expect(await screen.findByText('token_oc_alpha')).toBeTruthy();
+    expect(screen.getByText(/live 已连接 1/)).toBeTruthy();
+    expect(screen.getByText(/历史成功命中 1/)).toBeTruthy();
     expect(screen.queryByText('non_chat_file')).toBeNull();
     expect(screen.getByRole('button', { name: '查询额度' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '删除401账号' })).toBeTruthy();
