@@ -90,6 +90,7 @@ def build_summary(
     snapshot_skipped: bool,
     jin10_payload: dict[str, Any],
     axios_payload: dict[str, Any],
+    polymarket_payload: dict[str, Any],
     external_payload: dict[str, Any],
     snapshot_payload: dict[str, Any],
 ) -> dict[str, Any]:
@@ -104,15 +105,17 @@ def build_summary(
             dashboard_outputs.append(text)
     jin10_status = str(jin10_payload.get("status") or "")
     axios_status = str(axios_payload.get("status") or "")
+    polymarket_status = str(polymarket_payload.get("status") or "")
     external_status = str(external_payload.get("status") or "")
 
     if snapshot_skipped:
-        fully_ready = jin10_status == "ok" and axios_status == "ok" and external_status == "ok"
+        fully_ready = jin10_status == "ok" and axios_status == "ok" and polymarket_status == "ok" and external_status == "ok"
         partially_ready = external_status in {"ok", "partial"}
     else:
         fully_ready = (
             jin10_status == "ok"
             and axios_status == "ok"
+            and polymarket_status == "ok"
             and external_status == "ok"
             and bool(dashboard_outputs)
         )
@@ -132,6 +135,7 @@ def build_summary(
         "refresh_order": [
             "run_jin10_mcp_snapshot",
             "run_axios_site_snapshot",
+            "run_polymarket_gamma_snapshot",
             "run_external_intelligence_snapshot",
         ]
         + ([] if snapshot_skipped else ["build_dashboard_frontend_snapshot"]),
@@ -139,6 +143,8 @@ def build_summary(
         "jin10_path": str(jin10_payload.get("artifact_json") or ""),
         "axios_status": axios_status,
         "axios_path": str(axios_payload.get("artifact_json") or ""),
+        "polymarket_status": polymarket_status,
+        "polymarket_path": str(polymarket_payload.get("artifact_json") or ""),
         "external_status": external_status,
         "external_intelligence_path": str(external_payload.get("artifact_json") or ""),
         "dashboard_outputs": dashboard_outputs,
@@ -154,6 +160,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--now", help="Explicit UTC timestamp for deterministic artifact stamping.")
     parser.add_argument("--jin10-token-env", default="JIN10_MCP_BEARER_TOKEN")
     parser.add_argument("--axios-limit", type=int, default=20)
+    parser.add_argument("--polymarket-limit", type=int, default=20)
     parser.add_argument("--skip-dashboard-snapshot", action="store_true")
     return parser.parse_args()
 
@@ -192,6 +199,17 @@ def main() -> None:
             str(int(args.axios_limit)),
         ],
     )
+    polymarket_payload = run_json(
+        name="run_polymarket_gamma_snapshot",
+        cmd=[
+            sys.executable,
+            str(system_root / "scripts" / "run_polymarket_gamma_snapshot.py"),
+            "--workspace",
+            str(workspace),
+            "--limit",
+            str(int(args.polymarket_limit)),
+        ],
+    )
     external_payload = run_json(
         name="run_external_intelligence_snapshot",
         cmd=[
@@ -222,6 +240,7 @@ def main() -> None:
         snapshot_skipped=bool(args.skip_dashboard_snapshot),
         jin10_payload=jin10_payload,
         axios_payload=axios_payload,
+        polymarket_payload=polymarket_payload,
         external_payload=external_payload,
         snapshot_payload=snapshot_payload,
     )

@@ -23,6 +23,10 @@ function axiosPayload(model: TerminalReadModel) {
   return (model.workspace.artifactPayloads?.axios_site_snapshot?.payload as Record<string, unknown> | undefined) || {};
 }
 
+function polymarketPayload(model: TerminalReadModel) {
+  return (model.workspace.artifactPayloads?.polymarket_gamma_snapshot?.payload as Record<string, unknown> | undefined) || {};
+}
+
 function externalPayload(model: TerminalReadModel) {
   return (model.workspace.artifactPayloads?.external_intelligence_snapshot?.payload as Record<string, unknown> | undefined) || {};
 }
@@ -41,6 +45,8 @@ export function OpsRiskPage({ model, focus }: OpsRiskPageProps) {
   const jin10Summary = (jin10.summary as Record<string, unknown> | undefined) || {};
   const axios = axiosPayload(model);
   const axiosSummary = (axios.summary as Record<string, unknown> | undefined) || {};
+  const polymarket = polymarketPayload(model);
+  const polymarketSummary = (polymarket.summary as Record<string, unknown> | undefined) || {};
 
   return (
     <section className="ops-risk-page" aria-label="ops-risk-page">
@@ -71,7 +77,7 @@ export function OpsRiskPage({ model, focus }: OpsRiskPageProps) {
             {Object.keys(external).length ? (
               <PanelCard
                 title="外部情报带"
-                kicker="aggregated / jin10 + axios"
+                kicker="aggregated / jin10 + axios + polymarket"
                 meta={safeDisplayValue(external.recommended_brief || '外部情报汇总')}
                 actions={<Link className="button" to={buildWorkspaceLink('artifacts', { artifact: 'external_intelligence_snapshot', group: 'system_anchor' })}>查看外部情报工件</Link>}
               >
@@ -81,6 +87,14 @@ export function OpsRiskPage({ model, focus }: OpsRiskPageProps) {
                     { key: 'calendar_total', label: '日历事件', value: externalSummary.calendar_total ?? '—' },
                     { key: 'flash_total', label: '最新快讯', value: externalSummary.flash_total ?? '—' },
                     { key: 'news_total', label: '新闻条目', value: externalSummary.axios_news_total ?? '—' },
+                    { key: 'polymarket_markets_total', label: '预测市场', value: externalSummary.polymarket_markets_total ?? '—' },
+                    {
+                      key: 'polymarket_yes_price_avg',
+                      label: '平均 Yes 概率',
+                      value: typeof externalSummary.polymarket_yes_price_avg === 'number'
+                        ? `${(Number(externalSummary.polymarket_yes_price_avg) * 100).toFixed(1)}%`
+                        : safeDisplayValue(externalSummary.polymarket_yes_price_avg),
+                    },
                     {
                       key: 'quote_watch',
                       label: '盯盘品种',
@@ -143,6 +157,37 @@ export function OpsRiskPage({ model, focus }: OpsRiskPageProps) {
                     ]}
                   />
                   {safeDisplayValue(axios.takeaway) !== '—' ? <div className="empty-block">重点：{safeDisplayValue(axios.takeaway)}</div> : null}
+                </PanelCard>
+              ) : null}
+              {Object.keys(polymarket).length ? (
+                <PanelCard
+                  title="Polymarket 情绪侧边车"
+                  kicker="prediction market / sentiment"
+                  meta={safeDisplayValue(polymarket.recommended_brief || '预测市场 / 情绪分布 / 热门主题')}
+                  actions={<Link className="button" to={buildWorkspaceLink('artifacts', { artifact: 'polymarket_gamma_snapshot', group: 'system_anchor' })}>查看 Polymarket 工件</Link>}
+                >
+                  <KeyValueGrid
+                    rows={[
+                      { key: 'markets_total', label: '活跃市场', value: polymarketSummary.markets_total ?? '—' },
+                      { key: 'bullish_count', label: '偏多合约', value: polymarketSummary.bullish_count ?? '—' },
+                      { key: 'bearish_count', label: '偏空合约', value: polymarketSummary.bearish_count ?? '—' },
+                      {
+                        key: 'yes_price_avg',
+                        label: '平均 Yes 概率',
+                        value: typeof polymarketSummary.yes_price_avg === 'number'
+                          ? `${(Number(polymarketSummary.yes_price_avg) * 100).toFixed(1)}%`
+                          : safeDisplayValue(polymarketSummary.yes_price_avg),
+                      },
+                      {
+                        key: 'top_categories',
+                        label: '热门主题',
+                        value: Array.isArray(polymarketSummary.top_categories)
+                          ? polymarketSummary.top_categories.map((value) => safeDisplayValue(value)).filter((value) => value && value !== '—').join(', ')
+                          : '—',
+                      },
+                    ]}
+                  />
+                  {safeDisplayValue(polymarket.takeaway) !== '—' ? <div className="empty-block">重点：{safeDisplayValue(polymarket.takeaway)}</div> : null}
                 </PanelCard>
               ) : null}
             </div>

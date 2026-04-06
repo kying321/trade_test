@@ -479,20 +479,48 @@ const mockSnapshot = {
         takeaway: "Gilbert's Heritage Park to open first phase in September",
       },
     },
+    polymarket_gamma_snapshot: {
+      label: 'polymarket gamma snapshot',
+      path: 'review/latest_polymarket_gamma_snapshot.json',
+      summary: {
+        status: 'ok',
+        change_class: 'RESEARCH_ONLY',
+        recommended_brief: 'poly markets=12 | yes_avg=56.3% | bull=3 | bear=2',
+        takeaway: 'Will BTC hit $120k in April?',
+      },
+      payload: {
+        status: 'ok',
+        summary: {
+          markets_total: 12,
+          binary_markets_total: 12,
+          bullish_count: 3,
+          bearish_count: 2,
+          yes_price_avg: 0.563,
+          total_volume_24hr: 272355.6,
+          top_categories: ['Crypto', 'Economy', 'Politics'],
+          top_titles: [
+            'Will BTC hit $120k in April?',
+            'Will the Fed cut before June?',
+          ],
+        },
+        recommended_brief: 'poly markets=12 | yes_avg=56.3% | bull=3 | bear=2',
+        takeaway: 'Will BTC hit $120k in April?',
+      },
+    },
     external_intelligence_snapshot: {
       label: 'external intelligence snapshot',
       path: 'review/latest_external_intelligence_snapshot.json',
       summary: {
         status: 'ok',
         change_class: 'RESEARCH_ONLY',
-        recommended_brief: 'sources=2 | calendar=244 | flash=20 | quotes=2 | news=10',
-        takeaway: "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September",
+        recommended_brief: 'sources=3 | calendar=244 | flash=20 | quotes=2 | news=10 | poly=12',
+        takeaway: "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September ｜ Will BTC hit $120k in April?",
       },
       payload: {
         status: 'ok',
         summary: {
-          sources_total: 2,
-          active_sources: ['jin10', 'axios'],
+          sources_total: 3,
+          active_sources: ['jin10', 'axios', 'polymarket'],
           calendar_total: 244,
           high_importance_count: 5,
           flash_total: 20,
@@ -500,14 +528,20 @@ const mockSnapshot = {
           axios_news_total: 10,
           axios_local_total: 8,
           axios_national_total: 2,
+          polymarket_markets_total: 12,
+          polymarket_yes_price_avg: 0.563,
+          polymarket_bullish_count: 3,
+          polymarket_bearish_count: 2,
+          polymarket_top_categories: ['Crypto', 'Economy', 'Politics'],
           top_titles: [
             "Gilbert's Heritage Park to open first phase in September",
             'Anthropic cuts third party usage',
+            'Will BTC hit $120k in April?',
           ],
-          top_keywords: ['Arizona', 'Axios'],
+          top_keywords: ['Arizona', 'Axios', 'Crypto'],
         },
-        recommended_brief: 'sources=2 | calendar=244 | flash=20 | quotes=2 | news=10',
-        takeaway: "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September",
+        recommended_brief: 'sources=3 | calendar=244 | flash=20 | quotes=2 | news=10 | poly=12',
+        takeaway: "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September ｜ Will BTC hit $120k in April?",
       },
     },
     hold_selection_handoff: {
@@ -531,6 +565,7 @@ const mockSnapshot = {
     { id: 'external_intelligence_snapshot', payload_key: 'external_intelligence_snapshot', artifact_layer: 'canonical', artifact_group: 'system_anchor', category: 'research', label: 'external_intelligence_snapshot', status: 'ok', path: 'review/latest_external_intelligence_snapshot.json' },
     { id: 'jin10_mcp_snapshot', payload_key: 'jin10_mcp_snapshot', artifact_layer: 'canonical', artifact_group: 'system_anchor', category: 'research', label: 'jin10_mcp_snapshot', status: 'ok', path: 'review/latest_jin10_mcp_snapshot.json' },
     { id: 'axios_site_snapshot', payload_key: 'axios_site_snapshot', artifact_layer: 'canonical', artifact_group: 'system_anchor', category: 'research', label: 'axios_site_snapshot', status: 'ok', path: 'review/latest_axios_site_snapshot.json' },
+    { id: 'polymarket_gamma_snapshot', payload_key: 'polymarket_gamma_snapshot', artifact_layer: 'canonical', artifact_group: 'system_anchor', category: 'research', label: 'polymarket_gamma_snapshot', status: 'ok', path: 'review/latest_polymarket_gamma_snapshot.json' },
     { id: 'price_action_breakout_pullback', payload_key: 'price_action_breakout_pullback', artifact_layer: 'canonical', artifact_group: 'research_mainline', category: 'sim-only', label: 'price_action_breakout_pullback', status: 'ok' },
     { id: 'price_action_exit_risk', payload_key: 'price_action_exit_risk', artifact_layer: 'canonical', artifact_group: 'research_mainline', category: 'sim-only', label: 'price_action_exit_risk', status: 'warning' },
     { id: 'price_action_exit_hold_robustness', payload_key: 'price_action_exit_hold_robustness', artifact_layer: 'canonical', artifact_group: 'research_exit_risk', category: 'sim-only', label: 'price_action_exit_hold_robustness', status: 'ok' },
@@ -1125,6 +1160,11 @@ describe('Fenlie terminal console', () => {
     expect(externalCard?.textContent || '').toContain('现货黄金');
     expect(externalCard?.textContent || '').toContain('WTI原油');
     expect(externalCard?.textContent || '').toContain('Arizona');
+    expect(externalCard?.textContent || '').toContain('Will BTC hit $120k in April?');
+    expect(screen.getByRole('heading', { name: 'Polymarket 情绪侧边车' })).toBeTruthy();
+    const polymarketCard = screen.getByRole('heading', { name: 'Polymarket 情绪侧边车' }).closest('section');
+    expect(polymarketCard?.textContent || '').toContain('Crypto');
+    expect(polymarketCard?.textContent || '').toContain('Economy');
     const cpaEntry = screen.getByRole('link', { name: '进入 CPA 管理' });
     expect(cpaEntry.getAttribute('href')).toBe('/cpa');
     expect(cpaEntry.textContent || '').toContain('CPA 管理');
@@ -2721,6 +2761,20 @@ describe('Fenlie terminal console', () => {
     expect(bodyText).toContain('Axios');
   });
 
+  it('renders structured Polymarket workspace detail when the Polymarket artifact is focused', async () => {
+    await navigatePath('/workspace/artifacts?artifact=polymarket_gamma_snapshot&group=system_anchor');
+    await renderApp();
+
+    await screen.findByLabelText('workspace-context-strip');
+    expect(document.querySelector('.artifact-button.active')?.textContent || '').toMatch(/polymarket_gamma_snapshot|Polymarket/);
+    expect(screen.getByText('Polymarket 情绪侧边车摘要')).toBeTruthy();
+    const bodyText = document.body.textContent || '';
+    expect(bodyText).toContain('Will BTC hit $120k in April?');
+    expect(bodyText).toContain('Will the Fed cut before June?');
+    expect(bodyText).toContain('Crypto');
+    expect(bodyText).toContain('Economy');
+  });
+
   it('renders structured external intelligence workspace detail when the unified artifact is focused', async () => {
     await navigatePath('/workspace/artifacts?artifact=external_intelligence_snapshot&group=system_anchor');
     await renderApp();
@@ -2733,6 +2787,8 @@ describe('Fenlie terminal console', () => {
     expect(bodyText).toContain("Gilbert's Heritage Park to open first phase in September");
     expect(bodyText).toContain('现货黄金');
     expect(bodyText).toContain('Arizona');
+    expect(bodyText).toContain('Will BTC hit $120k in April?');
+    expect(bodyText).toContain('Crypto');
   });
 
   it('syncs workspace explorer state back into the url', async () => {

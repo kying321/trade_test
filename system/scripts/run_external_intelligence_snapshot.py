@@ -74,17 +74,23 @@ def run_snapshot(*, workspace: Path) -> dict[str, Any]:
 
     jin10_path = review_dir / "latest_jin10_mcp_snapshot.json"
     axios_path = review_dir / "latest_axios_site_snapshot.json"
+    polymarket_path = review_dir / "latest_polymarket_gamma_snapshot.json"
     jin10 = load_json(jin10_path) if jin10_path.exists() else {}
     axios = load_json(axios_path) if axios_path.exists() else {}
+    polymarket = load_json(polymarket_path) if polymarket_path.exists() else {}
 
     active_sources: list[str] = []
     if source_is_active(jin10):
         active_sources.append("jin10")
     if source_is_active(axios):
         active_sources.append("axios")
+    if source_is_active(polymarket):
+        active_sources.append("polymarket")
+    expected_sources = ["jin10", "axios", "polymarket"]
 
     jin10_summary = jin10.get("summary", {}) if source_is_active(jin10) and isinstance(jin10.get("summary", {}), dict) else {}
     axios_summary = axios.get("summary", {}) if source_is_active(axios) and isinstance(axios.get("summary", {}), dict) else {}
+    polymarket_summary = polymarket.get("summary", {}) if source_is_active(polymarket) and isinstance(polymarket.get("summary", {}), dict) else {}
     quote_watch = [
         str((row or {}).get("name") or (row or {}).get("code") or "").strip()
         for row in list(jin10_summary.get("quote_watch") or [])
@@ -93,6 +99,7 @@ def run_snapshot(*, workspace: Path) -> dict[str, Any]:
     takeaways = [
         str(jin10.get("takeaway") or "").strip() if source_is_active(jin10) else "",
         str(axios.get("takeaway") or "").strip() if source_is_active(axios) else "",
+        str(polymarket.get("takeaway") or "").strip() if source_is_active(polymarket) else "",
     ]
     takeaways = [value for value in takeaways if value]
 
@@ -101,7 +108,7 @@ def run_snapshot(*, workspace: Path) -> dict[str, Any]:
         "mode": "external_intelligence_snapshot",
         "change_class": "RESEARCH_ONLY",
         "ok": bool(active_sources),
-        "status": "ok" if len(active_sources) == 2 else "partial" if active_sources else "blocked_missing_sources",
+        "status": "ok" if len(active_sources) == len(expected_sources) else "partial" if active_sources else "blocked_missing_sources",
         "sources": {
             "jin10": {
                 "status": jin10.get("status"),
@@ -115,6 +122,12 @@ def run_snapshot(*, workspace: Path) -> dict[str, Any]:
                 "takeaway": axios.get("takeaway"),
                 "path": str(axios_path) if axios else "",
             },
+            "polymarket": {
+                "status": polymarket.get("status"),
+                "recommended_brief": polymarket.get("recommended_brief"),
+                "takeaway": polymarket.get("takeaway"),
+                "path": str(polymarket_path) if polymarket else "",
+            },
         },
         "summary": {
             "sources_total": len(active_sources),
@@ -126,8 +139,15 @@ def run_snapshot(*, workspace: Path) -> dict[str, Any]:
             "axios_news_total": axios_summary.get("news_total", 0),
             "axios_local_total": axios_summary.get("local_total", 0),
             "axios_national_total": axios_summary.get("national_total", 0),
-            "top_titles": list(axios_summary.get("top_titles") or [])[:3],
-            "top_keywords": list(axios_summary.get("top_keywords") or [])[:5],
+            "polymarket_markets_total": polymarket_summary.get("markets_total", 0),
+            "polymarket_yes_price_avg": polymarket_summary.get("yes_price_avg", 0),
+            "polymarket_bullish_count": polymarket_summary.get("bullish_count", 0),
+            "polymarket_bearish_count": polymarket_summary.get("bearish_count", 0),
+            "polymarket_top_categories": list(polymarket_summary.get("top_categories") or [])[:5],
+            "top_titles": list(axios_summary.get("top_titles") or [])[:3]
+            + [str(value).strip() for value in list(polymarket_summary.get("top_titles") or [])[:2] if str(value).strip()],
+            "top_keywords": list(axios_summary.get("top_keywords") or [])[:5]
+            + [str(value).strip() for value in list(polymarket_summary.get("top_categories") or [])[:3] if str(value).strip()],
         },
         "recommended_brief": " | ".join(
             [
@@ -137,6 +157,7 @@ def run_snapshot(*, workspace: Path) -> dict[str, Any]:
                 f"quotes={len(quote_watch)}",
                 f"news={axios_summary.get('news_total', 0)}",
             ]
+            + ([f"poly={polymarket_summary.get('markets_total', 0)}"] if source_is_active(polymarket) else [])
         ),
         "takeaway": " ｜ ".join(takeaways),
     }

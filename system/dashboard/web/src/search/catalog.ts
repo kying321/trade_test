@@ -96,11 +96,19 @@ function createStaticModuleEntries(): SearchCatalogEntry[] {
       destination: buildOverviewLink({ anchor: 'overview-axios-sidecar' }),
     },
     {
+      id: 'module:overview-polymarket-sidecar',
+      category: 'module',
+      title: 'Polymarket 情绪侧边车',
+      subtitle: '总览 / prediction market / sentiment',
+      keywords: ['总览', 'polymarket', 'prediction market', 'sentiment', 'yes price', 'crypto', 'economy'],
+      destination: buildOverviewLink({ anchor: 'overview-polymarket-sidecar' }),
+    },
+    {
       id: 'module:overview-external-intelligence',
       category: 'module',
       title: '外部情报带',
       subtitle: '总览 / Jin10 + Axios / aggregated',
-      keywords: ['总览', '外部情报', 'jin10', 'axios', 'calendar', 'flash', 'news'],
+      keywords: ['总览', '外部情报', 'jin10', 'axios', 'polymarket', 'calendar', 'flash', 'news'],
       destination: buildOverviewLink({ anchor: 'overview-external-intelligence' }),
     },
     {
@@ -199,9 +207,11 @@ function createArtifactEntries(model: TerminalReadModel): SearchCatalogEntry[] {
       ? 'Jin10 研究侧边车'
       : artifactId === 'axios_site_snapshot'
         ? 'Axios 研究侧边车'
+        : artifactId === 'polymarket_gamma_snapshot'
+          ? 'Polymarket 情绪侧边车'
         : artifactId === 'external_intelligence_snapshot'
           ? '外部情报带'
-        : labelFor(safeDisplayValue(row.label || row.payload_key || row.id));
+          : labelFor(safeDisplayValue(row.label || row.payload_key || row.id));
     const payloadEntry = row.payload_key ? model.workspace.artifactPayloads[row.payload_key] : undefined;
     const payloadSummary = payloadEntry?.summary as Record<string, unknown> | undefined;
     const payload = payloadEntry?.payload as Record<string, unknown> | undefined;
@@ -219,6 +229,8 @@ function createArtifactEntries(model: TerminalReadModel): SearchCatalogEntry[] {
           return [safeDisplayValue(row.name), safeDisplayValue(row.code)];
         })
         : []),
+      ...(Array.isArray(nestedSummary?.top_categories) ? nestedSummary.top_categories.map((value) => safeDisplayValue(value)) : []),
+      ...(Array.isArray(nestedSummary?.top_titles) ? nestedSummary.top_titles.map((value) => safeDisplayValue(value)) : []),
     ];
     return {
       id: `artifact:catalog:${artifactId}`,

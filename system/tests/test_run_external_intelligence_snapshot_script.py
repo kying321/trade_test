@@ -64,17 +64,43 @@ def test_run_snapshot_merges_jin10_and_axios_sidecars(tmp_path: Path) -> None:
         ) + "\n",
         encoding="utf-8",
     )
+    (review_dir / "latest_polymarket_gamma_snapshot.json").write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "ok": True,
+                "takeaway": "Will BTC hit $120k in April?",
+                "recommended_brief": "poly markets=12 | yes_avg=56.3% | bull=3 | bear=2",
+                "summary": {
+                    "markets_total": 12,
+                    "binary_markets_total": 12,
+                    "bullish_count": 3,
+                    "bearish_count": 2,
+                    "yes_price_avg": 0.563,
+                    "total_volume_24hr": 272355.6,
+                    "top_categories": ["Crypto", "Economy", "Politics"],
+                    "top_titles": ["Will BTC hit $120k in April?"],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
 
     payload = mod.run_snapshot(workspace=workspace)
 
     assert payload["ok"] is True
     assert payload["status"] == "ok"
     assert payload["mode"] == "external_intelligence_snapshot"
-    assert payload["summary"]["sources_total"] == 2
+    assert payload["summary"]["sources_total"] == 3
     assert payload["summary"]["calendar_total"] == 244
     assert payload["summary"]["axios_news_total"] == 10
+    assert payload["summary"]["polymarket_markets_total"] == 12
+    assert payload["summary"]["polymarket_yes_price_avg"] == 0.563
+    assert payload["summary"]["polymarket_top_categories"] == ["Crypto", "Economy", "Politics"]
     assert payload["summary"]["quote_watch"] == ["现货黄金", "WTI原油"]
-    assert payload["takeaway"] == "美国至4月3日当周EIA原油库存(万桶) ｜ Anthropic cuts third party usage"
+    assert payload["takeaway"] == "美国至4月3日当周EIA原油库存(万桶) ｜ Anthropic cuts third party usage ｜ Will BTC hit $120k in April?"
     assert Path(payload["artifact_json"]).exists()
     assert Path(payload["artifact_md"]).exists()
 

@@ -263,6 +263,29 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "takeaway": "Gilbert's Heritage Park to open first phase in September",
         },
     )
+    polymarket_gamma_snapshot_path = review_dir / "latest_polymarket_gamma_snapshot.json"
+    write_json(
+        polymarket_gamma_snapshot_path,
+        {
+            "generated_at_utc": "2026-04-06T13:25:00Z",
+            "mode": "polymarket_gamma_snapshot",
+            "change_class": "RESEARCH_ONLY",
+            "ok": True,
+            "status": "ok",
+            "summary": {
+                "markets_total": 12,
+                "binary_markets_total": 12,
+                "bullish_count": 3,
+                "bearish_count": 2,
+                "yes_price_avg": 0.563,
+                "total_volume_24hr": 272355.6,
+                "top_categories": ["Crypto", "Economy", "Politics"],
+                "top_titles": ["Will BTC hit $120k in April?"],
+            },
+            "recommended_brief": "poly markets=12 | yes_avg=56.3% | bull=3 | bear=2",
+            "takeaway": "Will BTC hit $120k in April?",
+        },
+    )
     external_intelligence_snapshot_path = review_dir / "latest_external_intelligence_snapshot.json"
     write_json(
         external_intelligence_snapshot_path,
@@ -273,8 +296,8 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "ok": True,
             "status": "ok",
             "summary": {
-                "sources_total": 2,
-                "active_sources": ["jin10", "axios"],
+                "sources_total": 3,
+                "active_sources": ["jin10", "axios", "polymarket"],
                 "calendar_total": 244,
                 "high_importance_count": 5,
                 "flash_total": 20,
@@ -282,14 +305,18 @@ def build_public_snapshot(tmp_path: Path) -> dict:
                 "axios_news_total": 10,
                 "axios_local_total": 8,
                 "axios_national_total": 2,
+                "polymarket_markets_total": 12,
+                "polymarket_yes_price_avg": 0.563,
+                "polymarket_top_categories": ["Crypto", "Economy", "Politics"],
                 "top_titles": [
                     "Gilbert's Heritage Park to open first phase in September",
                     "Anthropic cuts third party usage",
+                    "Will BTC hit $120k in April?",
                 ],
-                "top_keywords": ["Arizona", "Axios"],
+                "top_keywords": ["Arizona", "Axios", "Crypto"],
             },
-            "recommended_brief": "sources=2 | calendar=244 | flash=20 | quotes=2 | news=10",
-            "takeaway": "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September",
+            "recommended_brief": "sources=3 | calendar=244 | flash=20 | quotes=2 | news=10 | poly=12",
+            "takeaway": "美国至4月3日当周EIA原油库存(万桶) ｜ Gilbert's Heritage Park to open first phase in September ｜ Will BTC hit $120k in April?",
         },
     )
 
@@ -488,6 +515,18 @@ def test_dashboard_snapshot_exposes_external_intelligence_snapshot_artifact(tmp_
     row = next(row for row in snapshot["catalog"] if row.get("payload_key") == "external_intelligence_snapshot")
     assert row["artifact_group"] == "system_anchor"
     assert row["path"].endswith("review/latest_external_intelligence_snapshot.json")
+
+
+def test_dashboard_snapshot_exposes_polymarket_gamma_snapshot_artifact(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    assert "polymarket_gamma_snapshot" in payloads
+    assert payloads["polymarket_gamma_snapshot"]["path"].endswith("review/latest_polymarket_gamma_snapshot.json")
+    assert payloads["polymarket_gamma_snapshot"]["summary"]["artifact_group"] == "system_anchor"
+    row = next(row for row in snapshot["catalog"] if row.get("payload_key") == "polymarket_gamma_snapshot")
+    assert row["artifact_group"] == "system_anchor"
+    assert row["path"].endswith("review/latest_polymarket_gamma_snapshot.json")
 
 
 def test_public_catalog_dedupes_selected_artifact_against_same_review_file(tmp_path: Path) -> None:
