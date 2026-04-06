@@ -153,6 +153,21 @@
   - 目标：
     - 不再只看 summary chip
     - 直接把 handoff 中最关键的 CPA 风险队列结构化暴露到控制面
+- CPA control plane Phase 5 已接入 repo：
+  - 新增 guarded action runner：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_cpa_guarded_action.py`
+  - 当前能力：
+    - 从 `latest_cpa_control_plane_snapshot.json` 读取受控动作
+    - 默认 `dry_run`
+    - 可选 `--execute`
+    - 写回 `latest_cpa_guarded_action_receipt_<action>.json`
+  - `build_cpa_control_plane_snapshot.py` 现会聚合 `latest_receipts`
+  - `CpaPage.tsx` 现会展示：
+    - 最近回执
+    - 最近一次 guarded action 的状态 / 时间 / returncode
+  - 当前原则：
+    - 仍不允许页面内直接触发 live 执行
+    - 先通过 CLI 受控入口执行，再由 snapshot 把 receipts 回挂到控制面
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`

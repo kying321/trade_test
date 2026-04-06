@@ -60,6 +60,15 @@ describe('CpaPage', () => {
                 command: 'cd /Users/jokenrobot/Downloads/Folders/MAC工具 && python3 check_five_account_acceptance.py --csv data/registered_success_active20.csv --target-count 20 --store data/pipeline_store.sqlite3 --pretty',
               },
             ],
+            latest_receipts: [
+              {
+                action_id: 'retry_candidate_pipeline',
+                action_label: '重试 retry_candidate 队列',
+                status: 'ok',
+                generated_at_utc: '2026-04-07T01:30:00Z',
+                returncode: 0,
+              },
+            ],
             groups: {
               retry_candidate_rows: [
                 {
@@ -119,10 +128,12 @@ describe('CpaPage', () => {
     expect(screen.getByText(/20 个历史成功账号/)).toBeTruthy();
     expect(screen.getByText(/Guarded Actions/)).toBeTruthy();
     expect(screen.getByText(/验收回放 \/ 历史成功20/)).toBeTruthy();
-    expect(screen.getByText(/retry_candidate 队列/)).toBeTruthy();
-    expect(screen.getByText(/blocked_about_you 队列/)).toBeTruthy();
-    expect(screen.getByText(/no_retry_deactivated 队列/)).toBeTruthy();
-    expect(screen.getByText(/new_unmounted 池/)).toBeTruthy();
+    expect(screen.getByText(/最近回执/)).toBeTruthy();
+    expect(screen.getByText(/重试 retry_candidate 队列/)).toBeTruthy();
+    expect(screen.getAllByText(/retry_candidate 队列/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/blocked_about_you 队列/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/no_retry_deactivated 队列/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/new_unmounted 池/).length).toBeGreaterThan(0);
     expect(screen.getByText(/retry1@fuuu.fun/)).toBeTruthy();
     expect(screen.getByText(/about1@fuuu.fun/)).toBeTruthy();
     expect(screen.getByText(/dead1@fuuu.fun/)).toBeTruthy();

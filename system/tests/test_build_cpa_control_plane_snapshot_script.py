@@ -90,6 +90,21 @@ def test_build_snapshot_rolls_up_handoff_sources_and_kernel_state(tmp_path: Path
         + "\n",
         encoding="utf-8",
     )
+    (review_dir / "latest_cpa_guarded_action_receipt_retry_candidate_pipeline.json").write_text(
+        json.dumps(
+            {
+                "mode": "cpa_guarded_action",
+                "status": "ok",
+                "action_id": "retry_candidate_pipeline",
+                "action_label": "重试 retry_candidate 队列",
+                "risk_class": "LIVE_GUARD_ONLY",
+                "returncode": 0,
+                "generated_at_utc": "2026-04-07T01:30:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     payload = mod.build_snapshot(
         workspace=workspace,
@@ -123,5 +138,7 @@ def test_build_snapshot_rolls_up_handoff_sources_and_kernel_state(tmp_path: Path
     assert "python3 check_five_account_acceptance.py --csv data/registered_success_active20.csv" in payload["guarded_actions"][0]["command"]
     assert "python3 run_active_target_sync.py --csv data/registered_success_active20.csv" in payload["guarded_actions"][1]["command"]
     assert "python3 run_retry_candidate_pipeline.py --csv registered_accounts.csv" in payload["guarded_actions"][2]["command"]
+    assert payload["latest_receipts"][0]["action_id"] == "retry_candidate_pipeline"
+    assert payload["latest_receipts"][0]["status"] == "ok"
     assert Path(payload["artifact_json"]).exists()
     assert (public_dir / "data" / "cpa_control_plane_snapshot.json").exists()

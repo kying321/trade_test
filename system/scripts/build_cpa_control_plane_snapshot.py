@@ -39,6 +39,16 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def latest_receipts_for_review_dir(review_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in sorted(review_dir.glob("latest_cpa_guarded_action_receipt_*.json")):
+        payload = read_json(path)
+        if isinstance(payload, dict):
+            rows.append(payload)
+    rows.sort(key=lambda row: str(row.get("generated_at_utc") or ""), reverse=True)
+    return rows[:10]
+
+
 def build_markdown(payload: dict[str, Any]) -> str:
     summary = payload["summary"]
     lines = [
@@ -211,6 +221,7 @@ def build_snapshot(*, workspace: Path, public_dir: Path, source_root: Path = DEF
         "acceptance": acceptance_map,
         "latest_kernel_run_id": str(kernel_map.get("run_id") or ""),
         "guarded_actions": guarded_actions,
+        "latest_receipts": latest_receipts_for_review_dir(review_dir),
     }
 
     artifact_json, artifact_md = write_review_artifacts(review_dir, payload, stamp)
