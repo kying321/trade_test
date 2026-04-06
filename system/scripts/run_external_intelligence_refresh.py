@@ -87,6 +87,7 @@ def build_summary(
     workspace: Path,
     public_dir: Path,
     runtime_now: dt.datetime,
+    snapshot_skipped: bool,
     jin10_payload: dict[str, Any],
     axios_payload: dict[str, Any],
     external_payload: dict[str, Any],
@@ -105,13 +106,17 @@ def build_summary(
     axios_status = str(axios_payload.get("status") or "")
     external_status = str(external_payload.get("status") or "")
 
-    fully_ready = (
-        jin10_status == "ok"
-        and axios_status == "ok"
-        and external_status == "ok"
-        and bool(dashboard_outputs)
-    )
-    partially_ready = bool(dashboard_outputs) and external_status in {"ok", "partial"}
+    if snapshot_skipped:
+        fully_ready = jin10_status == "ok" and axios_status == "ok" and external_status == "ok"
+        partially_ready = external_status in {"ok", "partial"}
+    else:
+        fully_ready = (
+            jin10_status == "ok"
+            and axios_status == "ok"
+            and external_status == "ok"
+            and bool(dashboard_outputs)
+        )
+        partially_ready = bool(dashboard_outputs) and external_status in {"ok", "partial"}
     status = "ok" if fully_ready else "partial" if partially_ready else "blocked"
 
     return {
@@ -121,14 +126,15 @@ def build_summary(
         "ok": partially_ready,
         "status": status,
         "stamp": stamp,
+        "snapshot_skipped": bool(snapshot_skipped),
         "workspace": str(workspace),
         "public_dir": str(public_dir),
         "refresh_order": [
             "run_jin10_mcp_snapshot",
             "run_axios_site_snapshot",
             "run_external_intelligence_snapshot",
-            "build_dashboard_frontend_snapshot",
-        ],
+        ]
+        + ([] if snapshot_skipped else ["build_dashboard_frontend_snapshot"]),
         "jin10_status": jin10_status,
         "jin10_path": str(jin10_payload.get("artifact_json") or ""),
         "axios_status": axios_status,
@@ -148,6 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--now", help="Explicit UTC timestamp for deterministic artifact stamping.")
     parser.add_argument("--jin10-token-env", default="JIN10_MCP_BEARER_TOKEN")
     parser.add_argument("--axios-limit", type=int, default=20)
+    parser.add_argument("--skip-dashboard-snapshot", action="store_true")
     return parser.parse_args()
 
 
@@ -194,22 +201,25 @@ def main() -> None:
             str(workspace),
         ],
     )
-    snapshot_payload = run_json(
-        name="build_dashboard_frontend_snapshot",
-        cmd=[
-            sys.executable,
-            str(system_root / "scripts" / "build_dashboard_frontend_snapshot.py"),
-            "--workspace",
-            str(workspace),
-            "--public-dir",
-            str(public_dir),
-        ],
-    )
+    snapshot_payload: dict[str, Any] = {}
+    if not bool(args.skip_dashboard_snapshot):
+        snapshot_payload = run_json(
+            name="build_dashboard_frontend_snapshot",
+            cmd=[
+                sys.executable,
+                str(system_root / "scripts" / "build_dashboard_frontend_snapshot.py"),
+                "--workspace",
+                str(workspace),
+                "--public-dir",
+                str(public_dir),
+            ],
+        )
 
     payload = build_summary(
         workspace=workspace,
         public_dir=public_dir,
         runtime_now=runtime_now,
+        snapshot_skipped=bool(args.skip_dashboard_snapshot),
         jin10_payload=jin10_payload,
         axios_payload=axios_payload,
         external_payload=external_payload,

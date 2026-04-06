@@ -338,6 +338,8 @@ Jin10 与 Axios 之上增加统一 read-model：
 - 只有 `status in {ok, partial}` 且 `ok != false` 的 sidecar 才能计入 active sources
 - blocked auth / blocked initialize 必须继续保持 blocked，不得因 latest artifact 存在而被误计为 active
 - refresh runner 允许重建 dashboard frontend snapshot，但仍属于 `RESEARCH_ONLY`
+- 当被 `run_operator_panel_refresh.py` 作为上游步骤调用时，应使用 `--skip-dashboard-snapshot`，避免重复构建 frontend snapshot
+- `run_operator_panel_refresh.py` 对该步骤采用 degrade-only 语义：外部情报 refresh 失败不能阻断 panel/dashboard 主刷新
 
 产物：
 

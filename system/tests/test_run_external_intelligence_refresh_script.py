@@ -159,3 +159,49 @@ def test_main_runs_external_intelligence_refresh_chain(monkeypatch, tmp_path: Pa
         "--public-dir",
         str(public_dir),
     ]
+
+
+def test_main_skips_dashboard_snapshot_when_requested(monkeypatch, tmp_path: Path, capsys) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    system_root = workspace / "system"
+    review_dir = system_root / "output" / "review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+
+    seen_cmds: dict[str, list[str]] = {}
+
+    def fake_run_json(*, name: str, cmd: list[str]) -> dict:
+        seen_cmds[name] = list(cmd)
+        if name == "run_jin10_mcp_snapshot":
+            return {"status": "blocked_auth_missing", "artifact_json": str(review_dir / "latest_jin10_mcp_snapshot.json")}
+        if name == "run_axios_site_snapshot":
+            return {"status": "ok", "artifact_json": str(review_dir / "latest_axios_site_snapshot.json")}
+        if name == "run_external_intelligence_snapshot":
+            return {
+                "status": "partial",
+                "artifact_json": str(review_dir / "latest_external_intelligence_snapshot.json"),
+                "recommended_brief": "sources=1 | calendar=0 | flash=0 | quotes=0 | news=10",
+                "takeaway": "NBA takes bids on European league, eyes 2027",
+            }
+        raise AssertionError(name)
+
+    monkeypatch.setattr(mod, "run_json", fake_run_json)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_external_intelligence_refresh.py",
+            "--workspace",
+            str(workspace),
+            "--skip-dashboard-snapshot",
+        ],
+    )
+
+    mod.main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["ok"] is True
+    assert payload["status"] == "partial"
+    assert payload["snapshot_skipped"] is True
+    assert payload["dashboard_outputs"] == []
+    assert "build_dashboard_frontend_snapshot" not in seen_cmds
