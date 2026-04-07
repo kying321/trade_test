@@ -3,11 +3,28 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+
+SYSTEM_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = SYSTEM_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+
+def _load_snapshot_builder():
+    module_path = SYSTEM_ROOT / "scripts" / "build_cpa_control_plane_snapshot.py"
+    spec = importlib.util.spec_from_file_location("build_cpa_control_plane_snapshot_module", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot_load_snapshot_builder:{module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def now_utc() -> dt.datetime:
@@ -31,6 +48,11 @@ def load_snapshot_action(workspace: Path, action_id: str) -> dict[str, Any]:
         if isinstance(action, dict) and str(action.get("id") or "") == action_id:
             return action
     raise KeyError(f"guarded_action_not_found:{action_id}")
+
+
+def refresh_control_snapshot(*, workspace: Path, public_dir: Path) -> dict[str, Any]:
+    module = _load_snapshot_builder()
+    return module.build_snapshot(workspace=workspace, public_dir=public_dir)
 
 
 def parse_stdout_json(stdout: str) -> Any:
@@ -105,10 +127,11 @@ def write_artifacts(review_dir: Path, payload: dict[str, Any], stamp: str, actio
     return json_path, md_path
 
 
-def run_action(*, workspace: Path, action_id: str, execute: bool) -> dict[str, Any]:
+def run_action(*, workspace: Path, action_id: str, execute: bool, refresh_control_plane_after: bool = False) -> dict[str, Any]:
     generated_at = now_utc()
     stamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
     review_dir = review_dir_for_workspace(workspace)
+    public_dir = workspace_to_system_root(workspace) / "dashboard" / "web" / "public"
     action = load_snapshot_action(workspace, action_id)
     command = str(action.get("command") or "").strip()
     if not command:
@@ -128,6 +151,7 @@ def run_action(*, workspace: Path, action_id: str, execute: bool) -> dict[str, A
         "stdout_preview": "",
         "stderr_preview": "",
         "structured_summary": {},
+        "control_snapshot_refresh": {},
     }
 
     if execute:
@@ -138,6 +162,8 @@ def run_action(*, workspace: Path, action_id: str, execute: bool) -> dict[str, A
         payload["status"] = "ok" if proc.returncode == 0 else "failed"
         payload["ok"] = proc.returncode == 0
         payload["structured_summary"] = build_structured_summary(action_id, parse_stdout_json(proc.stdout))
+        if refresh_control_plane_after:
+            payload["control_snapshot_refresh"] = refresh_control_snapshot(workspace=workspace, public_dir=public_dir)
 
     artifact_json, artifact_md = write_artifacts(review_dir, payload, stamp, action_id)
     payload["artifact_json"] = str(artifact_json)
@@ -150,6 +176,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--action-id", required=True)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--refresh-control-plane", action="store_true")
     return parser.parse_args()
 
 
@@ -159,6 +186,7 @@ def main() -> None:
         workspace=Path(args.workspace).expanduser().resolve(),
         action_id=str(args.action_id),
         execute=bool(args.execute),
+        refresh_control_plane_after=bool(args.refresh_control_plane),
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
