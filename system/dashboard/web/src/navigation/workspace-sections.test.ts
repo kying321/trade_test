@@ -88,6 +88,7 @@ describe('getDefaultWorkspacePageSection', () => {
   it('returns explicit default section ids instead of depending on list order', () => {
     const model = createModel();
 
+    expect(getDefaultWorkspacePageSection('artifacts', model)?.id).toBe('workspace-artifacts-focus-panel');
     expect(getDefaultWorkspacePageSection('alignment', model)?.id).toBe('alignment-summary');
     expect(getDefaultWorkspacePageSection('backtests', model)?.id).toBe('backtests-overview');
     expect(getDefaultWorkspacePageSection('contracts', model)?.id).toBe('contracts-topology');
@@ -131,5 +132,20 @@ describe('getDefaultWorkspacePageSection', () => {
 
     const sections = getWorkspacePageSections('raw', model);
     expect(sections.find((item) => item.id === 'raw-focus')?.label).toBe('price_action_breakout_pullback');
+  });
+
+  it('exposes artifacts page sections for filter, focus, action, and inspector flows', () => {
+    const model = createModel();
+    const sections = getWorkspacePageSections('artifacts', model);
+
+    expect(sections.map((item) => item.id)).toEqual([
+      'workspace-artifacts-map-panel',
+      'workspace-artifacts-status-panel',
+      'workspace-artifacts-search-panel',
+      'workspace-artifacts-focus-panel',
+      'workspace-artifacts-next-step-panel',
+      'workspace-artifacts-target-pool',
+      'workspace-artifacts-inspector-panel',
+    ]);
   });
 });

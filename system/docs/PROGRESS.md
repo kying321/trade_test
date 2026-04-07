@@ -109,6 +109,28 @@
 - 当前残余风险：
   - 这轮主要修的是壳层与交互密度，不包含完整手机端 smoke；仍建议后续补 `graph_home_narrow` 与 workspace 窄屏浏览器烟测
   - `PanelCard` 已默认支持最大化，后续若发现某些极小卡片按钮噪音过大，可按页面逐步 opt-out
+  - [UPDATE 2026-04-08 01:12 +0800] workspace 细页已完成第一轮窄屏连续性修补：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/navigation/workspace-sections.ts`
+      - artifacts 页现在也有 page-sections 契约，不再只有 contracts/raw 才有页内 section 源
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/WorkspacePanels.tsx`
+      - 手机端为 workspace 页面新增页内 jumpbar
+      - artifacts 页新增“筛选与范围”折叠区，默认收起，主内容优先
+      - artifacts 页补齐：
+        - `workspace-artifacts-next-step-panel`
+        - `workspace-artifacts-inspector-panel`
+      - 使 page_section / sidebar / 页内 jumpbar 可以共享同一组锚点
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/WorkspacePanels.test.tsx`
+      - 新增手机端 artifacts 页回归测试，锁定 jumpbar + 可折叠筛选区行为
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/index.css`
+      - 手机端 artifacts 页改为主内容优先、筛选后置
+      - workspace quick nav 变为 sticky 横向跳转条
+    - 验证：
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx tsc --noEmit`
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm test -- --run src/navigation/workspace-sections.test.ts src/components/WorkspacePanels.test.tsx src/app-shell/AppShell.test.tsx src/app-shell/ContextSidebar.test.tsx src/components/PanelCard.test.tsx src/app-shell/GlobalTopbar.test.tsx src/hooks/use-sidebar-collapse.test.tsx src/pages/GraphHomePage.test.tsx`
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run smoke:workspace-routes -- --skip-build`
+      - 结果：
+        - 前端测试 `38 passed`
+        - workspace browser smoke `ok=true`
 
 
 ## Current State (2026-04-03)

@@ -13,11 +13,24 @@ export type WorkspacePageSectionItem = {
 };
 
 const DEFAULT_WORKSPACE_PAGE_SECTION_IDS: Partial<Record<WorkspaceSection, string>> = {
+  artifacts: 'workspace-artifacts-focus-panel',
   alignment: 'alignment-summary',
   backtests: 'backtests-overview',
   contracts: 'contracts-topology',
   raw: 'raw-summary',
 };
+
+function buildArtifactsSections(): WorkspacePageSectionItem[] {
+  return [
+    { id: 'workspace-artifacts-map-panel', label: '分组总览', level: 1, groupId: 'artifacts-filter', groupLabel: '筛选与范围' },
+    { id: 'workspace-artifacts-status-panel', label: '状态分桶', level: 2, groupId: 'artifacts-filter', groupLabel: '筛选与范围' },
+    { id: 'workspace-artifacts-search-panel', label: '搜索与范围', level: 2, groupId: 'artifacts-filter', groupLabel: '筛选与范围' },
+    { id: 'workspace-artifacts-focus-panel', label: '当前焦点', level: 1, groupId: 'artifacts-flow', groupLabel: '当前工作流' },
+    { id: 'workspace-artifacts-next-step-panel', label: '下一步动作', level: 1, groupId: 'artifacts-flow', groupLabel: '当前工作流' },
+    { id: 'workspace-artifacts-target-pool', label: '目标池', level: 1, groupId: 'artifacts-flow', groupLabel: '当前工作流' },
+    { id: 'workspace-artifacts-inspector-panel', label: '工件检查器', level: 1, groupId: 'artifacts-flow', groupLabel: '当前工作流' },
+  ];
+}
 
 function buildBacktestsSections(): WorkspacePageSectionItem[] {
   return [
@@ -113,6 +126,7 @@ function buildRawSections(model: TerminalReadModel): WorkspacePageSectionItem[] 
 }
 
 export function getWorkspacePageSections(section: WorkspaceSection, model: TerminalReadModel): WorkspacePageSectionItem[] {
+  if (section === 'artifacts') return buildArtifactsSections();
   if (section === 'alignment') return buildAlignmentSections(model);
   if (section === 'backtests') return buildBacktestsSections();
   if (section === 'contracts') return buildContractsSections(model);

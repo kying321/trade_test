@@ -5,10 +5,11 @@ import { findWorkspacePageSection, getDefaultWorkspacePageSection, getWorkspaceP
 import { buildSearchLink } from '../search/links';
 import type { OperatorAlertLink, PublicAcceptanceResearchAuditCase, TerminalReadModel, ViewFieldSchema } from '../types/contracts';
 import { labelFor } from '../utils/dictionary';
-import { buildTerminalLink, buildWorkspaceLink, buildWorkspacePageLink, type SharedFocusState } from '../utils/focus-links';
+import { buildTerminalLink, buildWorkspaceLink, buildWorkspacePageLink, type SharedFocusState, type WorkspaceSection } from '../utils/focus-links';
 import { compactPath, safeDisplayValue, statusTone } from '../utils/formatters';
-import { ActionLink, EntityRowButton } from './control-primitives';
+import { ActionButton, ActionLink, EntityRowButton } from './control-primitives';
 import { AccordionCard, Badge, DenseTable, DrilldownSection, JsonBlock, KeyValueGrid, PanelCard, PathText, ValueText, toneClass } from './ui-kit';
+import { useShellBreakpoint } from '../hooks/use-shell-breakpoint';
 
 const t = (key: string) => labelFor(key);
 const c = (key: string, labelKey?: string) => ({ key, label: t(labelKey || key) });
@@ -92,6 +93,34 @@ function SectionAnchor({
     <div className="workspace-section-anchor" data-workspace-section={id} id={id}>
       {children}
     </div>
+  );
+}
+
+function WorkspaceQuickNav({
+  section,
+  focus,
+  pageSections,
+  activeSectionId,
+}: {
+  section: WorkspaceSection;
+  focus?: WorkspaceFocus;
+  pageSections: ReturnType<typeof getWorkspacePageSections>;
+  activeSectionId?: string;
+}) {
+  if (!pageSections.length) return null;
+  return (
+    <nav className="workspace-quick-nav workspace-quick-nav-mobile" aria-label="workspace-mobile-quick-nav">
+      {pageSections.map((item) => (
+        <Link
+          key={item.id}
+          aria-current={activeSectionId === item.id ? 'location' : undefined}
+          className={`chip-button workspace-quick-nav-link level-${item.level} ${activeSectionId === item.id ? 'active' : ''}`.trim()}
+          to={buildWorkspacePageLink(section, focus, item.id)}
+        >
+          {item.label}
+        </Link>
+      ))}
+    </nav>
   );
 }
 
@@ -468,10 +497,14 @@ export function WorkspacePanels({
   if (section === 'backtests') return <BacktestsWorkspace model={model} focus={focus} pageSectionId={pageSectionId} />;
   if (section === 'contracts') return <ContractsWorkspace model={model} focus={focus} pageSectionId={pageSectionId} />;
   if (section === 'raw') return <RawWorkspace model={model} focus={focus} pageSectionId={pageSectionId} />;
-  return <ArtifactsWorkspace model={model} focus={focus} />;
+  return <ArtifactsWorkspace model={model} focus={focus} pageSectionId={pageSectionId} />;
 }
 
-function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?: WorkspaceFocus }) {
+function ArtifactsWorkspace({ model, focus, pageSectionId }: { model: TerminalReadModel; focus?: WorkspaceFocus; pageSectionId?: string }) {
+  const { tier } = useShellBreakpoint();
+  const compactWorkspace = tier === 's';
+  const pageSections = useMemo(() => getWorkspacePageSections('artifacts', model), [model]);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState<boolean>(() => !compactWorkspace);
   const { artifactRows, artifactPayloads, artifactHandoffs, artifactPrimaryFocus } = model.workspace;
   const view = model.view.workspace.artifacts;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -592,6 +625,23 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
   const selectedArtifactPath = selectedRow ? artifactPath(selectedRow as ArtifactRowState, artifactPayloads[selectedPayloadKey]?.path) : '—';
   const selectedRowId = selectedRow?.id ? safeDisplayValue(selectedRow.id) : '';
   const handoffLinks = selectedRowId ? artifactHandoffs[selectedRowId] || [] : [];
+  const activeSectionId = pageSectionId
+    ? (findWorkspacePageSection('artifacts', model, pageSectionId)?.id || undefined)
+    : (getDefaultWorkspacePageSection('artifacts', model)?.id || undefined);
+
+  useEffect(() => {
+    setMobileFiltersOpen(!compactWorkspace);
+  }, [compactWorkspace]);
+
+  useEffect(() => {
+    const target = findWorkspacePageSection('artifacts', model, pageSectionId) || (!pageSectionId ? getDefaultWorkspacePageSection('artifacts', model) : null);
+    if (!target) return;
+    const handle = window.requestAnimationFrame(() => {
+      scrollToWorkspaceSection(target.id);
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [model, pageSectionId, pageSections]);
+
   const fallbackFocusLinks: OperatorAlertLink[] = selectedRowId
     ? [
         {
@@ -681,8 +731,15 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
   };
 
   return (
-    <div className="workspace-grid artifacts-grid">
-      <section className="workspace-left-rail workspace-rhythm-band workspace-rhythm-state" aria-label="workspace-rhythm-state">
+    <div className={`workspace-grid artifacts-grid ${compactWorkspace ? 'artifacts-grid-compact' : ''}`.trim()}>
+      {compactWorkspace ? (
+        <WorkspaceQuickNav section="artifacts" focus={focus} pageSections={pageSections} activeSectionId={activeSectionId} />
+      ) : null}
+      <section
+        className={`workspace-left-rail workspace-rhythm-band workspace-rhythm-state ${compactWorkspace ? 'workspace-left-rail-mobile' : ''}`.trim()}
+        aria-label="workspace-rhythm-state"
+        hidden={compactWorkspace ? !mobileFiltersOpen : undefined}
+      >
           <h3>当前状态</h3>
         <div data-search-anchor="workspace-artifacts-map-panel" id="workspace-artifacts-map-panel">
         <PanelCard title={t('workspace_artifacts_map_title')} kicker={t('workspace_artifacts_map_kicker')} meta={t('workspace_artifacts_map_meta')}>
@@ -752,6 +809,34 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
       </section>
 
       <div className="workspace-rhythm-main">
+        {compactWorkspace ? (
+          <section className="workspace-rhythm-band workspace-rhythm-state workspace-mobile-state-toggle" aria-label="workspace-mobile-state-toggle">
+            <h3>筛选与范围</h3>
+            <PanelCard
+              title="筛选与范围"
+              kicker="mobile / compact"
+              meta={mobileFiltersOpen ? '已展开分组、状态与搜索面板' : '先看焦点与证据，按需展开筛选'}
+              maximizable={false}
+              actions={(
+                <ActionButton
+                  aria-label={mobileFiltersOpen ? '收起筛选与范围' : '展开筛选与范围'}
+                  onClick={() => setMobileFiltersOpen((open) => !open)}
+                >
+                  {mobileFiltersOpen ? '收起筛选与范围' : '展开筛选与范围'}
+                </ActionButton>
+              )}
+            >
+              <KeyValueGrid
+                rows={[
+                  { key: 'group', label: '当前分组', value: artifactGroupLabel(activeGroup) },
+                  { key: 'status', label: '状态过滤', value: toneFilter === 'all' ? '全部状态' : labelFor(toneFilter) },
+                  { key: 'scope', label: '搜索范围', value: t(`workspace_artifacts_search_scope_${searchScope}`) },
+                  { key: 'search', label: '当前搜索', value: search.trim() || '未设置' },
+                ]}
+              />
+            </PanelCard>
+          </section>
+        ) : null}
         <section className="workspace-rhythm-band workspace-rhythm-focus" aria-label="workspace-rhythm-focus">
           <h3>当前焦点</h3>
         <div data-search-anchor="workspace-artifacts-focus-panel" id="workspace-artifacts-focus-panel">
@@ -778,6 +863,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
 
         <section className="workspace-rhythm-band workspace-rhythm-action" aria-label="workspace-rhythm-action">
           <h3>下一步</h3>
+        <div data-search-anchor="workspace-artifacts-next-step-panel" id="workspace-artifacts-next-step-panel">
         <PanelCard title="下一步动作" kicker="handoff / action" meta={selectedRow ? artifactTitle(selectedRow) : t('workspace_artifacts_focus_empty')}>
           {selectedRow ? (
             <div className="button-row workspace-handoff-links">
@@ -791,6 +877,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
             <div className="empty-block">{t('workspace_artifacts_focus_empty')}</div>
           )}
         </PanelCard>
+        </div>
         </section>
 
         <section className="workspace-rhythm-band workspace-rhythm-evidence" aria-label="workspace-rhythm-evidence">
@@ -840,6 +927,7 @@ function ArtifactsWorkspace({ model, focus }: { model: TerminalReadModel; focus?
         >
           {selectedRow ? (
             <>
+              <div data-search-anchor="workspace-artifacts-inspector-panel" id="workspace-artifacts-inspector-panel" />
               <DrilldownSection title={t('workspace_artifacts_meta_title')} summary={labelFor(safeDisplayValue(selectedRow.status || selectedRow.research_decision))} defaultOpen>
                 <KeyValueGrid
                   rows={[
@@ -1021,6 +1109,7 @@ function renderFeedbackAnchor(anchor: Record<string, unknown>, index: number) {
 
 function AlignmentWorkspace({ model, pageSectionId }: { model: TerminalReadModel; pageSectionId?: string }) {
   const pageSections = useMemo(() => getWorkspacePageSections('alignment', model), [model]);
+  const { tier } = useShellBreakpoint();
   const feedback = model.feedback.projection;
   const isInternal = model.surface.requested === 'internal' && model.surface.effective === 'internal';
   const defaultEventId = preferredFeedbackEventId(feedback);
@@ -1060,6 +1149,7 @@ function AlignmentWorkspace({ model, pageSectionId }: { model: TerminalReadModel
 
   return (
     <div className="workspace-grid single-column">
+      {tier === 's' ? <WorkspaceQuickNav section="alignment" focus={undefined} pageSections={pageSections} activeSectionId={pageSectionId || undefined} /> : null}
       <SectionAnchor id="alignment-summary">
         <PanelCard title="方向对齐投射" kicker="内部反馈投射" meta={safeDisplayValue(feedback.summary.headline || '暂无摘要')}>
           <KeyValueGrid
@@ -1160,6 +1250,7 @@ function AlignmentWorkspace({ model, pageSectionId }: { model: TerminalReadModel
 function BacktestsWorkspace({ model, focus, pageSectionId }: { model: TerminalReadModel; focus?: WorkspaceFocus; pageSectionId?: string }) {
   const view = model.view.workspace.backtests;
   const pageSections = useMemo(() => getWorkspacePageSections('backtests', model), [model]);
+  const { tier } = useShellBreakpoint();
   const backtestCount = model.labReview.backtests.length;
   const comparisonCount = model.labReview.comparisonRows.length;
 
@@ -1174,6 +1265,7 @@ function BacktestsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
 
   return (
     <div className="workspace-grid single-column">
+      {tier === 's' ? <WorkspaceQuickNav section="backtests" focus={focus} pageSections={pageSections} activeSectionId={pageSectionId || undefined} /> : null}
       <SectionAnchor id="backtests-overview">
         <PanelCard
           title={t('workspace_backtests_overview_title')}
@@ -1217,6 +1309,7 @@ function BacktestsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
 }
 
 function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalReadModel; focus?: WorkspaceFocus; pageSectionId?: string }) {
+  const { tier } = useShellBreakpoint();
   const view = model.view.workspace.contracts;
   const [searchParams, setSearchParams] = useSearchParams();
   const surfaceContracts = useMemo(
@@ -1265,6 +1358,7 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
 
   return (
     <div className="workspace-grid single-column">
+      {tier === 's' ? <WorkspaceQuickNav section="contracts" focus={focus} pageSections={pageSections} activeSectionId={pageSectionId || undefined} /> : null}
       <SectionAnchor id="contracts-topology">
         <PanelCard title={t('workspace_contracts_topology_title')} kicker={t('workspace_contracts_topology_kicker')} meta={t('workspace_contracts_topology_meta')}>
           {publicTopology.length ? (
@@ -1756,6 +1850,7 @@ function buildInterfaceGroups(rows: TerminalReadModel['workspace']['interfaces']
 }
 
 function RawWorkspace({ model, focus, pageSectionId }: { model: TerminalReadModel; focus?: WorkspaceFocus; pageSectionId?: string }) {
+  const { tier } = useShellBreakpoint();
   const focusedArtifact = model.workspace.artifactRows.find((row) => matchesArtifactFocus(row as ArtifactRowState, focus?.artifact)) || null;
   const focusedPayload = focusedArtifact?.payload_key ? model.workspace.artifactPayloads[focusedArtifact.payload_key]?.payload : null;
   const focusedPayloadRecord = focusedPayload && typeof focusedPayload === 'object' && !Array.isArray(focusedPayload)
@@ -1776,6 +1871,7 @@ function RawWorkspace({ model, focus, pageSectionId }: { model: TerminalReadMode
 
   return (
     <div className="workspace-grid single-column">
+      {tier === 's' ? <WorkspaceQuickNav section="raw" focus={focus} pageSections={pageSections} activeSectionId={pageSectionId || undefined} /> : null}
       <SectionAnchor id="raw-summary">
         <PanelCard title={t('workspace_raw_overview_title')} kicker="研究摘要 / 原始回退" meta="只汇总当前工件键、源路径与 handoff，不复写下层 JSON。">
           <ArtifactHandoffs links={handoffLinks} title={t('workspace_raw_handoff_title')} />
