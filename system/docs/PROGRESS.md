@@ -131,6 +131,26 @@
       - 结果：
         - 前端测试 `38 passed`
         - workspace browser smoke `ok=true`
+  - [UPDATE 2026-04-08 01:18 +0800] raw/contracts 深层阅读区已补充便捷操作：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/ui-kit.tsx`
+      - `JsonBlock` 现支持：
+        - `复制 JSON`
+        - `开启/关闭自动换行`
+      - 该能力会直接作用于：
+        - workspace raw 页面
+        - contracts 子命令 stdout/stderr
+        - 其他所有使用 `JsonBlock` 的深层证据区
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/ui-kit.test.tsx`
+      - 新增 `JsonBlock` 工具栏回归测试
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/index.css`
+      - 补充 `json-block-shell / json-block-toolbar / wrap mode` 样式
+    - 验证：
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx tsc --noEmit`
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm test -- --run src/components/ui-kit.test.tsx src/navigation/workspace-sections.test.ts src/components/WorkspacePanels.test.tsx src/app-shell/AppShell.test.tsx src/app-shell/ContextSidebar.test.tsx src/components/PanelCard.test.tsx src/app-shell/GlobalTopbar.test.tsx src/hooks/use-sidebar-collapse.test.tsx src/pages/GraphHomePage.test.tsx`
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run smoke:workspace-routes -- --skip-build`
+      - 结果：
+        - 前端测试 `48 passed`
+        - workspace browser smoke `ok=true`
 
 
 ## Current State (2026-04-03)

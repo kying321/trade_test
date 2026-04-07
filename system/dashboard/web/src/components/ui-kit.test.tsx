@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Badge, ClampText, DenseTable, MetricStrip, PathText } from './ui-kit';
+import { Badge, ClampText, DenseTable, JsonBlock, MetricStrip, PathText } from './ui-kit';
 
 function mockClampOverflow({ overflows }: { overflows: boolean }) {
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function scrollHeight(this: HTMLElement) {
@@ -177,6 +177,28 @@ describe('ui-kit source-owned 审计显示', () => {
 
     expect(screen.getByText('视图：匹配')).toBeTruthy();
     expect(screen.queryByText('视图：, 匹配')).toBeNull();
+  });
+
+  it('JsonBlock 提供复制原始 JSON 与自动换行切换', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: { writeText },
+    });
+
+    render(<JsonBlock value={{ alpha: 1, nested: { beta: 'two' } }} />);
+
+    const wrapToggle = screen.getByRole('button', { name: '开启自动换行' });
+    expect(document.querySelector('.json-block')?.getAttribute('data-wrap')).toBe('false');
+    fireEvent.click(wrapToggle);
+    expect(screen.getByRole('button', { name: '关闭自动换行' })).toBeTruthy();
+    expect(document.querySelector('.json-block')?.getAttribute('data-wrap')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: '复制 JSON' }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(1);
+    });
+    expect(writeText.mock.calls[0]?.[0]).toContain('"alpha": 1');
+    expect(screen.getByText('已复制')).toBeTruthy();
   });
 
   it('展开后的长文本在重新测量时不应闪退回收', async () => {

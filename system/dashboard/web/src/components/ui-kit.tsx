@@ -330,7 +330,44 @@ export function DenseTable({
 }
 
 export function JsonBlock({ value }: { value: unknown }) {
-  return <pre className="json-block">{JSON.stringify(value, null, 2)}</pre>;
+  const [wrap, setWrap] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const jsonText = JSON.stringify(value, null, 2);
+
+  const handleCopy = async () => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(jsonText);
+    setCopied(true);
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => setCopied(false), 1200);
+    }
+  };
+
+  return (
+    <div className="json-block-shell">
+      <div className="json-block-toolbar">
+        <button
+          type="button"
+          className="chip-button json-block-toggle"
+          aria-label={wrap ? '关闭自动换行' : '开启自动换行'}
+          onClick={() => setWrap((current) => !current)}
+        >
+          {wrap ? '关闭自动换行' : '开启自动换行'}
+        </button>
+        <button
+          type="button"
+          className="chip-button json-block-copy"
+          aria-label="复制 JSON"
+          onClick={() => {
+            void handleCopy();
+          }}
+        >
+          {copied ? '已复制' : '复制 JSON'}
+        </button>
+      </div>
+      <pre className="json-block" data-wrap={wrap ? 'true' : 'false'}>{jsonText}</pre>
+    </div>
+  );
 }
 
 export function PathText({

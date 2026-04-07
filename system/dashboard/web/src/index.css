@@ -2830,6 +2830,24 @@ button { cursor: pointer; }
   color: var(--json-text);
   font-size: 12px;
   overflow: auto;
+  white-space: pre;
+}
+
+.json-block[data-wrap='true'] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.json-block-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.json-block-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .sparkline {
