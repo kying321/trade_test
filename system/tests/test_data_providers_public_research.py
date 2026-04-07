@@ -4,6 +4,7 @@ from contextlib import ExitStack
 from datetime import date, datetime
 from pathlib import Path
 import sys
+import types
 import unittest
 
 import pandas as pd
@@ -19,6 +20,51 @@ from lie_engine.data.providers import (
 
 
 class PublicInternetResearchProviderTests(unittest.TestCase):
+    def test_fetch_freight_index_falls_back_to_direct_series_when_aggregate_source_breaks(self) -> None:
+        provider = PublicInternetResearchProvider()
+        fake_akshare = types.SimpleNamespace(
+            macro_china_freight_index=lambda: (_ for _ in ()).throw(UnicodeDecodeError("gbk", b"\x88", 0, 1, "illegal multibyte sequence")),
+            macro_shipping_bdi=lambda: pd.DataFrame(
+                {
+                    "日期": pd.to_datetime(["2026-04-01", "2026-04-07"]),
+                    "最新值": [2030.0, 2095.0],
+                }
+            ),
+            macro_shipping_bcti=lambda: pd.DataFrame(
+                {
+                    "日期": pd.to_datetime(["2026-04-01", "2026-04-07"]),
+                    "最新值": [1994.0, 1969.0],
+                }
+            ),
+            macro_china_bdti_index=lambda: pd.DataFrame(
+                {
+                    "日期": pd.to_datetime(["2026-04-01", "2026-04-07"]),
+                    "最新值": [3678.0, 3639.0],
+                }
+            ),
+        )
+
+        with patch.dict(sys.modules, {"akshare": fake_akshare}):
+            out = provider._fetch_freight_index(oldest_date=date(2026, 4, 1), latest_date=date(2026, 4, 7))
+
+        self.assertFalse(out.empty)
+        self.assertEqual(
+            list(out.columns),
+            [
+                "截止日期",
+                "波罗的海综合运价指数BDI",
+                "油轮运价指数成品油运价指数BCTI",
+                "油轮运价指数原油运价指数BDTI",
+                "波罗的海超级大灵便型船BSI指数",
+            ],
+        )
+        latest = out[out["截止日期"] == pd.Timestamp("2026-04-07")]
+        self.assertEqual(len(latest), 1)
+        self.assertAlmostEqual(float(latest.iloc[0]["波罗的海综合运价指数BDI"]), 2095.0, places=6)
+        self.assertAlmostEqual(float(latest.iloc[0]["油轮运价指数成品油运价指数BCTI"]), 1969.0, places=6)
+        self.assertAlmostEqual(float(latest.iloc[0]["油轮运价指数原油运价指数BDTI"]), 3639.0, places=6)
+        self.assertTrue(pd.isna(latest.iloc[0]["波罗的海超级大灵便型船BSI指数"]))
+
     def test_fetch_society_electricity_http_fallback_parses_jsonp(self) -> None:
         provider = PublicInternetResearchProvider()
         body = """/*<script>location.href='//sina.com';</script>*/

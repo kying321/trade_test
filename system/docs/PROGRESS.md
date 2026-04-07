@@ -40,6 +40,17 @@
 - 当前残余风险：
   - `PublicInternetResearchProvider.fetch_macro()` 对 `bcti_index / bdti_index / cargo_volume_yoy / coastal_port_throughput_yoy` 在当前窗口仍可能返回缺失，runner 已降级为 coverage 缺口而非伪造数据
   - 由于实时产业链字段覆盖不完整，当前 strategy 输出应视作研究 lane 提示，不应外推为 live 执行信号
+  - [UPDATE 2026-04-07 23:15 +0800] 已修复 freight aggregate 源失效时的 direct-series fallback：
+    - `_fetch_freight_index()` 现会在 `macro_china_freight_index()` 异常/空结果时回退到 `macro_shipping_bdi()`、`macro_shipping_bcti()`、`macro_china_bdti_index()`
+    - 新增测试：
+      - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_data_providers_public_research.py::test_fetch_freight_index_falls_back_to_direct_series_when_aggregate_source_breaks`
+    - 真实 runner 复跑后，`latest_fuel_oil_2607_input_packet.json` 的 `coverage_ratio` 已由 `0.5625` 提升到 `0.6875`
+    - 当前仍未解决的 live coverage 缺口收敛为：
+      - `cargo_volume_yoy`
+      - `coastal_port_throughput_yoy`
+      - `refinery_run_rate`
+      - `refinery_margin`
+      - `environmental_policy_signal`
 
 
 ## Current State (2026-04-03)

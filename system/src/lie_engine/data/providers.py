@@ -426,6 +426,75 @@ class PublicInternetResearchProvider:
         oldest_date: date | None = None,
         latest_date: date | None = None,
     ) -> pd.DataFrame:
+        def _empty_frame() -> pd.DataFrame:
+            return pd.DataFrame(
+                columns=[
+                    "截止日期",
+                    "波罗的海综合运价指数BDI",
+                    "油轮运价指数成品油运价指数BCTI",
+                    "油轮运价指数原油运价指数BDTI",
+                    "波罗的海超级大灵便型船BSI指数",
+                ]
+            )
+
+        def _normalize_direct_series(frame: pd.DataFrame, value_name: str) -> pd.DataFrame:
+            if frame is None or frame.empty:
+                return pd.DataFrame(columns=["截止日期", value_name])
+            out = frame.copy()
+            out["截止日期"] = pd.to_datetime(out.get("日期"), errors="coerce").dt.normalize()
+            out[value_name] = pd.to_numeric(out.get("最新值"), errors="coerce")
+            out = (
+                out[["截止日期", value_name]]
+                .dropna(subset=["截止日期"])
+                .sort_values("截止日期")
+                .drop_duplicates(subset=["截止日期"], keep="last")
+                .reset_index(drop=True)
+            )
+            return out
+
+        def _direct_fallback() -> pd.DataFrame:
+            try:
+                import akshare as ak
+            except Exception:
+                return _empty_frame()
+            frames: list[pd.DataFrame] = []
+            direct_specs = [
+                ("波罗的海综合运价指数BDI", "macro_shipping_bdi"),
+                ("油轮运价指数成品油运价指数BCTI", "macro_shipping_bcti"),
+                ("油轮运价指数原油运价指数BDTI", "macro_china_bdti_index"),
+            ]
+            for column_name, method_name in direct_specs:
+                method = getattr(ak, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    normalized = _normalize_direct_series(method(), column_name)
+                except Exception:
+                    continue
+                if not normalized.empty:
+                    frames.append(normalized)
+            if not frames:
+                return _empty_frame()
+            out = frames[0]
+            for frame in frames[1:]:
+                out = out.merge(frame, on="截止日期", how="outer")
+            if "波罗的海超级大灵便型船BSI指数" not in out.columns:
+                out["波罗的海超级大灵便型船BSI指数"] = np.nan
+            return (
+                out[
+                    [
+                        "截止日期",
+                        "波罗的海综合运价指数BDI",
+                        "油轮运价指数成品油运价指数BCTI",
+                        "油轮运价指数原油运价指数BDTI",
+                        "波罗的海超级大灵便型船BSI指数",
+                    ]
+                ]
+                .sort_values("截止日期")
+                .drop_duplicates(subset=["截止日期"], keep="last")
+                .reset_index(drop=True)
+            )
+
         cache_key = f"eastmoney:freight_index:{oldest_date.isoformat() if oldest_date else ''}:{latest_date.isoformat() if latest_date else ''}"
         with self._macro_cache_lock:
             cached = self._macro_cache.get(cache_key)
@@ -435,11 +504,16 @@ class PublicInternetResearchProvider:
             import akshare as ak
             out = ak.macro_china_freight_index()
         except Exception:
-            return pd.DataFrame(columns=["截止日期", "波罗的海综合运价指数BDI", "油轮运价指数成品油运价指数BCTI", "油轮运价指数原油运价指数BDTI", "波罗的海超级大灵便型船BSI指数"])
+            out = _direct_fallback()
         if out is None or out.empty:
-            return pd.DataFrame(columns=["截止日期", "波罗的海综合运价指数BDI", "油轮运价指数成品油运价指数BCTI", "油轮运价指数原油运价指数BDTI", "波罗的海超级大灵便型船BSI指数"])
+            out = _direct_fallback()
+        if out is None or out.empty:
+            return _empty_frame()
         out = out.copy()
-        out["截止日期"] = pd.to_datetime(out.get("截止日期"), errors="coerce").dt.normalize()
+        date_column = "截止日期" if "截止日期" in out.columns else "日期" if "日期" in out.columns else None
+        if date_column is None:
+            return _empty_frame()
+        out["截止日期"] = pd.to_datetime(out.get(date_column), errors="coerce").dt.normalize()
         for col in [
             "波罗的海综合运价指数BDI",
             "油轮运价指数成品油运价指数BCTI",
