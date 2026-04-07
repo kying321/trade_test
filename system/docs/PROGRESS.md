@@ -168,6 +168,14 @@
   - 当前原则：
     - 仍不允许页面内直接触发 live 执行
     - 先通过 CLI 受控入口执行，再由 snapshot 把 receipts 回挂到控制面
+- 第三方对照组 `MAACodeX` 已完成独立探测并固化结论：
+  - 文档：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/CPA_AUTOMATION_COMPARISON.md`
+  - 当前结论：
+    - install / configure 可通过
+    - 在当前 macOS 环境下被 `powershell.exe ENOENT` 和 `Win32` 依赖阻断
+    - 不能作为当前 Fenlie CPA 主线替代
+    - 当前 authority 仍应优先 `MAC工具` 历史成功快照 + Fenlie 主仓 CPA source-owned kernel/control snapshot
 - `/ops/risk` 已从旧 public terminal shell 进一步收敛为独立 risk cockpit：
   - header / sidebar 改成 `风险驾驶舱` + `操作路由`
   - 首屏结构改成 `风险观察 / 风险诊断 / 动作分流 / 当前动作栈`
