@@ -44,6 +44,7 @@ def _macro_frame(
     inventory_delta: float,
     lfu_inventory: float,
     lfu_inventory_delta: float,
+    bdi: float = float("nan"),
     bcti: float,
     bdti: float,
     cargo_yoy: float,
@@ -58,6 +59,7 @@ def _macro_frame(
                 "fuel_oil_inventory_delta": inventory_delta,
                 "lfu_inventory": lfu_inventory,
                 "lfu_inventory_delta": lfu_inventory_delta,
+                "bdi_index": bdi,
                 "bcti_index": bcti,
                 "bdti_index": bdti,
                 "cargo_volume_yoy": cargo_yoy,
@@ -277,3 +279,52 @@ def test_fuel_oil_2607_reasoning_pipeline_detects_bearish_macro_path() -> None:
     assert trade_space["directional_bias"] == "down"
     assert strategy_matrix["preferred_bias"] == "short"
     assert strategy_matrix["priority_strategies"][0]["direction"] in {"short", "relative_short"}
+
+
+def test_input_packet_uses_bdi_proxy_when_direct_transport_fields_are_missing() -> None:
+    macro = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2026-03-10"),
+                "fuel_oil_inventory": 210_000,
+                "fuel_oil_inventory_delta": -1_000,
+                "lfu_inventory": 140_000,
+                "lfu_inventory_delta": -800,
+                "bdi_index": 1600.0,
+                "bcti_index": 1500.0,
+                "bdti_index": 2500.0,
+                "cargo_volume_yoy": float("nan"),
+                "coastal_port_throughput_yoy": float("nan"),
+            },
+            {
+                "date": pd.Timestamp("2026-04-07"),
+                "fuel_oil_inventory": 205_000,
+                "fuel_oil_inventory_delta": -2_500,
+                "lfu_inventory": 138_000,
+                "lfu_inventory_delta": -1200,
+                "bdi_index": 2095.0,
+                "bcti_index": 1969.0,
+                "bdti_index": 3639.0,
+                "cargo_volume_yoy": float("nan"),
+                "coastal_port_throughput_yoy": float("nan"),
+            },
+        ]
+    )
+    packet = build_fuel_oil_2607_input_packet(
+        contract_focus="FU2607",
+        benchmark_contract="SC2607",
+        deferred_contract="FU2609",
+        macro_frame=macro,
+        contract_daily=_bars("FU2607", [3900 + i * 5 for i in range(60)], [9000 + i * 30 for i in range(60)], [22000 + i * 20 for i in range(60)]),
+        benchmark_daily=_bars("SC2607", [640 + i * 0.2 for i in range(60)], [7000 + i * 15 for i in range(60)], [13000 + i * 10 for i in range(60)]),
+        deferred_daily=_bars("FU2609", [3820 + i * 4 for i in range(60)], [7500 + i * 15 for i in range(60)], [18000 + i * 10 for i in range(60)]),
+        spot_snapshot={"current_price": 4240.0, "last_settle_price": 4210.0, "volume": 18000, "hold": 25000},
+        benchmark_spot_snapshot={"current_price": 682.0, "last_settle_price": 676.0, "volume": 6000, "hold": 13000},
+        member_rank_payload=_member_rank(long_1=4100, short_1=3200),
+        report_text="direct transport fields missing, use bdi proxy",
+        generated_at="2026-04-07T19:10:00Z",
+    )
+
+    assert packet["fundamental_snapshot"]["cargo_volume_yoy"] != packet["fundamental_snapshot"]["cargo_volume_yoy"]
+    assert packet["fundamental_snapshot"]["demand_signal_source"] == "proxy_bdi"
+    assert packet["fundamental_snapshot"]["demand_signal"] == "firm"

@@ -324,8 +324,10 @@ def build_fuel_oil_2607_input_packet(
     lfu_inventory_delta = _latest_non_null(macro, "lfu_inventory_delta")
     bcti = _latest_non_null(macro, "bcti_index")
     bdti = _latest_non_null(macro, "bdti_index")
+    bdi = _latest_non_null(macro, "bdi_index")
     bcti_prev = _previous_non_null(macro, "bcti_index")
     bdti_prev = _previous_non_null(macro, "bdti_index")
+    bdi_prev = _previous_non_null(macro, "bdi_index")
     cargo_yoy = _latest_non_null(macro, "cargo_volume_yoy")
     port_yoy = _latest_non_null(macro, "coastal_port_throughput_yoy")
 
@@ -340,6 +342,21 @@ def build_fuel_oil_2607_input_packet(
         _pct_change(bdti, bdti_prev) if np.isfinite(bdti_prev) else (1.0 if bdti >= 900 else -1.0),
     )
     demand_signal = _signal_from_two(cargo_yoy, port_yoy)
+    demand_signal_source = "direct_transport"
+    bdi_change = _pct_change(bdi, bdi_prev)
+    if demand_signal == "mixed" and not (np.isfinite(cargo_yoy) and np.isfinite(port_yoy)):
+        demand_signal_source = "proxy_bdi"
+        if np.isfinite(bdi_change):
+            if bdi_change >= 0.05:
+                demand_signal = "firm"
+            elif bdi_change <= -0.05:
+                demand_signal = "soft"
+            else:
+                demand_signal = "mixed"
+        elif np.isfinite(bdi):
+            demand_signal = "firm" if bdi >= 1800 else "soft" if bdi <= 1200 else "mixed"
+        else:
+            demand_signal = "mixed"
 
     long_top2, long_change_top2 = _member_position_sum(_as_frame(member_rank_payload.get("多单持仓")), "多单持仓")
     short_top2, short_change_top2 = _member_position_sum(_as_frame(member_rank_payload.get("空单持仓")), "空单持仓")
@@ -412,11 +429,14 @@ def build_fuel_oil_2607_input_packet(
             "lfu_inventory_delta": lfu_inventory_delta,
             "bcti_index": bcti,
             "bdti_index": bdti,
+            "bdi_index": bdi,
+            "bdi_change_1step": bdi_change,
             "cargo_volume_yoy": cargo_yoy,
             "coastal_port_throughput_yoy": port_yoy,
             "inventory_signal": inventory_signal,
             "freight_signal": freight_signal,
             "demand_signal": demand_signal,
+            "demand_signal_source": demand_signal_source,
             "relative_strength_score": relative_strength_score,
         },
         "technical_snapshot": {

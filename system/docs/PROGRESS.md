@@ -51,6 +51,16 @@
       - `refinery_run_rate`
       - `refinery_margin`
       - `environmental_policy_signal`
+  - [UPDATE 2026-04-07 23:25 +0800] 已为燃油 lane 增加 `direct-first / BDI-proxy-second` 的需求信号策略：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_input_packet.py`
+    - 当 `cargo_volume_yoy / coastal_port_throughput_yoy` 缺失时，允许使用 `bdi_index` 的一步变化生成 `demand_signal_source=proxy_bdi`
+    - 不伪造 direct traffic 字段，coverage 仍保留缺口；只是让情景推演在缺 direct traffic 时仍能消费来源明确的代理证据
+    - 新增测试：
+      - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_fuel_oil_2607_reasoning.py::test_input_packet_uses_bdi_proxy_when_direct_transport_fields_are_missing`
+    - 真实 runner 复跑后：
+      - `coverage_ratio=0.6875`
+      - `fundamental_snapshot.demand_signal_source=proxy_bdi`
+      - `latest_fuel_oil_2607_summary.json` 已回到 `preferred_bias=long`
 
 
 ## Current State (2026-04-03)
