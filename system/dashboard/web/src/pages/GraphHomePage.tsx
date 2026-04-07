@@ -550,6 +550,12 @@ export function GraphHomePage({
                     >
                       <div className="graph-pipeline-item-copy" data-testid={`graph-pipeline-item-${nodeId}`}>
                         <strong>{nodeLabel(node)}</strong>
+                        {node ? (
+                          <>
+                            <span className="graph-pipeline-item-summary">{explainNode(node, defaultPipelineName).summary}</span>
+                            <small className="graph-pipeline-item-description">{explainNode(node, defaultPipelineName).detail}</small>
+                          </>
+                        ) : null}
                         <div className="chip-row">
                           {node?.detail?.sourceContract ? (
                             <span className="summary-chip">{node.detail.sourceContract}</span>

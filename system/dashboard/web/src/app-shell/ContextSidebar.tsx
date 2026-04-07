@@ -189,7 +189,7 @@ export function ContextSidebar({
           onClick={onToggleCollapse}
         >
           <span className="sidebar-collapse-glyph" aria-hidden="true">{collapsed ? '›' : '‹'}</span>
-          {!collapsed ? <span className="sidebar-collapse-copy">回缩导航</span> : null}
+          <span className="sidebar-collapse-copy">{collapsed ? '展开导航' : '回缩导航'}</span>
         </button>
       ) : null}
       {!collapsed ? (

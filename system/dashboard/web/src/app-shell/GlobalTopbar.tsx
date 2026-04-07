@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { ActionButton, ActionLink, DomainTab, SegmentedOption } from '../components/control-primitives';
 import { ClampText } from '../components/ui-kit';
 import type { NavItem } from '../pages/page-types';
+import { useShellBreakpoint } from '../hooks/use-shell-breakpoint';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
 export type ResolvedTheme = 'dark' | 'light';
@@ -46,63 +48,158 @@ export function GlobalTopbar({
   onThemeChange,
   onOpenSearch,
 }: GlobalTopbarProps) {
+  const { tier } = useShellBreakpoint();
+  const compact = tier === 's';
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!compact) {
+      setMobileNavOpen(false);
+      setMobileToolsOpen(false);
+    }
+  }, [compact]);
+
+  const navExpanded = !compact || mobileNavOpen;
+  const toolsExpanded = !compact || mobileToolsOpen;
+
   return (
-    <div className="global-topbar-inner">
+    <div className="global-topbar-inner" data-shell-tier={tier}>
       <div className="global-topbar-row global-topbar-main global-topbar-global-only">
         <section className="global-brand" aria-label="global-brand-context">
           <p className="brand-kicker">Fenlie / 控制台</p>
           <strong><ClampText expandable={false} raw="只读操作与研究面">只读操作与研究面</ClampText></strong>
         </section>
-        <nav className="primary-nav" aria-label="primary-domains">
-          {primaryNav.map((item) => (
-            <DomainTab
-              key={item.id}
-              className="primary-nav-link"
-              active={isPrimaryNavActive(item, currentPath)}
-              to={item.to}
-            >
-              <span>{item.label}</span>
-            </DomainTab>
-          ))}
-        </nav>
-        <section className="global-control-deck" aria-label="global-tool-strip">
-          <div className="theme-switcher" role="group" aria-label="theme-switcher">
-            <span className="theme-switcher-label">主题</span>
-            <div className="theme-switcher-segment">
-              {THEME_OPTIONS.map((option) => (
-                <SegmentedOption
-                  key={option.id}
-                  className={`theme-switcher-button ${themePreference === option.id ? 'active' : ''}`.trim()}
-                  aria-label={option.ariaLabel}
-                  active={themePreference === option.id}
-                  onClick={() => onThemeChange(option.id)}
-                >
-                  {option.label}
-                </SegmentedOption>
-              ))}
-            </div>
-            <span className="theme-switcher-state">当前：{resolvedThemeLabel(resolvedTheme)}</span>
-          </div>
-          {onOpenSearch ? (
+        {compact ? (
+          <section className="global-mobile-actions" aria-label="global-mobile-actions">
+            {onOpenSearch ? (
+              <ActionButton
+                className="chip-button global-search-trigger global-search-trigger-compact"
+                aria-label="打开全局搜索"
+                onClick={onOpenSearch}
+              >
+                搜索
+              </ActionButton>
+            ) : null}
             <ActionButton
-              className="chip-button global-search-trigger"
-              aria-label="打开全局搜索"
-              onClick={onOpenSearch}
+              className="chip-button global-mobile-toggle"
+              aria-label={mobileNavOpen ? '收起主导航' : '展开主导航'}
+              aria-expanded={mobileNavOpen}
+              onClick={() => setMobileNavOpen((open) => !open)}
             >
-              搜索 / ⌘K
+              {mobileNavOpen ? '收起导航' : '导航'}
             </ActionButton>
-          ) : null}
-          <ActionLink className="chip-button global-cpa-trigger" aria-label="打开 CPA 管理" to="/cpa">
-            打开 CPA 管理
-          </ActionLink>
-        </section>
-        <section className="global-summary-strip" aria-label="global-summary">
-          {globalSummary.chips?.map((chip) => (
-            <span className="summary-chip" key={`${chip.label}-${chip.value}`}>{chip.label}：{chip.value}</span>
-          ))}
-          <span className="summary-chip summary-chip-emphasis">变更级别：{globalSummary.changeClass}</span>
-        </section>
+            <ActionButton
+              className="chip-button global-mobile-toggle"
+              aria-label={mobileToolsOpen ? '收起工具与状态' : '展开工具与状态'}
+              aria-expanded={mobileToolsOpen}
+              onClick={() => setMobileToolsOpen((open) => !open)}
+            >
+              {mobileToolsOpen ? '收起状态' : '工具 / 状态'}
+            </ActionButton>
+          </section>
+        ) : (
+          <nav className="primary-nav" aria-label="primary-domains">
+            {primaryNav.map((item) => (
+              <DomainTab
+                key={item.id}
+                className="primary-nav-link"
+                active={isPrimaryNavActive(item, currentPath)}
+                to={item.to}
+              >
+                <span>{item.label}</span>
+              </DomainTab>
+            ))}
+          </nav>
+        )}
+        {!compact ? (
+          <>
+            <section className="global-control-deck" aria-label="global-tool-strip">
+              <div className="theme-switcher" role="group" aria-label="theme-switcher">
+                <span className="theme-switcher-label">主题</span>
+                <div className="theme-switcher-segment">
+                  {THEME_OPTIONS.map((option) => (
+                    <SegmentedOption
+                      key={option.id}
+                      className={`theme-switcher-button ${themePreference === option.id ? 'active' : ''}`.trim()}
+                      aria-label={option.ariaLabel}
+                      active={themePreference === option.id}
+                      onClick={() => onThemeChange(option.id)}
+                    >
+                      {option.label}
+                    </SegmentedOption>
+                  ))}
+                </div>
+                <span className="theme-switcher-state">当前：{resolvedThemeLabel(resolvedTheme)}</span>
+              </div>
+              {onOpenSearch ? (
+                <ActionButton
+                  className="chip-button global-search-trigger"
+                  aria-label="打开全局搜索"
+                  onClick={onOpenSearch}
+                >
+                  搜索 / ⌘K
+                </ActionButton>
+              ) : null}
+              <ActionLink className="chip-button global-cpa-trigger" aria-label="打开 CPA 管理" to="/cpa">
+                打开 CPA 管理
+              </ActionLink>
+            </section>
+            <section className="global-summary-strip" aria-label="global-summary">
+              {globalSummary.chips?.map((chip) => (
+                <span className="summary-chip" key={`${chip.label}-${chip.value}`}>{chip.label}：{chip.value}</span>
+              ))}
+              <span className="summary-chip summary-chip-emphasis">变更级别：{globalSummary.changeClass}</span>
+            </section>
+          </>
+        ) : null}
       </div>
+      {compact ? (
+        <>
+          <nav className="primary-nav primary-nav-compact" aria-label="primary-domains" hidden={!navExpanded}>
+            {primaryNav.map((item) => (
+              <DomainTab
+                key={item.id}
+                className="primary-nav-link"
+                active={isPrimaryNavActive(item, currentPath)}
+                to={item.to}
+              >
+                <span>{item.label}</span>
+              </DomainTab>
+            ))}
+          </nav>
+          <div className="global-mobile-tools" hidden={!toolsExpanded}>
+            <section className="global-control-deck global-control-deck-compact" aria-label="global-tool-strip">
+              <div className="theme-switcher" role="group" aria-label="theme-switcher">
+                <span className="theme-switcher-label">主题</span>
+                <div className="theme-switcher-segment">
+                  {THEME_OPTIONS.map((option) => (
+                    <SegmentedOption
+                      key={option.id}
+                      className={`theme-switcher-button ${themePreference === option.id ? 'active' : ''}`.trim()}
+                      aria-label={option.ariaLabel}
+                      active={themePreference === option.id}
+                      onClick={() => onThemeChange(option.id)}
+                    >
+                      {option.label}
+                    </SegmentedOption>
+                  ))}
+                </div>
+                <span className="theme-switcher-state">当前：{resolvedThemeLabel(resolvedTheme)}</span>
+              </div>
+              <ActionLink className="chip-button global-cpa-trigger" aria-label="打开 CPA 管理" to="/cpa">
+                打开 CPA 管理
+              </ActionLink>
+            </section>
+            <section className="global-summary-strip global-summary-strip-compact" aria-label="global-summary">
+              {globalSummary.chips?.map((chip) => (
+                <span className="summary-chip" key={`${chip.label}-${chip.value}`}>{chip.label}：{chip.value}</span>
+              ))}
+              <span className="summary-chip summary-chip-emphasis">变更级别：{globalSummary.changeClass}</span>
+            </section>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

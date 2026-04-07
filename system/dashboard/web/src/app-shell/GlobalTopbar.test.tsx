@@ -1,7 +1,15 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobalTopbar, type ThemePreference } from './GlobalTopbar';
+
+function mockWindowWidth(width: number) {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+}
 
 function renderTopbar({
   currentPath = '/overview',
@@ -35,6 +43,10 @@ function renderTopbar({
 }
 
 describe('GlobalTopbar', () => {
+  beforeEach(() => {
+    mockWindowWidth(1400);
+  });
+
   it('仅承载全局职责并暴露稳定语义契约', () => {
     renderTopbar();
 
@@ -69,5 +81,19 @@ describe('GlobalTopbar', () => {
     expect(within(nav).getByRole('link', { name: '总览' })).toBeTruthy();
     const activeLink = within(nav).getByRole('link', { name: '研究工作区' });
     expect(activeLink.className).toContain('active');
+  });
+
+  it('在手机端把主导航折叠进紧凑菜单，避免顶栏占据四分之一屏幕', () => {
+    mockWindowWidth(760);
+    renderTopbar();
+
+    const toggle = screen.getByRole('button', { name: '展开主导航' });
+    expect(toggle).toBeTruthy();
+    expect(screen.queryByRole('link', { name: '总览' })).toBeNull();
+
+    fireEvent.click(toggle);
+    const nav = screen.getByRole('navigation', { name: 'primary-domains' });
+    expect(within(nav).getByRole('link', { name: '总览' })).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: '研究工作区' })).toBeTruthy();
   });
 });

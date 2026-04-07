@@ -73,11 +73,11 @@ export function GraphHomeRenderer({
             opacity: node.id === centerId
               ? 1
               : showDimLayer && !(showFocusLayer && activeNodeSet.has(node.id))
-                ? 0.16
+                ? 0.34
                 : showFocusLayer && activeNodeSet.has(node.id)
-                  ? Math.max(node.intensity, 0.72)
+                  ? Math.max(node.intensity, 0.82)
                   : node.intensity,
-            shadowBlur: node.id === centerId ? 28 : showFocusLayer && activeNodeSet.has(node.id) ? 16 : showDimLayer ? 4 : 12,
+            shadowBlur: node.id === centerId ? 24 : showFocusLayer && activeNodeSet.has(node.id) ? 14 : showDimLayer ? 2 : 10,
             shadowColor: 'rgba(15,23,42,0.28)',
             borderColor: showWarningLayer && activeNodeSet.has(node.id) && hasMissingSourceDetail(node) ? '#ff8b5b' : undefined,
             borderWidth: showWarningLayer && activeNodeSet.has(node.id) && hasMissingSourceDetail(node) ? 3 : 0,
@@ -94,7 +94,7 @@ export function GraphHomeRenderer({
           target: edge.target,
           lineStyle: {
             width: showFocusLayer && activeEdgeSet.has(edge.id) ? 3 : 1,
-            opacity: showFocusLayer && activeEdgeSet.has(edge.id) ? 0.92 : showDimLayer ? 0.08 : 0.35,
+            opacity: showFocusLayer && activeEdgeSet.has(edge.id) ? 0.92 : showDimLayer ? 0.2 : 0.35,
             curveness: 0.14,
           },
         })),

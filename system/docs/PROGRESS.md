@@ -81,6 +81,35 @@
       - `refinery_proxy_snapshot.run_rate_signal=active`
       - `latest_fuel_oil_2607_summary.json` 的 `key_evidence_brief` 已纳入 `refinery_margin_proxy_support,refinery_run_proxy_active`
 
+## Current State (2026-04-08)
+- dashboard/web 已完成一轮可用性修补，范围限定在 `RESEARCH_ONLY`，未触碰 live path：
+  - 全局顶栏：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/app-shell/GlobalTopbar.tsx`
+    - 手机端新增折叠主导航与折叠工具/状态区，避免顶栏在小屏持续占据高比例首屏
+    - 中屏改为横向可滚动导航/摘要，不再一味换行堆高
+  - 左侧导航：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/hooks/use-sidebar-collapse.ts`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/app-shell/ContextSidebar.tsx`
+    - 手机单列断点改为默认收起，但保留显式展开；不再强制整块侧栏常驻
+  - 页面内最大化：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/ui-kit.tsx`
+    - `PanelCard` 现支持页面内最大化/还原，适合图谱、工件池、搜索结果等长信息面板
+  - 图谱主页：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/graph/GraphHomeRenderer.tsx`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/pages/GraphHomePage.tsx`
+    - 非当前链 dim opacity 已抬高，边透明度不再过低
+    - 自定义管道列表新增节点说明，直接显示“为什么看它 / 它在流程里负责什么”
+  - 视觉与排版：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/index.css`
+    - 提升正文 line-height、基础字号、卡片标题尺度，并补齐紧凑顶栏/移动侧栏/最大化卡片样式
+- 测试与验证：
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx tsc --noEmit`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm test -- --run src/app-shell/AppShell.test.tsx src/app-shell/ContextSidebar.test.tsx src/graph/GraphHomeRenderer.test.tsx src/components/PanelCard.test.tsx src/app-shell/GlobalTopbar.test.tsx src/hooks/use-sidebar-collapse.test.tsx src/pages/GraphHomePage.test.tsx`
+  - 结果：`34 passed`
+- 当前残余风险：
+  - 这轮主要修的是壳层与交互密度，不包含完整手机端 smoke；仍建议后续补 `graph_home_narrow` 与 workspace 窄屏浏览器烟测
+  - `PanelCard` 已默认支持最大化，后续若发现某些极小卡片按钮噪音过大，可按页面逐步 opt-out
+
 
 ## Current State (2026-04-03)
 - Dashboard 前端已完成 path-routing 第一刀，范围限定在 `RESEARCH_ONLY`，未触碰 live path：

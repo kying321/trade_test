@@ -195,6 +195,7 @@ export function PanelCard({
   actions,
   children,
   className = '',
+  maximizable = true,
 }: {
   title: ReactNode;
   kicker?: string;
@@ -202,18 +203,51 @@ export function PanelCard({
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
+  maximizable?: boolean;
 }) {
+  const titleText = resolveRawTitle(title) || '当前面板';
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    if (!maximized) {
+      document.body.classList.remove('panel-card-lock');
+      return undefined;
+    }
+    document.body.classList.add('panel-card-lock');
+    return () => document.body.classList.remove('panel-card-lock');
+  }, [maximized]);
+
   return (
-    <section className={`panel-card ${className}`.trim()}>
+    <section
+      className={`panel-card ${maximized ? 'panel-card-maximized' : ''} ${className}`.trim()}
+      data-maximized={maximized ? 'true' : 'false'}
+    >
       <header className="panel-card-head">
         <div className="panel-card-copy">
           {kicker ? <p className="panel-kicker">{kicker}</p> : null}
           <h2 className="panel-card-title"><ClampText>{title}</ClampText></h2>
           {meta ? <p className="panel-note panel-card-meta"><ClampText>{meta}</ClampText></p> : null}
         </div>
-        {actions ? <div className="panel-actions">{actions}</div> : null}
+        {(actions || maximizable) ? (
+          <div className="panel-actions panel-card-head-actions">
+            {actions}
+            {maximizable ? (
+              <button
+                type="button"
+                className="panel-card-maximize-button"
+                aria-label={`${maximized ? '还原' : '最大化'}面板：${titleText}`}
+                title={`${maximized ? '还原' : '最大化'}面板：${titleText}`}
+                onClick={() => setMaximized((current) => !current)}
+              >
+                <span aria-hidden="true" className="panel-card-maximize-glyph">{maximized ? '🗗' : '⛶'}</span>
+                <span className="panel-card-maximize-label">{maximized ? '还原' : '最大化'}</span>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </header>
-      {children}
+      <div className="panel-card-body">{children}</div>
     </section>
   );
 }

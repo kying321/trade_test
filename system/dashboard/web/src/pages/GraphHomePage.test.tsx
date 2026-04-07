@@ -210,6 +210,9 @@ describe('GraphHomePage', () => {
     await waitFor(() => {
       expect(window.localStorage.getItem('graph_home_pipelines_v1')).toContain('pipeline-market-input');
     });
+    const pipelineItem = screen.getByTestId('graph-pipeline-item-pipeline-market-input');
+    expect(within(pipelineItem).getByText('它是一等阶段节点')).toBeTruthy();
+    expect(within(pipelineItem).getByText(/这一层用来承接中枢的一级工作带/)).toBeTruthy();
   });
 
   it('shows localized filters, explicit quick-entry links, and a recenter action for the current node', () => {

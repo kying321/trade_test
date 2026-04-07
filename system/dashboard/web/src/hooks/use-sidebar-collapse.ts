@@ -20,11 +20,16 @@ function resolveCompactLayout(): boolean {
 export function useSidebarCollapse() {
   const [storedCollapsed, setStoredCollapsed] = useState<boolean>(() => loadStoredCollapse());
   const [compactLayout, setCompactLayout] = useState<boolean>(() => resolveCompactLayout());
+  const [compactCollapsed, setCompactCollapsed] = useState<boolean>(() => resolveCompactLayout());
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
     const media = window.matchMedia(SIDEBAR_COLLAPSE_QUERY);
-    const handleChange = () => setCompactLayout(media.matches);
+    const handleChange = () => {
+      const matches = media.matches;
+      setCompactLayout(matches);
+      if (matches) setCompactCollapsed(true);
+    };
     handleChange();
     if (typeof media.addEventListener === 'function') {
       media.addEventListener('change', handleChange);
@@ -40,15 +45,23 @@ export function useSidebarCollapse() {
   }, [storedCollapsed]);
 
   const setCollapsed = useCallback((next: boolean) => {
+    if (compactLayout) {
+      setCompactCollapsed(next);
+      return;
+    }
     setStoredCollapsed(next);
-  }, []);
+  }, [compactLayout]);
 
   const toggleCollapsed = useCallback(() => {
+    if (compactLayout) {
+      setCompactCollapsed((current) => !current);
+      return;
+    }
     setStoredCollapsed((current) => !current);
-  }, []);
+  }, [compactLayout]);
 
-  const canCollapse = !compactLayout;
-  const collapsed = canCollapse ? storedCollapsed : false;
+  const canCollapse = true;
+  const collapsed = compactLayout ? compactCollapsed : storedCollapsed;
 
   return useMemo(() => ({
     collapsed,

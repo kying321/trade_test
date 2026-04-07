@@ -66,7 +66,7 @@ describe('useSidebarCollapse', () => {
     });
   });
 
-  it('forces expanded state on single-column breakpoint while keeping remembered preference', async () => {
+  it('在单列断点默认收起侧栏，但不丢失桌面端记忆偏好', async () => {
     const media = stubMatchMedia(false);
     window.localStorage.setItem(SIDEBAR_COLLAPSE_STORAGE_KEY, 'true');
     const { result } = renderHook(() => useSidebarCollapse());
@@ -81,8 +81,8 @@ describe('useSidebarCollapse', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.collapsed).toBe(false);
-      expect(result.current.canCollapse).toBe(false);
+      expect(result.current.collapsed).toBe(true);
+      expect(result.current.canCollapse).toBe(true);
       expect(window.localStorage.getItem(SIDEBAR_COLLAPSE_STORAGE_KEY)).toBe('true');
     });
   });

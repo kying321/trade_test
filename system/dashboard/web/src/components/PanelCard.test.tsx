@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { PanelCard } from './ui-kit';
 
@@ -21,5 +21,21 @@ describe('PanelCard', () => {
     expect(container.querySelector('.panel-actions')).toBeTruthy();
     expect(screen.getByText('研究地图')).toBeTruthy();
     expect(screen.getByRole('button', { name: '切换视图' })).toBeTruthy();
+  });
+
+  it('支持页面内最大化与还原，避免长页密集信息无法连续使用', () => {
+    const { container } = render(
+      <PanelCard title="图谱化主页">
+        <div>内容区</div>
+      </PanelCard>,
+    );
+
+    const toggle = screen.getByRole('button', { name: '最大化面板：图谱化主页' });
+    fireEvent.click(toggle);
+    expect(container.querySelector('.panel-card')?.getAttribute('data-maximized')).toBe('true');
+    expect(screen.getByRole('button', { name: '还原面板：图谱化主页' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '还原面板：图谱化主页' }));
+    expect(container.querySelector('.panel-card')?.getAttribute('data-maximized')).toBe('false');
   });
 });
