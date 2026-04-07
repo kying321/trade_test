@@ -187,6 +187,10 @@ describe('ui-kit source-owned 审计显示', () => {
 
     render(<JsonBlock value={{ alpha: 1, nested: { beta: 'two' } }} />);
 
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索 JSON 键 / 值' }), { target: { value: 'beta' } });
+    expect(screen.getByText('1 命中')).toBeTruthy();
+    expect(screen.getByText('beta')).toBeTruthy();
+
     const wrapToggle = screen.getByRole('button', { name: '开启自动换行' });
     expect(document.querySelector('.json-block')?.getAttribute('data-wrap')).toBe('false');
     fireEvent.click(wrapToggle);

@@ -332,7 +332,49 @@ export function DenseTable({
 export function JsonBlock({ value }: { value: unknown }) {
   const [wrap, setWrap] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [query, setQuery] = useState('');
   const jsonText = JSON.stringify(value, null, 2);
+  const queryText = query.trim().toLowerCase();
+  const lines = jsonText.split('\n');
+
+  const highlightLine = (line: string, index: number) => {
+    if (!queryText) return line;
+    const lowered = line.toLowerCase();
+    const segments: ReactNode[] = [];
+    let cursor = 0;
+    let hitIndex = 0;
+    while (cursor < line.length) {
+      const matchAt = lowered.indexOf(queryText, cursor);
+      if (matchAt < 0) {
+        segments.push(line.slice(cursor));
+        break;
+      }
+      if (matchAt > cursor) segments.push(line.slice(cursor, matchAt));
+      segments.push(
+        <mark className="json-search-hit" key={`${index}-${hitIndex}`}>
+          {line.slice(matchAt, matchAt + queryText.length)}
+        </mark>,
+      );
+      cursor = matchAt + queryText.length;
+      hitIndex += 1;
+    }
+    return segments;
+  };
+
+  const hitCount = queryText
+    ? lines.reduce((count, line) => {
+      let cursor = 0;
+      const lowered = line.toLowerCase();
+      let hits = 0;
+      while (cursor < lowered.length) {
+        const matchAt = lowered.indexOf(queryText, cursor);
+        if (matchAt < 0) break;
+        hits += 1;
+        cursor = matchAt + queryText.length;
+      }
+      return count + hits;
+    }, 0)
+    : 0;
 
   const handleCopy = async () => {
     if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
@@ -346,6 +388,14 @@ export function JsonBlock({ value }: { value: unknown }) {
   return (
     <div className="json-block-shell">
       <div className="json-block-toolbar">
+        <input
+          className="search-input json-block-search"
+          aria-label="搜索 JSON 键 / 值"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索 JSON 键 / 值"
+        />
+        {queryText ? <span className="summary-chip">{`${hitCount} 命中`}</span> : null}
         <button
           type="button"
           className="chip-button json-block-toggle"
@@ -365,7 +415,14 @@ export function JsonBlock({ value }: { value: unknown }) {
           {copied ? '已复制' : '复制 JSON'}
         </button>
       </div>
-      <pre className="json-block" data-wrap={wrap ? 'true' : 'false'}>{jsonText}</pre>
+      <pre className="json-block" data-wrap={wrap ? 'true' : 'false'}>
+        {lines.map((line, index) => (
+          <div className="json-block-line" key={`json-line-${index}`}>
+            <span className="json-block-line-number" aria-hidden="true">{index + 1}</span>
+            <code className="json-block-line-copy">{highlightLine(line, index)}</code>
+          </div>
+        ))}
+      </pre>
     </div>
   );
 }

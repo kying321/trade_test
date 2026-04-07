@@ -1310,6 +1310,7 @@ function BacktestsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
 
 function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalReadModel; focus?: WorkspaceFocus; pageSectionId?: string }) {
   const { tier } = useShellBreakpoint();
+  const compactWorkspace = tier === 's';
   const view = model.view.workspace.contracts;
   const [searchParams, setSearchParams] = useSearchParams();
   const surfaceContracts = useMemo(
@@ -1358,7 +1359,7 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
 
   return (
     <div className="workspace-grid single-column">
-      {tier === 's' ? <WorkspaceQuickNav section="contracts" focus={focus} pageSections={pageSections} activeSectionId={pageSectionId || undefined} /> : null}
+      {compactWorkspace ? <WorkspaceQuickNav section="contracts" focus={focus} pageSections={pageSections} activeSectionId={pageSectionId || undefined} /> : null}
       <SectionAnchor id="contracts-topology">
         <PanelCard title={t('workspace_contracts_topology_title')} kicker={t('workspace_contracts_topology_kicker')} meta={t('workspace_contracts_topology_meta')}>
           {publicTopology.length ? (
@@ -1427,7 +1428,11 @@ function ContractsWorkspace({ model, focus, pageSectionId }: { model: TerminalRe
       >
         {publicAcceptance.summary ? (
           <>
-            <div className="contracts-acceptance-status-strip" data-testid="contracts-acceptance-status-strip">
+            <div
+              className="contracts-acceptance-status-strip"
+              data-testid="contracts-acceptance-status-strip"
+              data-mobile-layout={compactWorkspace ? 'true' : 'false'}
+            >
               <div className="metric-strip">
                 {publicAcceptance.checks.map((row) => {
                   const rowId = safeDisplayValue(row.id);

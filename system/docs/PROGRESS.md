@@ -151,6 +151,22 @@
       - 结果：
         - 前端测试 `48 passed`
         - workspace browser smoke `ok=true`
+  - [UPDATE 2026-04-08 01:28 +0800] contracts/raw 手机端与深层阅读继续补强：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/WorkspacePanels.tsx`
+      - contracts 页 mobile quick nav 继续保留，并新增 `contracts-acceptance-status-strip[data-mobile-layout]` 契约，允许窄屏状态区压成横向状态轨
+      - raw 页 mobile quick nav 与 `JsonBlock` 工具栏已实测接通
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/ui-kit.tsx`
+      - `JsonBlock` 新增 `搜索 JSON 键 / 值` 输入框与命中数
+      - 复制/自动换行/搜索三者现在可组合使用
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web/src/components/WorkspacePanels.test.tsx`
+      - 新增 contracts/raw 手机端行为回归测试
+    - 验证：
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npx tsc --noEmit`
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm test -- --run src/components/ui-kit.test.tsx src/navigation/workspace-sections.test.ts src/components/WorkspacePanels.test.tsx src/app-shell/AppShell.test.tsx src/app-shell/ContextSidebar.test.tsx src/components/PanelCard.test.tsx src/app-shell/GlobalTopbar.test.tsx src/hooks/use-sidebar-collapse.test.tsx src/pages/GraphHomePage.test.tsx`
+      - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system/dashboard/web && npm run smoke:workspace-routes -- --skip-build`
+      - 结果：
+        - 前端测试 `50 passed`
+        - workspace browser smoke `ok=true`
 
 
 ## Current State (2026-04-03)

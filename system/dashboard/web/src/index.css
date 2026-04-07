@@ -2468,6 +2468,28 @@ button { cursor: pointer; }
   margin-top: 10px;
 }
 
+.contracts-acceptance-status-strip[data-mobile-layout='true'] .metric-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+  scroll-snap-type: x proximity;
+}
+
+.contracts-acceptance-status-strip[data-mobile-layout='true'] .contracts-acceptance-status-card {
+  flex: 0 0 min(84vw, 320px);
+  min-width: min(84vw, 320px);
+  scroll-snap-align: start;
+}
+
+.contracts-acceptance-status-strip[data-mobile-layout='true'] .contracts-acceptance-status-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .contracts-acceptance-status-card:hover,
 .contracts-acceptance-status-card.active {
   border-color: var(--accent-strong);
@@ -2848,6 +2870,37 @@ button { cursor: pointer; }
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.json-block-search {
+  width: min(280px, 100%);
+}
+
+.json-block-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.json-block-line-number {
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: right;
+  min-width: 28px;
+  user-select: none;
+}
+
+.json-block-line-copy {
+  display: block;
+  white-space: inherit;
+}
+
+.json-search-hit {
+  background: rgba(242, 169, 59, 0.2);
+  color: var(--text-1);
+  border-radius: 4px;
+  padding: 0 2px;
 }
 
 .sparkline {
