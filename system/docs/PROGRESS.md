@@ -180,6 +180,17 @@
   - `CpaPage.tsx` 现会：
     - 在 `最近回执` 面板显示结构化摘要
     - 在 `retry_candidate 队列` drilldown 里联动展示对应 receipt 摘要
+- CPA control plane Phase 7 已接入 repo：
+  - `run_cpa_guarded_action.py` 现支持：
+    - `--refresh-control-plane`
+  - 当前行为：
+    - `--execute` 后可自动刷新 `cpa_control_plane_snapshot`
+    - 结构化 receipt summary 会继续回挂到：
+      - `latest_receipts`
+      - `group_receipts`
+  - `CpaPage.tsx` 现会：
+    - 在 `最近回执` 面板展示结构化摘要
+    - 在 `retry_candidate 队列` 下直接显示最近 receipt 的结构化摘要
 - 第三方对照组 `MAACodeX` 已完成独立探测并固化结论：
   - 文档：
     - `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/CPA_AUTOMATION_COMPARISON.md`

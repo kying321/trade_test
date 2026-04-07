@@ -148,3 +148,55 @@ def test_run_action_extracts_retry_candidate_structured_summary(monkeypatch, tmp
         "accepted": True,
         "retry_candidate_remaining": 1,
     }
+
+
+def test_run_action_can_refresh_control_snapshot(monkeypatch, tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "system" / "output" / "review"
+    public_dir = workspace / "system" / "dashboard" / "web" / "public"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    public_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "latest_cpa_control_plane_snapshot.json").write_text(
+        json.dumps(
+            {
+                "guarded_actions": [
+                    {
+                        "id": "acceptance_replay_success20",
+                        "label": "验收回放 / 历史成功20",
+                        "risk_class": "LIVE_GUARD_ONLY",
+                        "command": "cd /tmp/mactools && python3 check_five_account_acceptance.py --csv data/registered_success_active20.csv",
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class DummyProc:
+        returncode = 0
+        stdout = '{"accepted": true}\n'
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: DummyProc())
+    monkeypatch.setattr(
+        mod,
+        "refresh_control_snapshot",
+        lambda *, workspace, public_dir: {
+            "status": "ok",
+            "artifact_json": str(review_dir / "latest_cpa_control_plane_snapshot.json"),
+            "public_path": str(public_dir / "data" / "cpa_control_plane_snapshot.json"),
+        },
+    )
+    mod.now_utc = lambda: mod.dt.datetime(2026, 4, 7, 1, 33, tzinfo=mod.dt.timezone.utc)
+
+    result = mod.run_action(
+        workspace=workspace,
+        action_id="acceptance_replay_success20",
+        execute=True,
+        refresh_control_plane_after=True,
+    )
+
+    assert result["control_snapshot_refresh"]["status"] == "ok"
+    assert result["control_snapshot_refresh"]["artifact_json"].endswith("latest_cpa_control_plane_snapshot.json")
