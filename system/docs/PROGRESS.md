@@ -168,6 +168,18 @@
   - 当前原则：
     - 仍不允许页面内直接触发 live 执行
     - 先通过 CLI 受控入口执行，再由 snapshot 把 receipts 回挂到控制面
+- CPA control plane Phase 6 已接入 repo：
+  - `run_cpa_guarded_action.py` 现会在 `--execute` 时解析 stdout JSON，生成 `structured_summary`
+  - 当前已支持结构化摘要的 action：
+    - `acceptance_replay_success20`
+    - `active_target_sync_success20`
+    - `retry_candidate_pipeline`
+  - `build_cpa_control_plane_snapshot.py` 现会输出：
+    - `latest_receipts`
+    - `group_receipts`
+  - `CpaPage.tsx` 现会：
+    - 在 `最近回执` 面板显示结构化摘要
+    - 在 `retry_candidate 队列` drilldown 里联动展示对应 receipt 摘要
 - 第三方对照组 `MAACodeX` 已完成独立探测并固化结论：
   - 文档：
     - `/Users/jokenrobot/Downloads/Folders/fenlie/system/docs/CPA_AUTOMATION_COMPARISON.md`

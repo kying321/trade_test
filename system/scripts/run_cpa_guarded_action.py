@@ -33,6 +33,50 @@ def load_snapshot_action(workspace: Path, action_id: str) -> dict[str, Any]:
     raise KeyError(f"guarded_action_not_found:{action_id}")
 
 
+def parse_stdout_json(stdout: str) -> Any:
+    text = str(stdout or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def build_structured_summary(action_id: str, payload: Any) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    if action_id == "retry_candidate_pipeline":
+        refresh = data.get("refresh") if isinstance(data.get("refresh"), dict) else {}
+        acceptance = refresh.get("acceptance") if isinstance(refresh.get("acceptance"), dict) else {}
+        inventory = data.get("inventory") if isinstance(data.get("inventory"), dict) else {}
+        summary = inventory.get("summary") if isinstance(inventory.get("summary"), dict) else {}
+        return {
+            "attempted_count": int(data.get("attempted_count") or 0),
+            "successful_count": len(list(data.get("successful_emails") or [])),
+            "failed_count": len(list(data.get("failed_emails") or [])),
+            "accepted": bool(acceptance.get("accepted", data.get("accepted", False))),
+            "retry_candidate_remaining": int(summary.get("retry_candidate") or 0),
+        }
+    if action_id == "active_target_sync_success20":
+        acceptance = data.get("acceptance") if isinstance(data.get("acceptance"), dict) else {}
+        return {
+            "exported_active_count": int(data.get("exported_active_count") or 0),
+            "uploaded_count": int(data.get("uploaded_count") or 0),
+            "synced_count": int(data.get("synced_count") or 0),
+            "accepted": bool(acceptance.get("accepted", False)),
+            "missing_active_paths_count": len(list(data.get("missing_active_paths") or [])),
+        }
+    if action_id == "acceptance_replay_success20":
+        return {
+            "accepted": bool(data.get("accepted", False)),
+            "active_target_authfiles": int(data.get("active_target_authfiles") or 0),
+            "store_verified_target_accounts": int(data.get("store_verified_target_accounts") or 0),
+            "missing_in_proxy_count": len(list(data.get("missing_in_proxy") or [])),
+            "missing_in_store_count": len(list(data.get("missing_in_store") or [])),
+        }
+    return {}
+
+
 def build_markdown(payload: dict[str, Any]) -> str:
     lines = [
         "# CPA Guarded Action Receipt",
@@ -83,6 +127,7 @@ def run_action(*, workspace: Path, action_id: str, execute: bool) -> dict[str, A
         "returncode": 0,
         "stdout_preview": "",
         "stderr_preview": "",
+        "structured_summary": {},
     }
 
     if execute:
@@ -92,6 +137,7 @@ def run_action(*, workspace: Path, action_id: str, execute: bool) -> dict[str, A
         payload["stderr_preview"] = (proc.stderr or "").strip()[:2000]
         payload["status"] = "ok" if proc.returncode == 0 else "failed"
         payload["ok"] = proc.returncode == 0
+        payload["structured_summary"] = build_structured_summary(action_id, parse_stdout_json(proc.stdout))
 
     artifact_json, artifact_md = write_artifacts(review_dir, payload, stamp, action_id)
     payload["artifact_json"] = str(artifact_json)

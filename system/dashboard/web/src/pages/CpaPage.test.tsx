@@ -67,8 +67,29 @@ describe('CpaPage', () => {
                 status: 'ok',
                 generated_at_utc: '2026-04-07T01:30:00Z',
                 returncode: 0,
+                structured_summary: {
+                  attempted_count: 4,
+                  successful_count: 3,
+                  failed_count: 1,
+                  accepted: true,
+                  retry_candidate_remaining: 1,
+                },
               },
             ],
+            group_receipts: {
+              retry_candidate_rows: {
+                action_id: 'retry_candidate_pipeline',
+                action_label: '重试 retry_candidate 队列',
+                status: 'ok',
+                structured_summary: {
+                  attempted_count: 4,
+                  successful_count: 3,
+                  failed_count: 1,
+                  accepted: true,
+                  retry_candidate_remaining: 1,
+                },
+              },
+            },
             groups: {
               retry_candidate_rows: [
                 {
@@ -128,8 +149,9 @@ describe('CpaPage', () => {
     expect(screen.getByText(/20 个历史成功账号/)).toBeTruthy();
     expect(screen.getByText(/Guarded Actions/)).toBeTruthy();
     expect(screen.getByText(/验收回放 \/ 历史成功20/)).toBeTruthy();
-    expect(screen.getByText(/最近回执/)).toBeTruthy();
+    expect(screen.getAllByText(/最近回执/).length).toBeGreaterThan(0);
     expect(screen.getByText(/重试 retry_candidate 队列/)).toBeTruthy();
+    expect(screen.getAllByText(/attempted 4 \/ success 3 \/ failed 1/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/retry_candidate 队列/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/blocked_about_you 队列/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/no_retry_deactivated 队列/).length).toBeGreaterThan(0);
@@ -138,6 +160,7 @@ describe('CpaPage', () => {
     expect(screen.getByText(/about1@fuuu.fun/)).toBeTruthy();
     expect(screen.getByText(/dead1@fuuu.fun/)).toBeTruthy();
     expect(screen.getByText(/new1@fuuu.fun/)).toBeTruthy();
+    expect(screen.getByText(/最近回执：ok/)).toBeTruthy();
     expect(await screen.findByText('token_oc_alpha')).toBeTruthy();
     expect(screen.getByText(/live 已连接 1/)).toBeTruthy();
     expect(screen.getByText(/历史成功命中 1/)).toBeTruthy();
