@@ -1,5 +1,47 @@
 # Progress Handoff
 
+## Current State (2026-04-07)
+- 已将 `/Users/jokenrobot/Downloads/燃油期货2607分析与交易策略.txt` 从静态长报告改造成可执行的 `fuel_oil_2607` 结构化研究链，变更范围限定在 `RESEARCH_ONLY`：
+  - 新增专用模块：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_input_packet.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_scenario.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_transmission.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_validation.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_trade_space.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_strategy.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_summary.py`
+  - 新增 runner：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/run_fuel_oil_2607_reasoning.py`
+  - 新增 latest 工件：
+    - `system/output/review/latest_fuel_oil_2607_input_packet.json`
+    - `system/output/review/latest_fuel_oil_2607_scenario_tree.json`
+    - `system/output/review/latest_fuel_oil_2607_transmission_map.json`
+    - `system/output/review/latest_fuel_oil_2607_validation_ring.json`
+    - `system/output/review/latest_fuel_oil_2607_trade_space.json`
+    - `system/output/review/latest_fuel_oil_2607_strategy_matrix.json`
+    - `system/output/review/latest_fuel_oil_2607_summary.json`
+- 框架修正点：
+  - 去掉原报告中的固定概率、固定区间、固定结论
+  - 改为 `input_packet -> scenario_tree -> transmission_map -> validation_ring -> trade_space -> strategy_matrix -> summary`
+  - 对缺失的炼厂利润/开工率/环保替代字段显式暴露 `coverage.missing_fields`，不再静默假设
+- dashboard snapshot 已吸收该 lane 的 artifact 暴露：
+  - `/Users/jokenrobot/Downloads/Folders/fenlie/system/scripts/build_dashboard_frontend_snapshot.py`
+  - 新增 payload keys：
+    - `fuel_oil_2607_input_packet`
+    - `fuel_oil_2607_scenario_tree`
+    - `fuel_oil_2607_transmission_map`
+    - `fuel_oil_2607_validation_ring`
+    - `fuel_oil_2607_trade_space`
+    - `fuel_oil_2607_strategy_matrix`
+    - `fuel_oil_2607_summary`
+- 测试与验证：
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system && pytest -q tests/test_fuel_oil_2607_reasoning.py tests/test_run_fuel_oil_2607_reasoning.py tests/test_build_dashboard_frontend_snapshot_script.py`
+  - `cd /Users/jokenrobot/Downloads/Folders/fenlie/system && python scripts/run_fuel_oil_2607_reasoning.py --output-root output --contract FU2607 --benchmark SC2607 --deferred FU2609 --as-of 2026-04-07 --now 2026-04-07T18:40:00Z`
+- 当前残余风险：
+  - `PublicInternetResearchProvider.fetch_macro()` 对 `bcti_index / bdti_index / cargo_volume_yoy / coastal_port_throughput_yoy` 在当前窗口仍可能返回缺失，runner 已降级为 coverage 缺口而非伪造数据
+  - 由于实时产业链字段覆盖不完整，当前 strategy 输出应视作研究 lane 提示，不应外推为 live 执行信号
+
+
 ## Current State (2026-04-03)
 - Dashboard 前端已完成 path-routing 第一刀，范围限定在 `RESEARCH_ONLY`，未触碰 live path：
   - `HashRouter -> BrowserRouter`

@@ -224,6 +224,50 @@ def build_public_snapshot(tmp_path: Path) -> dict:
             "contracts_in_focus": ["BU2606"],
         },
     )
+    write_json(
+        review_dir / "latest_fuel_oil_2607_input_packet.json",
+        {
+            "contract_focus": "FU2607",
+            "coverage": {"coverage_ratio": 0.82},
+        },
+    )
+    write_json(
+        review_dir / "latest_fuel_oil_2607_scenario_tree.json",
+        {
+            "primary_scenario": "base_repricing",
+        },
+    )
+    write_json(
+        review_dir / "latest_fuel_oil_2607_transmission_map.json",
+        {
+            "primary_chain": "inventory_tightening_chain",
+        },
+    )
+    write_json(
+        review_dir / "latest_fuel_oil_2607_validation_ring.json",
+        {
+            "boundary_pressure": "supportive",
+        },
+    )
+    write_json(
+        review_dir / "latest_fuel_oil_2607_trade_space.json",
+        {
+            "directional_bias": "up",
+        },
+    )
+    write_json(
+        review_dir / "latest_fuel_oil_2607_strategy_matrix.json",
+        {
+            "preferred_bias": "long",
+        },
+    )
+    write_json(
+        review_dir / "latest_fuel_oil_2607_summary.json",
+        {
+            "headline": "FU2607 base_repricing | bias=long",
+            "primary_scenario_brief": "base_repricing",
+        },
+    )
     jin10_mcp_snapshot_path = review_dir / "latest_jin10_mcp_snapshot.json"
     write_json(
         jin10_mcp_snapshot_path,
@@ -476,6 +520,23 @@ def test_dashboard_snapshot_exposes_commodity_reasoning_artifacts(tmp_path: Path
         ("commodity_reasoning_transmission_map", "latest_commodity_reasoning_transmission_map.json"),
         ("commodity_reasoning_boundary_strength", "latest_commodity_reasoning_boundary_strength.json"),
         ("commodity_reasoning_summary", "latest_commodity_reasoning_summary.json"),
+    ]:
+        assert artifact_id in payloads
+        assert payloads[artifact_id]["path"].endswith(f"review/{suffix}")
+
+
+def test_dashboard_snapshot_exposes_fuel_oil_2607_artifacts(tmp_path: Path) -> None:
+    snapshot = build_public_snapshot(tmp_path)
+
+    payloads = snapshot["artifact_payloads"]
+    for artifact_id, suffix in [
+        ("fuel_oil_2607_input_packet", "latest_fuel_oil_2607_input_packet.json"),
+        ("fuel_oil_2607_scenario_tree", "latest_fuel_oil_2607_scenario_tree.json"),
+        ("fuel_oil_2607_transmission_map", "latest_fuel_oil_2607_transmission_map.json"),
+        ("fuel_oil_2607_validation_ring", "latest_fuel_oil_2607_validation_ring.json"),
+        ("fuel_oil_2607_trade_space", "latest_fuel_oil_2607_trade_space.json"),
+        ("fuel_oil_2607_strategy_matrix", "latest_fuel_oil_2607_strategy_matrix.json"),
+        ("fuel_oil_2607_summary", "latest_fuel_oil_2607_summary.json"),
     ]:
         assert artifact_id in payloads
         assert payloads[artifact_id]["path"].endswith(f"review/{suffix}")
