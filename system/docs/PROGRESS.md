@@ -61,6 +61,25 @@
       - `coverage_ratio=0.6875`
       - `fundamental_snapshot.demand_signal_source=proxy_bdi`
       - `latest_fuel_oil_2607_summary.json` 已回到 `preferred_bias=long`
+  - [UPDATE 2026-04-08 00:15 +0800] 已为燃油 lane 增加炼厂侧代理快照，并接入 validation / summary：
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_input_packet.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_scenario.py`
+    - `/Users/jokenrobot/Downloads/Folders/fenlie/system/src/lie_engine/research/fuel_oil_2607_validation.py`
+    - 新增 `refinery_proxy_snapshot`
+      - `margin_signal_source=proxy_downstream_vs_crude`
+      - `run_rate_signal_source=proxy_inventory_energy_mix`
+    - 代理逻辑说明：
+      - `margin_signal` 使用区域柴油/汽油篮子相对原油基准的一步变化
+      - `run_rate_signal` 使用库存变化 + energy/commodity index 动量 + margin proxy 组合
+      - 这两个字段是**显式代理**，不是把 `refinery_margin / refinery_run_rate` 伪装成直连真值
+    - 新增测试：
+      - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_fuel_oil_2607_reasoning.py::test_input_packet_emits_refinery_proxy_snapshot_from_downstream_and_inventory_mix`
+      - `/Users/jokenrobot/Downloads/Folders/fenlie/system/tests/test_fuel_oil_2607_reasoning.py::test_validation_ring_uses_refinery_proxy_support_as_confirmation`
+    - 真实 runner 复跑后：
+      - `coverage_ratio=0.75`
+      - `refinery_proxy_snapshot.margin_signal=supportive`
+      - `refinery_proxy_snapshot.run_rate_signal=active`
+      - `latest_fuel_oil_2607_summary.json` 的 `key_evidence_brief` 已纳入 `refinery_margin_proxy_support,refinery_run_proxy_active`
 
 
 ## Current State (2026-04-03)

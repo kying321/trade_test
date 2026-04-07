@@ -328,3 +328,130 @@ def test_input_packet_uses_bdi_proxy_when_direct_transport_fields_are_missing() 
     assert packet["fundamental_snapshot"]["cargo_volume_yoy"] != packet["fundamental_snapshot"]["cargo_volume_yoy"]
     assert packet["fundamental_snapshot"]["demand_signal_source"] == "proxy_bdi"
     assert packet["fundamental_snapshot"]["demand_signal"] == "firm"
+
+
+def test_input_packet_emits_refinery_proxy_snapshot_from_downstream_and_inventory_mix() -> None:
+    macro = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2026-04-06"),
+                "fuel_oil_inventory": 208_000,
+                "fuel_oil_inventory_delta": 500,
+                "lfu_inventory": 39_500,
+                "lfu_inventory_delta": 100,
+                "bdi_index": 2066.0,
+                "bcti_index": 1969.0,
+                "bdti_index": 3639.0,
+                "cargo_volume_yoy": float("nan"),
+                "coastal_port_throughput_yoy": float("nan"),
+                "diesel_price_regional_mean": 8.00,
+                "gasoline_92_price_regional_mean": 8.75,
+                "gasoline_95_price_regional_mean": 9.20,
+                "energy_index_pct_chg": 0.20,
+                "commodity_price_index_pct_chg": 0.15,
+            },
+            {
+                "date": pd.Timestamp("2026-04-07"),
+                "fuel_oil_inventory": 201_390,
+                "fuel_oil_inventory_delta": -2_500,
+                "lfu_inventory": 36_800,
+                "lfu_inventory_delta": -1_200,
+                "bdi_index": 2095.0,
+                "bcti_index": 1969.0,
+                "bdti_index": 3639.0,
+                "cargo_volume_yoy": float("nan"),
+                "coastal_port_throughput_yoy": float("nan"),
+                "diesel_price_regional_mean": 8.25,
+                "gasoline_92_price_regional_mean": 9.10,
+                "gasoline_95_price_regional_mean": 9.45,
+                "energy_index_pct_chg": 0.29,
+                "commodity_price_index_pct_chg": 0.45,
+            },
+        ]
+    )
+    packet = build_fuel_oil_2607_input_packet(
+        contract_focus="FU2607",
+        benchmark_contract="SC2607",
+        deferred_contract="FU2609",
+        macro_frame=macro,
+        contract_daily=_bars("FU2607", [3900 + i * 5 for i in range(60)], [9000 + i * 30 for i in range(60)], [22000 + i * 20 for i in range(60)]),
+        benchmark_daily=_bars("SC2607", [640 + i * 0.2 for i in range(60)], [7000 + i * 15 for i in range(60)], [13000 + i * 10 for i in range(60)]),
+        deferred_daily=_bars("FU2609", [3820 + i * 4 for i in range(60)], [7500 + i * 15 for i in range(60)], [18000 + i * 10 for i in range(60)]),
+        spot_snapshot={"current_price": 4240.0, "last_settle_price": 4210.0, "volume": 18000, "hold": 25000},
+        benchmark_spot_snapshot={"current_price": 682.0, "last_settle_price": 676.0, "volume": 6000, "hold": 13000},
+        member_rank_payload=_member_rank(long_1=4100, short_1=3200),
+        report_text="refinery proxy support",
+        generated_at="2026-04-07T19:30:00Z",
+    )
+
+    proxy = packet["refinery_proxy_snapshot"]
+    assert proxy["margin_signal"] == "supportive"
+    assert proxy["run_rate_signal"] == "active"
+    assert proxy["margin_signal_source"] == "proxy_downstream_vs_crude"
+    assert proxy["run_rate_signal_source"] == "proxy_inventory_energy_mix"
+    assert proxy["margin_proxy_score"] > 0.5
+    assert proxy["run_rate_proxy_score"] > 0.5
+
+
+def test_validation_ring_uses_refinery_proxy_support_as_confirmation() -> None:
+    packet = build_fuel_oil_2607_input_packet(
+        contract_focus="FU2607",
+        benchmark_contract="SC2607",
+        deferred_contract="FU2609",
+        macro_frame=pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2026-04-06"),
+                    "fuel_oil_inventory": 208_000,
+                    "fuel_oil_inventory_delta": 500,
+                    "lfu_inventory": 39_500,
+                    "lfu_inventory_delta": 100,
+                    "bdi_index": 2066.0,
+                    "bcti_index": 1969.0,
+                    "bdti_index": 3639.0,
+                    "diesel_price_regional_mean": 8.00,
+                    "gasoline_92_price_regional_mean": 8.75,
+                    "gasoline_95_price_regional_mean": 9.20,
+                    "energy_index_pct_chg": 0.20,
+                    "commodity_price_index_pct_chg": 0.15,
+                },
+                {
+                    "date": pd.Timestamp("2026-04-07"),
+                    "fuel_oil_inventory": 201_390,
+                    "fuel_oil_inventory_delta": -2_500,
+                    "lfu_inventory": 36_800,
+                    "lfu_inventory_delta": -1_200,
+                    "bdi_index": 2095.0,
+                    "bcti_index": 1969.0,
+                    "bdti_index": 3639.0,
+                    "diesel_price_regional_mean": 8.25,
+                    "gasoline_92_price_regional_mean": 9.10,
+                    "gasoline_95_price_regional_mean": 9.45,
+                    "energy_index_pct_chg": 0.29,
+                    "commodity_price_index_pct_chg": 0.45,
+                },
+            ]
+        ),
+        contract_daily=_bars("FU2607", [3900 + i * 5 for i in range(60)], [9000 + i * 30 for i in range(60)], [22000 + i * 20 for i in range(60)]),
+        benchmark_daily=_bars("SC2607", [640 + i * 0.2 for i in range(60)], [7000 + i * 15 for i in range(60)], [13000 + i * 10 for i in range(60)]),
+        deferred_daily=_bars("FU2609", [3820 + i * 4 for i in range(60)], [7500 + i * 15 for i in range(60)], [18000 + i * 10 for i in range(60)]),
+        spot_snapshot={"current_price": 4240.0, "last_settle_price": 4210.0, "volume": 18000, "hold": 25000},
+        benchmark_spot_snapshot={"current_price": 682.0, "last_settle_price": 676.0, "volume": 6000, "hold": 13000},
+        member_rank_payload=_member_rank(long_1=4100, short_1=3200),
+        report_text="refinery proxy support",
+        generated_at="2026-04-07T19:35:00Z",
+    )
+    scenario_tree = build_fuel_oil_2607_scenario_tree(input_packet=packet, generated_at="2026-04-07T19:35:00Z")
+    validation = build_fuel_oil_2607_validation_ring(
+        input_packet=packet,
+        scenario_tree=scenario_tree,
+        transmission_map=build_fuel_oil_2607_transmission_map(
+            input_packet=packet,
+            scenario_tree=scenario_tree,
+            generated_at="2026-04-07T19:35:00Z",
+        ),
+        generated_at="2026-04-07T19:35:00Z",
+    )
+
+    assert "refinery_margin_proxy_support" in validation["confirmations"]
+    assert "refinery_run_proxy_active" in validation["confirmations"]

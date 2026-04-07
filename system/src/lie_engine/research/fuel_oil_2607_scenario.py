@@ -40,12 +40,15 @@ def build_fuel_oil_2607_scenario_tree(
     technical = dict(input_packet.get("technical_snapshot") or {})
     participants = dict(input_packet.get("participant_snapshot") or {})
     price = dict(input_packet.get("price_snapshot") or {})
+    refinery_proxy = dict(input_packet.get("refinery_proxy_snapshot") or {})
 
     supportive = np.mean(
         [
             _signal_score(str(fundamental.get("inventory_signal") or ""), positive="tightening", negative="loosening"),
             _signal_score(str(fundamental.get("freight_signal") or ""), positive="firm", negative="soft"),
             _signal_score(str(fundamental.get("demand_signal") or ""), positive="firm", negative="soft"),
+            _signal_score(str(refinery_proxy.get("margin_signal") or ""), positive="supportive", negative="compressed"),
+            _signal_score(str(refinery_proxy.get("run_rate_signal") or ""), positive="active", negative="slowing"),
             1.0 if technical.get("daily_trend") == "up" else 0.0 if technical.get("daily_trend") == "down" else 0.5,
             1.0 if technical.get("weekly_trend") == "up" else 0.0 if technical.get("weekly_trend") == "down" else 0.5,
             1.0 if participants.get("long_short_bias") == "net_long" else 0.0 if participants.get("long_short_bias") == "net_short" else 0.5,
@@ -57,6 +60,8 @@ def build_fuel_oil_2607_scenario_tree(
             _signal_score(str(fundamental.get("inventory_signal") or ""), positive="loosening", negative="tightening"),
             _signal_score(str(fundamental.get("freight_signal") or ""), positive="soft", negative="firm"),
             _signal_score(str(fundamental.get("demand_signal") or ""), positive="soft", negative="firm"),
+            _signal_score(str(refinery_proxy.get("margin_signal") or ""), positive="compressed", negative="supportive"),
+            _signal_score(str(refinery_proxy.get("run_rate_signal") or ""), positive="slowing", negative="active"),
             1.0 if technical.get("daily_trend") == "down" else 0.0 if technical.get("daily_trend") == "up" else 0.5,
             1.0 if technical.get("weekly_trend") == "down" else 0.0 if technical.get("weekly_trend") == "up" else 0.5,
             1.0 if participants.get("long_short_bias") == "net_short" else 0.0 if participants.get("long_short_bias") == "net_long" else 0.5,

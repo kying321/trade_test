@@ -21,6 +21,7 @@ def build_fuel_oil_2607_validation_ring(
     fundamental = dict(input_packet.get("fundamental_snapshot") or {})
     technical = dict(input_packet.get("technical_snapshot") or {})
     participants = dict(input_packet.get("participant_snapshot") or {})
+    refinery_proxy = dict(input_packet.get("refinery_proxy_snapshot") or {})
     coverage = dict(input_packet.get("coverage") or {})
     primary = str(scenario_tree.get("primary_scenario") or "")
     confirmations: list[str] = []
@@ -43,6 +44,14 @@ def build_fuel_oil_2607_validation_ring(
             confirmations.append("member_net_short")
         else:
             counter_evidence.append("member_not_net_short")
+        if refinery_proxy.get("margin_signal") == "compressed":
+            confirmations.append("refinery_margin_proxy_compressed")
+        else:
+            counter_evidence.append("refinery_margin_proxy_not_compressed")
+        if refinery_proxy.get("run_rate_signal") == "slowing":
+            confirmations.append("refinery_run_proxy_slowing")
+        else:
+            counter_evidence.append("refinery_run_proxy_not_slowing")
     else:
         if fundamental.get("inventory_signal") == "tightening":
             confirmations.append("inventory_draw_supports_price")
@@ -64,6 +73,14 @@ def build_fuel_oil_2607_validation_ring(
             confirmations.append("member_net_long")
         else:
             counter_evidence.append("member_not_net_long")
+        if refinery_proxy.get("margin_signal") == "supportive":
+            confirmations.append("refinery_margin_proxy_support")
+        else:
+            counter_evidence.append("refinery_margin_proxy_not_supportive")
+        if refinery_proxy.get("run_rate_signal") == "active":
+            confirmations.append("refinery_run_proxy_active")
+        else:
+            counter_evidence.append("refinery_run_proxy_not_active")
 
     coverage_gaps = list(coverage.get("missing_fields") or [])
     coverage_ratio = float(coverage.get("coverage_ratio") or 0.0)

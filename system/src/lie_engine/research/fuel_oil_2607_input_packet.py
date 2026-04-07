@@ -264,6 +264,31 @@ def _member_position_sum(df: pd.DataFrame, value_col: str) -> tuple[float, float
     return _safe_float(vals.head(2).sum()), _safe_float(delta.head(2).sum())
 
 
+def _mean_valid(values: list[float]) -> float:
+    vals = [float(v) for v in values if np.isfinite(v)]
+    if not vals:
+        return float("nan")
+    return float(sum(vals) / len(vals))
+
+
+def _bounded_score(value: float, *, low: float, high: float) -> float:
+    if not np.isfinite(value):
+        return 0.5
+    if high <= low:
+        return 0.5
+    return _clamp01((float(value) - low) / (high - low))
+
+
+def _proxy_signal(score: float, *, positive: str, negative: str, neutral: str = "neutral") -> str:
+    if not np.isfinite(score):
+        return neutral
+    if score >= 0.60:
+        return positive
+    if score <= 0.40:
+        return negative
+    return neutral
+
+
 def build_fuel_oil_2607_input_packet(
     *,
     contract_focus: str,
@@ -330,6 +355,18 @@ def build_fuel_oil_2607_input_packet(
     bdi_prev = _previous_non_null(macro, "bdi_index")
     cargo_yoy = _latest_non_null(macro, "cargo_volume_yoy")
     port_yoy = _latest_non_null(macro, "coastal_port_throughput_yoy")
+    diesel_regional = _latest_non_null(macro, "diesel_price_regional_mean")
+    gasoline92_regional = _latest_non_null(macro, "gasoline_92_price_regional_mean")
+    gasoline95_regional = _latest_non_null(macro, "gasoline_95_price_regional_mean")
+    diesel_regional_prev = _previous_non_null(macro, "diesel_price_regional_mean")
+    gasoline92_regional_prev = _previous_non_null(macro, "gasoline_92_price_regional_mean")
+    gasoline95_regional_prev = _previous_non_null(macro, "gasoline_95_price_regional_mean")
+    diesel_price = _latest_non_null(macro, "diesel_price")
+    gasoline_price = _latest_non_null(macro, "gasoline_price")
+    diesel_price_prev = _previous_non_null(macro, "diesel_price")
+    gasoline_price_prev = _previous_non_null(macro, "gasoline_price")
+    energy_index_pct = _latest_non_null(macro, "energy_index_pct_chg")
+    commodity_index_pct = _latest_non_null(macro, "commodity_price_index_pct_chg")
 
     inventory_signal = "mixed"
     if np.isfinite(inventory_delta) and np.isfinite(lfu_inventory_delta):
@@ -357,6 +394,32 @@ def build_fuel_oil_2607_input_packet(
             demand_signal = "firm" if bdi >= 1800 else "soft" if bdi <= 1200 else "mixed"
         else:
             demand_signal = "mixed"
+
+    benchmark_pct = _pct_change(benchmark_last_price, benchmark_prev_settle)
+    downstream_basket = _mean_valid([diesel_regional, gasoline92_regional, gasoline95_regional])
+    downstream_basket_prev = _mean_valid([diesel_regional_prev, gasoline92_regional_prev, gasoline95_regional_prev])
+    downstream_basket_source = "regional_refined_basket"
+    if not np.isfinite(downstream_basket) or not np.isfinite(downstream_basket_prev):
+        downstream_basket = _mean_valid([diesel_price, gasoline_price])
+        downstream_basket_prev = _mean_valid([diesel_price_prev, gasoline_price_prev])
+        downstream_basket_source = "national_refined_basket"
+    downstream_pct = _pct_change(downstream_basket, downstream_basket_prev)
+    margin_proxy_delta = downstream_pct - benchmark_pct if np.isfinite(downstream_pct) and np.isfinite(benchmark_pct) else float("nan")
+    margin_proxy_score = _bounded_score(margin_proxy_delta, low=-0.02, high=0.04)
+    margin_signal = _proxy_signal(margin_proxy_score, positive="supportive", negative="compressed")
+
+    inventory_component = (
+        1.0
+        if np.isfinite(inventory_delta) and np.isfinite(lfu_inventory_delta) and inventory_delta < 0 and lfu_inventory_delta <= 0
+        else 0.0
+        if np.isfinite(inventory_delta) and np.isfinite(lfu_inventory_delta) and inventory_delta > 0 and lfu_inventory_delta >= 0
+        else 0.5
+    )
+    energy_proxy = _mean_valid([energy_index_pct, commodity_index_pct])
+    energy_component = _bounded_score(energy_proxy, low=-0.30, high=0.30)
+    downstream_component = 1.0 if margin_signal == "supportive" else 0.0 if margin_signal == "compressed" else 0.5
+    run_rate_proxy_score = float(np.mean([inventory_component, energy_component, downstream_component]))
+    run_rate_signal = _proxy_signal(run_rate_proxy_score, positive="active", negative="slowing")
 
     long_top2, long_change_top2 = _member_position_sum(_as_frame(member_rank_payload.get("多单持仓")), "多单持仓")
     short_top2, short_change_top2 = _member_position_sum(_as_frame(member_rank_payload.get("空单持仓")), "空单持仓")
@@ -438,6 +501,20 @@ def build_fuel_oil_2607_input_packet(
             "demand_signal": demand_signal,
             "demand_signal_source": demand_signal_source,
             "relative_strength_score": relative_strength_score,
+        },
+        "refinery_proxy_snapshot": {
+            "margin_proxy_score": margin_proxy_score,
+            "margin_proxy_delta": margin_proxy_delta,
+            "margin_signal": margin_signal,
+            "margin_signal_source": "proxy_downstream_vs_crude",
+            "downstream_basket_price": downstream_basket,
+            "downstream_basket_prev": downstream_basket_prev,
+            "downstream_basket_source": downstream_basket_source,
+            "run_rate_proxy_score": run_rate_proxy_score,
+            "run_rate_signal": run_rate_signal,
+            "run_rate_signal_source": "proxy_inventory_energy_mix",
+            "energy_proxy_pct": energy_proxy,
+            "inventory_component": inventory_component,
         },
         "technical_snapshot": {
             "last_price": last_close,
