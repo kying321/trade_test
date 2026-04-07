@@ -92,3 +92,59 @@ def test_run_action_execute_records_subprocess_result(monkeypatch, tmp_path: Pat
     assert result["status"] == "ok"
     assert result["returncode"] == 0
     assert result["stdout_preview"] == '{"accepted": true}'
+    assert result["structured_summary"] == {
+        "attempted_count": 0,
+        "successful_count": 0,
+        "failed_count": 0,
+        "accepted": True,
+        "retry_candidate_remaining": 0,
+    }
+
+
+def test_run_action_extracts_retry_candidate_structured_summary(monkeypatch, tmp_path: Path) -> None:
+    mod = load_module()
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "system" / "output" / "review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "latest_cpa_control_plane_snapshot.json").write_text(
+        json.dumps(
+            {
+                "guarded_actions": [
+                    {
+                        "id": "retry_candidate_pipeline",
+                        "label": "重试 retry_candidate 队列",
+                        "risk_class": "LIVE_GUARD_ONLY",
+                        "command": "cd /tmp/mactools && python3 run_retry_candidate_pipeline.py --max-attempts 4 --pretty",
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class DummyProc:
+        returncode = 0
+        stdout = json.dumps(
+            {
+                "attempted_count": 4,
+                "successful_emails": ["a@fuuu.fun", "b@fuuu.fun", "c@fuuu.fun"],
+                "failed_emails": ["d@fuuu.fun"],
+                "refresh": {"acceptance": {"accepted": True}},
+                "inventory": {"summary": {"retry_candidate": 1}},
+            }
+        )
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: DummyProc())
+    mod.now_utc = lambda: mod.dt.datetime(2026, 4, 7, 1, 32, tzinfo=mod.dt.timezone.utc)
+
+    result = mod.run_action(workspace=workspace, action_id="retry_candidate_pipeline", execute=True)
+
+    assert result["structured_summary"] == {
+        "attempted_count": 4,
+        "successful_count": 3,
+        "failed_count": 1,
+        "accepted": True,
+        "retry_candidate_remaining": 1,
+    }

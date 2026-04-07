@@ -44,6 +44,7 @@ type CpaControlSnapshot = {
   guarded_actions?: Array<Record<string, unknown>>;
   groups?: Record<string, Array<Record<string, unknown>>>;
   latest_receipts?: Array<Record<string, unknown>>;
+  group_receipts?: Record<string, Record<string, unknown>>;
 };
 
 function trimJsonSuffix(name: string) {
@@ -465,10 +466,23 @@ export function CpaPage() {
   const guardedActions = Array.isArray(controlSnapshot?.guarded_actions) ? controlSnapshot?.guarded_actions : [];
   const latestReceipts = Array.isArray(controlSnapshot?.latest_receipts) ? controlSnapshot?.latest_receipts : [];
   const groups = (controlSnapshot?.groups || {}) as Record<string, Array<Record<string, unknown>>>;
+  const groupReceipts = (controlSnapshot?.group_receipts || {}) as Record<string, Record<string, unknown>>;
   const retryCandidateRows = Array.isArray(groups.retry_candidate_rows) ? groups.retry_candidate_rows : [];
   const blockedAboutYouRows = Array.isArray(groups.blocked_about_you_rows) ? groups.blocked_about_you_rows : [];
   const noRetryDeactivatedRows = Array.isArray(groups.no_retry_deactivated_rows) ? groups.no_retry_deactivated_rows : [];
   const newUnmountedRows = Array.isArray(groups.new_unmounted_rows) ? groups.new_unmounted_rows : [];
+  const retryReceipt = groupReceipts.retry_candidate_rows;
+
+  const receiptSummaryText = (receipt: Record<string, unknown> | undefined) => {
+    const summary = (receipt?.structured_summary || {}) as Record<string, unknown>;
+    const attempted = Number(summary.attempted_count || 0);
+    const success = Number(summary.successful_count || 0);
+    const failed = Number(summary.failed_count || 0);
+    const accepted = summary.accepted === true ? 'accepted' : summary.accepted === false ? 'not_accepted' : '';
+    const parts = [`attempted ${attempted} / success ${success} / failed ${failed}`];
+    if (accepted) parts.push(accepted);
+    return parts.join(' / ');
+  };
 
   return (
     <div className="workspace-grid single-column cpa-page">
@@ -520,6 +534,7 @@ export function CpaPage() {
               <div>{`状态：${String(receipt.status || 'unknown')}`}</div>
               <div>{`时间：${String(receipt.generated_at_utc || '—')}`}</div>
               <div>{`returncode：${String(receipt.returncode ?? '—')}`}</div>
+              {Object.keys((receipt.structured_summary || {}) as Record<string, unknown>).length ? <div>{receiptSummaryText(receipt)}</div> : null}
             </div>
           ))}
         </PanelCard>
@@ -527,7 +542,10 @@ export function CpaPage() {
       {(retryCandidateRows.length || blockedAboutYouRows.length || noRetryDeactivatedRows.length || newUnmountedRows.length) ? (
         <PanelCard title="CPA 分组表" kicker="source-owned / grouped drilldown" meta="把 retry / blocked / deactivated / new_unmounted 从 summary chip 下钻成结构化表。">
           {retryCandidateRows.length ? (
-            <DrilldownSection title="retry_candidate 队列" summary={`${retryCandidateRows.length} 条`} defaultOpen>
+            <DrilldownSection title="retry_candidate 队列" summary={`${retryCandidateRows.length} 条`} meta={retryReceipt ? `最近回执：${String(retryReceipt.status || 'unknown')}` : undefined} defaultOpen>
+              {retryReceipt && Object.keys((retryReceipt.structured_summary || {}) as Record<string, unknown>).length ? (
+                <div className="empty-block">{receiptSummaryText(retryReceipt)}</div>
+              ) : null}
               <DenseTable
                 columns={[
                   { key: 'email', label: '邮箱' },

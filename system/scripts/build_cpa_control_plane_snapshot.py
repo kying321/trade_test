@@ -49,6 +49,19 @@ def latest_receipts_for_review_dir(review_dir: Path) -> list[dict[str, Any]]:
     return rows[:10]
 
 
+def group_receipts(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    mapping = {
+        "retry_candidate_pipeline": "retry_candidate_rows",
+    }
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        action_id = str(row.get("action_id") or "").strip()
+        target_group = mapping.get(action_id)
+        if target_group and target_group not in grouped:
+            grouped[target_group] = row
+    return grouped
+
+
 def build_markdown(payload: dict[str, Any]) -> str:
     summary = payload["summary"]
     lines = [
@@ -147,6 +160,7 @@ def build_snapshot(*, workspace: Path, public_dir: Path, source_root: Path = DEF
         },
     ]
 
+    latest_receipts = latest_receipts_for_review_dir(review_dir)
     payload: dict[str, Any] = {
         "generated_at_utc": generated_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "mode": "cpa_control_plane_snapshot",
@@ -221,7 +235,8 @@ def build_snapshot(*, workspace: Path, public_dir: Path, source_root: Path = DEF
         "acceptance": acceptance_map,
         "latest_kernel_run_id": str(kernel_map.get("run_id") or ""),
         "guarded_actions": guarded_actions,
-        "latest_receipts": latest_receipts_for_review_dir(review_dir),
+        "latest_receipts": latest_receipts,
+        "group_receipts": group_receipts(latest_receipts),
     }
 
     artifact_json, artifact_md = write_review_artifacts(review_dir, payload, stamp)

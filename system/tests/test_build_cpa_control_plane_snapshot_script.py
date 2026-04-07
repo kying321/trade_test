@@ -140,5 +140,6 @@ def test_build_snapshot_rolls_up_handoff_sources_and_kernel_state(tmp_path: Path
     assert "python3 run_retry_candidate_pipeline.py --csv registered_accounts.csv" in payload["guarded_actions"][2]["command"]
     assert payload["latest_receipts"][0]["action_id"] == "retry_candidate_pipeline"
     assert payload["latest_receipts"][0]["status"] == "ok"
+    assert payload["group_receipts"]["retry_candidate_rows"]["action_id"] == "retry_candidate_pipeline"
     assert Path(payload["artifact_json"]).exists()
     assert (public_dir / "data" / "cpa_control_plane_snapshot.json").exists()
